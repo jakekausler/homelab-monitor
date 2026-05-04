@@ -18,3 +18,20 @@ repos:
         types_or: [python, pyi]
       - id: ruff-format
         types_or: [python, pyi]
+
+  # Requires pnpm on PATH; CI must install pnpm before running pre-commit
+  - repo: local
+    hooks:
+      - id: prettier-check
+        name: prettier (ui)
+        language: system
+        entry: bash -c 'cd apps/ui && pnpm exec prettier --check .'
+        files: ^apps/ui/.*\.(ts|tsx|json|css|html)$
+        pass_filenames: false
+
+      - id: eslint-check
+        name: eslint (ui)
+        language: system
+        entry: bash -c 'cd apps/ui && pnpm exec eslint .'
+        files: ^apps/ui/.*\.(ts|tsx)$
+        pass_filenames: false

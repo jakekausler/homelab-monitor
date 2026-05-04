@@ -21,6 +21,12 @@ uv.lock.bak
 # Node
 node_modules/
 .vite/
+*.tsbuildinfo
+
+# Frontend build artifacts
+**/coverage/
+apps/ui/playwright-report/
+apps/ui/test-results/
 
 # IDE
 .vscode/

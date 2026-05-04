@@ -10,12 +10,21 @@ Developer onboarding for first-time contributors.
 |------|---------|-------|
 | Python | 3.12+ | Pinned to 3.12.8 via `.python-version` |
 | [uv](https://docs.astral.sh/uv/getting-started/installation/) | latest | Workspace manager and task runner |
+| Node.js | 20+ | Required for the React UI (`apps/ui/`) |
+| [pnpm](https://pnpm.io/installation) | 9+ | Package manager for the frontend workspace |
 | git | any | Pre-commit hooks run on every commit |
 
 Install uv:
 
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+Install pnpm (via Corepack, bundled with Node 20+):
+
+```bash
+corepack enable
+corepack prepare pnpm@latest --activate
 ```
 
 ---
@@ -28,11 +37,12 @@ cd homelab-monitor
 make setup
 ```
 
-`make setup` does three things:
+`make setup` does the following:
 
 ```makefile
-uv sync --directory apps/monitor --all-extras       # installs all deps including dev
+uv sync --directory apps/monitor --all-extras       # installs all Python deps including dev
 uv run --directory apps/monitor pre-commit install  # wires hooks into .git/hooks
+pnpm install                                        # installs frontend deps under apps/ui/
 # if crg-daemon is on PATH: registers repo + starts daemon (idempotent)
 ```
 
@@ -56,13 +66,15 @@ resolves the full dependency graph from there.
 ## The verify pipeline
 
 ```bash
-make verify        # runs: lint → format-check → typecheck → test
+make verify        # runs: backend checks → frontend checks
 # or equivalently:
 scripts/verify
 ```
 
-`make verify` is the canonical gate. CI runs the same command. All four steps
-must pass before a commit merges.
+`make verify` is the canonical gate. CI runs the same command. All steps must
+pass before a commit merges. The pipeline has two legs:
+
+**Backend** (`apps/monitor/`):
 
 | Step | Command | What it checks |
 |------|---------|---------------|
@@ -73,6 +85,18 @@ must pass before a commit merges.
 
 The 100% coverage gate is enforced via `fail_under = 100` in `[tool.coverage.report]`.
 `homelab_monitor/cli/__main__.py` is excluded from coverage measurement (entry-point shim).
+
+**Frontend** (`apps/ui/`) — run via `make ui-verify`:
+
+| Step | Command | What it checks |
+|------|---------|---------------|
+| `lint` | `pnpm eslint .` | ESLint flat config (TypeScript strict rules) |
+| `format-check` | `pnpm prettier --check .` | Prettier (`semi: false`, single quotes) |
+| `typecheck` | `pnpm tsc -b` | TypeScript strict mode, no emitted output |
+| `test` | `pnpm vitest run --coverage` | Vitest unit tests with **100% coverage** gate |
+| `build` | `pnpm vite build` | Production Vite build (verifies bundle succeeds) |
+
+`src/main.tsx` is excluded from the frontend coverage gate (entry-point shim, same rationale as the backend).
 
 ---
 
@@ -103,6 +127,8 @@ to CI. Start with the first failing step; later steps are likely noise.
 
 ## Running specific subsets
 
+**Backend:**
+
 ```bash
 make lint          # ruff check only
 make format-check  # formatting check only (no writes)
@@ -128,6 +154,24 @@ Run without coverage (faster iteration):
 uv run --directory apps/monitor pytest --no-cov -v
 ```
 
+**Frontend:**
+
+```bash
+make ui-dev        # start Vite dev server at port 5173 (proxies /api → localhost:9090)
+make ui-build      # production Vite build
+make ui-test       # Vitest in run mode (with coverage)
+make ui-verify     # full frontend gate: ESLint + Prettier check + tsc -b + Vitest + Vite build
+```
+
+You can also invoke scripts directly via pnpm:
+
+```bash
+pnpm --filter ui run dev       # same as make ui-dev
+pnpm --filter ui run test      # same as make ui-test
+pnpm --filter ui run lint      # ESLint only
+pnpm --filter ui run typecheck # tsc -b only
+```
+
 ---
 
 ## The `hm` CLI
@@ -149,6 +193,18 @@ hm = "homelab_monitor.cli.main:main"
 ---
 
 ## Dev server
+
+**Frontend:**
+
+```bash
+make ui-dev
+```
+
+Starts Vite at port 5173 (auto-selects the next available port if 5173 is taken).
+All requests to `/api/*` are proxied to `http://localhost:9090` (the FastAPI backend).
+Dark theme is the default per spec §9.3.
+
+**Backend:**
 
 ```bash
 make dev
@@ -218,8 +274,35 @@ make crg-init
 This is a one-time step per clone. After it completes, subsequent `make setup` runs
 will register and start the daemon automatically.
 
+**`pnpm not found` after cloning**
+
+pnpm is not installed or Corepack has not activated it. Fix:
+
+```bash
+corepack enable
+corepack prepare pnpm@latest --activate
+```
+
+Alternatively, install pnpm directly via the standalone installer:
+
+```bash
+curl -fsSL https://get.pnpm.io/install.sh | sh -
+```
+
+Then re-run `make setup`.
+
+**Vite dev server bound to a different port**
+
+If port 5173 is already in use, Vite automatically selects the next available
+port and logs the actual URL on startup. Check the terminal output for the
+bound address. To pin a specific port, pass `--port` explicitly:
+
+```bash
+pnpm --filter ui run dev -- --port 5174
+```
+
 **`make clean` — when to use it**
 
 Removes `__pycache__`, `.pytest_cache`, `.ruff_cache`, `.pyright`, and
 `.coverage` artifacts. Use it if you see stale cache behavior. Does not
-remove `.venv`.
+remove `.venv` or `node_modules`.

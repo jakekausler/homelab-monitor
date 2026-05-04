@@ -1,0 +1,25 @@
+{
+  "compilerOptions": {
+    "composite": true,
+    "noEmit": true,
+    "target": "ES2022",
+    "lib": ["ES2023"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "allowSyntheticDefaultImports": true,
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "skipLibCheck": true
+  },
+  "include": [
+    "vite.config.ts",
+    "vitest.config.ts",
+    "eslint.config.js",
+    "prettier.config.js",
+    "postcss.config.js",
+    "tailwind.config.ts"
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "name": "homelab-monitor-workspace",
+  "private": true,
+  "packageManager": "pnpm@9.15.0",
+  "engines": {
+    "node": ">=20",
+    "pnpm": ">=9"
+  },
+  "scripts": {
+    "verify": "pnpm --filter ui run verify",
+    "lint": "pnpm --filter ui run lint",
+    "typecheck": "pnpm --filter ui run typecheck",
+    "test": "pnpm --filter ui run test",
+    "build": "pnpm --filter ui run build"
+  }
+}

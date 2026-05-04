@@ -1,0 +1,15 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+@layer base {
+  body {
+    @apply bg-background text-foreground;
+    margin: 0;
+    font-family: ui-sans-serif, system-ui, sans-serif;
+  }
+}
