@@ -17,9 +17,17 @@ Items to verify after each deployment in this epic. Format: `[D]` = desktop, `[M
 
 ## STAGE-001-002: Frontend skeleton
 
-- [ ] `pnpm verify` (or `npm run verify`) passes lint + tsc + vitest
-- [ ] [D][M] Default Vite scaffold renders at the dev port and is responsive
-- [ ] No console errors or warnings on first page load
+- [ ] `pnpm verify` (root) passes: lint + format-check + tsc + vitest with 100% coverage on tracked files + vite build
+- [ ] `make verify` chains both backend and frontend pipelines green
+- [ ] `pnpm --filter ui run dev` starts a Vite dev server in <500ms with no errors
+- [ ] [D][M] Placeholder Tremor card renders centered on dark `#0b0d10` background at first paint (no FOUC)
+- [ ] [D] Card heading "homelab-monitor" and status text "EPIC-001 STAGE-001-002" visible at 1280×720
+- [ ] [M] Card fits within 375×667 viewport with no horizontal scrollbar
+- [ ] [D][M] Zero console errors and zero 4xx/5xx network requests on initial load
+- [ ] HMR works: editing `apps/ui/src/App.tsx` updates the page without full reload
+- [ ] `pnpm --filter ui run build` produces `apps/ui/dist/` (chunk-size warning ~993KB is informational, deferred)
+- [ ] `pnpm-lock.yaml` is present at the repo root and tracked in git
+- [ ] No emitted `.js` or `.d.ts` files appear in `apps/ui/src/` after running `pnpm typecheck` (noEmit: true respected)
 
 ## STAGE-001-003: CI + Code Review Graph + Dependabot
 
