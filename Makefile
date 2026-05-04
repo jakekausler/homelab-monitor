@@ -7,7 +7,14 @@ MONITOR_DIR := apps/monitor
 setup:
 	uv sync --directory apps/monitor --all-extras
 	uv run --directory apps/monitor pre-commit install
-	@echo "Setup complete — workspace .venv is ready."
+	@if command -v crg-daemon >/dev/null 2>&1; then \
+		crg-daemon add /storage/programs/homelab-monitor 2>/dev/null || true; \
+		crg-daemon start 2>/dev/null || true; \
+		echo "Setup complete — workspace .venv is ready. CRG daemon registered and started."; \
+	else \
+		echo "Setup complete — workspace .venv is ready."; \
+		echo "  Tip: run 'make crg-init' once to install the Code Review Graph daemon (optional)."; \
+	fi
 
 verify: lint format-check typecheck test
 
@@ -40,4 +47,9 @@ clean:
 	find . -path './.venv*' -prune -o \( -type d -name 'htmlcov' \) -exec rm -rf {} +
 
 crg-init:
-	@echo "Run: pip install code-review-graph && code-review-graph install && code-review-graph build"
+	uv tool install --force code-review-graph
+	code-review-graph install
+	code-review-graph build
+	crg-daemon add /storage/programs/homelab-monitor 2>/dev/null || true
+	crg-daemon start 2>/dev/null || true
+	@echo "CRG installed, graph built, and daemon started. Graph auto-updates on file edits and commits."

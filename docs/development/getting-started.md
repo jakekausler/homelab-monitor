@@ -28,12 +28,24 @@ cd homelab-monitor
 make setup
 ```
 
-`make setup` does two things:
+`make setup` does three things:
 
 ```makefile
-uv sync --directory apps/monitor --all-extras   # installs all deps including dev
+uv sync --directory apps/monitor --all-extras       # installs all deps including dev
 uv run --directory apps/monitor pre-commit install  # wires hooks into .git/hooks
+# if crg-daemon is on PATH: registers repo + starts daemon (idempotent)
 ```
+
+**Optional — Code Review Graph (once per clone):**
+
+```bash
+make crg-init
+```
+
+This installs `code-review-graph` as an isolated `uv` tool, runs `code-review-graph install`
+(auto-configures the Claude Code MCP integration), builds the initial graph, and starts
+`crg-daemon` so the graph auto-updates on every file edit and git commit. CRG is not
+required — `make verify` and CI work without it.
 
 The virtual environment is created at `apps/monitor/.venv`. The workspace root
 `pyproject.toml` declares `apps/monitor` as the single workspace member; `uv`
@@ -193,6 +205,18 @@ Otherwise, write the missing tests — the gate is intentionally strict.
 **`make dev` prints a stub message**
 
 Expected. The dev server is not yet implemented. See STAGE-001-010.
+
+**`crg-daemon` not starting after `make setup`**
+
+`make setup` only starts the daemon if `crg-daemon` is already on PATH. If you see
+the "Tip: run 'make crg-init'" message, run:
+
+```bash
+make crg-init
+```
+
+This is a one-time step per clone. After it completes, subsequent `make setup` runs
+will register and start the daemon automatically.
 
 **`make clean` — when to use it**
 

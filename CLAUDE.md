@@ -75,9 +75,16 @@ epics/EPIC-XXX-name/STAGE-XXX-YYY.md
 Installed via:
 
 ```bash
-pip install code-review-graph
-code-review-graph install     # auto-configures Claude Code MCP
-code-review-graph build       # initial graph
+make crg-init
+```
+
+Which runs:
+```bash
+uv tool install code-review-graph   # isolated install, not in project venv
+code-review-graph install           # auto-configures Claude Code MCP
+code-review-graph build             # initial graph
+crg-daemon add /storage/programs/homelab-monitor
+crg-daemon start
 ```
 
 The `crg-daemon` watches the repo and auto-rebuilds the graph as files change. Use the slash commands above during Build / Refinement / Finalize phases. `.code-review-graph/` is gitignored.
