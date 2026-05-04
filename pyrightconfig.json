@@ -1,0 +1,15 @@
+{
+  "pythonVersion": "3.12",
+  "typeCheckingMode": "strict",
+  "include": [
+    "apps/monitor/homelab_monitor",
+    "apps/monitor/tests"
+  ],
+  "exclude": [
+    "**/__pycache__",
+    "**/.venv",
+    "data",
+    "node_modules"
+  ],
+  "reportMissingTypeStubs": false
+}

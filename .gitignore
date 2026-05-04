@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+.pyright/
+*.egg-info/
+dist/
+build/
+.venv/
+
+# uv
+uv.lock.bak
+
+# Node
+node_modules/
+.vite/
+
+# IDE
+.vscode/
+.idea/
+
+# Env / secrets
+.env
+.env.local
+.env.*.local
+secrets-master/
+
+# Data
+data/
+
+# Local DB
+*.sqlite
+*.sqlite-journal
+*.db
+
+# OMC tool state
+.omc/
+
+# Code Review Graph
+.code-review-graph/
+
+# OS
+.DS_Store
+Thumbs.db
