@@ -29,7 +29,7 @@ After EPIC-001 is complete, the system has: a working CI pipeline, a verified de
 | STAGE-001-005 | Encrypted secrets store                               | Complete    |
 | STAGE-001-006 | Collector protocol + base classes                     | Complete    |
 | STAGE-001-007 | In-process plugin loader + scheduler                  | Complete    |
-| STAGE-001-008 | Concurrency groups + failure budget + quarantine      | Not Started |
+| STAGE-001-008 | Concurrency groups + failure budget + quarantine      | Complete |
 | STAGE-001-009 | Subprocess plugin runner + JSON line protocol         | Not Started |
 | STAGE-001-010 | FastAPI app shell + healthz + structured logging      | Not Started |
 | STAGE-001-011 | Local auth (bcrypt + sessions + CSRF)                 | Not Started |
@@ -45,7 +45,7 @@ After EPIC-001 is complete, the system has: a working CI pipeline, a verified de
 | STAGE-001-020 | Grafana + dashboards-as-code provisioning             | Not Started |
 | STAGE-001-021 | Full integration test rig + canonical e2e test        | Not Started |
 
-## Current Stage: STAGE-001-008
+## Current Stage: STAGE-001-009
 
 ## Cross-stage acceptance criteria
 

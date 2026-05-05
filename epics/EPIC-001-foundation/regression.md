@@ -106,11 +106,15 @@ or related tests.
 3. **Re-run high-cardinality offset spread test if collector naming conventions change** — if all collector names hash to the same offset bucket, thundering herd protection silently breaks.
 4. **Address fork() in multi-threaded context before enabling PROCESS RunKind in production** — STAGE-001-010 (FastAPI lifespan) must construct ProcessPoolExecutor with `mp_context=multiprocessing.get_context("forkserver")` (or "spawn"), or document that PROCESS RunKind is unsupported in production. Add a test that verifies the executor's start method once decided.
 
-## STAGE-001-008: Concurrency groups + failure budget + quarantine
+## STAGE-001-008 — Concurrency groups + failure budget + quarantine
 
-- [ ] Two collectors in the same group never run concurrently (timing test)
-- [ ] After N consecutive failures, collector enters quarantine and emits an alert
-- [ ] Manual "retry now" via API exits quarantine
+1. **Quarantine DB columns set atomically with audit row** — `consecutive_failures`, `quarantined_at`, and `quarantine_reason` must all be written in the same transaction as the `audit_log` INSERT. Verify by reading both tables after exactly N=threshold failures: SQL UPDATE columns + audit_log row should be visible together or not at all.
+2. **Quarantine gates ticks after threshold** — After quarantine fires, `homelab_collector_run_skipped_total{reason="quarantined"}` must increment on each scheduled tick; `success_total` and `failure_total` must NOT increment for the quarantined collector.
+3. **load_state() rehydrates quarantine across scheduler restart** — A new `FailureBudget` bound to the same DB file must return `is_quarantined=True` for previously-quarantined collectors without any additional failures occurring. Run scheduler instance #2 → 0 ticks of the quarantined collector.
+4. **clear_quarantine audit trail** — `audit_log` must contain `collector.quarantine_cleared` event with correct `who` field (operator-supplied `by` parameter). The cleared event must appear chronologically AFTER the corresponding `quarantine_entered` event.
+5. **concurrency_group serializes named-group members** — Maximum concurrent execution depth for collectors sharing a non-default group name must not exceed 1, even with sleep-heavy `run()` implementations. Verify via shared in-process counter.
+6. **group_busy skip metric** — When a group lock is held past `interval/2`, the waiting collector must emit `homelab_collector_run_skipped_total{reason="group_busy"}` rather than blocking or timing out with an error.
+7. **quarantine_after per-collector override** — Threshold of N < default(5) must quarantine after exactly N failures; DB `consecutive_failures` column must equal N. Tests at `tests/test_scheduler_quarantine_e2e.py::test_per_collector_quarantine_after_override` cover this.
 
 ## STAGE-001-009: Subprocess plugin runner + JSON line protocol
 
