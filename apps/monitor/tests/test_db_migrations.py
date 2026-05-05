@@ -50,7 +50,10 @@ async def test_check_pending_returns_revisions_on_empty_db(db_url: str) -> None:
     engine = get_engine(url=db_url)
     try:
         pending = await check_pending_migrations(engine)
-        assert pending == ["0001"]
+        # Don't hardcode the migration list — test that all migrations are pending
+        # and that 0001 is the oldest (last in newest-to-oldest order).
+        assert len(pending) >= 1
+        assert pending[-1] == "0001"
     finally:
         await engine.dispose()
 
@@ -126,9 +129,14 @@ async def test_round_trip_downgrade_then_upgrade(db_url: str) -> None:
 def test_alembic_helpers_at_head(db_url: str) -> None:
     """``current``/``head``/``history`` helpers return sensible values after upgrade."""
     alembic_upgrade_head(db_url)
-    assert alembic_current_revision(db_url) == "0001"
-    assert alembic_head_revision(db_url) == "0001"
+    # Current and head should be equal (and non-None) after upgrade.
+    current = alembic_current_revision(db_url)
+    head = alembic_head_revision(db_url)
+    assert current is not None
+    assert head is not None
+    assert current == head
     history = alembic_history(db_url)
+    # 0001 is always the base revision regardless of how many migrations exist.
     assert any(line.startswith("0001 ->") for line in history)
 
 
@@ -153,16 +161,12 @@ async def test_check_pending_migrations_with_intermediate_current(
 ) -> None:
     """When current revision is mid-history, only revisions newer than current are pending.
 
-    Mocks the script directory to simulate a multi-revision history (the test environment
-    only has 0001 in tree, but CRIT-1's fix must work for future N-revision states).
+    Mocks both the script directory (to simulate a multi-revision history) and the
+    MigrationContext (to control what "current" the function reads). CRIT-1's fix
+    must work for future N-revision states regardless of how many real migrations exist.
     """
-    # First, apply 0001 so the DB has current=0001.
-    # (db_engine fixture has already done this; verify by checking pending is [].)
-    initial_pending = await check_pending_migrations(db_engine)
-    assert initial_pending == []
-
-    # Mock walk_revisions to pretend there are three revisions: 0003 (head), 0002, 0001 (current).
-    # walk_revisions yields newest-to-oldest.
+    # Mock walk_revisions to pretend there are three revisions: 0003 (head), 0002, 0001.
+    # walk_revisions yields newest-to-oldest. Mock current = 0001 (intermediate).
     mock_revs = [
         MagicMock(revision="0003"),
         MagicMock(revision="0002"),
@@ -172,13 +176,19 @@ async def test_check_pending_migrations_with_intermediate_current(
     mock_script.get_current_head.return_value = "0003"
     mock_script.walk_revisions.return_value = mock_revs
 
-    with patch(
-        "homelab_monitor.kernel.db.migrations.ScriptDirectory.from_config",
-        return_value=mock_script,
+    with (
+        patch(
+            "homelab_monitor.kernel.db.migrations.ScriptDirectory.from_config",
+            return_value=mock_script,
+        ),
+        patch("homelab_monitor.kernel.db.migrations.MigrationContext.configure") as mock_ctx,
     ):
+        # DB's actual current revision (0002) is overridden by the mock to be 0001
+        # so the loop walks from 0003 down and breaks when it hits 0001.
+        mock_ctx.return_value.get_current_revision.return_value = "0001"
         pending = await check_pending_migrations(db_engine)
 
-    # Pending should be [0003, 0002] (everything newer than 0001 in newest-to-oldest order).
+    # Pending should be [0003, 0002] (everything newer than mocked-current 0001).
     assert pending == ["0003", "0002"]
 
 

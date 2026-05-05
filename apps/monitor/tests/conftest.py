@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from homelab_monitor.kernel.db.engine import dispose_engine, get_engine
 from homelab_monitor.kernel.db.migrations import alembic_upgrade_head
 from homelab_monitor.kernel.db.repository import SqliteRepository
+from homelab_monitor.kernel.secrets.repository import AsyncSecretsRepository
 
 
 @pytest.fixture
@@ -80,3 +81,15 @@ async def _reset_engine_singleton() -> AsyncIterator[None]:  # pyright: ignore[r
     """
     yield
     await dispose_engine()
+
+
+@pytest.fixture
+def master_key() -> bytes:
+    """Fixed 32-byte test key — deterministic, easy to reason about in failures."""
+    return bytes(range(32))
+
+
+@pytest_asyncio.fixture
+async def secrets_repo(db_engine: AsyncEngine, master_key: bytes) -> AsyncSecretsRepository:
+    """``AsyncSecretsRepository`` bound to the migrated test DB + the fixture key."""
+    return AsyncSecretsRepository(SqliteRepository(engine=db_engine), master_key)
