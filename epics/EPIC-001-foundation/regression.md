@@ -82,10 +82,22 @@ or related tests.
 - [ ] No-leak: a sentinel value piped through any non-`get` CLI op never appears in captured stdout or stderr
 - [ ] audit_log table contains rows for set/rotate/delete/rotate-master with `before_json` / `after_json` containing ONLY metadata (name, row_count), never plaintext values
 
-## STAGE-001-006: Collector protocol + base classes
+## STAGE-001-006 — Collector protocol + base classes (added 2026-05-05)
 
-- [ ] A noop collector implements the protocol with `pyright --strict` clean
-- [ ] Tests cover all `RunKind` values (ASYNC / THREAD / PROCESS)
+Re-run after any change to: `apps/monitor/homelab_monitor/kernel/plugins/`
+or related tests.
+
+- [ ] All 20 public symbols import from `homelab_monitor.kernel.plugins` (RunKind, TrustLevel, CollectorConfig, CollectorEvent, CollectorResult, CollectorContext, Collector, BaseCollector, NoopCollector, MetricsWriter, LogsWriter, InMemoryMetricsWriter, InMemoryLogsWriter, MetricEntry, LogEntry, SshClientFactory, SshConnection, HomeAssistantClient, plus the 4 event payload classes if exported)
+- [ ] `isinstance(NoopCollector(), Collector)` returns True (runtime_checkable Protocol)
+- [ ] `isinstance(InMemoryMetricsWriter(), MetricsWriter)` returns True
+- [ ] `isinstance(InMemoryLogsWriter(), LogsWriter)` returns True
+- [ ] All 4 CollectorEvent kinds round-trip via `TypeAdapter[CollectorEvent].validate_python(...).dump_json(...)`
+- [ ] Invalid discriminator (`{"kind": "unknown"}`) raises `pydantic.ValidationError`
+- [ ] CollectorContext is `@dataclass(slots=True)`: extra attribute assignment raises AttributeError
+- [ ] CollectorContext.ha defaults to None
+- [ ] BaseCollector class defaults: run_kind=RunKind.ASYNC, trust_level=TrustLevel.BUILTIN, concurrency_group="default"
+- [ ] NoopCollector().run(ctx) returns CollectorResult(ok=True, metrics_emitted=0, errors=[], events=[])
+- [ ] CollectorEvent pickle round-trip preserves kind discriminator (STAGE-001-009 subprocess boundary requirement)
 
 ## STAGE-001-007: In-process plugin loader + scheduler
 
