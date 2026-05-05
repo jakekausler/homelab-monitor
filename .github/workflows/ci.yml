@@ -1,0 +1,89 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches-ignore:
+      - main
+
+jobs:
+  backend:
+    name: backend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v3
+        with:
+          python-version-file: .python-version
+
+      - name: Install dependencies
+        run: uv sync --directory apps/monitor --all-extras
+
+      - name: Lint
+        run: make lint
+
+      - name: Format check
+        run: make format-check
+
+      - name: Type check
+        run: make typecheck
+
+      - name: Test (with coverage)
+        run: make test
+
+  frontend:
+    name: frontend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm --filter ui run lint
+
+      - name: Format check
+        run: pnpm --filter ui run format-check
+
+      - name: Type check
+        run: pnpm --filter ui run typecheck
+
+      - name: Test (with coverage)
+        run: pnpm --filter ui run test
+
+      - name: Build
+        run: pnpm --filter ui run build
+
+  crg-build:
+    name: crg-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version-file: .python-version
+
+      - name: Install code-review-graph
+        run: pip install code-review-graph
+
+      - name: Build graph
+        run: code-review-graph build
+
+      - name: Upload graph artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: crg-graph
+          path: .code-review-graph/
+          retention-days: 7

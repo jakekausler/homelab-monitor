@@ -1,5 +1,7 @@
 # homelab-monitor
 
+[![CI](https://github.com/jakekausler/homelab-monitor/actions/workflows/ci.yml/badge.svg)](https://github.com/jakekausler/homelab-monitor/actions/workflows/ci.yml)
+
 Self-hosted monitoring service for a personal homelab. Detects issues and
 anomalies across containers, hosts, network gear, NAS, ISP, and Home
 Assistant — with optional auto-remediation via allow-listed runbooks.
@@ -37,3 +39,32 @@ for architecture decisions and full feature map.
 ```bash
 uv run pre-commit install
 ```
+
+## CI
+
+Every pull request runs three parallel jobs:
+
+| Job | What it checks |
+|---|---|
+| `backend` | ruff lint + format + pyright strict + pytest (100% coverage gate) |
+| `frontend` | eslint + prettier + tsc + vitest (coverage) + vite build |
+| `crg-build` | `code-review-graph build` on a clean checkout; uploads graph artifact (7-day retention) |
+
+CodeQL static analysis runs separately on every PR and on a weekly schedule
+(`.github/workflows/codeql.yml`).
+
+To simulate CI locally before pushing:
+
+```bash
+make verify-ci
+```
+
+See [docs/repo-setup.md](docs/repo-setup.md) for the branch protection rules
+to apply in the GitHub UI.
+
+## Releases
+
+Pushing a `v*` tag (e.g. `v0.1.0`) triggers `.github/workflows/release.yml`,
+which builds multi-arch container images (linux/amd64, linux/arm64) and pushes
+them to GHCR. The Dockerfile lands in STAGE-001-015; the workflow is dormant
+scaffolding until then. No tags are created during active development.

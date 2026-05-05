@@ -1,4 +1,4 @@
-.PHONY: setup verify lint format format-check typecheck test dev clean crg-init ui-verify ui-dev ui-build ui-test
+.PHONY: setup verify verify-ci lint format format-check typecheck test dev clean crg-init ui-verify ui-dev ui-build ui-test
 
 .DEFAULT_GOAL := verify
 
@@ -68,3 +68,8 @@ crg-init:
 	crg-daemon add /storage/programs/homelab-monitor 2>/dev/null || true
 	crg-daemon start 2>/dev/null || true
 	@echo "CRG installed, graph built, and daemon started. Graph auto-updates on file edits and commits."
+
+verify-ci:
+	@echo "Simulating CI: backend + frontend + crg-build"
+	$(MAKE) verify
+	command -v code-review-graph >/dev/null 2>&1 && code-review-graph build || echo "tip: run 'make crg-init' to enable Code Review Graph"

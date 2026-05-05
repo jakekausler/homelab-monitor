@@ -1,0 +1,46 @@
+version: 2
+
+updates:
+  - package-ecosystem: pip
+    directory: /apps/monitor
+    schedule:
+      interval: weekly
+    groups:
+      minor-patch:
+        update-types:
+          - minor
+          - patch
+    open-pull-requests-limit: 10
+
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      minor-patch:
+        update-types:
+          - minor
+          - patch
+    open-pull-requests-limit: 10
+
+  - package-ecosystem: npm
+    directory: /apps/ui
+    schedule:
+      interval: weekly
+    groups:
+      minor-patch:
+        update-types:
+          - minor
+          - patch
+    open-pull-requests-limit: 10
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      minor-patch:
+        update-types:
+          - minor
+          - patch
+    open-pull-requests-limit: 10

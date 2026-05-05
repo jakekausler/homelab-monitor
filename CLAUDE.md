@@ -88,6 +88,7 @@ crg-daemon start
 ```
 
 The `crg-daemon` watches the repo and auto-rebuilds the graph as files change. Use the slash commands above during Build / Refinement / Finalize phases. `.code-review-graph/` is gitignored.
+Run `make verify-ci` before pushing to simulate the full CI pipeline locally (backend + frontend + CRG build).
 
 ## Memory references
 
