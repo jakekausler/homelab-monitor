@@ -85,7 +85,9 @@ async def test_context_has_slots(ctx: CollectorContext) -> None:
         ctx.surprise = 1  # type: ignore[attr-defined]
 
 
-async def test_context_replace_returns_new_instance_with_overrides(ctx: CollectorContext) -> None:
+async def test_context_replace_returns_new_instance_with_overrides(
+    ctx: CollectorContext,
+) -> None:
     """``dataclasses.replace`` works on a slots dataclass; original is untouched."""
     new_cfg = CollectorConfig(name="other")
     replaced = dataclasses.replace(ctx, config=new_cfg)

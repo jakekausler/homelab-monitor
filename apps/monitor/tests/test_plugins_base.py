@@ -105,7 +105,11 @@ def test_base_collector_subclass_missing_classvar_raises() -> None:
             async def run(self, ctx: CollectorContext) -> CollectorResult:
                 _ = ctx
                 return CollectorResult(
-                    ok=True, metrics_emitted=0, errors=[], events=[], duration_seconds=0.0
+                    ok=True,
+                    metrics_emitted=0,
+                    errors=[],
+                    events=[],
+                    duration_seconds=0.0,
                 )
 
 

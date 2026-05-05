@@ -26,7 +26,9 @@ REVEAL_ENV = "HOMELAB_MONITOR_REVEAL"
 
 # argparse exposes no public type for sub-parsers; using the private alias is the
 # pyright-recommended workaround. https://github.com/python/typeshed/issues/2569
-def add_subparser(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:  # pyright: ignore[reportPrivateUsage]
+def add_subparser(
+    subparsers: argparse._SubParsersAction[argparse.ArgumentParser],  # pyright: ignore[reportPrivateUsage]
+) -> None:
     """Wire ``hm secrets`` and its sub-subcommands."""
     secrets = subparsers.add_parser("secrets", help="Manage encrypted secrets")
     sub = secrets.add_subparsers(dest="secrets_cmd")
@@ -61,11 +63,16 @@ def add_subparser(subparsers: argparse._SubParsersAction[argparse.ArgumentParser
     secrets.set_defaults(func=_handle)
 
 
-def _handle(args: argparse.Namespace) -> int:  # noqa: PLR0911  # one return per subcommand; flat dispatch is clearer than a dict
+def _handle(  # noqa: PLR0911
+    args: argparse.Namespace,
+) -> int:  # one return per subcommand; flat dispatch is clearer than a dict
     """Dispatch ``hm secrets <cmd>``."""
     sub = getattr(args, "secrets_cmd", None)
     if sub is None:
-        print("usage: hm secrets {set,get,list,rotate,delete,rotate-master}", file=sys.stderr)
+        print(
+            "usage: hm secrets {set,get,list,rotate,delete,rotate-master}",
+            file=sys.stderr,
+        )
         return 2
     if sub == "set":
         return asyncio.run(_cmd_set(args.name))

@@ -19,7 +19,12 @@ from homelab_monitor.kernel.plugins.io import (
     SshClientFactory,
     SshConnection,
 )
+from homelab_monitor.kernel.plugins.loader import LoadedCollector, PluginLoader
 from homelab_monitor.kernel.plugins.noop import NoopCollector
+from homelab_monitor.kernel.plugins.process_context import (
+    BufferingMetricsWriter,
+    ProcessCollectorContext,
+)
 from homelab_monitor.kernel.plugins.types import (
     AlertForwardEvent,
     CollectorConfig,
@@ -35,6 +40,7 @@ from homelab_monitor.kernel.plugins.types import (
 __all__ = [
     "AlertForwardEvent",
     "BaseCollector",
+    "BufferingMetricsWriter",
     "Collector",
     "CollectorConfig",
     "CollectorContext",
@@ -44,12 +50,15 @@ __all__ = [
     "HomeAssistantClient",
     "InMemoryLogsWriter",
     "InMemoryMetricsWriter",
+    "LoadedCollector",
     "LogEntry",
     "LogSignatureEvent",
     "LogsWriter",
     "MetricEntry",
     "MetricsWriter",
     "NoopCollector",
+    "PluginLoader",
+    "ProcessCollectorContext",
     "RunKind",
     "SshClientFactory",
     "SshConnection",

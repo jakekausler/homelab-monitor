@@ -11,7 +11,9 @@ from homelab_monitor.kernel.db.audit import audit_write
 from homelab_monitor.kernel.db.repository import SqliteRepository
 
 
-async def test_audit_write_inserts_row_with_minimal_args(repo: SqliteRepository) -> None:
+async def test_audit_write_inserts_row_with_minimal_args(
+    repo: SqliteRepository,
+) -> None:
     """Required-only arguments produce a row with NULL JSON columns and NULL ip."""
     await audit_write(repo, who="system", what="boot")
     row = await repo.fetch_one(

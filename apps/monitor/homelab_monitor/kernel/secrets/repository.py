@@ -312,7 +312,10 @@ class AsyncSecretsRepository:
         )
         return [
             SecretMeta(
-                id=row.id, name=row.name, created_at=row.created_at, rotated_at=row.rotated_at
+                id=row.id,
+                name=row.name,
+                created_at=row.created_at,
+                rotated_at=row.rotated_at,
             )
             for row in rows
         ]

@@ -19,7 +19,10 @@ def get_database_url() -> str:
     return os.environ.get("HOMELAB_MONITOR_DB_URL", DEFAULT_DATABASE_URL)
 
 
-def _apply_sqlite_pragmas(dbapi_connection: Any, _connection_record: Any) -> None:  # noqa: ANN401
+def _apply_sqlite_pragmas(
+    dbapi_connection: Any,  # noqa: ANN401
+    _connection_record: Any,  # noqa: ANN401
+) -> None:
     """SQLAlchemy ``connect`` listener: enforce WAL + foreign keys + busy timeout.
 
     Runs against every new DBAPI connection (sync underlying of the async engine).
