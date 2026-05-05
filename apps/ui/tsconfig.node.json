@@ -14,12 +14,5 @@
     "exactOptionalPropertyTypes": true,
     "skipLibCheck": true
   },
-  "include": [
-    "vite.config.ts",
-    "vitest.config.ts",
-    "eslint.config.js",
-    "prettier.config.js",
-    "postcss.config.js",
-    "tailwind.config.ts"
-  ]
+  "include": ["vite.config.ts", "vitest.config.ts", "eslint.config.js", "prettier.config.js"]
 }

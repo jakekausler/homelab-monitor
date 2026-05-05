@@ -1,7 +1,7 @@
 // @ts-check
 import js from '@eslint/js'
 import tseslint from 'typescript-eslint'
-import reactPlugin from 'eslint-plugin-react'
+import reactPlugin from '@eslint-react/eslint-plugin'
 import reactHooksPlugin from 'eslint-plugin-react-hooks'
 
 export default tseslint.config(
@@ -14,7 +14,10 @@ export default tseslint.config(
   // Type-aware rules — src files ONLY
   {
     files: ['src/**/*.{ts,tsx}'],
-    extends: [...tseslint.configs.recommendedTypeChecked],
+    extends: [
+      ...tseslint.configs.recommendedTypeChecked,
+      reactPlugin.configs['recommended-type-checked'],
+    ],
     languageOptions: {
       parserOptions: {
         project: './tsconfig.app.json',
@@ -22,16 +25,11 @@ export default tseslint.config(
       },
     },
     plugins: {
-      react: reactPlugin,
       'react-hooks': reactHooksPlugin,
     },
-    settings: {
-      react: { version: 'detect' },
-    },
     rules: {
-      ...reactPlugin.configs.recommended.rules,
-      ...reactHooksPlugin.configs.recommended.rules,
-      'react/react-in-jsx-scope': 'off',
+      ...(reactHooksPlugin.configs['recommended-latest']?.rules ??
+        reactHooksPlugin.configs.recommended.rules),
       '@typescript-eslint/no-unused-vars': [
         'error',
         { argsIgnorePattern: '^_', varsIgnorePattern: '^_' },
