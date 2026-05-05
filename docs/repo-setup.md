@@ -36,8 +36,7 @@ No secrets are required for v0. The `release.yml` workflow uses the automatic
 additional configuration.
 
 When the release workflow is activated (STAGE-001-015), verify:
-- Repository → Settings → Actions → General → Workflow permissions: set to
-  **Read and write permissions** (needed for `softprops/action-gh-release`).
+- The workflow declares its own permissions (`contents: write`, `packages: write`) so no repository-level Action permission changes are required. Verify only that the GHCR package, once published, is set to public visibility (next section).
 
 ## GHCR Package Visibility
 

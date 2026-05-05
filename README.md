@@ -67,4 +67,4 @@ to apply in the GitHub UI.
 Pushing a `v*` tag (e.g. `v0.1.0`) triggers `.github/workflows/release.yml`,
 which builds multi-arch container images (linux/amd64, linux/arm64) and pushes
 them to GHCR. The Dockerfile lands in STAGE-001-015; the workflow is dormant
-scaffolding until then. No tags are created during active development.
+scaffolding until then. No tags will be created until the release container path is complete (STAGE-001-015).

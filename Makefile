@@ -72,4 +72,5 @@ crg-init:
 verify-ci:
 	@echo "Simulating CI: backend + frontend + crg-build"
 	$(MAKE) verify
-	command -v code-review-graph >/dev/null 2>&1 && code-review-graph build || echo "tip: run 'make crg-init' to enable Code Review Graph"
+	@command -v code-review-graph >/dev/null 2>&1 || { echo "ERROR: code-review-graph missing — run 'make crg-init'"; exit 1; }
+	uv tool run code-review-graph build

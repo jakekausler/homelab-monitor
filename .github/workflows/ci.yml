@@ -6,6 +6,13 @@ on:
     branches-ignore:
       - main
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   backend:
     name: backend
@@ -69,15 +76,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - uses: astral-sh/setup-uv@v3
         with:
           python-version-file: .python-version
 
       - name: Install code-review-graph
-        run: pip install code-review-graph
+        run: uv tool install 'code-review-graph>=0.1,<1.0'
 
       - name: Build graph
-        run: code-review-graph build
+        run: uv tool run code-review-graph build
 
       - name: Upload graph artifact
         uses: actions/upload-artifact@v4
