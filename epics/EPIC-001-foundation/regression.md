@@ -29,6 +29,22 @@ Items to verify after each deployment in this epic. Format: `[D]` = desktop, `[M
 - [ ] `pnpm-lock.yaml` is present at the repo root and tracked in git
 - [ ] No emitted `.js` or `.d.ts` files appear in `apps/ui/src/` after running `pnpm typecheck` (noEmit: true respected)
 
+## STAGE-001-004 — SQLite + Alembic + first migration (added 2026-05-05)
+
+Re-run after any change to: `apps/monitor/homelab_monitor/kernel/db/`,
+`apps/monitor/alembic/`, `apps/monitor/homelab_monitor/cli/migrate.py`,
+or related tests.
+
+- [ ] `cd apps/monitor && HOMELAB_MONITOR_DB_URL="sqlite+aiosqlite:///$(mktemp -d)/test.db" uv run hm migrate status` reports `pending migrations` against an empty DB
+- [ ] `cd apps/monitor && HOMELAB_MONITOR_DB_URL="sqlite+aiosqlite:///$(mktemp -d)/test.db" uv run hm migrate` exits 0 and applies the schema
+- [ ] After applying: `hm migrate status` reports `up to date`, `current: 0001`, `head: 0001`
+- [ ] `hm migrate history` lists `0001 -> <base>: initial schema (19 tables, 2 indexes)`
+- [ ] After migration, the DB has exactly 19 application tables (excluding `sqlite_*` and `alembic_version`)
+- [ ] After migration, pragmas via the engine: `journal_mode=wal`, `foreign_keys=1`, `busy_timeout=5000`
+- [ ] With `HOMELAB_MONITOR_AUTO_MIGRATE=false` and an empty DB, `kernel.db.migrations.run_migrations()` raises `MigrationsPendingError`
+- [ ] Repository facade smoke: `repo.execute(insert)`, `repo.fetch_one(select)`, `repo.fetch_all(select)`, `audit_write(repo, ...)`, and `repo.transaction()` rollback on exception all work against a real tempfile DB
+- [ ] Alembic round-trip via the `hm migrate` CLI: upgrade head → downgrade-equivalent (or new migration) → upgrade head leaves DB at expected state
+
 ## STAGE-001-003: CI + Code Review Graph + Dependabot
 
 - [ ] `make verify-ci` runs locally and exits 0 (full Python+frontend chain + CRG build)
