@@ -57,6 +57,7 @@ class CollectorConfig(BaseModel):
     interval_seconds: int = Field(default=60, ge=1)
     timeout_seconds: int = Field(default=30, ge=1)
     enabled: bool = True
+    quarantine_after: int | None = Field(default=None, ge=1)
 
 
 # --- CollectorEvent payloads ----------------------------------------------------------------

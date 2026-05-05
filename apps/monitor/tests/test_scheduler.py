@@ -26,6 +26,7 @@ from homelab_monitor.kernel.plugins import (
     RunKind,
 )
 from homelab_monitor.kernel.scheduler import Scheduler, SchedulerConfig
+from homelab_monitor.kernel.scheduler.failure_budget import FailureBudget
 from homelab_monitor.kernel.secrets.resolver import SyncSecretsResolver
 
 # --- Test fixtures and helpers -----------------------------------------------
@@ -705,3 +706,94 @@ async def test_shutdown_grace_timeout_force_cancels() -> None:
     await asyncio.sleep(0.08)  # Let one tick start
     await scheduler.stop()
     assert not scheduler.running
+
+
+@pytest.mark.asyncio
+async def test_timeout_with_failure_budget() -> None:
+    """Timeout with FailureBudget records failure and emits metrics.
+
+    Covers the FailureBudget.record_failure path in _tick when a timeout occurs
+    (line 349 in scheduler.py).
+    """
+
+    async def _slow_run(self: BaseCollector, ctx: CollectorContext) -> CollectorResult:
+        del self, ctx
+        await asyncio.sleep(0.2)
+        return CollectorResult(ok=True)
+
+    metrics = InMemoryMetricsWriter()
+    collector_cls = _make_collector(
+        "timeout_with_budget",
+        interval_ms=500,
+        timeout_ms=50,
+        run_impl=_slow_run,
+    )
+    loaded = [
+        LoadedCollector(
+            collector=collector_cls(),
+            config=CollectorConfig(name="timeout_with_budget", quarantine_after=10),
+        )
+    ]
+
+    budget = MagicMock(spec=FailureBudget)
+    budget.is_quarantined.return_value = False
+    budget.load_state = AsyncMock()
+    budget.record_failure = AsyncMock()
+
+    scheduler = Scheduler(loaded, _make_ctx_factory(metrics), metrics, failure_budget=budget)
+    await scheduler.start()
+    await asyncio.sleep(0.3)
+    await scheduler.stop()
+
+    timeout_count = _count_metric(
+        metrics,
+        "homelab_collector_run_failure_total",
+        labels_subset={"name": "timeout_with_budget", "reason": "timeout"},
+    )
+    assert timeout_count >= 1
+    budget.record_failure.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_result_error_with_failure_budget() -> None:
+    """Result error with FailureBudget records failure and emits metrics.
+
+    Covers the FailureBudget.record_failure path in _tick when collector
+    returns result.ok=False (line 399 in scheduler.py).
+    """
+
+    async def _failing_run(self: BaseCollector, ctx: CollectorContext) -> CollectorResult:
+        del self, ctx
+        return CollectorResult(ok=False, errors=["Test failure"])
+
+    metrics = InMemoryMetricsWriter()
+    collector_cls = _make_collector(
+        "result_error_with_budget",
+        interval_ms=200,
+        timeout_ms=1000,
+        run_impl=_failing_run,
+    )
+    loaded = [
+        LoadedCollector(
+            collector=collector_cls(),
+            config=CollectorConfig(name="result_error_with_budget", quarantine_after=3),
+        )
+    ]
+
+    budget = MagicMock(spec=FailureBudget)
+    budget.is_quarantined.return_value = False
+    budget.load_state = AsyncMock()
+    budget.record_failure = AsyncMock()
+
+    scheduler = Scheduler(loaded, _make_ctx_factory(metrics), metrics, failure_budget=budget)
+    await scheduler.start()
+    await asyncio.sleep(0.5)  # Allow at least 2-3 ticks at 200ms interval
+    await scheduler.stop()
+
+    result_error_count = _count_metric(
+        metrics,
+        "homelab_collector_run_failure_total",
+        labels_subset={"name": "result_error_with_budget", "reason": "result_error"},
+    )
+    assert result_error_count >= 1
+    budget.record_failure.assert_called()

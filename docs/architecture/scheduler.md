@@ -181,9 +181,89 @@ Key properties:
 
 ---
 
-## 5. Self-Metrics
+## 5. Concurrency groups
 
-The scheduler emits these five metrics from `_tick` on every tick. Collectors do not emit them; the scheduler owns this layer unconditionally.
+Each collector declares a ``concurrency_group: ClassVar[str]`` on its class.
+The scheduler uses per-group ``asyncio.Lock``s to serialize collectors that
+share a group key.
+
+The magic value ``"default"`` (set by ``BaseCollector``) is resolved by the
+scheduler to a per-collector solo lock — i.e., ``concurrency_group="default"``
+means "this collector serializes with itself only", which is the right
+behavior when you don't want to share a group.
+
+To share a group, override ``concurrency_group`` on the subclass with any
+other string. All collectors with the same string serialize through one
+shared lock.
+
+### Skip-on-busy
+
+When a tick fires for a collector and its group lock is already held, the
+scheduler waits up to ``interval / 2`` for the lock. If the deadline expires,
+the tick is skipped (no dispatch) and the metric
+``homelab_collector_run_skipped_total{name, reason="group_busy"}`` is
+incremented. The next tick is scheduled normally.
+
+---
+
+## 6. Failure budget + quarantine
+
+Each collector has a per-name consecutive-failure counter. When the counter
+reaches the quarantine threshold, the collector is *quarantined*: the
+scheduler stops dispatching ticks for it and records the state in the
+``collectors`` table.
+
+### Threshold
+
+The default threshold is **5 consecutive failures**. Override per-collector
+via ``CollectorConfig.quarantine_after: int | None`` (must be >= 1; ``None``
+uses the default).
+
+### What counts as a failure?
+
+Any tick outcome that isn't a successful ``CollectorResult.ok=True``:
+- ``"timeout"`` — the inner ``asyncio.timeout(c.timeout)`` fired.
+- ``"exception"`` — the collector raised an unhandled exception.
+- ``"result_error"`` — the collector returned ``CollectorResult.ok=False``.
+
+A successful tick resets the counter to 0 in memory but does NOT clear
+quarantine — only ``Scheduler.clear_quarantine(name, by=...)`` does.
+
+### Persistence
+
+In-memory state is authoritative; persisted state lives in three columns
+on ``collectors``:
+- ``consecutive_failures INTEGER NOT NULL DEFAULT 0``
+- ``quarantined_at TEXT NULL`` (ISO-8601 UTC)
+- ``quarantine_reason TEXT NULL``
+
+Persistence policy:
+- On failure -> UPDATE counter.
+- On quarantine entry -> UPDATE all 3 columns + ``audit_log`` row in
+  same transaction.
+- On manual clear -> UPDATE all 3 columns to NULL/0 + ``audit_log`` row.
+- On success -> reset in-memory counter to 0; **no DB write**. (Restart
+  rehydration starts from persisted DB value, which is over-conservative
+  but safe.)
+
+### Audit events
+
+- ``collector.quarantine_entered`` (who=``"scheduler"``)
+- ``collector.quarantine_cleared`` (who=actor, default ``"operator"``)
+
+Both record full before/after state JSON.
+
+### Manual clear
+
+Operator clears quarantine via the kernel API:
+``await scheduler.clear_quarantine(name, by="alice")``. STAGE-001-010
+exposes this as ``POST /api/collectors/{name}/retry``.
+
+---
+
+## 7. Self-Metrics
+
+The scheduler emits these six metrics from `_tick` on every tick. Collectors do not emit them; the scheduler owns this layer unconditionally.
 
 | Metric | Type | Labels | When emitted |
 |---|---|---|---|
@@ -192,6 +272,7 @@ The scheduler emits these five metrics from `_tick` on every tick. Collectors do
 | `homelab_collector_run_shutdown_total` | counter | `name` | `CancelledError` while `_stopping == True` |
 | `homelab_collector_run_duration_seconds` | summary | `name` | Always, in `finally` block |
 | `homelab_collector_run_last_error_age_seconds` | gauge | `name` | See pattern below |
+| `homelab_collector_run_skipped_total` | counter | `name`, `reason` | Tick was not dispatched. `reason` ∈ `"group_busy" \| "quarantined"`. |
 
 `last_error_age_seconds` follows pattern (ii):
 
@@ -205,7 +286,7 @@ Collectors emit their domain metrics (e.g., `homelab_ping_rtt_seconds`) independ
 
 ---
 
-## 6. Graceful Shutdown Semantics
+## 8. Graceful Shutdown Semantics
 
 `stop()` sequence in order:
 
@@ -221,7 +302,7 @@ An in-flight tick that is cancelled during shutdown emits exactly one metric: `s
 
 ---
 
-## 7. PluginLoader
+## 9. PluginLoader
 
 `PluginLoader` is an in-memory programmatic registry. For STAGE-001-007 it is the complete discovery mechanism; later stages extend it without changing the scheduler-facing API.
 
@@ -241,7 +322,7 @@ Frozen dataclass pairing a `Collector` instance with its `CollectorConfig`. The 
 
 ---
 
-## 8. Forward Integration Points
+## 10. Forward Integration Points
 
 SCAFFOLDING comments mark the exact insertion points for upcoming stages. File references are relative to `apps/monitor/`.
 
@@ -257,7 +338,7 @@ SCAFFOLDING comments mark the exact insertion points for upcoming stages. File r
 
 ---
 
-## 9. Known Limitations
+## 11. Known Limitations
 
 **PROCESS + fork() under uvicorn**
 
@@ -285,7 +366,7 @@ Calling `start()` a second time raises `RuntimeError`. Construct a new `Schedule
 
 ---
 
-## 10. Testing
+## 12. Testing
 
 | File | Scope | Count |
 |---|---|---|

@@ -7,6 +7,10 @@ self-metrics emitted unconditionally per tick. Graceful shutdown with
 
 Spec references: STAGE-001-007.md §"Decisions in this stage" (D1-D5),
 ``docs/superpowers/specs/2026-05-04-homelab-monitor-design.md`` §3.1, §5.4.
+
+Updated by STAGE-001-008 with concurrency-group locks, quarantine gate via
+``FailureBudget``, and the 6th self-metric ``homelab_collector_run_skipped_total``.
+See ``docs/architecture/scheduler.md`` §5-§6.
 """
 
 from __future__ import annotations
@@ -25,7 +29,8 @@ from homelab_monitor.kernel.plugins.process_context import (
     BufferingMetricsWriter,
     ProcessCollectorContext,
 )
-from homelab_monitor.kernel.plugins.types import CollectorResult, RunKind
+from homelab_monitor.kernel.plugins.types import CollectorConfig, CollectorResult, RunKind
+from homelab_monitor.kernel.scheduler.failure_budget import FailureBudget
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,6 +121,7 @@ class Scheduler:
         ctx_factory: Callable[[Collector], CollectorContext],
         self_metrics: MetricsWriter,
         config: SchedulerConfig | None = None,
+        failure_budget: FailureBudget | None = None,
     ) -> None:
         """Stash dependencies; do NOT touch the event loop here.
 
@@ -128,6 +134,9 @@ class Scheduler:
         self._ctx_factory: Callable[[Collector], CollectorContext] = ctx_factory
         self._self_metrics: MetricsWriter = self_metrics
         self._config: SchedulerConfig = config if config is not None else SchedulerConfig()
+        self._failure_budget: FailureBudget | None = failure_budget
+        self._group_locks: dict[str, asyncio.Lock] = {}
+        self._configs: dict[str, CollectorConfig] = {lc.collector.name: lc.config for lc in loaded}
 
         self._loop: asyncio.AbstractEventLoop | None = None
         self._tick_tasks: list[asyncio.Task[None]] = []
@@ -157,6 +166,8 @@ class Scheduler:
             raise RuntimeError(msg)
         self._loop = asyncio.get_running_loop()
         self._stopping = False
+        if self._failure_budget is not None:
+            await self._failure_budget.load_state()
         self._thread_pool = ThreadPoolExecutor(max_workers=self._config.thread_pool_size)
         self._process_pool = ProcessPoolExecutor(max_workers=self._config.process_pool_size)
         self._tick_tasks = [
@@ -202,6 +213,26 @@ class Scheduler:
             self._process_pool.shutdown(wait=False, cancel_futures=True)
             self._process_pool = None
         self._tick_tasks.clear()
+
+    async def clear_quarantine(self, name: str, by: str = "operator") -> None:
+        """Manually clear a collector's quarantine.
+
+        Thin delegation to the FailureBudget. STAGE-001-010's
+        ``POST /api/collectors/{name}/retry`` endpoint will call this with the
+        authenticated user's identifier as ``by``.
+
+        Args:
+            name: Collector name.
+            by: Actor identifier for audit purposes.
+
+        Raises:
+            RuntimeError: If the scheduler was constructed without a
+                ``FailureBudget``.
+        """
+        if self._failure_budget is None:
+            msg = "Scheduler was constructed without a FailureBudget"
+            raise RuntimeError(msg)
+        await self._failure_budget.clear_quarantine(name, by=by)
 
     # --- Per-collector tick loop -----------------------------------------------------
 
@@ -256,80 +287,135 @@ class Scheduler:
 
     # --- Single tick -----------------------------------------------------------------
 
-    async def _tick(self, c: Collector) -> None:
-        """Run one tick: build ctx, dispatch, classify outcome, emit self-metrics.
+    async def _tick(self, c: Collector) -> None:  # noqa: PLR0912 -- catch-order discipline + budget recording on each path; splitting hurts readability
+        """Run one tick: gate on quarantine, acquire group lock, build ctx, dispatch,
+        classify outcome, emit self-metrics, record failure-budget state.
 
-        Catch order is exact (CancelledError → TimeoutError → Exception);
-        do NOT swap them. ``asyncio.timeout`` raises :class:`TimeoutError`
-        (the builtin, NOT ``asyncio.TimeoutError`` — they're the same on
-        3.11+ but the builtin is the documented form).
+        Catch order is exact (CancelledError -> TimeoutError -> Exception);
+        do NOT swap them. The lock-acquisition timeout is OUTSIDE the inner
+        ``asyncio.timeout()`` block so its TimeoutError is distinguishable from
+        a tick's own timeout.
         """
         assert self._loop is not None
-        start = self._loop.time()
-        ctx = self._ctx_factory(c)
+
+        # Quarantine gate.
+        if self._failure_budget is not None and self._failure_budget.is_quarantined(c.name):
+            self._self_metrics.write_counter(
+                "homelab_collector_run_skipped_total",
+                1.0,
+                {"name": c.name, "reason": "quarantined"},
+            )
+            return
+
+        # Group lock acquisition with interval/2 deadline. Outside the inner
+        # timeout block so the lock-acquisition TimeoutError is distinguishable
+        # from the tick's own timeout.
+        group_key = c.name if c.concurrency_group == "default" else c.concurrency_group
+        lock = self._group_locks.setdefault(group_key, asyncio.Lock())
         try:
-            async with asyncio.timeout(c.timeout.total_seconds()):
-                # SCAFFOLDING: STAGE-001-008 will add
-                #   `async with self._group_locks[c.concurrency_group]:`
-                # around _dispatch here. No driver changes.
-                result = await self._dispatch(c, ctx)
-        except asyncio.CancelledError:
-            if self._stopping:
+            await asyncio.wait_for(
+                lock.acquire(),
+                timeout=c.interval.total_seconds() / 2,
+            )
+        except TimeoutError:
+            self._self_metrics.write_counter(
+                "homelab_collector_run_skipped_total",
+                1.0,
+                {"name": c.name, "reason": "group_busy"},
+            )
+            return
+
+        # Lock held; main tick body wrapped in try/finally for guaranteed release.
+        try:
+            start = self._loop.time()
+            ctx = self._ctx_factory(c)
+
+            try:
+                async with asyncio.timeout(c.timeout.total_seconds()):
+                    result = await self._dispatch(c, ctx)
+            except asyncio.CancelledError:
+                if self._stopping:
+                    self._self_metrics.write_counter(
+                        "homelab_collector_run_shutdown_total",
+                        1.0,
+                        {"name": c.name},
+                    )
+                    return
+                raise  # pragma: no cover -- not reachable via Scheduler.stop()
+            except TimeoutError:
                 self._self_metrics.write_counter(
-                    "homelab_collector_run_shutdown_total",
+                    "homelab_collector_run_failure_total",
+                    1.0,
+                    {"name": c.name, "reason": "timeout"},
+                )
+                self._record_error(c.name)
+                if self._failure_budget is not None:
+                    await self._failure_budget.record_failure(
+                        c.name,
+                        "timeout",
+                        threshold=self._threshold_for(c),
+                    )
+                return
+            except Exception:
+                self._self_metrics.write_counter(
+                    "homelab_collector_run_failure_total",
+                    1.0,
+                    {"name": c.name, "reason": "exception"},
+                )
+                self._record_error(c.name)
+                if self._failure_budget is not None:
+                    await self._failure_budget.record_failure(
+                        c.name,
+                        "exception",
+                        threshold=self._threshold_for(c),
+                    )
+                return
+            finally:
+                self._self_metrics.write_summary(
+                    "homelab_collector_run_duration_seconds",
+                    self._loop.time() - start,
+                    {"name": c.name},
+                )
+
+            if result.ok:
+                self._self_metrics.write_counter(
+                    "homelab_collector_run_success_total",
                     1.0,
                     {"name": c.name},
                 )
-                return
-            # External cancellation of a tick task (not via Scheduler.stop())
-            # is unexpected; propagate so the supervising _run_collector loop
-            # sees the cancel.
-            raise  # pragma: no cover -- not reachable via Scheduler.stop()
-        except TimeoutError:
-            self._self_metrics.write_counter(
-                "homelab_collector_run_failure_total",
-                1.0,
-                {"name": c.name, "reason": "timeout"},
-            )
-            self._record_error(c.name)
-            return
-        except Exception:  # — scheduler must isolate plugin failures
-            self._self_metrics.write_counter(
-                "homelab_collector_run_failure_total",
-                1.0,
-                {"name": c.name, "reason": "exception"},
-            )
-            self._record_error(c.name)
-            return
-        finally:
-            self._self_metrics.write_summary(
-                "homelab_collector_run_duration_seconds",
-                self._loop.time() - start,
-                {"name": c.name},
-            )
-
-        # No exception: classify by result.ok.
-        if result.ok:
-            self._self_metrics.write_counter(
-                "homelab_collector_run_success_total",
-                1.0,
-                {"name": c.name},
-            )
-            # Emit last-error-age gauge ONLY if we have a baseline failure.
-            if c.name in self._last_error_ts:
-                age = self._loop.time() - self._last_error_ts[c.name]
-                self._self_metrics.write_gauge(
-                    "homelab_collector_run_last_error_age_seconds",
-                    age,
-                    {"name": c.name},
+                if c.name in self._last_error_ts:
+                    age = self._loop.time() - self._last_error_ts[c.name]
+                    self._self_metrics.write_gauge(
+                        "homelab_collector_run_last_error_age_seconds",
+                        age,
+                        {"name": c.name},
+                    )
+                if self._failure_budget is not None:
+                    await self._failure_budget.record_success(c.name)
+            else:
+                self._self_metrics.write_counter(
+                    "homelab_collector_run_failure_total",
+                    1.0,
+                    {"name": c.name, "reason": "result_error"},
                 )
-        else:
-            self._self_metrics.write_counter(
-                "homelab_collector_run_failure_total",
-                1.0,
-                {"name": c.name, "reason": "result_error"},
-            )
-            self._record_error(c.name)
+                self._record_error(c.name)
+                if self._failure_budget is not None:
+                    await self._failure_budget.record_failure(
+                        c.name,
+                        "result_error",
+                        threshold=self._threshold_for(c),
+                    )
+
+        finally:
+            lock.release()
+
+    def _threshold_for(self, c: Collector) -> int | None:
+        """Return per-collector ``quarantine_after`` override, or ``None`` for default."""
+        # SCAFFOLDING: STAGE-001-009/010 may add dynamic collector reload; if so,
+        # self._configs (snapshot at __init__) will need to be refreshed via a
+        # public update method. Currently no reload mechanism exists.
+        cfg = self._configs.get(c.name)
+        return cfg.quarantine_after if cfg is not None else None
 
     def _record_error(self, name: str) -> None:
         """Stash the error timestamp + emit ``last_error_age_seconds`` = 0.
@@ -377,15 +463,11 @@ class Scheduler:
             )
 
         if c.run_kind == RunKind.PROCESS:
-            # SCAFFOLDING: STAGE-001-008+ — pool recovery on BrokenProcessPool.
-            # NOTE: a PROCESS worker hard-crash (e.g., os._exit) propagates
-            # `concurrent.futures.process.BrokenProcessPool` and the executor
-            # becomes unusable for subsequent submits — every following PROCESS
-            # tick will fail with the same exception. Rebuild logic on broken
-            # state is deferred to STAGE-001-008 (alongside quarantine), where
-            # the failure budget will catch the chain of failures and quarantine
-            # the offending collector. Until then, a single hard-crash will
-            # disable PROCESS-mode for ALL collectors until scheduler restart.
+            # SCAFFOLDING: STAGE-001-008 added failure-budget quarantine which will
+            # quarantine a chronically-failing PROCESS collector after threshold,
+            # bounding the impact of a hard-crash. However, the executor pool itself
+            # remains broken until scheduler restart. Pool rebuild on broken state is
+            # still a future enhancement (post-009).
             assert self._process_pool is not None
             proc_ctx = ProcessCollectorContext(
                 config=ctx.config,
