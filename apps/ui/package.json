@@ -44,7 +44,7 @@
     "autoprefixer": "^10.4",
     "eslint": "^9.17",
     "eslint-plugin-react": "^7.37",
-    "eslint-plugin-react-hooks": "^5.1",
+    "eslint-plugin-react-hooks": "^7.1",
     "jsdom": "^25.0",
     "postcss": "^8.4",
     "prettier": "^3.4",
