@@ -51,6 +51,6 @@
     "typescript": "~5.7",
     "typescript-eslint": "^8.18",
     "vite": "^6.0",
-    "vitest": "^2.1"
+    "vitest": "^4.1"
   }
 }
