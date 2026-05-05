@@ -25,7 +25,7 @@ After EPIC-001 is complete, the system has: a working CI pipeline, a verified de
 | STAGE-001-001 | Backend Python skeleton                               | Complete    |
 | STAGE-001-002 | Frontend skeleton                                     | Complete    |
 | STAGE-001-003 | CI + Code Review Graph + Dependabot                   | Complete    |
-| STAGE-001-004 | SQLite + Alembic + first migration                    | Build       |
+| STAGE-001-004 | SQLite + Alembic + first migration                    | Refinement  |
 | STAGE-001-005 | Encrypted secrets store                               | Not Started |
 | STAGE-001-006 | Collector protocol + base classes                     | Not Started |
 | STAGE-001-007 | In-process plugin loader + scheduler                  | Not Started |
