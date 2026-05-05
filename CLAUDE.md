@@ -63,7 +63,7 @@ epics/EPIC-XXX-name/STAGE-XXX-YYY.md
 
 - **Monorepo** with `apps/monitor` (Python/FastAPI), `apps/ui` (React/Vite), `packages/` (shared types, plugin SDK), `deploy/` (compose, grafana dashboards-as-code, vmalert rules, vector config), `runbooks/` (built-in runbooks). The host-specific override repo (`homelab-monitor-overrides`) is separate, gitignored from this public repo, and mounted as a volume into the running container.
 - **Strict typing** — `pyright --strict` and TypeScript strict; no `Any` without a written exception in code review.
-- **Verify** — `make verify` (or `scripts/verify`) is the canonical check: ruff + black + pyright + pytest (with 100% kernel coverage gate) + tsc + vitest + UI build smoke + (optional) integration + (optional) Playwright. Pre-commit runs the fast subset.
+- **Verify** — `make verify` (or `scripts/verify`) is the canonical check: ruff + black + pyright + pytest (with 100% kernel coverage gate) + tsc + vitest + UI build smoke + (optional) integration + (optional) Playwright. Pre-commit runs the fast subset. Run `make verify-ci` before pushing to simulate the full CI pipeline locally (backend + frontend + CRG build).
 - **No `git add -A` ever** — always specific file paths. The doc-updater subagent and changelog flow rely on this.
 - **All internal timestamps are UTC.** Display layer converts to `America/New_York` (configurable).
 - **Plugins observe themselves** — `homelab_collector_run_*` metrics are mandatory.
@@ -88,7 +88,6 @@ crg-daemon start
 ```
 
 The `crg-daemon` watches the repo and auto-rebuilds the graph as files change. Use the slash commands above during Build / Refinement / Finalize phases. `.code-review-graph/` is gitignored.
-Run `make verify-ci` before pushing to simulate the full CI pipeline locally (backend + frontend + CRG build).
 
 ## Memory references
 
