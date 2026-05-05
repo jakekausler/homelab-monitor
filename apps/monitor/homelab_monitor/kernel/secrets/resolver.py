@@ -21,11 +21,24 @@ class SyncSecretsResolver:
     callers should treat the source dict as owned by the resolver.
 
     Pickle-safe (only primitive fields). MappingProxyType is constructed
-    lazily in :meth:`as_mapping` to keep ``__init__`` minimal — frozen
-    dataclasses can't easily wrap-on-construct without ``__post_init__``.
+    in ``__post_init__`` to prevent accidental mutation of the backing dict.
     """
 
-    _values: dict[str, str] = field(default_factory=dict)  # type: ignore[var-annotated]
+    _values: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
+
+    def __post_init__(self) -> None:
+        """Wrap _values in MappingProxyType so consumers cannot mutate the source dict."""
+        if not isinstance(self._values, MappingProxyType):
+            object.__setattr__(self, "_values", MappingProxyType(dict(self._values)))
+
+    def __reduce__(self) -> tuple[type[SyncSecretsResolver], tuple[dict[str, str]]]:
+        """Pickle support: serialize _values as a plain dict, rebuild on unpickle.
+
+        ``MappingProxyType`` is not directly picklable in CPython, so we round-trip
+        through ``dict``. ``__post_init__`` re-wraps the dict on the receiving side,
+        preserving immutability across the IPC boundary.
+        """
+        return (SyncSecretsResolver, (dict(self._values),))
 
     def get(self, name: str) -> str | None:
         """Return the plaintext value for ``name`` or ``None`` if absent."""

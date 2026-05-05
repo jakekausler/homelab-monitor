@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import pytest
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncEngine
 
 from homelab_monitor.kernel.db.repository import SqliteRepository
+from homelab_monitor.kernel.secrets import repository as repo_mod
 from homelab_monitor.kernel.secrets.errors import (
     SecretIntegrityError,
     SecretNotFoundError,
@@ -140,13 +143,15 @@ async def test_rotate_master_re_encrypts_all(
         assert r.ciphertext != old_cts[r.name]
 
 
-async def test_rotate_master_atomic_on_failure(
+async def test_rotate_master_aborts_pre_flight_on_decrypt_failure(
     secrets_repo: AsyncSecretsRepository, repo: SqliteRepository
 ) -> None:
-    """If decryption fails for any row, no row is updated.
+    """If any row fails to decrypt during the pre-flight pass, no row is updated.
 
-    We simulate by hand-corrupting one row's ciphertext, then attempting rotate.
-    The whole rotation must roll back.
+    rotate_master decrypts every row OUTSIDE the transaction first (pre-flight),
+    then opens a transaction to write all the new ciphertexts. This test pins
+    the pre-flight abort: a corrupted row triggers SecretIntegrityError before
+    any UPDATE runs, so no rows are partially rotated.
     """
     await secrets_repo.set("alpha", "a")
     await secrets_repo.set("beta", "b")
@@ -224,3 +229,109 @@ async def test_snapshot_returns_all_decrypted(
     assert snap.get("alpha") == "a-val"
     assert snap.get("beta") == "b-val"
     assert snap.list_names() == ["alpha", "beta"]
+
+
+async def test_set_duplicate_name_via_direct_insert_violates_unique(
+    db_engine: AsyncEngine, secrets_repo: AsyncSecretsRepository
+) -> None:
+    """Direct ``INSERT`` of a duplicate-name row violates the UNIQUE index from migration 0002."""
+    # First, set a secret normally so a row exists for "tok".
+    await secrets_repo.set("tok", "value-1")
+
+    # Try to insert a second row with the same name via raw SQL — should violate UNIQUE.
+    async with db_engine.connect() as conn:
+        with pytest.raises(IntegrityError):
+            await conn.execute(
+                text(
+                    "INSERT INTO secrets (id, name, ciphertext, kdf_salt, created_at) "
+                    "VALUES (:id, :name, :ct, :salt, :ts)"
+                ),
+                {
+                    "id": "duplicate-id",
+                    "name": "tok",
+                    "ct": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                    "salt": b"\x00" * 16,
+                    "ts": "2026-05-05T00:00:00+00:00",
+                },
+            )
+            await conn.commit()
+
+
+async def test_audit_failure_rolls_back_data(
+    secrets_repo: AsyncSecretsRepository,
+    db_engine: AsyncEngine,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If audit INSERT fails, the data INSERT must roll back too (atomicity invariant)."""
+
+    async def _boom(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("simulated audit failure")
+
+    monkeypatch.setattr(repo_mod, "_insert_audit", _boom)
+    with pytest.raises(RuntimeError, match="simulated audit failure"):
+        await secrets_repo.set("api-token", "v")
+
+    # Verify no row was written despite the data INSERT having executed first.
+    async with db_engine.connect() as conn:
+        result = await conn.execute(
+            text("SELECT id FROM secrets WHERE name = :n"), {"n": "api-token"}
+        )
+        rows = result.fetchall()
+    assert rows == []
+
+
+async def test_get_raises_integrity_error_on_invalid_base64(
+    secrets_repo: AsyncSecretsRepository, db_engine: AsyncEngine
+) -> None:
+    """If row.ciphertext is corrupted to non-base64 garbage, get raises SecretIntegrityError."""
+    await secrets_repo.set("tok", "v")
+    async with db_engine.connect() as conn:
+        await conn.execute(
+            text("UPDATE secrets SET ciphertext = :ct WHERE name = :n"),
+            {"ct": "!!! not base64 !!!", "n": "tok"},
+        )
+        await conn.commit()
+    with pytest.raises(SecretIntegrityError, match="not valid base64"):
+        await secrets_repo.get("tok")
+
+
+async def test_rotate_master_raises_integrity_error_on_invalid_base64(
+    secrets_repo: AsyncSecretsRepository, db_engine: AsyncEngine
+) -> None:
+    """rotate_master surfaces SecretIntegrityError when a row's ciphertext is non-base64."""
+    await secrets_repo.set("tok", "v")
+    async with db_engine.connect() as conn:
+        await conn.execute(
+            text("UPDATE secrets SET ciphertext = :ct WHERE name = :n"),
+            {"ct": "!!! not base64 !!!", "n": "tok"},
+        )
+        await conn.commit()
+    new_master = bytes(range(32, 64))
+    with pytest.raises(SecretIntegrityError, match="not valid base64"):
+        await secrets_repo.rotate_master(new_master)
+
+
+async def test_snapshot_raises_integrity_error_on_invalid_base64(
+    secrets_repo: AsyncSecretsRepository, db_engine: AsyncEngine
+) -> None:
+    """snapshot surfaces SecretIntegrityError when a row's ciphertext is non-base64."""
+    await secrets_repo.set("tok", "v")
+    async with db_engine.connect() as conn:
+        await conn.execute(
+            text("UPDATE secrets SET ciphertext = :ct WHERE name = :n"),
+            {"ct": "!!! not base64 !!!", "n": "tok"},
+        )
+        await conn.commit()
+    with pytest.raises(SecretIntegrityError, match="not valid base64"):
+        await secrets_repo.snapshot()
+
+
+async def test_current_fingerprint_is_stable(
+    secrets_repo: AsyncSecretsRepository,
+) -> None:
+    """current_fingerprint() returns the same string on repeated calls with same key."""
+    fp1 = secrets_repo.current_fingerprint()
+    fp2 = secrets_repo.current_fingerprint()
+    assert fp1 == fp2
+    assert isinstance(fp1, str)
+    assert len(fp1) == 64  # noqa: PLR2004  # SHA-256 hex string

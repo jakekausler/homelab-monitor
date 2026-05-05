@@ -55,3 +55,75 @@ The initial migration (`0001_initial_schema.py`) creates **19 tables**:
 
 Never hand-edit the database schema. All changes must go through numbered
 migration files in `apps/monitor/alembic/versions/`.
+
+## Secrets store
+
+### Configuration
+
+- **`HOMELAB_MONITOR_MASTER_KEY`** — base64-encoded 32-byte master key (highest priority)
+- **File fallback** — `/run/secrets/master-key`, also base64-encoded (read if env var is unset)
+- Generation: `head -c 32 /dev/urandom | base64`
+- Refuses to start if neither is set or if the decoded key is not exactly 32 bytes
+- **`HOMELAB_MONITOR_REVEAL=1`** — required for `hm secrets get` to print plaintext (defense against accidental disclosure in shell history)
+
+### CLI commands
+
+```bash
+# Store a secret (value piped from stdin; no positional value to avoid shell-history exposure)
+echo -n 'my-token' | hm secrets set unifi_password --from-stdin
+
+# Retrieve plaintext (requires HOMELAB_MONITOR_REVEAL=1)
+HOMELAB_MONITOR_REVEAL=1 hm secrets get unifi_password
+# Output: plaintext value on stdout, no other output
+
+# List all secrets — name + created_at + rotated_at; values never appear
+hm secrets list
+
+# Replace an existing secret's value
+echo -n 'new-token' | hm secrets rotate unifi_password --from-stdin
+
+# Remove a secret
+hm secrets delete unifi_password
+
+# Re-encrypt all secrets under a new master key (read base64 from stdin)
+# Prints old + new key fingerprints (HMAC-based, not the keys themselves)
+echo "$NEW_KEY_B64" | hm secrets rotate-master --from-stdin
+```
+
+### Master key rotation operational notes
+
+`hm secrets rotate-master` is atomic all-or-nothing. The implementation decrypts
+every row with the OLD key first, then encrypts each with the NEW key, then
+commits. If ANY row fails to decrypt (corrupted disk state, tampered ciphertext),
+the rotation aborts before touching any data — the operation is "all rows or none."
+
+If you encounter a rotation failure with `AES-GCM tag verification failed`, the
+offending row must be deleted before rotation can proceed:
+
+```bash
+# Find the problematic secret (the error doesn't currently identify the row by name)
+hm secrets list
+
+# After identifying which row is corrupted (e.g., via `hm secrets get` on each):
+hm secrets delete <corrupted-name>
+
+# Then retry rotation
+echo "$NEW_KEY_B64" | hm secrets rotate-master --from-stdin
+```
+
+After rotation, the old key can no longer decrypt any row — `hm secrets get` will
+fail with `AES-GCM tag verification failed` until the env var is updated to the
+new key.
+
+### Crypto details (for auditors)
+
+- **AEAD**: AES-256-GCM
+- **KDF**: HKDF-SHA256 with per-row 16-byte salt and HKDF info =
+  `b"homelab-monitor/secrets/v1/" + secrets.id` (UUIDv7)
+- **Per-encryption nonce**: 12 random bytes; never reused
+- **Storage**: `ciphertext` column holds `base64(nonce||ciphertext||tag)`; `kdf_salt`
+  is a separate BLOB column; `id` (UUIDv7) is bound into HKDF's info parameter so
+  the key derivation is unique per row
+- **Audit log**: every set/rotate/delete/rotate-master writes a row to `audit_log`
+  with metadata only (name, row count) — no plaintext values ever appear in audit
+  columns

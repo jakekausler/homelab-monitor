@@ -30,7 +30,7 @@ FINGERPRINT_INFO = b"homelab-monitor/master-key/fingerprint"
 """Domain separator for the fingerprint HMAC."""
 
 
-def _decode_b64(data: str, *, source: str) -> bytes:
+def decode_master_key_b64(data: str, *, source: str) -> bytes:
     """Strict base64 decode; raise :class:`MasterKeyError` on any failure.
 
     ``source`` is "env" or "file" — included in the error message for clarity.
@@ -41,7 +41,7 @@ def _decode_b64(data: str, *, source: str) -> bytes:
         raise MasterKeyError(f"master key from {source} is not valid base64") from exc
     if len(decoded) != EXPECTED_KEY_LEN:
         raise MasterKeyError(
-            f"master key from {source} has length {len(decoded)}; expected {EXPECTED_KEY_LEN}"
+            f"master key from {source} is not exactly {EXPECTED_KEY_LEN} bytes after base64 decode"
         )
     return decoded
 
@@ -56,12 +56,12 @@ def load_master_key(*, file_path: str | None = None) -> bytes:
     """
     raw_env = os.environ.get(ENV_VAR)
     if raw_env is not None and raw_env.strip() != "":
-        return _decode_b64(raw_env, source="env")
+        return decode_master_key_b64(raw_env, source="env")
 
     path = Path(file_path) if file_path is not None else Path(DEFAULT_KEY_FILE)
     if path.exists():
         contents = path.read_text(encoding="utf-8")
-        return _decode_b64(contents, source="file")
+        return decode_master_key_b64(contents, source="file")
 
     raise MasterKeyError(
         f"no master key: set {ENV_VAR} or place a base64-encoded 32-byte key at {path}"

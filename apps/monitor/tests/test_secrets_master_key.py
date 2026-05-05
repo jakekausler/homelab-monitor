@@ -80,7 +80,7 @@ def test_malformed_base64_raises_file(tmp_path: Path, monkeypatch: pytest.Monkey
 def test_wrong_length_raises_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """A base64 string that decodes to the wrong byte length raises."""
     monkeypatch.setenv(ENV_VAR, _b64(b"\x00" * 16))  # 16 bytes ≠ 32
-    with pytest.raises(MasterKeyError, match="length 16"):
+    with pytest.raises(MasterKeyError, match="not exactly 32 bytes"):
         load_master_key()
 
 
@@ -89,7 +89,7 @@ def test_wrong_length_raises_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     monkeypatch.delenv(ENV_VAR, raising=False)
     key_file = tmp_path / "short"
     key_file.write_text(_b64(b"\x00" * 8), encoding="utf-8")
-    with pytest.raises(MasterKeyError, match="length 8"):
+    with pytest.raises(MasterKeyError, match="not exactly 32 bytes"):
         load_master_key(file_path=str(key_file))
 
 

@@ -72,3 +72,19 @@ def test_filtered_returns_independent_instance() -> None:
     sub = r.filtered(["alpha"])
     assert isinstance(sub, SyncSecretsResolver)
     assert sub is not r
+
+
+def test_resolver_values_are_immutable() -> None:
+    """The internal _values mapping cannot be mutated after construction."""
+    resolver = SyncSecretsResolver({"key": "value"})  # pyright: ignore[reportPrivateUsage]
+    with pytest.raises(TypeError):
+        resolver._values["new"] = "x"  # pyright: ignore[reportPrivateUsage, reportIndexIssue]
+
+
+def test_resolver_pickle_roundtrip_preserves_immutability() -> None:
+    """After pickle round-trip, _values is still immutable."""
+    resolver = SyncSecretsResolver({"key": "value"})  # pyright: ignore[reportPrivateUsage]
+    restored = pickle.loads(pickle.dumps(resolver))
+    assert restored.get("key") == "value"
+    with pytest.raises(TypeError):
+        restored._values["new"] = "x"  # pyright: ignore[reportPrivateUsage, reportIndexIssue]

@@ -10,6 +10,7 @@ audit INSERT is issued directly against the same connection (NOT via
 from __future__ import annotations
 
 import base64
+import binascii
 import json
 from dataclasses import dataclass
 
@@ -24,6 +25,10 @@ from homelab_monitor.kernel.secrets.errors import (
     SecretIntegrityError,
     SecretNotFoundError,
 )
+from homelab_monitor.kernel.secrets.master_key import (
+    EXPECTED_KEY_LEN,
+    master_key_fingerprint,
+)
 from homelab_monitor.kernel.secrets.resolver import SyncSecretsResolver
 
 AUDIT_INSERT = text(
@@ -36,6 +41,10 @@ AUDIT_INSERT = text(
 class SecretMeta:
     """Metadata-only view of a secret row. Never includes the plaintext value."""
 
+    # SCAFFOLDING: ``id`` is exposed for future audit cross-referencing and for the
+    # admin UI in STAGE-001-014. Its UUIDv7 form encodes creation-time ordering, so
+    # operators with list access can already infer creation time from ``created_at``;
+    # leaking ``id`` adds no information beyond what ``created_at`` already exposes.
     id: str
     name: str
     created_at: str
@@ -100,7 +109,10 @@ class AsyncSecretsRepository:
         )
         if row is None:
             return None
-        ct_blob = base64.b64decode(row.ciphertext)
+        try:
+            ct_blob = base64.b64decode(row.ciphertext)
+        except (binascii.Error, ValueError) as exc:
+            raise SecretIntegrityError("ciphertext is not valid base64") from exc
         return row.id, bytes(row.kdf_salt), ct_blob
 
     # ----- mutating operations -----
@@ -111,6 +123,11 @@ class AsyncSecretsRepository:
         If a row already exists, this acts as a rotation: same row id is
         preserved, ciphertext + salt are replaced, ``rotated_at`` is bumped.
         Audit row is written in the same transaction.
+
+        Note: Idempotent calls (setting an existing name to the same plaintext value)
+        still write a new audit row because the ciphertext rotates (new nonce + salt +
+        key derivation). The audit log reflects ciphertext writes, not just plaintext
+        value changes.
         """
         plaintext = value.encode("utf-8")
         async with self._repo.transaction() as conn:
@@ -216,8 +233,11 @@ class AsyncSecretsRepository:
         in-memory master via :meth:`set_master_key`. The repository does not
         update its own ``_master`` automatically — the new master is a
         parameter, not a side effect.
+
+        Note: ``rotated_at`` is NOT updated by this operation. The audit_log
+        captures the rotation event.
         """
-        if len(new_master) != 32:  # noqa: PLR2004
+        if len(new_master) != EXPECTED_KEY_LEN:
             raise SecretIntegrityError("new master key must be 32 bytes")
 
         rows = await self._repo.fetch_all(
@@ -228,7 +248,10 @@ class AsyncSecretsRepository:
         # leak even if the writer fails halfway through.
         plaintexts: list[tuple[str, bytes]] = []
         for row in rows:
-            blob = base64.b64decode(row.ciphertext)
+            try:
+                blob = base64.b64decode(row.ciphertext)
+            except (binascii.Error, ValueError) as exc:
+                raise SecretIntegrityError("ciphertext is not valid base64") from exc
             pt = decrypt(self._master, bytes(row.kdf_salt), blob, row.id)
             plaintexts.append((row.id, pt))
 
@@ -237,15 +260,11 @@ class AsyncSecretsRepository:
             for row_id, pt in plaintexts:
                 new_salt, new_blob = encrypt(new_master, pt, row_id)
                 await conn.execute(
-                    text(
-                        "UPDATE secrets SET ciphertext = :ct, kdf_salt = :salt, "
-                        "rotated_at = :ts WHERE id = :id"
-                    ),
+                    text("UPDATE secrets SET ciphertext = :ct, kdf_salt = :salt WHERE id = :id"),
                     {
                         "id": row_id,
                         "ct": base64.b64encode(new_blob).decode("ascii"),
                         "salt": new_salt,
-                        "ts": utc_now_iso(),
                     },
                 )
             await _insert_audit(
@@ -257,9 +276,17 @@ class AsyncSecretsRepository:
             )
         return len(plaintexts)
 
+    def current_fingerprint(self) -> str:
+        """Return the HMAC fingerprint of the in-memory master key.
+
+        Used by the CLI's ``rotate-master`` command to display the old key's
+        fingerprint without exposing the bytes via ``_master``.
+        """
+        return master_key_fingerprint(self._master)
+
     def set_master_key(self, master_key: bytes) -> None:
         """Replace the in-memory master key (used after :meth:`rotate_master`)."""
-        if len(master_key) != 32:  # noqa: PLR2004
+        if len(master_key) != EXPECTED_KEY_LEN:
             raise SecretIntegrityError("master key must be 32 bytes")
         self._master = master_key
 
@@ -302,7 +329,10 @@ class AsyncSecretsRepository:
         )
         values: dict[str, str] = {}
         for row in rows:
-            blob = base64.b64decode(row.ciphertext)
+            try:
+                blob = base64.b64decode(row.ciphertext)
+            except (binascii.Error, ValueError) as exc:
+                raise SecretIntegrityError("ciphertext is not valid base64") from exc
             pt = decrypt(self._master, bytes(row.kdf_salt), blob, row.id)
             values[row.name] = pt.decode("utf-8")
         return SyncSecretsResolver(_values=values)

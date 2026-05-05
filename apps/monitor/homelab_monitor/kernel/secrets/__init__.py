@@ -9,6 +9,7 @@ from homelab_monitor.kernel.secrets.errors import (
     SecretNotFoundError,
 )
 from homelab_monitor.kernel.secrets.master_key import (
+    decode_master_key_b64,
     load_master_key,
     master_key_fingerprint,
 )
@@ -25,6 +26,7 @@ __all__ = [
     "SecretMeta",
     "SecretNotFoundError",
     "SyncSecretsResolver",
+    "decode_master_key_b64",
     "decrypt",
     "derive_key",
     "encrypt",

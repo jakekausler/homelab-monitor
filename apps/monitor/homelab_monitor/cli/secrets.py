@@ -15,6 +15,7 @@ from homelab_monitor.kernel.secrets.errors import (
     SecretNotFoundError,
 )
 from homelab_monitor.kernel.secrets.master_key import (
+    decode_master_key_b64,
     load_master_key,
     master_key_fingerprint,
 )
@@ -60,7 +61,7 @@ def add_subparser(subparsers: argparse._SubParsersAction[argparse.ArgumentParser
     secrets.set_defaults(func=_handle)
 
 
-def _handle(args: argparse.Namespace) -> int:  # noqa: PLR0911
+def _handle(args: argparse.Namespace) -> int:  # noqa: PLR0911  # one return per subcommand; flat dispatch is clearer than a dict
     """Dispatch ``hm secrets <cmd>``."""
     sub = getattr(args, "secrets_cmd", None)
     if sub is None:
@@ -91,13 +92,17 @@ async def _build_repo() -> AsyncSecretsRepository:
 
 async def _cmd_set(name: str) -> int:
     """``hm secrets set NAME --from-stdin``: read value from stdin, store."""
-    value = sys.stdin.read()
-    if value.endswith("\n"):
-        value = value[:-1]
+    value = sys.stdin.read().rstrip("\r\n")
     try:
         repo = await _build_repo()
         await repo.set(name, value, who="system")
     except MasterKeyError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    # ``# pragma: no cover``: defensive handler. ``set`` does not decrypt the
+    # existing row (the rotation path overwrites without reading), so this branch
+    # is unreachable today. Kept for uniform error-UX contract per code review I4.
+    except SecretIntegrityError as exc:  # pragma: no cover
         print(f"error: {exc}", file=sys.stderr)
         return 1
     print(f"set: {name}")
@@ -144,13 +149,15 @@ async def _cmd_list() -> int:
 
 async def _cmd_rotate(name: str) -> int:
     """``hm secrets rotate NAME --from-stdin``: rotate existing secret."""
-    value = sys.stdin.read()
-    if value.endswith("\n"):
-        value = value[:-1]
+    value = sys.stdin.read().rstrip("\r\n")
     try:
         repo = await _build_repo()
         await repo.rotate(name, value, who="system")
     except MasterKeyError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    # Defensive; rotate overwrites without decrypting the existing row.
+    except SecretIntegrityError as exc:  # pragma: no cover
         print(f"error: {exc}", file=sys.stderr)
         return 1
     except SecretNotFoundError:
@@ -168,6 +175,10 @@ async def _cmd_delete(name: str) -> int:
     except MasterKeyError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
+    # Defensive; delete doesn't decrypt the row.
+    except SecretIntegrityError as exc:  # pragma: no cover
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
     except SecretNotFoundError:
         print(f"error: no secret named {name!r}", file=sys.stderr)
         return 1
@@ -179,17 +190,13 @@ async def _cmd_rotate_master() -> int:
     """``hm secrets rotate-master --from-stdin``: re-encrypt under new master."""
     raw = sys.stdin.read().strip()
     try:
-        from homelab_monitor.kernel.secrets.master_key import (  # noqa: PLC0415
-            _decode_b64,  # pyright: ignore[reportPrivateUsage]
-        )
-
-        new_master = _decode_b64(raw, source="stdin")  # pyright: ignore[reportPrivateUsage]
+        new_master = decode_master_key_b64(raw, source="stdin")
     except MasterKeyError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     try:
         repo = await _build_repo()
-        old_fp = master_key_fingerprint(repo._master)  # pyright: ignore[reportPrivateUsage]
+        old_fp = repo.current_fingerprint()
         count = await repo.rotate_master(new_master, who="system")
         repo.set_master_key(new_master)
         new_fp = master_key_fingerprint(new_master)

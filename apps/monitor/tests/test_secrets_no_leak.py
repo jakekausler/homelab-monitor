@@ -10,6 +10,8 @@ from __future__ import annotations
 import base64
 import io
 import logging
+import sqlite3
+from urllib.parse import urlparse
 
 import pytest
 
@@ -230,3 +232,47 @@ def test_rotate_master_does_not_leak(
     captured = capsys.readouterr()
     assert rc == 0
     _assert_no_leak(captured, handler.records)
+
+
+def test_no_leak_on_corrupted_get(
+    db_url_env: str,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Sentinel value must not leak via stderr or logs when get fails on corrupted ciphertext."""
+    SENTINEL = "no-leak-corrupt-7c4f8a2-e6"
+    KEY_B64 = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="
+    monkeypatch.setenv(ENV_VAR, KEY_B64)
+    monkeypatch.setenv(REVEAL_ENV, "1")
+
+    main(["migrate"])
+    capsys.readouterr()
+
+    # Set the secret with the sentinel value.
+    monkeypatch.setattr("sys.stdin", io.StringIO(SENTINEL))
+    main(["secrets", "set", "leak_corrupt", "--from-stdin"])
+    capsys.readouterr()
+
+    # Corrupt the row directly via sqlite3.
+    parsed = urlparse(db_url_env.replace("sqlite+aiosqlite", "sqlite"))
+    db_file = parsed.path
+    conn = sqlite3.connect(db_file)
+    try:
+        conn.execute(
+            "UPDATE secrets SET ciphertext = ? WHERE name = ?",
+            ("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "leak_corrupt"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    # Attempt get — should fail.
+    caplog.set_level("DEBUG")
+    rc = main(["secrets", "get", "leak_corrupt"])
+    captured = capsys.readouterr()
+    assert rc == 1
+    log_text = "\n".join(record.getMessage() for record in caplog.records)
+    assert SENTINEL not in captured.out, "sentinel leaked to stdout"
+    assert SENTINEL not in captured.err, "sentinel leaked to stderr"
+    assert SENTINEL not in log_text, "sentinel leaked to log records"

@@ -34,12 +34,22 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
+    conn = op.get_bind()
+    row_count = conn.execute(sa.text("SELECT COUNT(*) FROM secrets")).scalar()
+    if row_count and row_count > 0:
+        raise RuntimeError(
+            f"refusing to upgrade 0002: secrets table has {row_count} row(s); "
+            "the NOT NULL columns cannot be added without a backfill. "
+            "Drop or migrate existing rows manually first."
+        )
     op.add_column("secrets", sa.Column("ciphertext", sa.Text(), nullable=False))
     op.add_column("secrets", sa.Column("kdf_salt", sa.LargeBinary(), nullable=False))
     op.add_column("secrets", sa.Column("rotated_at", sa.Text(), nullable=True))
+    op.create_index("ix_secrets_name_unique", "secrets", ["name"], unique=True)
 
 
 def downgrade() -> None:
+    op.drop_index("ix_secrets_name_unique", table_name="secrets")
     op.drop_column("secrets", "rotated_at")
     op.drop_column("secrets", "kdf_salt")
     op.drop_column("secrets", "ciphertext")

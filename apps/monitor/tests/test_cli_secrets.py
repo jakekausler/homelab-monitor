@@ -464,3 +464,21 @@ def test_rotate_strips_trailing_newline(
     main(["secrets", "get", "tok"])
     out = capsys.readouterr().out.strip()
     assert out == "new-val-with-newline"
+
+
+def test_set_strips_crlf(
+    cli_env: str,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Stdin pipes from CRLF sources have a trailing \\r\\n that must be stripped."""
+    main(["migrate"])
+    capsys.readouterr()
+    _stdin(monkeypatch, "value-with-crlf\r\n")
+    assert main(["secrets", "set", "tok", "--from-stdin"]) == 0
+    capsys.readouterr()
+
+    monkeypatch.setenv(REVEAL_ENV, "1")
+    main(["secrets", "get", "tok"])
+    out = capsys.readouterr().out.strip()
+    assert out == "value-with-crlf"
