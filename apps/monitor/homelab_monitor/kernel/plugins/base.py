@@ -47,9 +47,27 @@ class BaseCollector(ABC):
     name: ClassVar[str]
     interval: ClassVar[timedelta]
     timeout: ClassVar[timedelta]
+    # TODO: validate against pattern when scheduler lands (STAGE-001-008+)
     concurrency_group: ClassVar[str] = "default"
     run_kind: ClassVar[RunKind] = RunKind.ASYNC
     trust_level: ClassVar[TrustLevel] = TrustLevel.BUILTIN
+
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        """Enforce required ClassVars on concrete subclasses.
+
+        Abstract subclasses (those that don't override ``run``) are exempt — they're
+        meant to be intermediate layers, not instantiated. We check this by comparing
+        ``cls.run`` against this class's ``run``; ``__abstractmethods__`` is not yet
+        populated when ``__init_subclass__`` fires.
+        """
+        super().__init_subclass__(**kwargs)
+        # Skip enforcement for abstract subclasses (those that didn't override run).
+        if cls.run is BaseCollector.run:
+            return
+        for required in ("name", "interval", "timeout"):
+            if not getattr(cls, required, None):
+                msg = f"{cls.__name__} must define ClassVar `{required}`"
+                raise TypeError(msg)
 
     @abstractmethod
     async def run(self, ctx: CollectorContext) -> CollectorResult:

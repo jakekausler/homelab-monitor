@@ -92,3 +92,36 @@ def test_concrete_satisfies_collector_protocol() -> None:
     """A BaseCollector subclass is assignable to the Collector Protocol."""
     c: Collector = _ConcreteCollector()
     assert c.name == "concrete"
+
+
+def test_base_collector_subclass_missing_classvar_raises() -> None:
+    """A concrete subclass that forgets a required ClassVar fails clearly at class-creation time."""
+    with pytest.raises(TypeError, match="must define ClassVar `name`"):
+
+        class BadCollector(BaseCollector):  # pyright: ignore[reportUnusedClass]
+            # Missing `name`, `interval`, `timeout` — but provides run, so not abstract.
+            # The class definition itself raises TypeError via __init_subclass__,
+            # so the class is never actually used; pyright can't infer this.
+            async def run(self, ctx: CollectorContext) -> CollectorResult:
+                _ = ctx
+                return CollectorResult(
+                    ok=True, metrics_emitted=0, errors=[], events=[], duration_seconds=0.0
+                )
+
+
+def test_base_collector_abstract_subclass_skipped() -> None:
+    """Abstract subclasses are exempt from required-ClassVar enforcement.
+
+    Covers the early-return branch in ``__init_subclass__``: subclasses that
+    haven't implemented ``run`` are intermediate ABCs and shouldn't need to
+    set ``name``/``interval``/``timeout``.
+    """
+
+    # No exception expected — class definition succeeds despite missing ClassVars
+    # because the class is still abstract (run is not overridden).
+    class IntermediateCollector(BaseCollector):  # pyright: ignore[reportUnusedClass]
+        # Missing all required ClassVars and missing run() override: still abstract.
+        pass
+
+    # If we got here, the early-return branch was exercised.
+    assert IntermediateCollector.__abstractmethods__

@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from contextlib import AbstractAsyncContextManager
 from typing import cast
 
 import httpx
+import pytest_asyncio
 import structlog
 from structlog import BoundLogger
 
@@ -33,19 +35,22 @@ class _StubFactory:
         raise NotImplementedError
 
 
-def _make_ctx() -> CollectorContext:
-    log = cast(BoundLogger, structlog.get_logger())
-    return CollectorContext(
-        config=CollectorConfig(name="noop"),
-        db=cast(SqliteRepository, object()),
-        vm=InMemoryMetricsWriter(),
-        vl=InMemoryLogsWriter(),
-        http=httpx.AsyncClient(),
-        ssh=_StubFactory(),
-        secrets=SyncSecretsResolver(),
-        log=log,
-        ha=None,
-    )
+@pytest_asyncio.fixture
+async def ctx() -> AsyncIterator[CollectorContext]:
+    """A CollectorContext built with a properly-closed httpx.AsyncClient."""
+    async with httpx.AsyncClient() as http:
+        log = cast(BoundLogger, structlog.get_logger())
+        yield CollectorContext(
+            config=CollectorConfig(name="noop"),
+            db=cast(SqliteRepository, object()),
+            vm=InMemoryMetricsWriter(),
+            vl=InMemoryLogsWriter(),
+            http=http,
+            ssh=_StubFactory(),
+            secrets=SyncSecretsResolver(),
+            log=log,
+            ha=None,
+        )
 
 
 def test_noop_class_attributes() -> None:
@@ -66,9 +71,9 @@ def test_noop_satisfies_collector_protocol() -> None:
     assert c.name == "noop"
 
 
-async def test_noop_run_returns_empty_successful_result() -> None:
+async def test_noop_run_returns_empty_successful_result(ctx: CollectorContext) -> None:
     """``run`` returns ok=True with zero metrics, zero events, zero errors."""
-    result = await NoopCollector().run(_make_ctx())
+    result = await NoopCollector().run(ctx)
     assert isinstance(result, CollectorResult)
     assert result.ok is True
     assert result.metrics_emitted == 0

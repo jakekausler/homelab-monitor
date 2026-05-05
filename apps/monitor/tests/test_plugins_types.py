@@ -50,7 +50,7 @@ def test_trustlevel_has_three_string_values() -> None:
 # --- CollectorConfig ------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("good", ["abc", "my-collector", "foo_bar", "host-psutil-001"])
+@pytest.mark.parametrize("good", ["abc", "my-collector", "foo_bar", "host-psutil-001", "a" * 64])
 def test_collector_config_accepts_valid_names(good: str) -> None:
     """Valid plugin names match `[a-z][a-z0-9_-]{2,63}`."""
     cfg = CollectorConfig(name=good)

@@ -129,5 +129,7 @@ class CollectorResult(BaseModel):
     ok: bool
     metrics_emitted: int = Field(default=0, ge=0)
     errors: list[str] = Field(default_factory=list)
+    # type: ignore[arg-type] justification: Annotated[Union, Field(discriminator=)]
+    # alias confuses default_factory typing; runtime is fine.
     events: list[CollectorEvent] = Field(default_factory=lambda: [])  # type: ignore[arg-type]
     duration_seconds: float = Field(default=0.0, ge=0.0)

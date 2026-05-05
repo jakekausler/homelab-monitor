@@ -25,6 +25,7 @@ SUMMARY_VALUE = 12.3
 
 
 def test_metrics_writer_records_gauge() -> None:
+    """write_gauge records the metric with kind='gauge'."""
     w = InMemoryMetricsWriter()
     w.write_gauge("cpu", GAUGE_VALUE, {"host": "alpha"})
     assert len(w.recorded) == 1
@@ -36,12 +37,14 @@ def test_metrics_writer_records_gauge() -> None:
 
 
 def test_metrics_writer_records_counter() -> None:
+    """write_counter records the metric with kind='counter'."""
     w = InMemoryMetricsWriter()
     w.write_counter("requests", 1.0, {"route": "/x"})
     assert w.recorded[0].kind == "counter"
 
 
 def test_metrics_writer_records_summary() -> None:
+    """write_summary records the metric with kind='summary'."""
     w = InMemoryMetricsWriter()
     w.write_summary("latency", SUMMARY_VALUE, {"route": "/x"})
     assert w.recorded[0].kind == "summary"
@@ -75,6 +78,7 @@ def test_metrics_writer_satisfies_protocol() -> None:
 
 
 def test_logs_writer_records_line_with_explicit_ts() -> None:
+    """ingest records a log entry with the provided timestamp."""
     w = InMemoryLogsWriter()
     w.ingest("docker.sonarr", "started", ts="2026-05-05T00:00:00+00:00")
     assert len(w.recorded) == 1
@@ -92,6 +96,7 @@ def test_logs_writer_defaults_ts_to_utc_now() -> None:
 
 
 def test_logs_writer_recorded_returns_copy() -> None:
+    """``recorded`` returns a snapshot copy; mutating it does not affect future reads."""
     w = InMemoryLogsWriter()
     w.ingest("s", "l")
     snapshot = w.recorded
@@ -100,6 +105,7 @@ def test_logs_writer_recorded_returns_copy() -> None:
 
 
 def test_logs_writer_satisfies_protocol() -> None:
+    """``InMemoryLogsWriter`` satisfies the ``LogsWriter`` Protocol structurally."""
     w: LogsWriter = InMemoryLogsWriter()
     assert isinstance(w, LogsWriter)
 
@@ -150,5 +156,6 @@ class _FakeHa:
 
 
 def test_home_assistant_client_protocol_accepts_empty_class() -> None:
+    """Any class satisfies the empty ``HomeAssistantClient`` Protocol (tautology by design)."""
     ha: HomeAssistantClient = _FakeHa()
     assert isinstance(ha, HomeAssistantClient)

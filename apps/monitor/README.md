@@ -127,3 +127,77 @@ new key.
 - **Audit log**: every set/rotate/delete/rotate-master writes a row to `audit_log`
   with metadata only (name, row count) — no plaintext values ever appear in audit
   columns
+
+## Internal API: collector protocol
+
+Plugin authors implement the `Collector` Protocol from `homelab_monitor.kernel.plugins`. Two paths:
+
+### Subclass `BaseCollector` (recommended for in-process plugins)
+
+```python
+from datetime import timedelta
+from typing import ClassVar
+
+from homelab_monitor.kernel.plugins import (
+    BaseCollector, CollectorContext, CollectorResult, RunKind, TrustLevel,
+)
+
+class HostCollector(BaseCollector):
+    name: ClassVar[str] = "host"
+    interval: ClassVar[timedelta] = timedelta(seconds=10)
+    timeout: ClassVar[timedelta] = timedelta(seconds=5)
+    # run_kind, trust_level, concurrency_group inherit defaults
+    # (ASYNC, BUILTIN, "default")
+
+    async def run(self, ctx: CollectorContext) -> CollectorResult:
+        # ... read host metrics, write via ctx.vm.write_gauge(...)
+        return CollectorResult(
+            ok=True,
+            metrics_emitted=N,
+            errors=[],
+            events=[],
+            duration_seconds=elapsed,
+        )
+```
+
+`BaseCollector.__init_subclass__` enforces that concrete subclasses set `name`, `interval`, `timeout` — forgetting one raises `TypeError` at class-creation time.
+
+### Implement `Collector` Protocol structurally (for subprocess plugins)
+
+Subprocess plugins can't import `BaseCollector` (cross-process boundary). They satisfy the `Collector` Protocol by shape — declare the same ClassVars and `async def run` method on a free-standing class. STAGE-001-009 wires the JSON-RPC bridge.
+
+### `CollectorContext`
+
+The scheduler injects a `CollectorContext` per tick. Fields:
+
+- `config: CollectorConfig` — plugin config (pydantic model, regex-validated `name`)
+- `db: SqliteRepository` — async SQLite facade
+- `vm: MetricsWriter` — `write_gauge` / `write_counter` / `write_summary`
+- `vl: LogsWriter` — `ingest(stream, line, ts=None)`
+- `http: httpx.AsyncClient` — shared HTTP client
+- `ssh: SshClientFactory` — opens SSH connections by target id (Protocol stub today)
+- `secrets: SyncSecretsResolver` — read-only plaintext snapshot
+- `log: structlog.BoundLogger` — structured logger
+- `ha: HomeAssistantClient | None` — optional HA client (None for non-HA collectors)
+
+`CollectorContext` is a `@dataclass(slots=True)` — extra attribute assignment raises `AttributeError`.
+
+### `RunKind`
+
+- `RunKind.ASYNC` (default) — runs in the scheduler's event loop
+- `RunKind.THREAD` — wrapped in `asyncio.to_thread` for blocking I/O
+- `RunKind.PROCESS` — runs in a `ProcessPoolExecutor`; collector and config must be pickle-safe
+
+### `TrustLevel`
+
+- `TrustLevel.BUILTIN` (default) — full kernel access
+- `TrustLevel.TRUSTED` — narrowed env, scoped secrets resolver
+- `TrustLevel.UNTRUSTED` — forced subprocess, narrowest env, no DB writes (STAGE-001-009)
+
+### `CollectorEvent`
+
+Discriminated union (4 kinds): `suggestion`, `alert_forward`, `log_signature`, `heartbeat`. Use `pydantic.TypeAdapter[CollectorEvent].validate_python(...)` to construct from JSON.
+
+### Testing
+
+Use `InMemoryMetricsWriter` and `InMemoryLogsWriter` from `homelab_monitor.kernel.plugins` to record collector output without a real backend. The reference `NoopCollector` shows the minimal shape.

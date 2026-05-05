@@ -36,6 +36,7 @@ class CollectorContext:
     db: SqliteRepository
     vm: MetricsWriter
     vl: LogsWriter
+    # TODO: consider abstracting behind Protocol when STAGE-001-015 introduces test doubles
     http: httpx.AsyncClient
     ssh: SshClientFactory
     secrets: SyncSecretsResolver

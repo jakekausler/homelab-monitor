@@ -75,9 +75,11 @@ class LogsWriter(Protocol):
 
 @runtime_checkable
 class SshConnection(Protocol):
-    """Stub Protocol for an open SSH connection.
+    """SCAFFOLDING: methods land in EPIC-017 (SSH collectors).
 
-    SCAFFOLDING: methods (``run``, ``read_file``, ...) land in EPIC-017 SSH probes.
+    NOTE: while empty, ``isinstance(x, SshConnection)`` is a tautology
+    (always True for any object). Do NOT rely on it for narrowing in
+    production code until methods are added.
     """
 
 
@@ -95,10 +97,11 @@ class SshClientFactory(Protocol):
 
 @runtime_checkable
 class HomeAssistantClient(Protocol):
-    """Stub Protocol for the Home Assistant REST/WS client.
+    """SCAFFOLDING: methods land in the HA-collector epic.
 
-    SCAFFOLDING: methods land in EPIC-005 (Home Assistant integration).
-    Defined here only so :class:`CollectorContext` can type its ``ha`` field.
+    NOTE: while empty, ``isinstance(x, HomeAssistantClient)`` is a tautology
+    (always True for any object). Do NOT rely on it for narrowing in
+    production code until methods are added.
     """
 
 
