@@ -26,7 +26,7 @@ After EPIC-001 is complete, the system has: a working CI pipeline, a verified de
 | STAGE-001-002 | Frontend skeleton                                     | Complete    |
 | STAGE-001-003 | CI + Code Review Graph + Dependabot                   | Complete    |
 | STAGE-001-004 | SQLite + Alembic + first migration                    | Complete    |
-| STAGE-001-005 | Encrypted secrets store                               | Finalize    |
+| STAGE-001-005 | Encrypted secrets store                               | Complete    |
 | STAGE-001-006 | Collector protocol + base classes                     | Not Started |
 | STAGE-001-007 | In-process plugin loader + scheduler                  | Not Started |
 | STAGE-001-008 | Concurrency groups + failure budget + quarantine      | Not Started |
@@ -45,7 +45,7 @@ After EPIC-001 is complete, the system has: a working CI pipeline, a verified de
 | STAGE-001-020 | Grafana + dashboards-as-code provisioning             | Not Started |
 | STAGE-001-021 | Full integration test rig + canonical e2e test        | Not Started |
 
-## Current Stage: STAGE-001-005
+## Current Stage: STAGE-001-006
 
 ## Cross-stage acceptance criteria
 
