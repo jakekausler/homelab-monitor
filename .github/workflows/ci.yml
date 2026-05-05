@@ -91,7 +91,7 @@ jobs:
           python-version-file: .python-version
 
       - name: Install code-review-graph
-        run: uv tool install 'code-review-graph>=0.1,<1.0'
+        run: uv tool install 'code-review-graph>=1.2,<2.0'
 
       - name: Build graph
         run: uv tool run code-review-graph build
