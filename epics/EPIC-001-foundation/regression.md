@@ -99,11 +99,12 @@ or related tests.
 - [ ] NoopCollector().run(ctx) returns CollectorResult(ok=True, metrics_emitted=0, errors=[], events=[])
 - [ ] CollectorEvent pickle round-trip preserves kind discriminator (STAGE-001-009 subprocess boundary requirement)
 
-## STAGE-001-007: In-process plugin loader + scheduler
+## STAGE-001-007 — Scheduler
 
-- [ ] A scheduled tick fires within ±100ms of its target time
-- [ ] Multiple collectors with different intervals all fire correctly over a 60s test window
-- [ ] Per-collector timeout is enforced (a collector that sleeps past timeout is killed)
+1. **Run scheduler e2e suite as part of slow/integration tier** — `apps/monitor/tests/test_scheduler_e2e.py`. Particularly `test_long_running_tick_precision` (30s window) catches deadline drift that short unit tests cannot reveal.
+2. **Re-run PROCESS worker crash test after any ProcessPoolExecutor config change** — the isolation guarantee (worker death → failure metric, scheduler continues) is load-bearing for scheduler stability.
+3. **Re-run high-cardinality offset spread test if collector naming conventions change** — if all collector names hash to the same offset bucket, thundering herd protection silently breaks.
+4. **Address fork() in multi-threaded context before enabling PROCESS RunKind in production** — STAGE-001-010 (FastAPI lifespan) must construct ProcessPoolExecutor with `mp_context=multiprocessing.get_context("forkserver")` (or "spawn"), or document that PROCESS RunKind is unsupported in production. Add a test that verifies the executor's start method once decided.
 
 ## STAGE-001-008: Concurrency groups + failure budget + quarantine
 
