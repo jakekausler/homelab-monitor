@@ -116,6 +116,14 @@ or related tests.
 6. **group_busy skip metric** — When a group lock is held past `interval/2`, the waiting collector must emit `homelab_collector_run_skipped_total{reason="group_busy"}` rather than blocking or timing out with an error.
 7. **quarantine_after per-collector override** — Threshold of N < default(5) must quarantine after exactly N failures; DB `consecutive_failures` column must equal N. Tests at `tests/test_scheduler_quarantine_e2e.py::test_per_collector_quarantine_after_override` cover this.
 
+## STAGE-001-009 — Subprocess plugin runner + JSON line protocol
+
+1. **Subprocess plugin end-to-end via SubprocessCollector class factory** — `runbooks/_examples/hello-subprocess-plugin/plugin.yaml` should always parse, spawn, and emit metrics correctly when run via `make_subprocess_collector` + `run_subprocess`. Test: `tests/test_subprocess_runner_e2e.py::test_hello_world_plugin_via_collector_class_factory`. Re-run after any change to manifest schema, runner protocol parsing, or class factory.
+2. **All 5 JSON protocol line types** — metric/event/log/heartbeat/result must all parse correctly in a single subprocess run. Test: `test_all_five_protocol_line_types_parsed_correctly`. Re-run after any change to subprocess_runner's `_drain_stdout` parser or any new line type addition.
+3. **Timeout escalation: SIGTERM → 2s grace → SIGKILL** — Subprocess plugin that ignores SIGTERM must be SIGKILLed within `timeout + SIGTERM_GRACE_SECONDS` wall-clock. Test: `test_timeout_sigterm_then_sigkill_wall_clock`. Re-run after any change to timeout enforcement, signal handling, or `start_new_session`/`os.killpg` invocation.
+4. **Untrusted plugin secrets filtering** — Subprocess plugin's `secrets: [...]` manifest declaration must be the ONLY secrets visible to the subprocess (via filtered `SyncSecretsResolver`). Test: `test_untrusted_plugin_secrets_filtered_to_manifest_declarations`. Re-run after any change to `SyncSecretsResolver.filtered`, stdin payload construction, or trust-tier dispatch.
+5. **Loader.persist_to_db idempotency** — Calling `await loader.persist_to_db(repo)` twice on the same registered set must produce no duplicates and no errors. Closes STAGE-001-008's loader-INSERT gap. Test: `test_loader_persist_to_db_inserts_and_is_idempotent`. Re-run after any change to `loader.persist_to_db` SQL or schema migrations on the `collectors` table.
+
 ## STAGE-001-009: Subprocess plugin runner + JSON line protocol
 
 - [ ] A bash hello-world plugin produces metrics visible via the API
