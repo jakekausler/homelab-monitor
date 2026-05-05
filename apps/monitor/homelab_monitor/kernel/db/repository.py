@@ -30,7 +30,7 @@ class SqliteRepository:
 
     @property
     def engine(self) -> AsyncEngine:
-        """Return the underlying engine (used by audit + migration helpers)."""
+        """Underlying engine; used by audit + migration helpers and (future) lifespan ops."""
         return self._engine
 
     async def execute(

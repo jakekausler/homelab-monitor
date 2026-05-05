@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncEngine
 
 from homelab_monitor.kernel.db.ids import uuid7
 from homelab_monitor.kernel.db.repository import SqliteRepository
 from homelab_monitor.kernel.db.time import utc_now_iso
 
 
-async def test_engine_property_returns_underlying_engine(repo: SqliteRepository) -> None:
-    """``repo.engine`` exposes the AsyncEngine for downstream helpers."""
-    assert repo.engine is not None
+async def test_engine_property_returns_underlying_engine(
+    db_engine: AsyncEngine, repo: SqliteRepository
+) -> None:
+    """``repo.engine`` returns the same engine passed to the constructor."""
+    assert repo.engine is db_engine
 
 
 async def test_execute_and_fetch_one(repo: SqliteRepository) -> None:

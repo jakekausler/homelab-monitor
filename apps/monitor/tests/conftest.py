@@ -17,7 +17,7 @@ import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from homelab_monitor.kernel.db.engine import get_engine
+from homelab_monitor.kernel.db.engine import dispose_engine, get_engine
 from homelab_monitor.kernel.db.migrations import alembic_upgrade_head
 from homelab_monitor.kernel.db.repository import SqliteRepository
 
@@ -51,7 +51,12 @@ def db_url_env(db_url: str, monkeypatch: pytest.MonkeyPatch) -> str:
 
 @pytest_asyncio.fixture
 async def db_engine(db_url: str) -> AsyncIterator[AsyncEngine]:
-    """Async engine pointed at a freshly migrated temp DB."""
+    """Async engine pointed at a freshly migrated temp DB.
+
+    Note: bypasses ``run_migrations`` / the ``HOMELAB_MONITOR_AUTO_MIGRATE``
+    gate by calling ``alembic_upgrade_head`` directly — that gate is tested
+    separately in ``test_db_migrations.py``.
+    """
     alembic_upgrade_head(db_url)
     engine = get_engine(url=db_url)
     try:
@@ -64,3 +69,14 @@ async def db_engine(db_url: str) -> AsyncIterator[AsyncEngine]:
 async def repo(db_engine: AsyncEngine) -> SqliteRepository:
     """Repository facade bound to the migrated test engine."""
     return SqliteRepository(engine=db_engine)
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _reset_engine_singleton() -> AsyncIterator[None]:  # pyright: ignore[reportUnusedFunction]
+    """Ensure tests do not leak module-level engine state across each other.
+
+    Invoked by pytest's autouse collector, not by direct call — hence the
+    leading underscore and the pyright suppression.
+    """
+    yield
+    await dispose_engine()

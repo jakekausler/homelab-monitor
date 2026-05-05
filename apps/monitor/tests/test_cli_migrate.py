@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import tempfile
-from pathlib import Path
-
 import pytest
 
 from homelab_monitor.cli.main import main
@@ -62,17 +59,8 @@ def test_hm_migrate_history_lists_revisions(
     assert "0001 ->" in out
 
 
-def test_hm_unknown_command(
-    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_hm_unknown_command() -> None:
     """An unknown subcommand triggers argparse error."""
-    fd_path = Path(tempfile.mkstemp(prefix="hm-unknown-", suffix=".db")[1])
-    fd_path.unlink(missing_ok=True)
-    monkeypatch.setenv("HOMELAB_MONITOR_DB_URL", f"sqlite+aiosqlite:///{fd_path}")
-    try:
-        with pytest.raises(SystemExit) as excinfo:
-            main(["unknown"])
-        assert excinfo.value.code == 2  # noqa: PLR2004
-    finally:
-        for suffix in ("", "-wal", "-shm"):
-            (fd_path.parent / (fd_path.name + suffix)).unlink(missing_ok=True)
+    with pytest.raises(SystemExit) as excinfo:
+        main(["unknown"])
+    assert excinfo.value.code == 2  # noqa: PLR2004

@@ -13,6 +13,8 @@ from homelab_monitor.kernel.db.migrations import (
 )
 
 
+# argparse exposes no public type for sub-parsers; using the private alias is the
+# pyright-recommended workaround. https://github.com/python/typeshed/issues/2569
 def add_subparser(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:  # pyright: ignore[reportPrivateUsage]
     """Wire ``migrate`` and its sub-subcommands onto an argparse subparsers object."""
     migrate = subparsers.add_parser("migrate", help="Apply or inspect Alembic migrations")

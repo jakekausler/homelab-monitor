@@ -64,7 +64,6 @@ python_functions = ["test_*"]
 [tool.coverage.run]
 source = ["homelab_monitor"]
 branch = true
-omit = ["homelab_monitor/cli/__main__.py"]
 
 [tool.coverage.report]
 fail_under = 100

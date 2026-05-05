@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from collections.abc import Mapping
 
 from sqlalchemy import text
 
@@ -17,15 +17,18 @@ async def audit_write(  # noqa: PLR0913
     *,
     who: str,
     what: str,
-    before: dict[str, Any] | None = None,
-    after: dict[str, Any] | None = None,
+    before: Mapping[str, object] | None = None,
+    after: Mapping[str, object] | None = None,
     ip: str | None = None,
 ) -> None:
     """Insert a row into ``audit_log``.
 
-    ``before`` / ``after`` are JSON-serialised. ``when`` is set to the current
-    UTC instant (ISO-8601). ``id`` is a fresh UUIDv7. The column name ``when``
-    must be quoted because ``WHEN`` is a reserved SQL word.
+    ``who`` is required (no default) — callers must pass a stable identifier
+    such as ``"system"`` for kernel-initiated writes or the username for
+    user-initiated writes. Keyword-only to prevent positional-arg mistakes.
+
+    ``before`` / ``after`` are arbitrary JSON-serialisable mappings; ``Mapping``
+    keeps callers flexible while still type-narrowing in pyright strict mode.
     """
     before_json = json.dumps(before) if before is not None else None
     after_json = json.dumps(after) if after is not None else None

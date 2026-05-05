@@ -31,6 +31,8 @@ make crg-init   # installs code-review-graph, builds initial graph, starts crg-d
 
 > Note: `make dev` is a documented stub until the FastAPI app shell lands in STAGE-001-010.
 
+> STAGE-001-004 complete: SQLite + Alembic + initial schema (19 tables). See [`apps/monitor/README.md`](apps/monitor/README.md) for DB operations.
+
 See [design spec](docs/superpowers/specs/2026-05-04-homelab-monitor-design.md)
 for architecture decisions and full feature map.
 

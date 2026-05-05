@@ -80,7 +80,12 @@ def upgrade() -> None:
         sa.Column("rotated_at", sa.Text(), nullable=True),
     )
 
-    # ---------- minimal-schema stubs (id, name/key column, created_at) ----------
+    # ---------- SCAFFOLDING: minimal-schema stubs ----------
+    # Each table below carries only id + name/key + created_at. Behavioural columns
+    # are added in later stages via additive migrations (e.g., STAGE-001-005 expands
+    # `secrets`; STAGE-001-008 expands `collectors`; etc.). Do not add columns here —
+    # add them in the stage's own ``000N_*.py`` migration.
+    # SCAFFOLDING: targets — full columns (kind, labels, source, status, first_seen, last_seen) added by collector stages.
     op.create_table(
         "targets",
         sa.Column("id", sa.Text(), primary_key=True),
@@ -88,6 +93,7 @@ def upgrade() -> None:
         sa.Column("created_at", sa.Text(), nullable=False),
     )
 
+    # SCAFFOLDING: collectors — quarantine + run-state columns added by STAGE-001-008.
     op.create_table(
         "collectors",
         sa.Column("id", sa.Text(), primary_key=True),
@@ -96,6 +102,7 @@ def upgrade() -> None:
         sa.Column("created_at", sa.Text(), nullable=False),
     )
 
+    # SCAFFOLDING: crons — schedule, integration_mode, last_seen_state added by cron-monitoring stage.
     op.create_table(
         "crons",
         sa.Column("id", sa.Text(), primary_key=True),
@@ -103,6 +110,7 @@ def upgrade() -> None:
         sa.Column("created_at", sa.Text(), nullable=False),
     )
 
+    # SCAFFOLDING: heartbeats_state — current_state, last_ok_at, current_streak, expected_next_at added later.
     op.create_table(
         "heartbeats_state",
         sa.Column("id", sa.Text(), primary_key=True),
@@ -110,6 +118,7 @@ def upgrade() -> None:
         sa.Column("created_at", sa.Text(), nullable=False),
     )
 
+    # SCAFFOLDING: alerts — source_tool, severity, status, opened_at, resolved_at, ack_at, ack_by, runbook_id, payload_json added by alerts stage.
     op.create_table(
         "alerts",
         sa.Column("id", sa.Text(), primary_key=True),
@@ -117,6 +126,7 @@ def upgrade() -> None:
         sa.Column("created_at", sa.Text(), nullable=False),
     )
 
+    # SCAFFOLDING: alert_outcomes — outcome, decided_at, decided_by added by alerts-outcome stage.
     op.create_table(
         "alert_outcomes",
         sa.Column("id", sa.Text(), primary_key=True),
@@ -129,6 +139,7 @@ def upgrade() -> None:
         sa.Column("created_at", sa.Text(), nullable=False),
     )
 
+    # SCAFFOLDING: runbooks — alert_match_patterns, risk_tag, dry_run_required, rate_limit_per_hour, cooldown_seconds added by auto-fix stage.
     op.create_table(
         "runbooks",
         sa.Column("id", sa.Text(), primary_key=True),
@@ -136,6 +147,7 @@ def upgrade() -> None:
         sa.Column("created_at", sa.Text(), nullable=False),
     )
 
+    # SCAFFOLDING: runbook_runs — alert_id, mode, prompt, transcript_path, exit_code, started_at, ended_at, fixer_user, host added by auto-fix stage.
     op.create_table(
         "runbook_runs",
         sa.Column("id", sa.Text(), primary_key=True),
@@ -148,6 +160,7 @@ def upgrade() -> None:
         sa.Column("created_at", sa.Text(), nullable=False),
     )
 
+    # SCAFFOLDING: secrets — ciphertext, kdf_salt, rotated_at added by STAGE-001-005.
     op.create_table(
         "secrets",
         sa.Column("id", sa.Text(), primary_key=True),
@@ -155,6 +168,7 @@ def upgrade() -> None:
         sa.Column("created_at", sa.Text(), nullable=False),
     )
 
+    # SCAFFOLDING: channels — config_json_encrypted added by notifications stage.
     op.create_table(
         "channels",
         sa.Column("id", sa.Text(), primary_key=True),
@@ -162,6 +176,7 @@ def upgrade() -> None:
         sa.Column("created_at", sa.Text(), nullable=False),
     )
 
+    # SCAFFOLDING: routing_rules — tag_match, channel_id, priority added by routing stage.
     op.create_table(
         "routing_rules",
         sa.Column("id", sa.Text(), primary_key=True),
@@ -169,6 +184,7 @@ def upgrade() -> None:
         sa.Column("created_at", sa.Text(), nullable=False),
     )
 
+    # SCAFFOLDING: digest_configs — cadence, sections, level_of_detail added by digest stage.
     op.create_table(
         "digest_configs",
         sa.Column("id", sa.Text(), primary_key=True),
@@ -176,6 +192,7 @@ def upgrade() -> None:
         sa.Column("created_at", sa.Text(), nullable=False),
     )
 
+    # SCAFFOLDING: maintenance_windows — start_at, end_at, repeat (rrule), created_by added by maintenance stage.
     op.create_table(
         "maintenance_windows",
         sa.Column("id", sa.Text(), primary_key=True),
@@ -183,6 +200,7 @@ def upgrade() -> None:
         sa.Column("created_at", sa.Text(), nullable=False),
     )
 
+    # SCAFFOLDING: suggestions — payload_json, status added by suggestions stage.
     op.create_table(
         "suggestions",
         sa.Column("id", sa.Text(), primary_key=True),
@@ -190,6 +208,7 @@ def upgrade() -> None:
         sa.Column("created_at", sa.Text(), nullable=False),
     )
 
+    # SCAFFOLDING: tool_scorecards — window, alerts_emitted, action_rate, dedup_overlap, unique_share, recommendation_text added by scorecard stage.
     op.create_table(
         "tool_scorecards",
         sa.Column("id", sa.Text(), primary_key=True),
@@ -198,6 +217,9 @@ def upgrade() -> None:
     )
 
     # ---------- indexes whose target columns exist in this migration ----------
+    # Non-unique: a given fingerprint may recur over time; dedup is at the
+    # alert-firing layer. Composite ``alerts(source_tool, opened_at)`` index
+    # is added in a later stage when those columns exist.
     op.create_index("idx_alerts_fingerprint", "alerts", ["fingerprint"])
     op.create_index("idx_targets_name", "targets", ["name"])
 

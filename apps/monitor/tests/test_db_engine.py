@@ -25,9 +25,8 @@ def test_get_database_url_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
     assert get_database_url() == "sqlite+aiosqlite:///./other.db"
 
 
-async def test_get_engine_caches_default(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_get_engine_caches_default(db_url_env: str) -> None:
     """Default-URL ``get_engine()`` returns the same instance on repeat calls."""
-    monkeypatch.setenv("HOMELAB_MONITOR_DB_URL", "sqlite+aiosqlite:///./cache-test.db")
     await dispose_engine()
     e1 = get_engine()
     e2 = get_engine()
@@ -63,9 +62,8 @@ async def test_pragmas_applied_on_connect(db_url: str) -> None:
         await engine.dispose()
 
 
-async def test_dispose_engine_clears_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_dispose_engine_clears_cache(db_url_env: str) -> None:
     """``dispose_engine()`` resets the module-level cache."""
-    monkeypatch.setenv("HOMELAB_MONITOR_DB_URL", "sqlite+aiosqlite:///./dispose-test.db")
     await dispose_engine()
     e1 = get_engine()
     await dispose_engine()

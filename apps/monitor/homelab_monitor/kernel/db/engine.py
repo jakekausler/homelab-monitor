@@ -28,6 +28,9 @@ def _apply_sqlite_pragmas(dbapi_connection: Any, _connection_record: Any) -> Non
     """
     cursor = dbapi_connection.cursor()
     try:
+        # ``# pragma: no cover``: SQLAlchemy event callbacks fire in a separate
+        # trace context that coverage.py does not credit. Behaviour is verified by
+        # ``test_pragmas_applied_on_connect`` querying PRAGMA values via the engine.
         cursor.execute("PRAGMA journal_mode=WAL")  # pragma: no cover
         cursor.execute("PRAGMA foreign_keys=ON")  # pragma: no cover
         cursor.execute("PRAGMA busy_timeout=5000")  # pragma: no cover
@@ -58,6 +61,9 @@ def get_engine(url: str | None = None) -> AsyncEngine:
 async def dispose_engine() -> None:
     """Dispose of the cached engine (used at shutdown and between tests)."""
     global _engine  # noqa: PLW0603
-    if _engine is not None:
+    if _engine is None:
+        return
+    try:
         await _engine.dispose()
+    finally:
         _engine = None

@@ -69,6 +69,7 @@ epics/EPIC-XXX-name/STAGE-XXX-YYY.md
 - **Plugins observe themselves** — `homelab_collector_run_*` metrics are mandatory.
 - **Open-source-safe defaults** — generic public release defaults to A behavior on existing user scripts (observe, no edits). Host-specific overrides in the separate repo can be more aggressive.
 - **`nginx-configuator` is the actual directory name** at `/storage/programs/nginx-configuator/` (sic — not "configurator"). Do not "fix" the spelling.
+- **`uv run` working directory** — `uv run --directory apps/monitor <cmd>` runs the command WITH cwd set to `apps/monitor`, so any path arguments must be relative to that directory (e.g., `tests/test_db_migrations.py`, NOT `apps/monitor/tests/test_db_migrations.py`). The Makefile and pre-commit hooks both use this `--directory` form. When invoking `uv run` outside `make`, either match the same pattern or `cd apps/monitor && uv run <cmd>` (without `--directory`) and use repo-relative paths.
 
 ## Code Review Graph (CRG)
 

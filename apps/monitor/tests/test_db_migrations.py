@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock, patch
+
 import pytest
 from alembic.config import Config
 from sqlalchemy import inspect, text
@@ -92,7 +94,7 @@ async def test_run_migrations_raises_when_disabled(
     monkeypatch.setenv("HOMELAB_MONITOR_AUTO_MIGRATE", "false")
     engine = get_engine(url=db_url)
     try:
-        with pytest.raises(MigrationsPendingError):
+        with pytest.raises(MigrationsPendingError, match="HOMELAB_MONITOR_AUTO_MIGRATE"):
             await run_migrations(engine)
     finally:
         await engine.dispose()
@@ -144,3 +146,69 @@ async def test_check_pending_returns_empty_at_head(db_url: str) -> None:
         assert pending == []
     finally:
         await engine.dispose()
+
+
+async def test_check_pending_migrations_with_intermediate_current(
+    db_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When current revision is mid-history, only revisions newer than current are pending.
+
+    Mocks the script directory to simulate a multi-revision history (the test environment
+    only has 0001 in tree, but CRIT-1's fix must work for future N-revision states).
+    """
+    # First, apply 0001 so the DB has current=0001.
+    # (db_engine fixture has already done this; verify by checking pending is [].)
+    initial_pending = await check_pending_migrations(db_engine)
+    assert initial_pending == []
+
+    # Mock walk_revisions to pretend there are three revisions: 0003 (head), 0002, 0001 (current).
+    # walk_revisions yields newest-to-oldest.
+    mock_revs = [
+        MagicMock(revision="0003"),
+        MagicMock(revision="0002"),
+        MagicMock(revision="0001"),
+    ]
+    mock_script = MagicMock()
+    mock_script.get_current_head.return_value = "0003"
+    mock_script.walk_revisions.return_value = mock_revs
+
+    with patch(
+        "homelab_monitor.kernel.db.migrations.ScriptDirectory.from_config",
+        return_value=mock_script,
+    ):
+        pending = await check_pending_migrations(db_engine)
+
+    # Pending should be [0003, 0002] (everything newer than 0001 in newest-to-oldest order).
+    assert pending == ["0003", "0002"]
+
+
+async def test_check_pending_migrations_with_unknown_current(
+    db_engine: AsyncEngine,
+) -> None:
+    """If DB's current revision is not in the script directory, the loop exhausts.
+
+    Defensive: a stale ``alembic_version`` row pointing at a revision file that no
+    longer exists in the script tree. Exercises the ``for`` loop's no-break exit
+    branch in :func:`check_pending_migrations`. The function returns all walked
+    revisions because none of them matches ``current``.
+    """
+    mock_revs = [
+        MagicMock(revision="0002"),
+        MagicMock(revision="0001"),
+    ]
+    mock_script = MagicMock()
+    mock_script.get_current_head.return_value = "0002"
+    mock_script.walk_revisions.return_value = mock_revs
+
+    with (
+        patch(
+            "homelab_monitor.kernel.db.migrations.ScriptDirectory.from_config",
+            return_value=mock_script,
+        ),
+        patch("homelab_monitor.kernel.db.migrations.MigrationContext.configure") as mock_ctx,
+    ):
+        mock_ctx.return_value.get_current_revision.return_value = "9999-stale"
+        pending = await check_pending_migrations(db_engine)
+
+    # No mock revision matches 9999-stale, so the loop exhausts and returns all.
+    assert pending == ["0002", "0001"]

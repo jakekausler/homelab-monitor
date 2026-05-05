@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta
 
 from homelab_monitor.kernel.db.time import utc_now_iso
 
@@ -19,4 +19,4 @@ def test_utc_now_iso_is_iso_8601_utc() -> None:
     out = utc_now_iso()
     parsed = datetime.fromisoformat(out)
     assert parsed.tzinfo is not None
-    assert parsed.utcoffset() == timezone.utc.utcoffset(parsed)  # noqa: UP017
+    assert parsed.utcoffset() == timedelta(0)

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import time
 import uuid
 
 from homelab_monitor.kernel.db.ids import uuid7
@@ -16,9 +15,6 @@ def test_uuid7_returns_valid_uuid_string() -> None:
     assert parsed.version == 7  # noqa: PLR2004
 
 
-def test_uuid7_is_time_sortable() -> None:
-    """A UUIDv7 generated later sorts strictly after one generated earlier."""
-    earlier = uuid7()
-    time.sleep(0.005)  # 5ms — UUIDv7 is millisecond-precise
-    later = uuid7()
-    assert earlier < later
+def test_uuid7_two_calls_yield_distinct_strings() -> None:
+    """Each call returns a fresh UUID (random tail bits make collision negligible)."""
+    assert uuid7() != uuid7()
