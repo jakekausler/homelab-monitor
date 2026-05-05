@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 import asyncio
+import stat
 import time
 from collections.abc import Awaitable, Callable
 from datetime import timedelta
+from pathlib import Path
 from typing import ClassVar
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
 import structlog
+import yaml
 
 from homelab_monitor.kernel.plugins import (
     BaseCollector,
@@ -24,6 +27,10 @@ from homelab_monitor.kernel.plugins import (
     LoadedCollector,
     ProcessCollectorContext,
     RunKind,
+)
+from homelab_monitor.kernel.plugins.manifest import SubprocessManifest
+from homelab_monitor.kernel.plugins.subprocess_collector import (
+    make_subprocess_collector,
 )
 from homelab_monitor.kernel.scheduler import Scheduler, SchedulerConfig
 from homelab_monitor.kernel.scheduler.failure_budget import FailureBudget
@@ -797,3 +804,50 @@ async def test_result_error_with_failure_budget() -> None:
     )
     assert result_error_count >= 1
     budget.record_failure.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_subprocess_run_kind_dispatched_through_scheduler(tmp_path: Path) -> None:
+    """Scheduler's _dispatch routes SUBPROCESS run_kind to collector.run()."""
+
+    # Create a minimal subprocess plugin
+    plugin_dir = tmp_path / "sched-subproc"
+    plugin_dir.mkdir()
+    run_sh = plugin_dir / "run.sh"
+    run_sh.write_text(
+        """#!/usr/bin/env bash
+cat >/dev/null
+echo '{"type":"result","ok":true,"summary":"scheduler test"}'
+"""
+    )
+    run_sh.chmod(run_sh.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+    manifest_yaml = plugin_dir / "plugin.yaml"
+    manifest_yaml.write_text(
+        yaml.safe_dump(
+            {
+                "manifest": 1,
+                "name": "sched-subproc",
+                "command": ["./run.sh"],
+                "interval": "5s",
+                "timeout": "1s",
+                "trust_level": "trusted",
+            }
+        )
+    )
+    manifest = SubprocessManifest.load_from_path(manifest_yaml)
+    cls = make_subprocess_collector(manifest, plugin_dir)
+    loaded = [LoadedCollector(collector=cls(), config=CollectorConfig(name=manifest.name))]
+
+    metrics = InMemoryMetricsWriter()
+    sched = Scheduler(loaded, _make_ctx_factory(metrics), metrics)
+    await sched.start()
+    await asyncio.sleep(6.0)  # Allow one tick to complete (5s interval + buffer)
+    await sched.stop()
+
+    success_count = _count_metric(
+        metrics,
+        "homelab_collector_run_success_total",
+        labels_subset={"name": "sched-subproc"},
+    )
+    assert success_count >= 1

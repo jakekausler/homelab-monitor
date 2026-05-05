@@ -489,6 +489,14 @@ class Scheduler:
                     ctx.vm.write_summary(m.name, m.value, m.labels)
             return result
 
+        if c.run_kind == RunKind.SUBPROCESS:
+            # SubprocessCollector.run delegates to subprocess_runner internally;
+            # scheduler stays in-loop and just awaits. Group locks + FailureBudget
+            # are RunKind-agnostic (keyed by collector name), so no further wiring
+            # needed here. Self-metrics are emitted by the parent-side _tick loop
+            # for all RunKinds uniformly.
+            return await c.run(ctx)
+
         # Defensive — RunKind is exhaustively enumerated above; only reachable if
         # a future RunKind variant is added without a dispatch arm.
         msg = f"Unknown run_kind: {c.run_kind}"  # pragma: no cover

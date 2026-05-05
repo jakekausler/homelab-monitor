@@ -31,12 +31,13 @@ RESULT_DURATION = 1.25
 # --- enums ----------------------------------------------------------------------------------
 
 
-def test_runkind_has_three_string_values() -> None:
-    """RunKind exposes ASYNC/THREAD/PROCESS as string members."""
+def test_runkind_has_four_string_values() -> None:
+    """RunKind exposes ASYNC/THREAD/PROCESS/SUBPROCESS as string members."""
     assert RunKind.ASYNC == "async"
     assert RunKind.THREAD == "thread"
     assert RunKind.PROCESS == "process"
-    assert {m.value for m in RunKind} == {"async", "thread", "process"}
+    assert RunKind.SUBPROCESS == "subprocess"
+    assert {m.value for m in RunKind} == {"async", "thread", "process", "subprocess"}
 
 
 def test_trustlevel_has_three_string_values() -> None:

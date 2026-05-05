@@ -1,0 +1,9 @@
+manifest: 1
+name: hello-subprocess
+language: bash
+command: ["./run.sh"]
+interval: 60s
+timeout: 10s
+trust_level: trusted
+env: {}
+secrets: []

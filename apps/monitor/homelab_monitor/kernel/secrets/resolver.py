@@ -62,3 +62,12 @@ class SyncSecretsResolver:
         """
         subset = {n: self._values[n] for n in declared_names if n in self._values}
         return SyncSecretsResolver(_values=subset)
+
+    def as_dict(self) -> dict[str, str]:
+        """Return a dict copy of all secrets in this resolver.
+
+        Used by subprocess plugins (STAGE-001-009) to serialize secrets into
+        the stdin JSON payload. The returned dict is a copy; mutations do not
+        affect this resolver.
+        """
+        return dict(self._values)

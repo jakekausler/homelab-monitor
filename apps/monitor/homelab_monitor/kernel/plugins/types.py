@@ -24,11 +24,13 @@ class RunKind(StrEnum):
     - ``ASYNC``: shares the FastAPI event loop (most I/O-bound collectors).
     - ``THREAD``: runs in a worker thread (sync libraries — paramiko, certain SNMP libs).
     - ``PROCESS``: runs in a worker subprocess (CPU-heavy work; pickled context).
+    - ``SUBPROCESS``: spawned OS process; JSON line protocol; STAGE-001-009+.
     """
 
     ASYNC = "async"
     THREAD = "thread"
     PROCESS = "process"
+    SUBPROCESS = "subprocess"
 
 
 class TrustLevel(StrEnum):

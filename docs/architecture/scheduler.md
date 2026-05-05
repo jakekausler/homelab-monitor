@@ -385,3 +385,69 @@ E2E scenarios:
 6. Hash-offset spread — 20 collectors at identical 2s interval; first-tick times spread across ~2s window.
 
 Coverage gate: 100% kernel statements. The `_process_runner` body and a handful of timing-dependent defensive branches are the only `# pragma: no cover` lines, each with a one-line rationale comment in the source.
+
+---
+
+## 13. Subprocess plugins (STAGE-001-009)
+
+Subprocess plugins are spawned as separate OS processes per scheduled tick.
+They communicate with the kernel via:
+
+- **stdin (input)**: a single JSON object containing `collector_name`,
+  `deadline_unix`, and `secrets` (filtered to the manifest's declared list).
+  The runner writes the payload, then closes the pipe to signal EOF.
+- **stdout (output)**: line-delimited JSON. Five line types are recognized:
+  `metric`, `event`, `log`, `heartbeat`, `result`. The `result` line is
+  terminal; subsequent lines are logged and discarded.
+- **stderr (output)**: free-form text. Each line is logged at info level
+  (`subprocess.plugin.stderr`).
+
+The fourth `RunKind` (`SUBPROCESS`) joins the existing three
+(`ASYNC`, `THREAD`, `PROCESS`). The scheduler's `_dispatch` routes
+`SUBPROCESS` collectors through `await c.run(ctx)`, where `c` is a
+`SubprocessCollector` produced by `make_subprocess_collector(manifest, dir)`.
+The wrapper class delegates to `subprocess_runner.run_subprocess` internally.
+
+### Trust tiers
+
+`TRUSTED` and `UNTRUSTED` are the only valid trust levels for subprocess
+plugins (`BUILTIN` is reserved for in-process collectors).
+
+| Aspect | TRUSTED | UNTRUSTED |
+|---|---|---|
+| Env scrubbing | manifest env + `PATH`/`TZ`/`HOME=/tmp/<plugin>` | identical |
+| Secrets | filtered to `manifest.secrets` | filtered to `manifest.secrets` |
+| Workdir | manifest dir or override | manifest dir or override |
+| DB writes | architecturally blocked (no protocol line type) | architecturally blocked |
+
+Trust tier differences are uniform in STAGE-009; future hardening (cgroups,
+RLIMIT, namespacing) will diverge by tier.
+
+### Timeout enforcement
+
+The runner enforces `manifest.timeout` via `asyncio.timeout()`. On expiry:
+
+1. `SIGTERM` is sent to the subprocess's process group (`start_new_session=True`
+   on spawn ensures POSIX process-group containment).
+2. After 2 seconds (`SIGTERM_GRACE_SECONDS`), `SIGKILL` is sent to the group.
+3. The runner returns `CollectorResult(ok=False, errors=["timeout after Ns"])`.
+
+### Loader two-phase contract
+
+`PluginLoader.register()` is sync and only updates in-memory state.
+`PluginLoader.persist_to_db(repo)` is async and runs `INSERT OR IGNORE INTO
+collectors` for every registered collector. STAGE-001-010's FastAPI lifespan
+calls `persist_to_db` after `load_all()` and before `scheduler.start()` so
+that downstream `FailureBudget` UPDATEs have rows to target. The persist step
+is idempotent — repeat calls do nothing.
+
+### Self-metrics
+
+Subprocess plugins inherit the standard scheduler-emitted self-metrics
+(`homelab_collector_run_*`) uniformly via the parent-side `_tick` loop.
+No subprocess-specific self-metrics in STAGE-009.
+
+### Example
+
+`runbooks/_examples/hello-subprocess-plugin/` ships as a reference. See
+`docs/plugins/subprocess.md` for a plugin-author-oriented reference.

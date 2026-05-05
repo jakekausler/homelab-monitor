@@ -18,9 +18,22 @@ scheduler.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
+from pathlib import Path
 
+import structlog
+import yaml
+from pydantic import ValidationError
+from sqlalchemy import text
+from structlog.stdlib import BoundLogger
+
+from homelab_monitor.kernel.db.ids import uuid7
+from homelab_monitor.kernel.db.repository import SqliteRepository
+from homelab_monitor.kernel.db.time import utc_now_iso
 from homelab_monitor.kernel.plugins.base import Collector
+from homelab_monitor.kernel.plugins.manifest import SubprocessManifest
+from homelab_monitor.kernel.plugins.subprocess_collector import make_subprocess_collector
 from homelab_monitor.kernel.plugins.types import CollectorConfig
 
 
@@ -62,9 +75,10 @@ class PluginLoader:
         # -> [LoadedCollector(collector=<NoopCollector>, config=CollectorConfig(...))]
     """
 
-    def __init__(self) -> None:
+    def __init__(self, log: BoundLogger | None = None) -> None:
         """Construct an empty registry."""
         self._loaded: list[LoadedCollector] = []
+        self._log: BoundLogger = log if log is not None else structlog.stdlib.get_logger().bind()
 
     def register(
         self,
@@ -114,3 +128,66 @@ class PluginLoader:
         # and validate manifests.
         """
         return list(self._loaded)
+
+    async def persist_to_db(self, repo: SqliteRepository) -> None:
+        """INSERT OR IGNORE collector rows for all registered collectors.
+
+        Idempotent. STAGE-001-010 lifespan calls this after `load_all()` and
+        before `scheduler.start()` so FailureBudget UPDATEs have rows to target.
+
+        SCAFFOLDING: closes STAGE-001-008's loader-INSERT gap discovered during
+        Refinement.
+        """
+        async with repo.transaction() as conn:
+            for loaded in self._loaded:
+                await conn.execute(
+                    text(
+                        "INSERT OR IGNORE INTO collectors "
+                        "(id, name, config, created_at) "
+                        "VALUES (:id, :name, :config, :created_at)"
+                    ),
+                    {
+                        "id": uuid7(),
+                        "name": loaded.config.name,
+                        "config": json.dumps(loaded.config.model_dump(mode="json")),
+                        "created_at": utc_now_iso(),
+                    },
+                )
+
+    def load_subprocess_plugins(self, plugins_dir: Path) -> int:
+        """Walk plugins_dir for plugin.yaml manifests; register each as a SubprocessCollector.
+
+        Each found manifest is validated. Per-manifest validation failures are
+        logged at warning level; the scan continues (one bad manifest does not
+        block the rest).
+
+        SCAFFOLDING: STAGE-001-010 lifespan will call this with the user's
+        /plugins mount path. For STAGE-009, only the runbooks/_examples
+        directory is wired (via tests).
+
+        Args:
+            plugins_dir: Directory tree to walk recursively for `plugin.yaml`.
+
+        Returns:
+            Number of plugins successfully registered.
+        """
+        if not plugins_dir.exists():
+            return 0
+        count = 0
+        for manifest_path in plugins_dir.rglob("plugin.yaml"):
+            try:
+                manifest = SubprocessManifest.load_from_path(manifest_path)
+            except (ValidationError, OSError, yaml.YAMLError, ValueError) as e:
+                self._log.warning(
+                    "loader.subprocess_plugin_invalid",
+                    manifest_path=str(manifest_path),
+                    error=str(e),
+                )
+                continue
+            # TODO: STAGE-010 — verify cmd[0] is executable at load time and emit a
+            # loader.subprocess_plugin_invalid warning so operators see config errors
+            # before the first tick rather than after.
+            cls = make_subprocess_collector(manifest, manifest_dir=manifest_path.parent)
+            self.register(cls, config_overrides={"name": manifest.name})
+            count += 1
+        return count

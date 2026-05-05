@@ -20,10 +20,16 @@ from homelab_monitor.kernel.plugins.io import (
     SshConnection,
 )
 from homelab_monitor.kernel.plugins.loader import LoadedCollector, PluginLoader
+from homelab_monitor.kernel.plugins.manifest import SubprocessManifest
 from homelab_monitor.kernel.plugins.noop import NoopCollector
 from homelab_monitor.kernel.plugins.process_context import (
     BufferingMetricsWriter,
     ProcessCollectorContext,
+)
+from homelab_monitor.kernel.plugins.subprocess_collector import make_subprocess_collector
+from homelab_monitor.kernel.plugins.subprocess_runner import (
+    SIGTERM_GRACE_SECONDS,
+    run_subprocess,
 )
 from homelab_monitor.kernel.plugins.types import (
     AlertForwardEvent,
@@ -38,6 +44,7 @@ from homelab_monitor.kernel.plugins.types import (
 )
 
 __all__ = [
+    "SIGTERM_GRACE_SECONDS",
     "AlertForwardEvent",
     "BaseCollector",
     "BufferingMetricsWriter",
@@ -62,6 +69,9 @@ __all__ = [
     "RunKind",
     "SshClientFactory",
     "SshConnection",
+    "SubprocessManifest",
     "SuggestionEvent",
     "TrustLevel",
+    "make_subprocess_collector",
+    "run_subprocess",
 ]
