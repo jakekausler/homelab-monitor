@@ -63,11 +63,24 @@ or related tests.
 - [ ] `alembic downgrade -1` then `alembic upgrade head` round-trip works
 - [ ] `audit_log` row appears whenever a state-changing API call is made
 
-## STAGE-001-005: Encrypted secrets store
+## STAGE-001-005 — Encrypted secrets store (added 2026-05-05)
 
-- [ ] `hm secrets set FOO bar` then `hm secrets get FOO` round-trips
-- [ ] Master-key rotation via `hm secrets rotate-master` re-encrypts all rows; old key fails to decrypt
-- [ ] Secret value never appears in any log file (search the journal post-test)
+Re-run after any change to: `apps/monitor/homelab_monitor/kernel/secrets/`,
+`apps/monitor/homelab_monitor/cli/secrets.py`, `apps/monitor/alembic/versions/0002_secrets_columns.py`,
+or related tests.
+
+- [ ] `cd apps/monitor && KEY_B64=$(head -c 32 /dev/urandom | base64) && DB="$(mktemp -d)/test.db" && HOMELAB_MONITOR_DB_URL="sqlite+aiosqlite:///$DB" uv run hm migrate` exits 0
+- [ ] `echo -n 'sentinel-v1' | HOMELAB_MONITOR_DB_URL="..." HOMELAB_MONITOR_MASTER_KEY="$KEY_B64" uv run hm secrets set tok --from-stdin` exits 0
+- [ ] `hm secrets list` shows the secret name + created_at, never the plaintext value
+- [ ] `hm secrets get tok` (without REVEAL=1) exits 1 with `set HOMELAB_MONITOR_REVEAL=1 to reveal` on stderr
+- [ ] `HOMELAB_MONITOR_REVEAL=1 hm secrets get tok` exits 0 and prints the plaintext exactly
+- [ ] `echo -n 'sentinel-v2' | hm secrets rotate tok --from-stdin` exits 0; subsequent get returns the new value
+- [ ] `hm secrets delete tok` exits 0; subsequent get returns 1 with "no secret"
+- [ ] `echo -n "$NEW_KEY_B64" | hm secrets rotate-master --from-stdin` exits 0 and prints "N secret(s) re-encrypted" + old/new fingerprints
+- [ ] After rotate-master: get with the OLD key fails with AEAD tag verification error; get with NEW key returns the original plaintext
+- [ ] Direct DB corruption: `sqlite3 "$DB" "UPDATE secrets SET ciphertext='AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' WHERE name=?"` followed by `hm secrets get` returns AEAD error
+- [ ] No-leak: a sentinel value piped through any non-`get` CLI op never appears in captured stdout or stderr
+- [ ] audit_log table contains rows for set/rotate/delete/rotate-master with `before_json` / `after_json` containing ONLY metadata (name, row_count), never plaintext values
 
 ## STAGE-001-006: Collector protocol + base classes
 
