@@ -31,9 +31,15 @@ Items to verify after each deployment in this epic. Format: `[D]` = desktop, `[M
 
 ## STAGE-001-003: CI + Code Review Graph + Dependabot
 
-- [ ] GH Actions run on a deliberately broken PR and fail correctly
-- [ ] CRG `crg-daemon` is running locally; `code-review-graph` returns ≥10 nodes
-- [ ] Dependabot opens an update PR within 48h of a known-stale dep being added
+- [ ] `make verify-ci` runs locally and exits 0 (full Python+frontend chain + CRG build)
+- [ ] Pushing a PR with deliberately-broken Python (unused import OR type mismatch) triggers a FAIL on the `backend` CI job and PASS on `frontend` + `crg-build` + CodeQL
+- [ ] Reverting the breakage in the same PR moves all checks to green
+- [ ] CodeQL fires on `push` to main (Analyze python + javascript)
+- [ ] CodeQL fires on every PR
+- [ ] Required-status-checks list in branch protection includes: `backend`, `frontend`, `crg-build`, `Analyze (python)`, `Analyze (javascript)` (per `docs/repo-setup.md`)
+- [ ] `release.yml` does NOT fire on push or PR — only on `v*` tags
+- [ ] Dependabot opens an update PR within 48h of a known-stale dep being added; minor+patch updates are grouped per ecosystem
+- [ ] `pnpm/action-setup@v4` reads `packageManager` from `package.json` automatically (no `version:` input on the action — see PR #29)
 
 ## STAGE-001-004: SQLite + Alembic + first migration
 
