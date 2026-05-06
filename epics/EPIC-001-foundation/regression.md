@@ -106,6 +106,8 @@ or related tests.
 3. **Re-run high-cardinality offset spread test if collector naming conventions change** — if all collector names hash to the same offset bucket, thundering herd protection silently breaks.
 4. **Address fork() in multi-threaded context before enabling PROCESS RunKind in production** — STAGE-001-010 (FastAPI lifespan) must construct ProcessPoolExecutor with `mp_context=multiprocessing.get_context("forkserver")` (or "spawn"), or document that PROCESS RunKind is unsupported in production. Add a test that verifies the executor's start method once decided.
 
+   **Status update (2026-05-06):** CLOSED. STAGE-001-010 Build added `mp_context="forkserver"` to ProcessPoolExecutor instantiation in scheduler.py:172. STAGE-001-010 Refinement Scenario 4 confirmed under real lifespan conditions: `app.state.scheduler._process_pool._mp_context.get_start_method() == "forkserver"`. Unit-tested in `test_scheduler_request_immediate_run.py::test_process_pool_executor_has_forkserver_context`.
+
 ## STAGE-001-008 — Concurrency groups + failure budget + quarantine
 
 1. **Quarantine DB columns set atomically with audit row** — `consecutive_failures`, `quarantined_at`, and `quarantine_reason` must all be written in the same transaction as the `audit_log` INSERT. Verify by reading both tables after exactly N=threshold failures: SQL UPDATE columns + audit_log row should be visible together or not at all.
@@ -130,6 +132,27 @@ or related tests.
 - [ ] Plugin timeout kills the subprocess and records a failure
 - [ ] Malformed JSON on stdout is logged, doesn't crash the host
 - [ ] Non-zero exit code marks the run as failed and emits the failure metric
+
+## STAGE-001-010 Deferred — BaseHTTPMiddleware blocks streaming SSE under httpx ASGITransport
+
+**Date filed:** 2026-05-06
+**Affected tests:**
+- `tests/test_api_events_sse.py::test_sse_http_endpoint_smoke`
+- `tests/test_lifespan_e2e.py::test_lifespan_e2e_sse_receives_tick`
+
+**Status:** xfail with documented `reason=` parameter; not failing the suite
+
+**Symptom:** SSE HTTP endpoint tests time out after 5 seconds. Subscribers connect but never receive published events.
+
+**Root cause:** FastAPI's `BaseHTTPMiddleware` (used as base class by `RequestIdMiddleware`, `AccessLogMiddleware`, `DevAuthMiddleware`) wraps the ASGI app in a way that BUFFERS streaming responses until the response generator completes. SSE relies on the response generator yielding events incrementally over a long-lived connection; buffering means clients see nothing until the connection closes. This is a known limitation: https://github.com/encode/starlette/issues/919, https://www.starlette.io/middleware/#limitations.
+
+**Why not blocking:** The SSE broker logic (subscribe/publish/replay/overflow/concurrent/non-throwing/event_seq) is fully covered by 7 passing unit tests in `test_api_events_sse.py` that exercise the broker directly without going through the HTTP layer. The end-to-end HTTP delivery path is the only thing untested.
+
+**Resolution path:** Migrate the 3 middleware classes from `BaseHTTPMiddleware` subclasses to pure ASGI callables (`async def __call__(self, scope, receive, send)`). This is a non-trivial refactor; the dispatch/response handling has to be rewritten without the `call_next` abstraction. Estimated 1-2 hours of work + verification.
+
+**Targeted resolution:** STAGE-001-014 (UI shell + login + Overview live-tile) is the FIRST stage where the React frontend's SSE consumer needs HTTP delivery to actually work. That stage will discover the issue if not already resolved; resolving in STAGE-001-014's Design or Build is the natural fit. Alternatively, STAGE-001-013 (alert ingestor + dispatcher; first SSE-consuming alert channel) could resolve it earlier.
+
+**Workaround in current code:** The xfail decorator on each test carries a long, explicit `reason=` string so the deferral is visible in test output and won't silently pass if accidentally fixed.
 
 ## STAGE-001-010: FastAPI app shell + healthz + structured logging
 
