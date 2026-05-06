@@ -243,7 +243,7 @@ async def test_sse_broker_no_skip_seq_numbers_in_replay(broker: SseBroker) -> No
 @pytest.mark.xfail(
     reason="BaseHTTPMiddleware buffers streaming responses; HTTP-SSE coverage deferred. "
     "Broker logic is fully covered by 7 passing unit tests in this same file. "
-    "Fix requires migrating RequestIdMiddleware/AccessLogMiddleware/DevAuthMiddleware to "
+    "Fix requires migrating RequestIdMiddleware/AccessLogMiddleware/AuthMiddleware to"
     "pure ASGI callables (deferred to STAGE-001-014 or follow-up).",
     strict=False,
 )
@@ -256,103 +256,112 @@ async def test_sse_http_endpoint_smoke(
 ) -> None:
     """Subscribe via /api/events, publish a tick, assert event delivered with correct format."""
     monkeypatch.setenv("HOMELAB_MONITOR_DB_URL", db_url)
-    monkeypatch.setenv("HOMELAB_MONITOR_DEV_AUTH", "1")
     monkeypatch.setenv("HOMELAB_MONITOR_MASTER_KEY", base64.b64encode(master_key).decode())
+    monkeypatch.setenv("HOMELAB_MONITOR_HTTPS_ONLY_COOKIES", "false")
+    monkeypatch.setenv("HOMELAB_MONITOR_BCRYPT_COST", "4")
+    monkeypatch.setenv("HOMELAB_MONITOR_AUTO_MIGRATE", "1")
 
     app = create_app(lifespan_enabled=True)
 
-    async with (
-        app.router.lifespan_context(app),
-        AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client,
-    ):
-        # Start SSE subscription in background
-        async def subscribe_and_collect() -> list[str]:
-            events: list[str] = []
-            async with client.stream("GET", "/api/events", headers={"X-Auth": "dev"}) as resp:
-                assert resp.status_code == 200  # noqa: PLR2004
-                async for line in resp.aiter_lines():
-                    if line:
-                        events.append(line)
-                    if len(events) >= 9:  # noqa: PLR2004  # event + data + id + blank line per event
-                        break
-            return events
+    async with app.router.lifespan_context(app):
+        # Create an authenticated client
+        auth_repo = app.state.auth_repo
+        from homelab_monitor.kernel.auth.passwords import hash_password  # noqa: PLC0415
 
-        sub_task = asyncio.create_task(subscribe_and_collect())
+        await auth_repo.create_user("testuser", hash_password("testpassword123", cost=4))
 
-        # Give the subscription a moment to establish
-        await asyncio.sleep(0.1)
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            # Login to get session cookie
+            resp = await client.post(
+                "/api/auth/login",
+                json={"username": "testuser", "password": "testpassword123"},
+            )
+            assert resp.status_code == 200  # noqa: PLR2004
 
-        # Publish a tick via the broker
-        tick_event = SchedulerTickEvent(
-            collector="test_col",
-            tick_id=make_tick_id(),
-            outcome="success",
-            duration_seconds=0.5,
-            ts="2026-05-05T20:57:00Z",
-        )
-        await app.state.broker.publish(tick_event)
+            # Start SSE subscription in background
+            async def subscribe_and_collect() -> list[str]:
+                events: list[str] = []
+                async with client.stream("GET", "/api/events") as resp:
+                    assert resp.status_code == 200  # noqa: PLR2004
+                    async for line in resp.aiter_lines():
+                        if line:
+                            events.append(line)
+                        if len(events) >= 9:  # noqa: PLR2004  # event + data + id + blank line per event
+                            break
+                return events
 
-        # Collect events
-        events = await asyncio.wait_for(sub_task, timeout=5.0)
+            sub_task = asyncio.create_task(subscribe_and_collect())
 
-        # Parse the SSE format: event: ...\ndata: ...\nid: ...\n\n
-        assert len(events) >= 3  # noqa: PLR2004
-        # Check for magic value 9 (complete SSE event)
-        assert len(events) >= 9  # noqa: PLR2004  # noqa: PLR2004
-        # Find the event, data, and id lines
-        event_line = None
-        data_line = None
-        id_line = None
-        for _, line in enumerate(events):
-            if line.startswith("event:"):
-                event_line = line
-            elif line.startswith("data:"):
-                data_line = line
-            elif line.startswith("id:"):
-                id_line = line
+            # Give the subscription a moment to establish
+            await asyncio.sleep(0.1)
 
-        assert event_line == "event: collector.tick"
-        assert data_line is not None and data_line.startswith("data: {")
-        assert id_line is not None and id_line.startswith("id: ")
+            # Publish a tick via the broker
+            tick_event = SchedulerTickEvent(
+                collector="test_col",
+                tick_id=make_tick_id(),
+                outcome="success",
+                duration_seconds=0.5,
+                ts="2026-05-05T20:57:00Z",
+            )
+            await app.state.broker.publish(tick_event)
+
+            # Collect events
+            events = await asyncio.wait_for(sub_task, timeout=5.0)
+
+            # Parse the SSE format: event: ...\ndata: ...\nid: ...\n\n
+            assert len(events) >= 3  # noqa: PLR2004
+            # Check for magic value 9 (complete SSE event)
+            assert len(events) >= 9  # noqa: PLR2004  # noqa: PLR2004
+            # Find the event, data, and id lines
+            event_line = None
+            data_line = None
+            id_line = None
+            for _, line in enumerate(events):
+                if line.startswith("event:"):
+                    event_line = line
+                elif line.startswith("data:"):
+                    data_line = line
+                elif line.startswith("id:"):
+                    id_line = line
+
+            assert event_line == "event: collector.tick"
+            assert data_line is not None and data_line.startswith("data: {")
+            assert id_line is not None and id_line.startswith("id: ")
 
 
 @pytest.mark.asyncio
 async def test_sse_http_endpoint_auth_gated(
     db_path: Path, db_url: str, monkeypatch: pytest.MonkeyPatch, master_key: bytes
 ) -> None:
-    """401 without X-Auth: dev header."""
+    """401 without valid session cookie."""
     monkeypatch.setenv("HOMELAB_MONITOR_DB_URL", db_url)
-    monkeypatch.setenv("HOMELAB_MONITOR_DEV_AUTH", "1")
     monkeypatch.setenv("HOMELAB_MONITOR_MASTER_KEY", base64.b64encode(master_key).decode())
+    monkeypatch.setenv("HOMELAB_MONITOR_AUTO_MIGRATE", "1")
 
     app = create_app(lifespan_enabled=True)
 
-    async with (
-        app.router.lifespan_context(app),
-        AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client,
-    ):
-        # Try without auth header
-        resp = await client.get("/api/events")
-        assert resp.status_code == 401  # noqa: PLR2004
+    async with app.router.lifespan_context(app):  # noqa: SIM117
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            # Try without auth cookie
+            resp = await client.get("/api/events")
+            assert resp.status_code == 401  # noqa: PLR2004
 
 
 @pytest.mark.asyncio
-async def test_sse_http_endpoint_exempts_auth_when_disabled(
+async def test_sse_http_endpoint_requires_session(
     db_path: Path, db_url: str, monkeypatch: pytest.MonkeyPatch, master_key: bytes
 ) -> None:
-    """401 when HOMELAB_MONITOR_DEV_AUTH unset."""
+    """401 when no valid session present."""
     monkeypatch.setenv("HOMELAB_MONITOR_DB_URL", db_url)
-    monkeypatch.delenv("HOMELAB_MONITOR_DEV_AUTH", raising=False)
     monkeypatch.setenv("HOMELAB_MONITOR_MASTER_KEY", base64.b64encode(master_key).decode())
+    monkeypatch.setenv("HOMELAB_MONITOR_AUTO_MIGRATE", "1")
 
     app = create_app(lifespan_enabled=True)
 
-    async with (
-        app.router.lifespan_context(app),
-        AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client,
-    ):
-        resp = await client.get("/api/events")
-        assert resp.status_code == 401  # noqa: PLR2004
+    async with app.router.lifespan_context(app):  # noqa: SIM117
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.get("/api/events")
+            assert resp.status_code == 401  # noqa: PLR2004
 
 
 @pytest.mark.asyncio

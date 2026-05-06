@@ -222,3 +222,60 @@ async def test_check_pending_migrations_with_unknown_current(
 
     # No mock revision matches 9999-stale, so the loop exhausts and returns all.
     assert pending == ["0002", "0001"]
+
+
+async def test_api_tokens_hash_unique_constraint_enforced(db_engine: AsyncEngine) -> None:
+    """Migration 0004 adds UNIQUE INDEX api_tokens_hash_idx; duplicate hash insert fails.
+
+    Without the unique index, a partial-transaction retry could produce two
+    rows with the same hash that both match at lookup. The migration is
+    tested for round-trip elsewhere; this test verifies the constraint
+    actually rejects duplicates at the DB layer.
+    """
+    from sqlalchemy.exc import IntegrityError  # noqa: PLC0415
+
+    # Verify the named index from migration 0004 exists with unique=True
+    async with db_engine.connect() as conn:
+        result = await conn.execute(text("PRAGMA index_list('api_tokens')"))
+        rows = result.fetchall()
+        found = False
+        for row in rows:
+            # PRAGMA index_list columns: seq, name, unique, origin, partial
+            if row[1] == "api_tokens_hash_idx":
+                assert row[2] == 1, "api_tokens_hash_idx is not UNIQUE"
+                found = True
+                break
+        assert found, "Migration 0004's api_tokens_hash_idx not found"
+
+    async with db_engine.connect() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO api_tokens (id, name, hash, scopes, created_at) "
+                "VALUES (:id, :n, :h, :s, :t)"
+            ),
+            {
+                "id": "tok-1",
+                "n": "first",
+                "h": "deadbeef" * 8,  # 64 chars, valid SHA-256 hex shape
+                "s": "read:status",
+                "t": "2026-05-06T00:00:00Z",
+            },
+        )
+        await conn.commit()
+
+    with pytest.raises(IntegrityError):
+        async with db_engine.connect() as conn:
+            await conn.execute(
+                text(
+                    "INSERT INTO api_tokens (id, name, hash, scopes, created_at) "
+                    "VALUES (:id, :n, :h, :s, :t)"
+                ),
+                {
+                    "id": "tok-2",
+                    "n": "second",
+                    "h": "deadbeef" * 8,  # SAME hash as first — must fail
+                    "s": "read:status",
+                    "t": "2026-05-06T00:00:01Z",
+                },
+            )
+            await conn.commit()

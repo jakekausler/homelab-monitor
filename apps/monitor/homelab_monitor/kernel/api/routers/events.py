@@ -10,8 +10,9 @@ from fastapi import APIRouter, Depends
 from starlette.requests import Request
 from starlette.responses import StreamingResponse
 
-from homelab_monitor.kernel.api.dependencies import get_broker
+from homelab_monitor.kernel.api.dependencies import get_broker, require_session
 from homelab_monitor.kernel.api.sse import SseDisconnect
+from homelab_monitor.kernel.auth.models import User
 
 if TYPE_CHECKING:
     from homelab_monitor.kernel.api.sse import SseBroker
@@ -22,6 +23,7 @@ router = APIRouter()
 @router.get("/events")
 async def stream_events(
     request: Request,
+    _user: User = Depends(require_session()),  # noqa: B008
     broker: SseBroker = Depends(get_broker),  # noqa: B008
 ) -> StreamingResponse:
     """Stream collector tick events via Server-Sent Events.

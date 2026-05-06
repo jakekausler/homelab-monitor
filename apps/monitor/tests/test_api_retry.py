@@ -55,9 +55,8 @@ def test_retry_response_forbids_extra_fields() -> None:
 
 
 @pytest.mark.asyncio
-async def test_retry_401_without_auth(monkeypatch: pytest.MonkeyPatch) -> None:
-    """POST /api/collectors/{name}/retry returns 401 without X-Auth header."""
-    monkeypatch.setenv("HOMELAB_MONITOR_DEV_AUTH", "1")
+async def test_retry_401_without_auth() -> None:
+    """POST /api/collectors/{name}/retry returns 401 without session cookie."""
     app = create_app(lifespan_enabled=False)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         resp = await client.post("/api/collectors/noop/retry")
@@ -65,45 +64,34 @@ async def test_retry_401_without_auth(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_retry_401_when_dev_auth_unset(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """POST /api/collectors/{name}/retry returns 401 when HOMELAB_MONITOR_DEV_AUTH unset."""
-    monkeypatch.delenv("HOMELAB_MONITOR_DEV_AUTH", raising=False)
+async def test_retry_401_when_no_session() -> None:
+    """POST /api/collectors/{name}/retry returns 401 when no valid session."""
     app = create_app(lifespan_enabled=False)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        resp = await client.post("/api/collectors/noop/retry", headers={"X-Auth": "dev"})
+        resp = await client.post("/api/collectors/noop/retry")
         assert resp.status_code == 401  # noqa: PLR2004
 
 
 @pytest.mark.asyncio
-async def test_retry_404_unknown_collector(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_retry_404_unknown_collector(authenticated_client: AsyncClient) -> None:
     """POST /api/collectors/{unknown}/retry returns 404."""
-    monkeypatch.setenv("HOMELAB_MONITOR_DEV_AUTH", "1")
-    app = create_app(lifespan_enabled=False)
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        resp = await client.post(
-            "/api/collectors/nonexistent-collector/retry", headers={"X-Auth": "dev"}
-        )
-        # Without lifespan, will get 503 first (scheduler unavailable)
-        # With lifespan, would get 404
-        assert resp.status_code in (503, 404)
+    csrf = authenticated_client.cookies.get("homelab_monitor_csrf")
+    resp = await authenticated_client.post(
+        "/api/collectors/nonexistent-collector/retry",
+        headers={"X-CSRF-Token": csrf} if csrf else {},
+    )
+    # authenticated_client boots lifespan, so 404 (not 503) when collector is unknown
+    assert resp.status_code == 404  # noqa: PLR2004
 
 
 @pytest.mark.asyncio
-async def test_retry_404_invalid_name(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_retry_404_invalid_name(authenticated_client: AsyncClient) -> None:
     """POST /api/collectors/{invalid-name}/retry returns 404 for regex mismatch."""
-    monkeypatch.setenv("HOMELAB_MONITOR_DEV_AUTH", "1")
-    app = create_app(lifespan_enabled=False)
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        # Invalid: starts with uppercase
-        resp = await client.post(
-            "/api/collectors/InvalidCollector/retry", headers={"X-Auth": "dev"}
-        )
-        # Regex check happens before scheduler lookup, so should be 404
-        # But without lifespan, might be 503 first
-        assert resp.status_code in (503, 404)
+    csrf = authenticated_client.cookies.get("homelab_monitor_csrf")
+    # Invalid: starts with uppercase
+    resp = await authenticated_client.post(
+        "/api/collectors/InvalidCollector/retry",
+        headers={"X-CSRF-Token": csrf} if csrf else {},
+    )
+    # Regex check happens before scheduler lookup; expect 404 with lifespan boot
+    assert resp.status_code == 404  # noqa: PLR2004

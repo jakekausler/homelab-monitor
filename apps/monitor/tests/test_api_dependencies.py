@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pytest
-from httpx import ASGITransport, AsyncClient
 
 from homelab_monitor.kernel.api.dependencies import (
     DependencyUnavailableProblem,
@@ -42,18 +41,14 @@ def test_get_failure_budget_raises_when_missing() -> None:
     assert exc_info.value.code == "failure_budget_unavailable"
 
 
-@pytest.mark.asyncio
-async def test_get_broker_raises_when_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_get_broker_raises_when_missing() -> None:
     """get_broker raises DependencyUnavailableProblem when broker missing from state."""
-    monkeypatch.setenv("HOMELAB_MONITOR_DEV_AUTH", "1")
-    from homelab_monitor.kernel.api.app import create_app  # noqa: PLC0415
+    from homelab_monitor.kernel.api.dependencies import get_broker  # noqa: PLC0415
 
-    app = create_app(lifespan_enabled=False)
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        resp = await client.get("/api/events", headers={"X-Auth": "dev"})
-        assert resp.status_code == 503  # noqa: PLR2004
-        data = resp.json()
-        assert data.get("error", {}).get("code") == "broker_unavailable"
+    req = _make_empty_request()
+    with pytest.raises(DependencyUnavailableProblem) as exc_info:
+        get_broker(req)  # pyright: ignore[reportArgumentType]
+    assert exc_info.value.code == "broker_unavailable"
 
 
 def test_get_scheduler_raises_when_missing() -> None:
@@ -115,15 +110,6 @@ def test_get_failure_budget_returns_when_present() -> None:
     req.app.state.failure_budget = mock_budget  # type: ignore
     result = get_failure_budget(req)  # pyright: ignore[reportArgumentType]
     assert result is mock_budget
-
-
-def test_require_dev_auth_returns_dev() -> None:
-    """require_dev_auth returns 'dev' as actor identity."""
-    from homelab_monitor.kernel.api.dependencies import require_dev_auth  # noqa: PLC0415
-
-    req = _make_empty_request()
-    result = require_dev_auth(req)  # pyright: ignore[reportArgumentType]
-    assert result == "dev"
 
 
 def test_get_scheduler_returns_when_present() -> None:

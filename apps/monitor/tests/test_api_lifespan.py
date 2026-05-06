@@ -187,7 +187,6 @@ async def test_lifespan_enabled_true_with_healthz_up(
     """lifespan_enabled=True + healthz returns 200 with db: up and scheduler: running."""
     monkeypatch.setenv("HOMELAB_MONITOR_DB_URL", db_url)
     monkeypatch.setenv("HOMELAB_MONITOR_MASTER_KEY", base64.b64encode(master_key).decode())
-    monkeypatch.setenv("HOMELAB_MONITOR_DEV_AUTH", "0")
 
     app = create_app(lifespan_enabled=True)
 

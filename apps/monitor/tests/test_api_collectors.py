@@ -9,39 +9,32 @@ from homelab_monitor.kernel.api.app import create_app
 
 
 @pytest.mark.asyncio
-async def test_collectors_list_shape(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_collectors_list_shape(authenticated_client: AsyncClient) -> None:
     """GET /api/collectors returns 200 with list of CollectorStatus."""
-    monkeypatch.setenv("HOMELAB_MONITOR_DEV_AUTH", "1")
-    app = create_app(lifespan_enabled=False)
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        resp = await client.get("/api/collectors", headers={"X-Auth": "dev"})
-        # Without lifespan, will get 503 (dependencies unavailable)
-        assert resp.status_code == 503  # noqa: PLR2004
+    resp = await authenticated_client.get("/api/collectors")
+    # authenticated_client boots full lifespan, so dependencies are wired
+    assert resp.status_code == 200  # noqa: PLR2004
+    data = resp.json()
+    assert isinstance(data, list)
 
 
 @pytest.mark.asyncio
-async def test_collectors_401_without_auth_header(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """GET /api/collectors returns 401 without X-Auth header when auth enabled."""
-    monkeypatch.setenv("HOMELAB_MONITOR_DEV_AUTH", "1")
+async def test_collectors_401_without_auth_header() -> None:
+    """GET /api/collectors returns 401 without session cookie."""
     app = create_app(lifespan_enabled=False)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         resp = await client.get("/api/collectors")
-        # Auth middleware should reject before we hit the 503 from missing dependencies
+        # require_session() runs before get_loader, so 401 wins over the 503
         assert resp.status_code == 401  # noqa: PLR2004
 
 
 @pytest.mark.asyncio
-async def test_collectors_401_when_dev_auth_unset(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """GET /api/collectors returns 401 when HOMELAB_MONITOR_DEV_AUTH unset."""
-    monkeypatch.delenv("HOMELAB_MONITOR_DEV_AUTH", raising=False)
+async def test_collectors_401_when_no_session() -> None:
+    """GET /api/collectors returns 401 when no valid session cookie."""
     app = create_app(lifespan_enabled=False)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        resp = await client.get("/api/collectors", headers={"X-Auth": "dev"})
-        # Should reject due to env not being set
+        resp = await client.get("/api/collectors")
+        # Should reject due to missing session
         assert resp.status_code == 401  # noqa: PLR2004
 
 

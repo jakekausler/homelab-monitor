@@ -83,6 +83,24 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0915
     await ttl_resolver.refresh_now()
     refresh_task = asyncio.create_task(ttl_resolver.refresh_loop())
 
+    # 4b. Auth subsystem
+    from homelab_monitor.kernel.auth.rate_limit import InProcessLoginRateLimiter  # noqa: PLC0415
+    from homelab_monitor.kernel.auth.repository import AuthRepository  # noqa: PLC0415
+
+    auth_repo = AuthRepository(repo)
+    login_rate_limiter = InProcessLoginRateLimiter()
+    # The "no users configured" warning fires once at lifespan startup. If the
+    # operator deletes the last user mid-process, /api/version's
+    # `users_configured` flag flips back to false (per-request lookup), but
+    # this warning won't re-fire until restart — acceptable for v1.
+    user_count = await auth_repo.users_count()
+    if user_count == 0:
+        log.warning(
+            "lifespan.bootstrap_required",
+            reason="no_users_configured",
+            hint="run `hm user create <USERNAME>` to create the first operator account",
+        )
+
     # 5. Loader
     loader = PluginLoader(log=log)
     degraded: list[str] = []
@@ -150,6 +168,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0915
     )
     await scheduler.start()
 
+    app.state.master_key = master_key
+    app.state.auth_repo = auth_repo
+    app.state.login_rate_limiter = login_rate_limiter
     app.state.scheduler = scheduler
     app.state.repo = repo
     app.state.broker = broker

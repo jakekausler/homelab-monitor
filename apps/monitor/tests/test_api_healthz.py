@@ -39,7 +39,7 @@ async def test_healthz_auth_exempt(monkeypatch: pytest.MonkeyPatch) -> None:
     # it will return 200 with degraded fields, not 401 (auth).
     app = create_app(lifespan_enabled=False)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        # No X-Auth header, should not get 401
+        # No auth (auth-exempt path), should not get 401
         resp = await client.get("/api/healthz")
         # Should NOT be 401 (auth). Returns 200 with degraded fields.
         assert resp.status_code != 401  # noqa: PLR2004

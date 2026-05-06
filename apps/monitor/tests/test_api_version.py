@@ -82,11 +82,10 @@ async def test_version_defaults_to_dev_when_unset() -> None:
 
 @pytest.mark.asyncio
 async def test_version_auth_exempt(monkeypatch: pytest.MonkeyPatch) -> None:
-    """GET /api/version is auth-exempt (returns 200 without X-Auth header)."""
-    monkeypatch.delenv("HOMELAB_MONITOR_DEV_AUTH", raising=False)
+    """GET /api/version is auth-exempt (returns 200 without any credentials)."""
+    del monkeypatch  # auth-exempt path; no env or cookie setup needed
     app = create_app(lifespan_enabled=False)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        # No X-Auth header, should still get 200 (not 401)
         resp = await client.get("/api/version")
         assert resp.status_code == 200  # noqa: PLR2004
 
@@ -99,10 +98,12 @@ def test_version_response_shape() -> None:
         version="1.2.3",
         git_sha="abc123",
         built_at="2026-05-05T00:00:00Z",
+        users_configured=False,
     )
     assert resp.version == "1.2.3"
     assert resp.git_sha == "abc123"
     assert resp.built_at == "2026-05-05T00:00:00Z"
+    assert resp.users_configured is False
 
 
 def test_version_response_forbids_extra_fields() -> None:

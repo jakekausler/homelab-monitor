@@ -1,8 +1,7 @@
-"""Request/response middleware for structured logging, request IDs, and dev auth."""
+"""Request/response middleware for structured logging, request IDs, and auth resolution."""
 
 from __future__ import annotations
 
-import os
 import time
 import uuid
 from collections.abc import Awaitable, Callable
@@ -12,25 +11,45 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 
-from homelab_monitor.kernel.api.errors import envelope_response
+from homelab_monitor.kernel.auth.api_tokens import hash_token
+from homelab_monitor.kernel.auth.repository import AuthRepository
+from homelab_monitor.kernel.auth.sessions import verify_session_cookie_value
 
-_AUTH_EXEMPT_PATHS = {
-    "/api/healthz",
-    "/api/version",
-    "/api/openapi.json",
-    "/api/docs",
-    "/api/redoc",
-    "/api/docs/oauth2-redirect",
-}
+# Paths that NEVER require auth resolution to populate request.state.user
+# (the resolver still runs but produces auth_kind="unauthenticated").
+# Enforcement decisions happen in route-level Depends, not here.
+AUTH_EXEMPT_PATHS = frozenset(
+    {
+        "/api/healthz",
+        "/api/version",
+        "/api/openapi.json",
+        "/api/docs",
+        "/api/redoc",
+        "/api/docs/oauth2-redirect",
+        "/api/auth/login",
+        # NOT exempt: /api/auth/logout. The route is idempotent (no-op when no
+        # session) but it MUST run AuthMiddleware so request.state.session is
+        # populated when a valid cookie is present, so the row can be deleted.
+    }
+)
+
+SESSION_COOKIE_NAME = "homelab_monitor_session"
 
 
 class RequestIdMiddleware(BaseHTTPMiddleware):
     """Generate or validate X-Request-Id header and bind to structlog context.
 
-    Reads X-Request-Id if present and valid (hex32), else generates fresh uuid.
-    Binds request_id to structlog.contextvars for the duration of the request,
-    and unbinds it after the response completes (no cross-request leakage).
-    Sets X-Request-Id response header.
+    Reads X-Request-Id if present (accepts both 32-char hex and 36-char
+    canonical UUID `8-4-4-4-12`), normalizes to 32-char hex internally and
+    in responses. If absent or unparseable, generates a fresh uuid4 hex.
+
+    Binds request_id to structlog.contextvars for the duration of the
+    request, and unbinds it after the response completes (no cross-request
+    leakage). Sets X-Request-Id response header.
+
+    Why 32-char hex in responses: simpler grep on log lines; clients that
+    sent canonical UUIDs see them echoed in 32-char form (acceptable per
+    RFC 4122 — the UUID value is the same).
     """
 
     async def dispatch(
@@ -66,7 +85,7 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
 
 
 class AccessLogMiddleware(BaseHTTPMiddleware):
-    """Log structured JSON entry for each request (method, path, status, duration)."""
+    """Log structured JSON entry for each request (method, path, status, duration, auth)."""
 
     async def dispatch(
         self, request: Request, call_next: Callable[..., Awaitable[Response]]
@@ -77,8 +96,6 @@ class AccessLogMiddleware(BaseHTTPMiddleware):
         except Exception:
             duration_ms = round((time.perf_counter() - start) * 1000, 2)
             log = structlog.get_logger()
-            # Status is unknown here; the exception handler will emit the actual
-            # response. Use status=0 to signal "exception escaped".
             log.warning(
                 "http.request",
                 method=request.method,
@@ -87,6 +104,7 @@ class AccessLogMiddleware(BaseHTTPMiddleware):
                 exception=True,
                 duration_ms=duration_ms,
                 query_count=len(request.query_params),
+                auth=_auth_log_field(request),
             )
             raise
         duration_ms = round((time.perf_counter() - start) * 1000, 2)
@@ -98,32 +116,127 @@ class AccessLogMiddleware(BaseHTTPMiddleware):
             status=response.status_code,
             duration_ms=duration_ms,
             query_count=len(request.query_params),
+            auth=_auth_log_field(request),
         )
         return response
 
 
-class DevAuthMiddleware(BaseHTTPMiddleware):
-    """Gate requests to protected endpoints with X-Auth: dev header (dev placeholder).
+def _auth_log_field(request: Request) -> str:
+    """Build the access-log auth field from request.state.
 
-    Checks HOMELAB_MONITOR_DEV_AUTH env var. If unset, returns 401 for protected
-    endpoints. If set to "1", requires X-Auth: dev header (case-insensitive).
-    Certain paths are auth-exempt (healthz, version, docs).
+    Returns:
+        - "session(user_id=N)" when AuthMiddleware resolved a session cookie
+        - "token:<name>" when an API token was used
+        - "unauthenticated" otherwise (including exempt paths)
+
+    The getattr fallbacks are defensive: AccessLogMiddleware sits OUTSIDE
+    AuthMiddleware in the stack, so on requests that error out before
+    AuthMiddleware runs (e.g., ASGI-level bug), state attributes may be
+    absent. The "?" sentinel surfaces that condition in logs without
+    crashing the access-log writer.
+    """
+    kind = getattr(request.state, "auth_kind", "unauthenticated")
+    if kind == "session":
+        uid = getattr(request.state, "user_id", "?")
+        return f"session(user_id={uid})"
+    if kind == "token":
+        name = getattr(request.state, "token_name", "?")
+        return f"token:{name}"
+    return "unauthenticated"
+
+
+class AuthMiddleware(BaseHTTPMiddleware):
+    """Resolve session cookie OR API token; populate request.state.
+
+    NEVER enforces. Route-level `Depends(require_*)` handles enforcement.
+    Sets:
+        - request.state.user (User | None)
+        - request.state.user_id (int | None)
+        - request.state.session (Session | None)
+        - request.state.token (ApiToken | None)
+        - request.state.token_name (str | None)
+        - request.state.auth_kind ("session" | "token" | "unauthenticated")
     """
 
     async def dispatch(
         self, request: Request, call_next: Callable[..., Awaitable[Response]]
     ) -> Response:
-        # Exempt paths never require auth
-        if request.url.path in _AUTH_EXEMPT_PATHS:
+        # Initialize state defaults so dependencies can rely on attribute presence
+        request.state.user = None
+        request.state.user_id = None
+        request.state.session = None
+        request.state.token = None
+        request.state.token_name = None
+        request.state.auth_kind = "unauthenticated"
+
+        # On exempt paths, skip the (cheap) DB lookups entirely.
+        if request.url.path in AUTH_EXEMPT_PATHS:
             return await call_next(request)
 
-        # Check if auth is enabled
-        if os.environ.get("HOMELAB_MONITOR_DEV_AUTH") != "1":
-            return envelope_response(401, "unauthorized", "auth not enabled in this build")
-
-        # Check X-Auth header
-        auth_header = request.headers.get("X-Auth", "").lower()
-        if auth_header != "dev":
-            return envelope_response(401, "unauthorized", "missing or invalid X-Auth header")
+        # Auth precedence (locked design D2):
+        #   1. Authorization: Bearer <token>  → API token (CSRF-IMMUNE)
+        #   2. Else, homelab_monitor_session cookie → session (CSRF ENFORCED on
+        #      state-changing methods inside require_session()/require_user_or_token())
+        #   3. Else, unauthenticated (route's Depends(require_*) decides 401).
+        # If a request sends BOTH a Bearer header AND a session cookie, the
+        # token wins and the session is ignored. This is deliberate: a
+        # programmatic caller (Alertmanager, cron) explicitly opting into
+        # token auth must not be downgraded to a CSRF-protected flow that
+        # demands an X-CSRF-Token header it cannot easily produce.
+        # If you add a new auth scheme, evaluate it BEFORE the cookie branch
+        # and document the precedence here.
+        auth_header = request.headers.get("authorization", "")
+        if auth_header.lower().startswith("bearer "):
+            await self._resolve_token(request, auth_header[len("bearer ") :].strip())
+        elif (cookie_val := request.cookies.get(SESSION_COOKIE_NAME)) is not None:
+            await self._resolve_session(request, cookie_val)
 
         return await call_next(request)
+
+    @staticmethod
+    async def _resolve_token(request: Request, plaintext: str) -> None:
+        # Reject empty plaintext early — `Authorization: Bearer ` (trailing space)
+        # otherwise hits the DB with hash_token(""). Constant-time short-circuit.
+        if not plaintext:
+            return
+        auth_repo = getattr(request.app.state, "auth_repo", None)
+        if auth_repo is None or not isinstance(auth_repo, AuthRepository):
+            return
+        sha = hash_token(plaintext)
+        token = await auth_repo.get_api_token_by_hash(sha)
+        if token is None:
+            return
+        request.state.token = token
+        request.state.token_name = token.name
+        request.state.auth_kind = "token"
+        # Best-effort last_used update; do not fail the request on a write error
+        try:
+            from homelab_monitor.kernel.db.time import utc_now_iso  # noqa: PLC0415
+
+            await auth_repo.update_token_last_used(token.id, utc_now_iso())
+        except Exception:  # pragma: no cover -- defensive
+            pass
+
+    @staticmethod
+    async def _resolve_session(request: Request, cookie_val: str) -> None:
+        master_key = getattr(request.app.state, "master_key", None)
+        if master_key is None:
+            return
+        auth_repo = getattr(request.app.state, "auth_repo", None)
+        if auth_repo is None or not isinstance(auth_repo, AuthRepository):
+            return
+        session_id = verify_session_cookie_value(cookie_val, master_key)
+        if session_id is None:
+            return
+        session = await auth_repo.get_session(session_id)
+        if session is None:
+            return
+        if AuthRepository.is_session_expired(session.expires_at):
+            return
+        user = await auth_repo.get_user_by_id(session.user_id)
+        if user is None:
+            return
+        request.state.user = user
+        request.state.user_id = user.id
+        request.state.session = session
+        request.state.auth_kind = "session"

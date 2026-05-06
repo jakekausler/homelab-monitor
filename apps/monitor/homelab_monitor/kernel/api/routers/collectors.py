@@ -13,10 +13,11 @@ from homelab_monitor.kernel.api.dependencies import (
     get_loader,
     get_metrics_writer,
     get_scheduler,
-    require_dev_auth,
+    require_session,
 )
 from homelab_monitor.kernel.api.errors import NotFoundProblem
 from homelab_monitor.kernel.api.schemas import CollectorStatus, RetryResponse
+from homelab_monitor.kernel.auth.models import User
 from homelab_monitor.kernel.db.time import utc_now_iso
 from homelab_monitor.kernel.events import TriggerContext
 from homelab_monitor.kernel.plugins.io import InMemoryMetricsWriter
@@ -33,6 +34,7 @@ router = APIRouter()
 
 @router.get("/collectors", response_model=list[CollectorStatus])
 async def list_collectors(
+    _user: User = Depends(require_session()),  # noqa: B008
     loader: PluginLoader = Depends(get_loader),  # noqa: B008
     metrics: InMemoryMetricsWriter = Depends(get_metrics_writer),  # noqa: B008
     scheduler: Scheduler = Depends(get_scheduler),  # noqa: B008
@@ -102,7 +104,7 @@ async def list_collectors(
 async def retry_collector(
     name: str,
     request: Request,
-    actor: str = Depends(require_dev_auth),
+    user: User = Depends(require_session()),  # noqa: B008
     scheduler: Scheduler = Depends(get_scheduler),  # noqa: B008
     loader: PluginLoader = Depends(get_loader),  # noqa: B008
 ) -> RetryResponse:
@@ -124,7 +126,7 @@ async def retry_collector(
         )
 
     # Clear quarantine
-    await scheduler.clear_quarantine(name, by=actor)
+    await scheduler.clear_quarantine(name, by=str(user.id))
 
     # Request immediate run
     tick_id = await scheduler.request_immediate_run(

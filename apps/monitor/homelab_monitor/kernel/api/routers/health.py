@@ -73,17 +73,24 @@ async def healthz(request: Request) -> HealthzResponse:
 
 
 @router.get("/version", response_model=VersionResponse)
-async def version() -> VersionResponse:
-    """Version endpoint.
-
-    Returns version, git SHA, and build timestamp.
-    """
+async def version(request: Request) -> VersionResponse:
+    """Version endpoint. Returns version, git SHA, build timestamp, users_configured."""
     version_str = __version__
     git_sha = os.environ.get("HOMELAB_MONITOR_GIT_SHA", "dev")
     built_at = os.environ.get("HOMELAB_MONITOR_BUILT_AT") or utc_now_iso()
+    auth_repo = getattr(request.app.state, "auth_repo", None)
+    users_configured = False
+    if auth_repo is not None:
+        try:
+            users_configured = await auth_repo.users_count() > 0
+        except Exception as exc:  # pragma: no cover -- defensive
+            import structlog  # noqa: PLC0415
 
+            structlog.get_logger().warning("version.users_count_failed", error=str(exc))
+            users_configured = False
     return VersionResponse(
         version=version_str,
         git_sha=git_sha,
         built_at=built_at,
+        users_configured=users_configured,
     )

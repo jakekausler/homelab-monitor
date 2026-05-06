@@ -41,6 +41,7 @@ class VersionResponse(BaseModel):
     version: str
     git_sha: str
     built_at: str
+    users_configured: bool
 
 
 class CollectorStatus(BaseModel):

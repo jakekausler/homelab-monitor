@@ -2,11 +2,22 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, TypeVar
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 from starlette.requests import Request
 
 from homelab_monitor.kernel.api.errors import DependencyUnavailableProblem
+from homelab_monitor.kernel.auth.csrf import verify_csrf_token
+from homelab_monitor.kernel.auth.errors import (
+    CsrfMismatchProblem,
+    InsufficientScopeProblem,
+    UnauthenticatedProblem,
+)
+from homelab_monitor.kernel.auth.models import ApiToken, User
+from homelab_monitor.kernel.auth.rate_limit import LoginRateLimiter
+from homelab_monitor.kernel.auth.repository import AuthRepository
+from homelab_monitor.kernel.auth.scopes import Scope, parse_scopes
 
 if TYPE_CHECKING:
     import httpx
@@ -17,9 +28,6 @@ if TYPE_CHECKING:
     from homelab_monitor.kernel.plugins.loader import PluginLoader
     from homelab_monitor.kernel.scheduler.failure_budget import FailureBudget
     from homelab_monitor.kernel.scheduler.scheduler import Scheduler
-
-
-T = TypeVar("T")
 
 
 def _require_state(request: Request, *, attr: str, code: str, message: str) -> Any:  # noqa: ANN401 -- generic state object, type varies per dependency
@@ -124,10 +132,115 @@ def get_failure_budget(request: Request) -> FailureBudget:
     )
 
 
-def require_dev_auth(request: Request) -> str:
-    """Require dev auth and return actor identity.
+def get_auth_repo(request: Request) -> AuthRepository:
+    """Get the auth repository from app state."""
+    return _require_state(
+        request,
+        attr="auth_repo",
+        code="auth_unavailable",
+        message="auth subsystem is not initialized",
+    )
 
-    Auth gating happens in DevAuthMiddleware; this dependency is a hook
-    for STAGE-001-011 to inject real auth. Currently always returns "dev".
+
+def get_rate_limiter(request: Request) -> LoginRateLimiter:
+    """Get the login rate limiter from app state."""
+    return _require_state(
+        request,
+        attr="login_rate_limiter",
+        code="auth_unavailable",
+        message="login rate limiter is not initialized",
+    )
+
+
+def get_master_key(request: Request) -> bytes:
+    """Get the master key from app state (used by login route to mint cookies)."""
+    return _require_state(
+        request,
+        attr="master_key",
+        code="master_key_unavailable",
+        message="master key is not loaded",
+    )
+
+
+CSRF_HEADER = "X-CSRF-Token"
+STATE_CHANGING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+
+def _enforce_csrf(request: Request) -> None:
+    """Compare X-CSRF-Token header to session.csrf_token. Raises on mismatch.
+
+    Only invoked for cookie-authenticated state-changing requests. Token-authed
+    requests are CSRF-immune (no ambient credential).
     """
-    return "dev"
+    if request.method.upper() not in STATE_CHANGING_METHODS:
+        return
+    session = getattr(request.state, "session", None)
+    if session is None:
+        # Defensive: only called from require_session() after user was resolved
+        raise CsrfMismatchProblem(  # pragma: no cover -- callable only when session set
+            message="missing session for CSRF check",
+        )
+    provided = request.headers.get(CSRF_HEADER, "")
+    if not verify_csrf_token(provided, session.csrf_token):
+        raise CsrfMismatchProblem()
+
+
+def require_session() -> Callable[..., User]:
+    """FastAPI dependency factory: require a session-authed User; enforce CSRF.
+
+    Use as: `Depends(require_session())`. Raises UnauthenticatedProblem if not
+    session-authed; CsrfMismatchProblem on state-changing requests with a bad
+    or missing X-CSRF-Token header.
+    """
+
+    def _dep(request: Request) -> User:
+        if request.state.auth_kind != "session" or request.state.user is None:
+            raise UnauthenticatedProblem()
+        _enforce_csrf(request)
+        return request.state.user  # pyright: ignore[reportReturnType]
+
+    return _dep
+
+
+def require_token_scope(scope: Scope) -> Callable[..., ApiToken]:
+    """FastAPI dependency factory: require an API token with the named scope."""
+
+    def _dep(request: Request) -> ApiToken:
+        if request.state.auth_kind != "token" or request.state.token is None:
+            raise UnauthenticatedProblem()
+        token: ApiToken = request.state.token
+        granted = parse_scopes(token.scopes)
+        if scope not in granted:
+            raise InsufficientScopeProblem(
+                message=f"token lacks required scope: {scope.value}",
+            )
+        return token
+
+    return _dep
+
+
+def require_user_or_token(scopes: set[Scope]) -> Callable[..., User | ApiToken]:
+    """FastAPI dependency factory: accept session OR token with ANY of the given scopes.
+
+    For session auth: enforces CSRF on state-changing requests.
+    For token auth: validates ANY (not all) scope membership.
+    """
+
+    def _dep(request: Request) -> User | ApiToken:
+        kind = request.state.auth_kind
+        if kind == "session" and request.state.user is not None:
+            _enforce_csrf(request)
+            return request.state.user  # pyright: ignore[reportReturnType]
+        if kind == "token" and request.state.token is not None:
+            token: ApiToken = request.state.token
+            granted = parse_scopes(token.scopes)
+            if scopes.isdisjoint(granted):
+                raise InsufficientScopeProblem(
+                    message=(
+                        f"token lacks any of required scopes: {sorted(s.value for s in scopes)}"
+                    ),
+                )
+            return token
+        raise UnauthenticatedProblem()
+
+    return _dep
