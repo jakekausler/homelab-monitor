@@ -168,6 +168,22 @@ or related tests.
 - [ ] CSRF token is required for POST/PUT/DELETE; missing token returns 403
 - [ ] Session expiry is enforced (test with short TTL)
 
+## STAGE-001-011 Regression Watch — Streaming endpoints MUST have explicit auth dependency
+
+**Date filed:** 2026-05-06
+
+**Pattern:** Any FastAPI route that returns a streaming response (`StreamingResponse`, `EventSourceResponse`, async generators) MUST declare an explicit `Depends(require_*)` in its signature.
+
+**Why:** Without an auth dependency, unauthenticated requests cause the response generator to begin streaming. Tests using `httpx.AsyncClient` against such endpoints WAIT INDEFINITELY for response data → infinite hang in test suite.
+
+**Real incident:** STAGE-001-011 Build phase. `/api/events` was missing `Depends(require_session())`. A test calling the endpoint without auth caused pytest to hang indefinitely. 17 minutes of CI wall-clock wasted before diagnosis. Fix: add the dep — covered in STAGE-011's commit.
+
+**Detection:** code-review-graph rule (future): every router function returning `StreamingResponse | EventSourceResponse | AsyncIterator` requires at least one `Depends(require_*)` parameter.
+
+**Resolution path:** STAGE-001-014 (UI shell — first frontend SSE consumer) or any future stage adding streaming endpoints must verify this. Add `pytest-timeout` to deps in a future stage to bound any future hang to 30s.
+
+**Status:** OPEN (preventive — applies to all future streaming endpoints)
+
 ## STAGE-001-012: First built-in `host` collector
 
 - [ ] `GET /api/collectors` returns `host` with `last_run_at` populated and updating across two calls
