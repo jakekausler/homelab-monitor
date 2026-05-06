@@ -35,3 +35,10 @@ repos:
         entry: bash -c 'cd apps/ui && pnpm exec eslint .'
         files: ^apps/ui/.*\.(ts|tsx)$
         pass_filenames: false
+
+      - id: openapi-export
+        name: openapi schema export (kernel/api)
+        language: system
+        entry: bash scripts/export-openapi.sh
+        files: ^apps/monitor/homelab_monitor/kernel/api/.*\.py$
+        pass_filenames: false

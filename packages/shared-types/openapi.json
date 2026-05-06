@@ -1,0 +1,410 @@
+{
+  "components": {
+    "schemas": {
+      "CollectorStatus": {
+        "additionalProperties": false,
+        "description": "Status of a single collector in GET /api/collectors response.",
+        "properties": {
+          "consecutive_failures": {
+            "title": "Consecutive Failures",
+            "type": "integer"
+          },
+          "interval_seconds": {
+            "title": "Interval Seconds",
+            "type": "number"
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error"
+          },
+          "last_run": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Run"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "next_run": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Run"
+          },
+          "quarantine_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quarantine Reason"
+          },
+          "quarantined": {
+            "title": "Quarantined",
+            "type": "boolean"
+          },
+          "quarantined_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quarantined At"
+          },
+          "run_kind": {
+            "title": "Run Kind",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "healthy",
+              "quarantined",
+              "degraded"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "status",
+          "last_run",
+          "last_error",
+          "quarantined",
+          "quarantined_at",
+          "quarantine_reason",
+          "next_run",
+          "run_kind",
+          "interval_seconds",
+          "consecutive_failures"
+        ],
+        "title": "CollectorStatus",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "HealthzResponse": {
+        "additionalProperties": false,
+        "description": "Response for GET /api/healthz.",
+        "properties": {
+          "db": {
+            "enum": [
+              "up",
+              "down"
+            ],
+            "title": "Db",
+            "type": "string"
+          },
+          "degraded_collectors": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Degraded Collectors",
+            "type": "array"
+          },
+          "failed_ticks_last_5m": {
+            "title": "Failed Ticks Last 5M",
+            "type": "integer"
+          },
+          "last_tick_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Tick At"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "quarantined_collectors": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Quarantined Collectors",
+            "type": "array"
+          },
+          "scheduler": {
+            "enum": [
+              "running",
+              "stopped"
+            ],
+            "title": "Scheduler",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "version",
+          "db",
+          "scheduler",
+          "last_tick_at",
+          "failed_ticks_last_5m",
+          "quarantined_collectors",
+          "degraded_collectors"
+        ],
+        "title": "HealthzResponse",
+        "type": "object"
+      },
+      "RetryResponse": {
+        "additionalProperties": false,
+        "description": "Response for POST /api/collectors/{name}/retry.",
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "requested_at": {
+            "title": "Requested At",
+            "type": "string"
+          },
+          "tick_id": {
+            "title": "Tick Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "tick_id",
+          "requested_at"
+        ],
+        "title": "RetryResponse",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      },
+      "VersionResponse": {
+        "additionalProperties": false,
+        "description": "Response for GET /api/version.",
+        "properties": {
+          "built_at": {
+            "title": "Built At",
+            "type": "string"
+          },
+          "git_sha": {
+            "title": "Git Sha",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "version",
+          "git_sha",
+          "built_at"
+        ],
+        "title": "VersionResponse",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "title": "homelab-monitor",
+    "version": "0.0.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/collectors": {
+      "get": {
+        "description": "List all loaded collectors with their status.",
+        "operationId": "list_collectors_api_collectors_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/CollectorStatus"
+                  },
+                  "title": "Response List Collectors Api Collectors Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Collectors"
+      }
+    },
+    "/api/collectors/{name}/retry": {
+      "post": {
+        "description": "Request an immediate retry of a collector.\n\nClears any quarantine, enqueues an immediate run, and returns the tick_id.",
+        "operationId": "retry_collector_api_collectors__name__retry_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RetryResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Retry Collector"
+      }
+    },
+    "/api/events": {
+      "get": {
+        "description": "Stream collector tick events via Server-Sent Events.\n\nConnects to the SSE broker and yields events in the format:\n  event: collector.tick\n  data: {JSON payload}\n  id: {sequence number}\n\nReplays the last 50 events on connect. If the consumer's queue fills\n(slow subscriber), the broker disconnects them with an error event.",
+        "operationId": "stream_events_api_events_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Stream Events"
+      }
+    },
+    "/api/healthz": {
+      "get": {
+        "description": "Health check endpoint.\n\nReturns overall system health plus detailed status fields. Tolerant of\nmissing dependencies (lifespan disabled / not yet started) \u2014 reports\ndegraded state instead of 503-ing.",
+        "operationId": "healthz_api_healthz_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthzResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Healthz"
+      }
+    },
+    "/api/version": {
+      "get": {
+        "description": "Version endpoint.\n\nReturns version, git SHA, and build timestamp.",
+        "operationId": "version_api_version_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VersionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Version"
+      }
+    }
+  }
+}

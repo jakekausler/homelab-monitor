@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -80,3 +81,65 @@ def test_loaded_collector_is_frozen() -> None:
     loaded = loader.register(NoopCollector, {"name": "noop"})
     with pytest.raises(dataclasses.FrozenInstanceError):
         loaded.collector = NoopCollector()  # type: ignore[misc]
+
+
+def test_load_subprocess_plugins_skips_non_executable_relative_path(
+    tmp_path: Path,
+) -> None:
+    """load_subprocess_plugins skips plugins with non-executable relative command paths."""
+
+    # Create a temporary manifest directory
+    manifest_dir = tmp_path / "plugins"
+    manifest_dir.mkdir()
+
+    # Create a manifest with a non-executable relative command
+    manifest_path = manifest_dir / "test_plugin.yaml"
+    manifest_path.write_text(
+        """
+name: test-nonexec
+interval: 60
+command:
+  - ./nonexistent_script
+  - --arg1
+"""
+    )
+
+    # Create a loader and load subprocess plugins
+    loader = PluginLoader()
+    count = loader.load_subprocess_plugins(manifest_dir)
+
+    # Should skip the non-executable plugin
+    assert count == 0
+    # Verify the plugin was not registered
+    assert len(loader.load_all()) == 0
+
+
+def test_load_subprocess_plugins_skips_command_not_on_path(
+    tmp_path: Path,
+) -> None:
+    """load_subprocess_plugins skips plugins with command not on PATH."""
+
+    # Create a temporary manifest directory
+    manifest_dir = tmp_path / "plugins"
+    manifest_dir.mkdir()
+
+    # Create a manifest with a non-existent command on PATH
+    manifest_path = manifest_dir / "test_plugin.yaml"
+    manifest_path.write_text(
+        """
+name: test-notfound
+interval: 60
+command:
+  - this_command_definitely_does_not_exist_12345
+  - --arg1
+"""
+    )
+
+    # Create a loader and load subprocess plugins
+    loader = PluginLoader()
+    count = loader.load_subprocess_plugins(manifest_dir)
+
+    # Should skip the plugin with command not on PATH
+    assert count == 0
+    # Verify the plugin was not registered
+    assert len(loader.load_all()) == 0

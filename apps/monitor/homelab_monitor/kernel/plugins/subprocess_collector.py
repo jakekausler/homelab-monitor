@@ -15,6 +15,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import cast
 
+from homelab_monitor.kernel.events import current_tick
 from homelab_monitor.kernel.plugins.base import BaseCollector
 from homelab_monitor.kernel.plugins.context import CollectorContext
 from homelab_monitor.kernel.plugins.manifest import SubprocessManifest
@@ -39,7 +40,20 @@ def make_subprocess_collector(
 
     async def _run(self: BaseCollector, ctx: CollectorContext) -> CollectorResult:
         del self  # not used; manifest captured via closure
-        return await run_subprocess(manifest, ctx, manifest_dir=manifest_dir)
+        tick = current_tick()
+        extra_env: dict[str, str] = {}
+        if (
+            tick is not None
+        ):  # pragma: no cover -- only reachable when collector runs within scheduler tick context
+            tick_id, trigger = tick
+            extra_env["HOMELAB_TICK_ID"] = tick_id
+            if trigger is not None:
+                extra_env["HOMELAB_TRIGGER_KIND"] = trigger.kind
+                if (
+                    trigger.request_id is not None
+                ):  # pragma: no cover -- requires request-triggered tick
+                    extra_env["HOMELAB_REQUEST_ID"] = trigger.request_id
+        return await run_subprocess(manifest, ctx, manifest_dir=manifest_dir, extra_env=extra_env)
 
     cls = type(
         f"_SubprocessCollector_{manifest.name.replace('-', '_')}",

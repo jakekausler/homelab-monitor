@@ -352,6 +352,7 @@ async def run_subprocess(  # noqa: PLR0915 -- spawn + stdin write + concurrent s
     ctx: CollectorContext,
     *,
     manifest_dir: Path,
+    extra_env: dict[str, str] | None = None,
 ) -> CollectorResult:
     """Spawn the subprocess, supervise it, return CollectorResult.
 
@@ -368,6 +369,8 @@ async def run_subprocess(  # noqa: PLR0915 -- spawn + stdin write + concurrent s
     log: BoundLogger = cast(BoundLogger, ctx.log.bind(collector=manifest.name))
     cwd = Path(manifest.workdir) if manifest.workdir else manifest_dir
     env = _build_subprocess_env(manifest)
+    if extra_env:
+        env.update(extra_env)
     secrets_dict = ctx.secrets.filtered(manifest.secrets).as_dict()
     stdin_payload = _build_stdin_payload(
         config_name=ctx.config.name,

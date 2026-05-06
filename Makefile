@@ -1,4 +1,4 @@
-.PHONY: setup verify verify-ci lint format format-check typecheck test dev clean crg-init ui-verify ui-dev ui-build ui-test
+.PHONY: setup verify verify-ci lint format format-check typecheck test dev backend-dev openapi-export clean crg-init ui-verify ui-dev ui-build ui-test
 
 .DEFAULT_GOAL := verify
 
@@ -34,9 +34,15 @@ typecheck:
 test:
 	uv run --directory $(MONITOR_DIR) pytest --cov=homelab_monitor --cov-report=term-missing
 
-dev:
-	@echo "dev server lands in STAGE-001-010 (FastAPI app shell)"
-	@echo "run \`make verify\` for the canonical check pipeline"
+backend-dev:
+	uv run --directory $(MONITOR_DIR) uvicorn homelab_monitor.kernel.api.app:create_app \
+		--factory --reload --host 0.0.0.0 --port 9090 \
+		--reload-dir $(MONITOR_DIR)/homelab_monitor
+
+openapi-export:
+	bash scripts/export-openapi.sh
+
+dev: backend-dev
 
 ui-verify:
 	pnpm --filter ui run verify

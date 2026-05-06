@@ -16,11 +16,25 @@ See ``docs/architecture/scheduler.md`` §5-§6.
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import multiprocessing
 import os
 from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from dataclasses import dataclass, field
+from uuid import uuid4
 
+from structlog.contextvars import bound_contextvars
+
+from homelab_monitor.kernel.db.time import utc_now_iso
+from homelab_monitor.kernel.events import (
+    EventSink,
+    NullEventSink,
+    SchedulerTickEvent,
+    TriggerContext,
+    reset_current_tick,
+    set_current_tick,
+)
 from homelab_monitor.kernel.plugins.base import Collector
 from homelab_monitor.kernel.plugins.context import CollectorContext
 from homelab_monitor.kernel.plugins.io import MetricEntry, MetricsWriter
@@ -43,6 +57,8 @@ class SchedulerConfig:
       Default ``min(2, os.cpu_count() or 1)`` (matches stage decision).
     - ``thread_pool_size`` — workers in the shared ``ThreadPoolExecutor``.
       Bounded; THREAD plugins are rare initially. Default 4.
+    - ``event_sink`` — EventSink implementation for publishing tick events
+      (e.g., SSE broker). Default NullEventSink (no-op).
     """
 
     shutdown_grace_seconds: float = 30.0
@@ -50,6 +66,7 @@ class SchedulerConfig:
         default_factory=lambda: min(2, os.cpu_count() or 1),
     )
     thread_pool_size: int = 4
+    event_sink: EventSink = field(default_factory=NullEventSink)
 
 
 def _thread_runner(collector: Collector, ctx: CollectorContext) -> CollectorResult:
@@ -145,6 +162,7 @@ class Scheduler:
         self._last_error_ts: dict[str, float] = {}
         self._thread_pool: ThreadPoolExecutor | None = None
         self._process_pool: ProcessPoolExecutor | None = None
+        self._immediate_runs: dict[str, asyncio.Queue[tuple[str, TriggerContext]]] = {}
 
     @property
     def running(self) -> bool:
@@ -154,6 +172,11 @@ class Scheduler:
         successful :meth:`start`, because ``bool([]) is False``.
         """
         return bool(self._tick_tasks) and not self._stopping
+
+    @property
+    def failure_budget(self) -> FailureBudget | None:
+        """Return the failure budget instance (read-only)."""
+        return self._failure_budget
 
     async def start(self) -> None:
         """Spawn per-collector tick loops + create the thread/process pools.
@@ -169,7 +192,10 @@ class Scheduler:
         if self._failure_budget is not None:
             await self._failure_budget.load_state()
         self._thread_pool = ThreadPoolExecutor(max_workers=self._config.thread_pool_size)
-        self._process_pool = ProcessPoolExecutor(max_workers=self._config.process_pool_size)
+        self._process_pool = ProcessPoolExecutor(
+            max_workers=self._config.process_pool_size,
+            mp_context=multiprocessing.get_context("forkserver"),
+        )
         self._tick_tasks = [
             self._loop.create_task(self._run_collector(lc.collector)) for lc in self._loaded
         ]
@@ -234,6 +260,33 @@ class Scheduler:
             raise RuntimeError(msg)
         await self._failure_budget.clear_quarantine(name, by=by)
 
+    async def request_immediate_run(self, name: str, trigger: TriggerContext) -> str:
+        """Enqueue an out-of-band run for ``name``. Returns the future tick_id.
+
+        The next iteration of the per-collector tick loop will dequeue the
+        request, attach the trigger to the tick, and run through the full
+        pipeline (lock → timeout → failure budget → event sink). The next
+        scheduled tick is deferred by one interval to avoid back-to-back.
+
+        Args:
+            name: Collector name.
+            trigger: TriggerContext describing what initiated the run.
+
+        Returns:
+            tick_id: The ID of the future tick (generated up-front so caller
+                can correlate with events).
+
+        Raises:
+            KeyError: If ``name`` is not a known collector.
+        """
+        if name not in self._configs:
+            msg = f"unknown collector: {name}"
+            raise KeyError(msg)
+        q = self._immediate_runs.setdefault(name, asyncio.Queue())
+        tick_id = uuid4().hex
+        await q.put((tick_id, trigger))
+        return tick_id
+
     # --- Per-collector tick loop -----------------------------------------------------
 
     async def _run_collector(self, c: Collector) -> None:
@@ -264,6 +317,9 @@ class Scheduler:
         interval = c.interval.total_seconds()
         offset = float(hash(c.name) % max(1, int(interval))) if interval >= 1 else 0.0
         deadline = self._loop.time() + offset
+        # Poll period for immediate-run queue: short enough to make retry feel
+        # interactive, but not so short it spins. 50ms is a reasonable default.
+        immediate_poll_seconds = min(0.05, interval)
         try:
             while (
                 not self._stopping
@@ -274,10 +330,42 @@ class Scheduler:
                 ):  # pragma: no cover -- drift > 1 interval is timing-dependent
                     # Drift > 1 interval: skip forward; do NOT catch up.
                     deadline = now + interval
-                await asyncio.sleep(max(0.0, deadline - now))
+
+                # Sleep until either the next scheduled deadline OR the next
+                # immediate-poll wake-up, whichever comes first. This lets immediate
+                # runs fire promptly without waiting for the full interval.
+                wait_seconds = max(0.0, min(deadline - now, immediate_poll_seconds))
+                await asyncio.sleep(wait_seconds)
                 if self._stopping:  # pragma: no branch -- mid-tick stop is timing-race;
                     # not deterministically testable
                     break  # pragma: no cover -- timing-race, not testable
+
+                # Check immediate-run queue first; drain ALL pending entries before
+                # considering the scheduled tick so a burst of retries doesn't get
+                # interleaved with scheduled fire.
+                q = self._immediate_runs.get(c.name)
+                drained_immediate = False
+                if q is not None:
+                    while True:
+                        try:
+                            tick_id, trigger = q.get_nowait()
+                        except asyncio.QueueEmpty:
+                            break
+                        inflight = self._loop.create_task(
+                            self._tick(c, trigger=trigger, predetermined_tick_id=tick_id)
+                        )
+                        self._inflight.add(inflight)
+                        inflight.add_done_callback(self._inflight.discard)
+                        drained_immediate = True
+                if drained_immediate:
+                    deadline = self._loop.time() + interval
+                    continue
+
+                # No immediate runs pending; only fire the scheduled tick if the
+                # scheduled deadline has actually arrived.
+                if self._loop.time() < deadline:
+                    continue
+
                 inflight = self._loop.create_task(self._tick(c))
                 self._inflight.add(inflight)
                 inflight.add_done_callback(self._inflight.discard)
@@ -287,7 +375,12 @@ class Scheduler:
 
     # --- Single tick -----------------------------------------------------------------
 
-    async def _tick(self, c: Collector) -> None:  # noqa: PLR0912 -- catch-order discipline + budget recording on each path; splitting hurts readability
+    async def _tick(  # noqa: PLR0912, PLR0915  -- explicit catch order required by spec
+        self,
+        c: Collector,
+        trigger: TriggerContext | None = None,
+        predetermined_tick_id: str | None = None,
+    ) -> None:
         """Run one tick: gate on quarantine, acquire group lock, build ctx, dispatch,
         classify outcome, emit self-metrics, record failure-budget state.
 
@@ -295,119 +388,230 @@ class Scheduler:
         do NOT swap them. The lock-acquisition timeout is OUTSIDE the inner
         ``asyncio.timeout()`` block so its TimeoutError is distinguishable from
         a tick's own timeout.
+
+        Args:
+            c: Collector to run.
+            trigger: TriggerContext if this is an immediate run (request_immediate_run).
+            predetermined_tick_id: Tick ID (pre-allocated by request_immediate_run).
+                If None, a fresh ID is generated.
         """
         assert self._loop is not None
 
-        # Quarantine gate.
-        if self._failure_budget is not None and self._failure_budget.is_quarantined(c.name):
-            self._self_metrics.write_counter(
-                "homelab_collector_run_skipped_total",
-                1.0,
-                {"name": c.name, "reason": "quarantined"},
-            )
-            return
+        # Generate tick_id if not provided by request_immediate_run
+        tick_id = predetermined_tick_id if predetermined_tick_id is not None else uuid4().hex
 
-        # Group lock acquisition with interval/2 deadline. Outside the inner
-        # timeout block so the lock-acquisition TimeoutError is distinguishable
-        # from the tick's own timeout.
-        group_key = c.name if c.concurrency_group == "default" else c.concurrency_group
-        lock = self._group_locks.setdefault(group_key, asyncio.Lock())
+        # Default to "scheduled" trigger if not provided
+        if trigger is None:
+            trigger = TriggerContext(kind="scheduled", request_id=None)
+
+        # Bind tick context to structlog contextvars for this tick
+        token = set_current_tick(tick_id, trigger)
+
         try:
-            await asyncio.wait_for(
-                lock.acquire(),
-                timeout=c.interval.total_seconds() / 2,
-            )
-        except TimeoutError:
-            self._self_metrics.write_counter(
-                "homelab_collector_run_skipped_total",
-                1.0,
-                {"name": c.name, "reason": "group_busy"},
-            )
-            return
-
-        # Lock held; main tick body wrapped in try/finally for guaranteed release.
-        try:
-            start = self._loop.time()
-            ctx = self._ctx_factory(c)
-
-            try:
-                async with asyncio.timeout(c.timeout.total_seconds()):
-                    result = await self._dispatch(c, ctx)
-            except asyncio.CancelledError:
-                if self._stopping:
+            ctx_kwargs: dict[str, object] = {
+                "tick_id": tick_id,
+                "collector": c.name,
+                "trigger_kind": trigger.kind,
+            }
+            if trigger.request_id is not None:
+                ctx_kwargs["request_id"] = trigger.request_id
+            with bound_contextvars(**ctx_kwargs):
+                # Quarantine gate.
+                if self._failure_budget is not None and self._failure_budget.is_quarantined(c.name):
                     self._self_metrics.write_counter(
-                        "homelab_collector_run_shutdown_total",
+                        "homelab_collector_run_skipped_total",
                         1.0,
-                        {"name": c.name},
+                        {"name": c.name, "reason": "quarantined"},
+                    )
+                    await self._publish_event(
+                        SchedulerTickEvent(
+                            collector=c.name,
+                            tick_id=tick_id,
+                            outcome="skipped",
+                            reason="quarantined",
+                            trigger_kind=trigger.kind,
+                            request_id=trigger.request_id,
+                            ts=utc_now_iso(),
+                        )
                     )
                     return
-                raise  # pragma: no cover -- not reachable via Scheduler.stop()
-            except TimeoutError:
-                self._self_metrics.write_counter(
-                    "homelab_collector_run_failure_total",
-                    1.0,
-                    {"name": c.name, "reason": "timeout"},
-                )
-                self._record_error(c.name)
-                if self._failure_budget is not None:
-                    await self._failure_budget.record_failure(
-                        c.name,
-                        "timeout",
-                        threshold=self._threshold_for(c),
-                    )
-                return
-            except Exception:
-                self._self_metrics.write_counter(
-                    "homelab_collector_run_failure_total",
-                    1.0,
-                    {"name": c.name, "reason": "exception"},
-                )
-                self._record_error(c.name)
-                if self._failure_budget is not None:
-                    await self._failure_budget.record_failure(
-                        c.name,
-                        "exception",
-                        threshold=self._threshold_for(c),
-                    )
-                return
-            finally:
-                self._self_metrics.write_summary(
-                    "homelab_collector_run_duration_seconds",
-                    self._loop.time() - start,
-                    {"name": c.name},
-                )
 
-            if result.ok:
-                self._self_metrics.write_counter(
-                    "homelab_collector_run_success_total",
-                    1.0,
-                    {"name": c.name},
-                )
-                if c.name in self._last_error_ts:
-                    age = self._loop.time() - self._last_error_ts[c.name]
-                    self._self_metrics.write_gauge(
-                        "homelab_collector_run_last_error_age_seconds",
-                        age,
-                        {"name": c.name},
+                # Group lock acquisition with interval/2 deadline. Outside the inner
+                # timeout block so the lock-acquisition TimeoutError is distinguishable
+                # from the tick's own timeout.
+                group_key = c.name if c.concurrency_group == "default" else c.concurrency_group
+                lock = self._group_locks.setdefault(group_key, asyncio.Lock())
+                try:
+                    await asyncio.wait_for(
+                        lock.acquire(),
+                        timeout=c.interval.total_seconds() / 2,
                     )
-                if self._failure_budget is not None:
-                    await self._failure_budget.record_success(c.name)
-            else:
-                self._self_metrics.write_counter(
-                    "homelab_collector_run_failure_total",
-                    1.0,
-                    {"name": c.name, "reason": "result_error"},
-                )
-                self._record_error(c.name)
-                if self._failure_budget is not None:
-                    await self._failure_budget.record_failure(
-                        c.name,
-                        "result_error",
-                        threshold=self._threshold_for(c),
+                except TimeoutError:
+                    self._self_metrics.write_counter(
+                        "homelab_collector_run_skipped_total",
+                        1.0,
+                        {"name": c.name, "reason": "group_busy"},
                     )
+                    await self._publish_event(
+                        SchedulerTickEvent(
+                            collector=c.name,
+                            tick_id=tick_id,
+                            outcome="skipped",
+                            reason="group_busy",
+                            trigger_kind=trigger.kind,
+                            request_id=trigger.request_id,
+                            ts=utc_now_iso(),
+                        )
+                    )
+                    return
 
+                # Lock held; main tick body wrapped in try/finally for guaranteed release.
+                try:
+                    start = self._loop.time()
+                    ctx = self._ctx_factory(c)
+
+                    try:
+                        async with asyncio.timeout(c.timeout.total_seconds()):
+                            result = await self._dispatch(c, ctx)
+                    except asyncio.CancelledError:
+                        if self._stopping:
+                            duration = self._loop.time() - start
+                            self._self_metrics.write_counter(
+                                "homelab_collector_run_shutdown_total",
+                                1.0,
+                                {"name": c.name},
+                            )
+                            await self._publish_event(
+                                SchedulerTickEvent(
+                                    collector=c.name,
+                                    tick_id=tick_id,
+                                    outcome="shutdown",
+                                    duration_seconds=duration,
+                                    trigger_kind=trigger.kind,
+                                    request_id=trigger.request_id,
+                                    ts=utc_now_iso(),
+                                )
+                            )
+                            return
+                        raise  # pragma: no cover -- not reachable via Scheduler.stop()
+                    except TimeoutError:
+                        duration = self._loop.time() - start
+                        self._self_metrics.write_counter(
+                            "homelab_collector_run_failure_total",
+                            1.0,
+                            {"name": c.name, "reason": "timeout"},
+                        )
+                        self._record_error(c.name)
+                        if self._failure_budget is not None:
+                            await self._failure_budget.record_failure(
+                                c.name,
+                                "timeout",
+                                threshold=self._threshold_for(c),
+                            )
+                        await self._publish_event(
+                            SchedulerTickEvent(
+                                collector=c.name,
+                                tick_id=tick_id,
+                                outcome="failure",
+                                reason="timeout",
+                                duration_seconds=duration,
+                                trigger_kind=trigger.kind,
+                                request_id=trigger.request_id,
+                                ts=utc_now_iso(),
+                            )
+                        )
+                        return
+                    except Exception:
+                        duration = self._loop.time() - start
+                        self._self_metrics.write_counter(
+                            "homelab_collector_run_failure_total",
+                            1.0,
+                            {"name": c.name, "reason": "exception"},
+                        )
+                        self._record_error(c.name)
+                        if self._failure_budget is not None:
+                            await self._failure_budget.record_failure(
+                                c.name,
+                                "exception",
+                                threshold=self._threshold_for(c),
+                            )
+                        await self._publish_event(
+                            SchedulerTickEvent(
+                                collector=c.name,
+                                tick_id=tick_id,
+                                outcome="failure",
+                                reason="exception",
+                                duration_seconds=duration,
+                                trigger_kind=trigger.kind,
+                                request_id=trigger.request_id,
+                                ts=utc_now_iso(),
+                            )
+                        )
+                        return
+                    finally:
+                        self._self_metrics.write_summary(
+                            "homelab_collector_run_duration_seconds",
+                            self._loop.time() - start,
+                            {"name": c.name},
+                        )
+
+                    duration = self._loop.time() - start
+                    if result.ok:
+                        self._self_metrics.write_counter(
+                            "homelab_collector_run_success_total",
+                            1.0,
+                            {"name": c.name},
+                        )
+                        if c.name in self._last_error_ts:
+                            age = self._loop.time() - self._last_error_ts[c.name]
+                            self._self_metrics.write_gauge(
+                                "homelab_collector_run_last_error_age_seconds",
+                                age,
+                                {"name": c.name},
+                            )
+                        if self._failure_budget is not None:
+                            await self._failure_budget.record_success(c.name)
+                        await self._publish_event(
+                            SchedulerTickEvent(
+                                collector=c.name,
+                                tick_id=tick_id,
+                                outcome="success",
+                                duration_seconds=duration,
+                                trigger_kind=trigger.kind,
+                                request_id=trigger.request_id,
+                                ts=utc_now_iso(),
+                            )
+                        )
+                    else:
+                        self._self_metrics.write_counter(
+                            "homelab_collector_run_failure_total",
+                            1.0,
+                            {"name": c.name, "reason": "result_error"},
+                        )
+                        self._record_error(c.name)
+                        if self._failure_budget is not None:
+                            await self._failure_budget.record_failure(
+                                c.name,
+                                "result_error",
+                                threshold=self._threshold_for(c),
+                            )
+                        await self._publish_event(
+                            SchedulerTickEvent(
+                                collector=c.name,
+                                tick_id=tick_id,
+                                outcome="failure",
+                                reason="result_error",
+                                duration_seconds=duration,
+                                trigger_kind=trigger.kind,
+                                request_id=trigger.request_id,
+                                ts=utc_now_iso(),
+                            )
+                        )
+
+                finally:
+                    lock.release()
         finally:
-            lock.release()
+            reset_current_tick(token)
 
     def _threshold_for(self, c: Collector) -> int | None:
         """Return per-collector ``quarantine_after`` override, or ``None`` for default."""
@@ -436,6 +640,17 @@ class Scheduler:
             0.0,
             {"name": name},
         )
+
+    async def _publish_event(self, event: SchedulerTickEvent) -> None:
+        """Publish a tick event to the event sink.
+
+        Non-throwing: exceptions are logged and ignored so scheduler ticks
+        are never disturbed by sink failures.
+        """
+        with contextlib.suppress(Exception):
+            await self._config.event_sink.publish(
+                event
+            )  # Per Protocol contract: publish MUST NOT raise
 
     # --- Dispatch by run_kind --------------------------------------------------------
 

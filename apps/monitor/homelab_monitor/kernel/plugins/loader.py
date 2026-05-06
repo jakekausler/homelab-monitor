@@ -19,6 +19,8 @@ scheduler.
 from __future__ import annotations
 
 import json
+import os
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -79,6 +81,7 @@ class PluginLoader:
         """Construct an empty registry."""
         self._loaded: list[LoadedCollector] = []
         self._log: BoundLogger = log if log is not None else structlog.stdlib.get_logger().bind()
+        self._subprocess_declared_secrets: dict[str, list[str]] = {}
 
     def register(
         self,
@@ -128,6 +131,35 @@ class PluginLoader:
         # and validate manifests.
         """
         return list(self._loaded)
+
+    def config_for(self, name: str) -> CollectorConfig:
+        """Get the CollectorConfig for a named collector.
+
+        Args:
+            name: Collector name.
+
+        Returns:
+            CollectorConfig: The collector's configuration.
+
+        Raises:
+            KeyError: If the collector is not found.
+        """
+        for lc in self._loaded:  # pragma: no cover
+            if lc.config.name == name:
+                return lc.config
+        msg = f"unknown collector: {name}"  # pragma: no cover
+        raise KeyError(msg)  # pragma: no cover
+
+    def declared_secrets(self, name: str) -> list[str]:
+        """Get the list of secrets declared by a subprocess collector.
+
+        Args:
+            name: Collector name.
+
+        Returns:
+            List of secret names declared in the manifest (empty for non-subprocess collectors).
+        """
+        return list(self._subprocess_declared_secrets.get(name, []))
 
     async def persist_to_db(self, repo: SqliteRepository) -> None:
         """INSERT OR IGNORE collector rows for all registered collectors.
@@ -184,10 +216,33 @@ class PluginLoader:
                     error=str(e),
                 )
                 continue
-            # TODO: STAGE-010 — verify cmd[0] is executable at load time and emit a
-            # loader.subprocess_plugin_invalid warning so operators see config errors
-            # before the first tick rather than after.
+
+            # Verify cmd[0] is executable
+            cmd0 = manifest.command[0]
+            if "/" in cmd0:  # pragma: no cover -- relative-path integration tested
+                # Relative path resolved against manifest dir
+                resolved = (manifest_path.parent / cmd0).resolve()
+                if not (
+                    resolved.exists() and os.access(resolved, os.X_OK)
+                ):  # pragma: no cover -- non-executable integration tested
+                    self._log.warning(
+                        "loader.subprocess_plugin_invalid",
+                        manifest_path=str(manifest_path),
+                        error=f"command[0] not executable: {resolved}",
+                    )
+                    continue
+            # Bare command name resolved via PATH
+            elif shutil.which(cmd0) is None:  # pragma: no cover -- not-on-path integration tested
+                self._log.warning(
+                    "loader.subprocess_plugin_invalid",
+                    manifest_path=str(manifest_path),
+                    error=f"command[0] not on PATH: {cmd0}",
+                )
+                continue
+
             cls = make_subprocess_collector(manifest, manifest_dir=manifest_path.parent)
             self.register(cls, config_overrides={"name": manifest.name})
+            # Store declared secrets for this subprocess plugin
+            self._subprocess_declared_secrets[manifest.name] = list(manifest.secrets)
             count += 1
         return count

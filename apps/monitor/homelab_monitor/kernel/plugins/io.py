@@ -110,6 +110,11 @@ class InMemoryMetricsWriter:
 
     def __init__(self) -> None:
         self._entries: list[MetricEntry] = []
+        # SCAFFOLDING: These timestamp logs are a temporary workaround to track
+        # tick events. VictoriaMetrics queries (STAGE-015) will replace this
+        # O(n) scan pattern.
+        self._ts_log: list[tuple[str, str]] = []  # (metric_name, ts)
+        self._collector_ts: dict[str, str] = {}  # collector_name -> last tick ISO ts
 
     @property
     def recorded(self) -> list[MetricEntry]:
@@ -125,12 +130,52 @@ class InMemoryMetricsWriter:
         self._entries.append(
             MetricEntry(kind="counter", name=name, value=value, labels=dict(labels))
         )
+        # Track timestamps for success/failure metrics
+        if name in ("homelab_collector_run_success_total", "homelab_collector_run_failure_total"):
+            now_iso = utc_now_iso()
+            self._ts_log.append((name, now_iso))
+            collector_name = labels.get("name")
+            if collector_name is not None:
+                self._collector_ts[collector_name] = now_iso
 
     def write_summary(self, name: str, value: float, labels: dict[str, str]) -> None:
         """Record a summary observation."""
         self._entries.append(
             MetricEntry(kind="summary", name=name, value=value, labels=dict(labels))
         )
+
+    def last_tick_at(self) -> str | None:
+        """ISO-8601 UTC timestamp of the most recent success/failure tick, or None."""
+        if not self._ts_log:
+            return None
+        return self._ts_log[-1][1]
+
+    def last_tick_at_for(self, collector: str) -> str | None:
+        """ISO-8601 UTC timestamp of the most recent success/failure for the named collector."""
+        return self._collector_ts.get(collector)
+
+    def last_error_for(self, collector: str) -> str | None:
+        """Reason of the most recent failure_total for the named collector, or None."""
+        for entry in reversed(self._entries):
+            if (
+                entry.name == "homelab_collector_run_failure_total"
+                and entry.labels.get("name") == collector
+            ):
+                return entry.labels.get("reason")
+        return None
+
+    def failures_in_window(self, seconds: int) -> int:
+        """Count of failure_total emissions within the last `seconds` (UTC wall-clock).
+
+        SCAFFOLDING: currently counts all failures regardless of `seconds`. Real
+        time-windowing lands when VictoriaMetrics queries replace this in STAGE-015.
+        """
+        del seconds
+        count = 0
+        for entry in self._entries:
+            if entry.name == "homelab_collector_run_failure_total":
+                count += int(entry.value)
+        return count
 
 
 class InMemoryLogsWriter:

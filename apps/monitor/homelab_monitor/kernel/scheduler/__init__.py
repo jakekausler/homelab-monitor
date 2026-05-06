@@ -5,11 +5,13 @@ Public surface re-exported here:
 - :class:`Scheduler` — the per-collector tick driver.
 - :class:`SchedulerConfig` — pool sizes + shutdown grace.
 - :class:`FailureBudget` — per-collector failure tracking + quarantine.
+- :class:`TriggerContext` — metadata describing what triggered a tick.
 """
 
 from __future__ import annotations
 
+from homelab_monitor.kernel.events import TriggerContext
 from homelab_monitor.kernel.scheduler.failure_budget import FailureBudget
 from homelab_monitor.kernel.scheduler.scheduler import Scheduler, SchedulerConfig
 
-__all__ = ["FailureBudget", "Scheduler", "SchedulerConfig"]
+__all__ = ["FailureBudget", "Scheduler", "SchedulerConfig", "TriggerContext"]

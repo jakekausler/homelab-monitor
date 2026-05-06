@@ -127,9 +127,25 @@ class FailureBudget:
         """In-memory check; safe to call outside an async context."""
         return name in self._quarantined
 
+    def quarantined_names(self) -> list[str]:
+        """Return sorted list of currently quarantined collector names."""
+        return sorted(self._quarantined.keys())
+
     def consecutive_failures(self, name: str) -> int:
         """Return in-memory counter; 0 if collector has never failed."""
         return self._consecutive_failures.get(name, 0)
+
+    def degraded_names(self) -> list[str]:
+        """Return collector names with elevated consecutive failures but not yet quarantined."""
+        return sorted(
+            name
+            for name, count in self._consecutive_failures.items()
+            if count > 0 and name not in self._quarantined
+        )
+
+    def quarantine_state(self, name: str) -> QuarantineState | None:
+        """Return the QuarantineState for a quarantined collector, or None."""
+        return self._quarantined.get(name)
 
     async def record_success(self, name: str) -> None:
         """Reset in-memory counter to 0.
