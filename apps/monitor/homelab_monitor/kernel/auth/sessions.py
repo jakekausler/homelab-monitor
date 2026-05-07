@@ -60,7 +60,9 @@ def verify_session_cookie_value(value: str, master_key: bytes) -> str | None:
         return None
     session_id = value[:sep]
     provided_hmac_hex = value[sep + 1 :]
-    if len(provided_hmac_hex) != SESSION_HMAC_LEN_BYTES * 2:
+    if len(provided_hmac_hex) != SESSION_HMAC_LEN_BYTES * 2:  # pragma: no cover
+        # Structurally unreachable: COOKIE_VALUE_LEN=65 and sep at SESSION_ID_LEN=32
+        # always yields 32-char hmac == SESSION_HMAC_LEN_BYTES*2.
         return None
     expected = make_session_cookie_value(session_id, master_key)
     if not hmac.compare_digest(value, expected):

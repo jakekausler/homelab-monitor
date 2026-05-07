@@ -260,6 +260,67 @@
         "title": "MeResponse",
         "type": "object"
       },
+      "MetricsSnapshotEntry": {
+        "additionalProperties": false,
+        "description": "Single metric entry in a snapshot.",
+        "properties": {
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Labels",
+            "type": "object"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "ts": {
+            "title": "Ts",
+            "type": "string"
+          },
+          "value": {
+            "title": "Value",
+            "type": "number"
+          }
+        },
+        "required": [
+          "name",
+          "value",
+          "labels",
+          "kind",
+          "ts"
+        ],
+        "title": "MetricsSnapshotEntry",
+        "type": "object"
+      },
+      "MetricsSnapshotResponse": {
+        "additionalProperties": false,
+        "description": "Response for GET /api/metrics/snapshot.",
+        "properties": {
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/MetricsSnapshotEntry"
+            },
+            "title": "Entries",
+            "type": "array"
+          },
+          "ts": {
+            "title": "Ts",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ts",
+          "entries"
+        ],
+        "title": "MetricsSnapshotResponse",
+        "type": "object"
+      },
       "RetryResponse": {
         "additionalProperties": false,
         "description": "Response for POST /api/collectors/{name}/retry.",
@@ -600,6 +661,25 @@
           }
         },
         "summary": "Healthz"
+      }
+    },
+    "/api/metrics/snapshot": {
+      "get": {
+        "description": "Return the in-memory writer's latest-value snapshot.\n\nAuth: cookie session required. CSRF NOT enforced on GET.\n\nSCAFFOLDING: when a real VictoriaMetrics-backed writer ships in STAGE-001-015,\nthis endpoint will be retired in favor of direct VM queries. STAGE-014's\nOverview tile is the only consumer.",
+        "operationId": "metrics_snapshot_api_metrics_snapshot_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetricsSnapshotResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Metrics Snapshot"
       }
     },
     "/api/version": {

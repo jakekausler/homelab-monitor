@@ -35,6 +35,22 @@ class MetricEntry:
 
 
 @dataclass(frozen=True, slots=True)
+class LatestMetricEntry:
+    """Latest-value entry retained by :class:`MemoryRetainingMetricsWriter`.
+
+    Carries ``ts`` and ``kind`` for the snapshot endpoint. NOT used by the
+    base :class:`InMemoryMetricsWriter` (which keeps the leaner :class:`MetricEntry`
+    for the IPC-bound buffering path).
+    """
+
+    name: str
+    value: float
+    labels: dict[str, str]
+    kind: str
+    ts: str
+
+
+@dataclass(frozen=True, slots=True)
 class LogEntry:
     """A single recorded log write — used by :class:`InMemoryLogsWriter`."""
 
@@ -176,6 +192,70 @@ class InMemoryMetricsWriter:
             if entry.name == "homelab_collector_run_failure_total":
                 count += int(entry.value)
         return count
+
+
+class MemoryRetainingMetricsWriter(InMemoryMetricsWriter):
+    """:class:`InMemoryMetricsWriter` plus a latest-value-by-(name, frozen-labels) map.
+
+    Used at process boot when no real backend is configured. Replaced by the
+    VictoriaMetrics-backed writer in STAGE-001-015. Adds:
+
+    - ``snapshot()`` — returns latest :class:`LatestMetricEntry` per (name, labels)
+    - ``replace_family(name, entries)`` — atomically wipe + rewrite a family
+
+    Append-only history (``recorded``) and tick-tracking helpers (``last_tick_at``,
+    ``last_tick_at_for``, ``last_error_for``, ``failures_in_window``) inherit
+    unchanged.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._latest: dict[tuple[str, frozenset[tuple[str, str]]], LatestMetricEntry] = {}
+
+    def _set_latest(self, kind: str, name: str, value: float, labels: dict[str, str]) -> None:
+        key = (name, frozenset(labels.items()))
+        self._latest[key] = LatestMetricEntry(
+            name=name,
+            value=value,
+            labels=dict(labels),
+            kind=kind,
+            ts=utc_now_iso(),
+        )
+
+    def write_gauge(self, name: str, value: float, labels: dict[str, str]) -> None:
+        """Record a gauge observation; also update the latest-value map."""
+        super().write_gauge(name, value, labels)
+        self._set_latest("gauge", name, value, labels)
+
+    def write_counter(self, name: str, value: float, labels: dict[str, str]) -> None:
+        """Record a counter increment; also update the latest-value map."""
+        super().write_counter(name, value, labels)
+        self._set_latest("counter", name, value, labels)
+
+    def write_summary(self, name: str, value: float, labels: dict[str, str]) -> None:
+        """Record a summary observation; also update the latest-value map."""
+        super().write_summary(name, value, labels)
+        self._set_latest("summary", name, value, labels)
+
+    def replace_family(self, name: str, entries: list[tuple[float, dict[str, str]]]) -> None:
+        """Atomically wipe latest-value entries for ``name`` and replace with ``entries``.
+
+        Each ``(value, labels)`` becomes a new gauge entry (kind="gauge"). Also
+        appended to the inherited ``_entries`` list — history stays append-only.
+
+        Used by the host collector for top-N families. Single-threaded scheduler
+        means concurrent reads of ``snapshot()`` see either the pre- or post-
+        replacement state, never a mix.
+        """
+        stale_keys = [k for k in self._latest if k[0] == name]
+        for k in stale_keys:
+            del self._latest[k]
+        for value, labels in entries:
+            self.write_gauge(name, value, labels)
+
+    def snapshot(self) -> list[LatestMetricEntry]:
+        """Return all currently-retained latest entries (insertion order)."""
+        return list(self._latest.values())
 
 
 class InMemoryLogsWriter:

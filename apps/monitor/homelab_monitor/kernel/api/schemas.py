@@ -15,6 +15,8 @@ __all__ = [
     "ErrorEnvelope",
     "ErrorPayload",
     "HealthzResponse",
+    "MetricsSnapshotEntry",
+    "MetricsSnapshotResponse",
     "RetryResponse",
     "VersionResponse",
 ]
@@ -68,3 +70,22 @@ class RetryResponse(BaseModel):
     name: str
     tick_id: str
     requested_at: str
+
+
+class MetricsSnapshotEntry(BaseModel):
+    """Single metric entry in a snapshot."""
+
+    model_config = ConfigDict(extra="forbid")
+    name: str
+    value: float
+    labels: dict[str, str]
+    kind: str  # "gauge" | "counter" | "summary"
+    ts: str  # ISO-8601 UTC of the most recent write for this (name, labels)
+
+
+class MetricsSnapshotResponse(BaseModel):
+    """Response for GET /api/metrics/snapshot."""
+
+    model_config = ConfigDict(extra="forbid")
+    ts: str  # snapshot capture time (ISO-8601 UTC)
+    entries: list[MetricsSnapshotEntry]

@@ -23,7 +23,10 @@ from homelab_monitor.kernel.db.time import utc_now_iso
 from homelab_monitor.kernel.logging import configure_logging
 from homelab_monitor.kernel.plugins.base import Collector
 from homelab_monitor.kernel.plugins.context import CollectorContext
-from homelab_monitor.kernel.plugins.io import InMemoryLogsWriter, InMemoryMetricsWriter
+from homelab_monitor.kernel.plugins.io import (
+    InMemoryLogsWriter,
+    MemoryRetainingMetricsWriter,
+)
 from homelab_monitor.kernel.plugins.loader import PluginLoader
 from homelab_monitor.kernel.plugins.noop import NoopCollector
 from homelab_monitor.kernel.scheduler.failure_budget import FailureBudget
@@ -109,6 +112,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0915
     except Exception as exc:  # pragma: no cover -- NoopCollector always succeeds
         log.warning("lifespan.collector_register_failed", name="noop", error=str(exc))
         degraded.append("noop")
+    # TODO(STAGE-014): load from /config/plugins/collectors/host.yaml when YAML
+    # config-loading lands; until then, defaults are baked into HostCollectorConfig.
+    try:
+        from homelab_monitor.plugins.collectors.builtin.host import HostCollector  # noqa: PLC0415
+
+        loader.register(
+            HostCollector,
+            {"name": "host", "interval_seconds": 10, "timeout_seconds": 5},
+        )
+    except Exception as exc:  # pragma: no cover -- defensive, host always succeeds
+        log.warning("lifespan.collector_register_failed", name="host", error=str(exc))
+        degraded.append("host")
 
     plugins_env = os.environ.get("HOMELAB_MONITOR_PLUGINS_DIR")
     if plugins_env is not None:
@@ -137,7 +152,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0915
         limits=httpx.Limits(max_connections=50, max_keepalive_connections=20),
         timeout=httpx.Timeout(10.0, connect=5.0),
     )
-    metrics_writer = InMemoryMetricsWriter()
+    metrics_writer = MemoryRetainingMetricsWriter()
     logs_writer = InMemoryLogsWriter()
     ssh_factory = _StubSshFactory()
     broker = SseBroker(log)
