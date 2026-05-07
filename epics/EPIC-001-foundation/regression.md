@@ -230,6 +230,22 @@ or related tests.
 - [ ] POSTing an Alertmanager-shaped payload to `/api/alerts/ingest` produces a row in `alerts`
 - [ ] Same fingerprint posted twice is deduped (one row, counter incremented)
 - [ ] Channel receives the alert and the dashboard SSE stream emits it
+- [ ] `POST /api/alerts/ingest` with cookie auth + CSRF → 202 with `{received, ingested}` body shape; row appears in `alerts` table with correct fingerprint, severity, source_tool.
+- [ ] `POST /api/alerts/ingest` with `Bearer homelab_<env>_<token>` token (scope `alerts:ingest:write`) → 202.
+- [ ] Same fingerprint posted twice while firing → 1 row, `last_seen_at` advanced, `opened_at` stable.
+- [ ] Resolution payload after firing → `resolved_at` set; `alert.resolved` SSE event published.
+- [ ] Refire after resolve → NEW row inserted (D4 design decision); 2 rows total with same fingerprint.
+- [ ] `GET /api/alerts` requires session cookie (token auth rejected with 401); filters `status`, `severity`, `source_tool`, `fingerprint` work.
+- [ ] `GET /api/alerts/{id}` returns alert + outcome history; 404 for unknown id.
+- [ ] `POST /api/alerts/{id}/ack` (with CSRF) creates outcome row + sets `ack_at`/`ack_by`. Without CSRF → 403.
+- [ ] `POST /api/alerts/{id}/dismiss` creates outcome row; alert status unchanged.
+- [ ] Scheduler quarantine: 3 consecutive collector failures → quarantine entered → `alert.firing` SSE event + alerts row with `source_tool='scheduler'`. `Scheduler.clear_quarantine(name)` → `alert.resolved` event + `resolved_at` set.
+- [ ] Quarantine after clear → NEW row inserted (D5 reuses D4 dedup story).
+- [ ] FailureBudget without alert_repo/dispatcher (defensive None defaults) does NOT raise; skips alert dispatch silently.
+- [ ] AlertDispatcher with a failing channel does NOT raise; logs WARNING, increments `_delivery_failures` counter; OTHER channels still receive the event.
+- [ ] Anonymous request to any `/api/alerts/*` endpoint → 401.
+- [ ] Privacy: INFO log lines NEVER contain full alert payload (label dicts).
+- [ ] Migration 0005 is additive (no row backfill required); SQLite batch_alter_table handles FK-having tables.
 
 ## STAGE-001-014: UI shell + login + Overview live-tile
 

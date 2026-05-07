@@ -34,7 +34,7 @@ After EPIC-001 is complete, the system has: a working CI pipeline, a verified de
 | STAGE-001-010 | FastAPI app shell + healthz + structured logging      | Complete    |
 | STAGE-001-011 | Local auth (bcrypt + sessions + CSRF)                 | Complete    |
 | STAGE-001-012 | First built-in `host` collector                       | Complete    |
-| STAGE-001-013 | Alert ingestor + first `inproc-dashboard` channel     | Refinement  |
+| STAGE-001-013 | Alert ingestor + first `inproc-dashboard` channel     | Finalize    |
 | STAGE-001-014 | UI shell + login + Overview live-tile                 | Not Started |
 | STAGE-001-015 | VictoriaMetrics + vmagent                             | Not Started |
 | STAGE-001-015A | Backup + disk budget + minimal test rig extension    | Not Started |
@@ -46,7 +46,7 @@ After EPIC-001 is complete, the system has: a working CI pipeline, a verified de
 | STAGE-001-021 | Full integration test rig + canonical e2e test        | Not Started |
 
 ## Current Stage: STAGE-001-013
-## Current Phase: Refinement
+## Current Phase: Finalize
 
 ## Cross-stage acceptance criteria
 
