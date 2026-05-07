@@ -192,6 +192,39 @@ or related tests.
 - [ ] `homelab_collector_run_success_total{name="host"}` increments on each tick
 - [ ] `homelab_collector_run_duration_seconds{name="host"}` records sane values (under timeout)
 
+## STAGE-001-012 Regression Watch — Top-N families must remain bounded
+
+**Date filed:** 2026-05-06
+
+**Pattern:** Counters and gauges that track top-N entities (processes by CPU, processes by memory) must use epoch semantics to prevent unbounded cardinality growth.
+
+**Implementation:** `MemoryRetainingMetricsWriter.replace_family(name, entries)` atomically clears prior entries for a family and writes the new top-N. This mirrors `topk()` behavior on a real VM.
+
+**Why:** If top-N families are emitted with standard `write_gauge()` (append-only), new processes appearing and disappearing will create unique (name, labels) tuples indefinitely. After weeks of uptime, the snapshot endpoint returns thousands of stale process entries with zero-value metrics.
+
+**Detection:** Iterate the collector 100 times; assert `len(writer._latest)` for top-N families stays ≤ `2 * top_n_processes` (one epoch of new, one epoch being replaced). Test: `test_memory_retaining_writer.py::test_replace_family_epoch_semantics`.
+
+**Status:** Monitored via regression checklist below.
+
+## STAGE-001-012: First built-in `host` collector
+
+- [ ] `GET /api/collectors` returns `host` with `last_run_at` populated and updating across two calls
+- [ ] `GET /api/metrics/snapshot` returns `homelab_host_cpu_percent` with `cpu="all"` label and at least one per-core entry
+- [ ] `homelab_host_disk_bytes` emitted for `/` and (when mounted) `/rackstation`
+- [ ] `homelab_collector_run_success_total{name="host"}` increments on each tick
+- [ ] `homelab_collector_run_duration_seconds{name="host"}` records sane values (under timeout)
+
+## STAGE-001-012 Regression Items Added
+
+- [ ] `GET /api/metrics/snapshot` (authenticated) returns 200 with `{ts, entries: [...]}` shape; entries include the 11 host metric families after at least one collector tick.
+- [ ] `GET /api/metrics/snapshot` without session cookie returns 401.
+- [ ] `GET /api/metrics/snapshot` with tampered/expired session cookie returns 401.
+- [ ] `MemoryRetainingMetricsWriter.replace_family()` is atomic — top-N families (`homelab_host_top_processes_cpu_percent`, `homelab_host_top_processes_memory_bytes`) bounded to ≤ 10 entries each in the snapshot regardless of how many ticks have run.
+- [ ] HostCollector handles per-section psutil failures (NoSuchProcess, FileNotFoundError on extra_mountpoints) without aborting the whole tick.
+- [ ] HostCollector with a base `InMemoryMetricsWriter` (not retaining) silently skips top-N families.
+- [ ] `utc_now_iso()` produces `+00:00`-suffixed ISO timestamps (NOT `Z`-suffix); snapshot endpoint preserves this.
+- [ ] Coverage gate `fail_under = 100` in `apps/monitor/pyproject.toml` is met by `make test`.
+
 ## STAGE-001-013: Alert ingestor + first `inproc-dashboard` channel
 
 - [ ] POSTing an Alertmanager-shaped payload to `/api/alerts/ingest` produces a row in `alerts`
