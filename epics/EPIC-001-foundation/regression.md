@@ -297,6 +297,25 @@ or related tests.
 - [ ] [D][M] Grafana renders the provisioned default dashboard with live data
 - [ ] [D][M] Editing a dashboard JSON in `deploy/grafana/dashboards/` and restarting Grafana picks up the change
 
+## STAGE-001-014: UI shell + login + Overview live-tile
+
+- Login: empty submit shows "Username is required" / "Password is required"; wrong creds shows 401 message; rate-limited shows 429 with countdown when Retry-After present.
+- Login form has working show/hide password toggle (Eye / EyeOff icons).
+- "Welcome — please run hm user create" message shows when `/api/version` returns `users_configured: false`.
+- After successful login, browser is redirected to `/overview` and `/api/auth/me` returns the user.
+- Overview page: HostCpuTile shows "Connecting…" briefly, then a big number CPU% + sparkline. Sparkline starts as a 60-point flat baseline at the initial value; new SSE ticks produce visible deltas. Sparkline does not flatline between ticks.
+- `/api/metrics/snapshot` is called ONCE on mount, then once per SSE tick (~10s) — not multiple times per second. `refetchOnWindowFocus` is OFF.
+- "Updated" line displays HH:MM:SS in the user's local TZ; date prefix appears only when the timestamp's calendar date differs from today.
+- AppShell sidebar: 13 items, Overview enabled, others show "Coming soon" tooltip, all disabled.
+- Top bar: collapse-sidebar (desktop) / open-mobile-sidebar (mobile), search placeholder (disabled), Notifications (disabled, "Coming soon" tooltip, no yellow dot), user menu (theme toggle, sign out).
+- Theme toggle persists across page reloads via localStorage.
+- Mobile (< 768px viewport): sidebar is a full-screen overlay with backdrop; opens via hamburger; closes via close button, backdrop click, or any nav item click. Body scroll-locked while open.
+- Desktop (≥ 768px viewport): sidebar is persistent; hamburger toggles `collapsed` width.
+- Logging in from a 2nd device does NOT revoke the 1st device's session. Both sessions remain valid until TTL or change-password.
+- Change-password still revokes all sessions for the user (post-incident posture preserved).
+- The 2 SSE pytest tests (`test_sse_http_endpoint_smoke`, `test_lifespan_e2e_sse_receives_tick`) pass against the in-process uvicorn fixture.
+- `make verify` exits 0 deterministically (no flakes from probabilistic tamper tests, no async timing flakes).
+
 ## STAGE-001-021: Full integration test rig + canonical e2e test
 
 - [ ] `docker compose -f deploy/compose/docker-compose.test.yml up --abort-on-container-exit --exit-code-from integration-tests` exits 0
