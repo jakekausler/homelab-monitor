@@ -18,10 +18,18 @@ afterEach(() => {
   cleanup()
 })
 
-function renderTopBar(onToggleSidebar = vi.fn(), onToggleTheme = vi.fn()) {
+function renderTopBar(
+  onToggleSidebar = vi.fn(),
+  onToggleMobile = vi.fn(),
+  onToggleTheme = vi.fn(),
+) {
   return render(
     <TooltipProvider>
-      <TopBar onToggleSidebar={onToggleSidebar} onToggleTheme={onToggleTheme} />
+      <TopBar
+        onToggleSidebar={onToggleSidebar}
+        onToggleMobile={onToggleMobile}
+        onToggleTheme={onToggleTheme}
+      />
     </TooltipProvider>,
   )
 }
@@ -37,9 +45,11 @@ describe('TopBar', () => {
     expect(screen.getByRole('searchbox', { name: 'Search' })).toBeDisabled()
   })
 
-  it('renders the Notifications button', () => {
+  it('renders the Notifications button (disabled, coming soon)', () => {
     renderTopBar()
-    expect(screen.getByRole('button', { name: 'Notifications' })).toBeInTheDocument()
+    const btn = screen.getByRole('button', { name: 'Notifications (coming soon)' })
+    expect(btn).toBeInTheDocument()
+    expect(btn).toBeDisabled()
   })
 
   it('calls onToggleSidebar when the sidebar button is clicked', async () => {

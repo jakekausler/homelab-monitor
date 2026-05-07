@@ -52,7 +52,13 @@ const NAV_ITEMS: NavItem[] = [
   { label: 'Settings', icon: Cog, disabledNote: 'Coming soon' },
 ]
 
-export function SidebarNav({ collapsed }: { collapsed: boolean }) {
+export function SidebarNav({
+  collapsed,
+  onNavigate,
+}: {
+  collapsed: boolean
+  onNavigate?: () => void
+}) {
   return (
     <nav
       aria-label="Primary"
@@ -71,6 +77,7 @@ export function SidebarNav({ collapsed }: { collapsed: boolean }) {
             <Link
               key={item.label}
               to={item.to}
+              onClick={onNavigate}
               activeProps={{
                 className: 'bg-accent text-accent-foreground',
               }}

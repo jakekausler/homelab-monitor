@@ -10,6 +10,28 @@ const HOST_CPU_METRIC = 'homelab_host_cpu_percent'
 const HOST_CPU_LABEL = 'all'
 const SERIES_CAPACITY = 60
 
+function formatUpdatedAt(iso: string): string {
+  // Backend timestamps are ISO-8601 UTC. Format in the user's local TZ.
+  // Show HH:MM:SS only if same calendar day (local TZ), otherwise prefix
+  // with YYYY-MM-DD so older timestamps disambiguate.
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return iso
+  const now = new Date()
+  const sameDay =
+    date.getFullYear() === now.getFullYear() &&
+    date.getMonth() === now.getMonth() &&
+    date.getDate() === now.getDate()
+  const hh = String(date.getHours()).padStart(2, '0')
+  const mm = String(date.getMinutes()).padStart(2, '0')
+  const ss = String(date.getSeconds()).padStart(2, '0')
+  const time = `${hh}:${mm}:${ss}`
+  if (sameDay) return time
+  const yy = date.getFullYear()
+  const mo = String(date.getMonth() + 1).padStart(2, '0')
+  const dd = String(date.getDate()).padStart(2, '0')
+  return `${yy}-${mo}-${dd} ${time}`
+}
+
 interface TickPayload {
   kind: 'collector.tick'
   collector: string
@@ -54,7 +76,7 @@ export function HostCpuTile() {
     if (entry !== undefined) {
       // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: seeding/updating state from non-React source (snapshot, SSE event)
       setLatest(entry.value)
-      setSeries([entry.value])
+      setSeries(Array<number>(SERIES_CAPACITY).fill(entry.value))
       // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: seeding/updating state from non-React source (snapshot, SSE event)
       setLastUpdatedAt(entry.ts)
     }
@@ -64,12 +86,19 @@ export function HostCpuTile() {
   // On every host tick, re-fetch the snapshot to pick up the new CPU value.
   // SCAFFOLDING: in STAGE-001-015 we replace the snapshot fetch with a
   // direct VictoriaMetrics query. For now, the tick event is the trigger.
+  // Latest-ref for snapshot.refetch: TanStack Query returns a new `snapshot`
+  // object every render; including it in the dep array would loop. We only
+  // want this effect to fire on a real SSE tick.
+  const refetchRef = useRef(snapshot.refetch)
+  // eslint-disable-next-line react-hooks/refs -- latest-ref pattern; safe because ref writes don't trigger re-render
+  refetchRef.current = snapshot.refetch
+
   useEffect(() => {
     if (sse.value === null) return
-    void snapshot.refetch()
+    void refetchRef.current()
     // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: seeding/updating state from non-React source (snapshot, SSE event)
     setLastUpdatedAt(sse.value.ts)
-  }, [sse.value, snapshot])
+  }, [sse.value])
 
   // Each refetch returns a new snapshot; append to the series.
   useEffect(() => {
@@ -124,7 +153,9 @@ export function HostCpuTile() {
                 {bigNumber}
               </div>
               {lastUpdatedAt !== null && (
-                <p className="mt-1 text-xs text-muted-foreground">Updated {lastUpdatedAt}</p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Updated {formatUpdatedAt(lastUpdatedAt)}
+                </p>
               )}
             </div>
             <Sparkline values={series} ariaLabel="Host CPU history" />

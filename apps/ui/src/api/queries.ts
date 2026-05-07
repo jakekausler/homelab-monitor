@@ -74,8 +74,8 @@ export function useMetricsSnapshot(): UseQueryResult<MetricsSnapshotResponse, Ap
       const result = await apiClient.GET('/api/metrics/snapshot')
       return unwrap(result)
     },
-    // The Overview tile re-fetches on mount; live updates come via SSE.
-    staleTime: 5_000,
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
   })
 }
 

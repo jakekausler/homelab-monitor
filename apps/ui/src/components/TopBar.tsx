@@ -2,18 +2,38 @@ import { Bell, Menu, Search } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { UserMenu } from '@/components/UserMenu'
 
 export function TopBar({
   onToggleSidebar,
+  onToggleMobile,
   onToggleTheme,
 }: {
   onToggleSidebar: () => void
+  onToggleMobile: () => void
   onToggleTheme: () => void
 }) {
   return (
     <header className="flex h-14 items-center gap-3 border-b border-border bg-background px-4">
-      <Button variant="ghost" size="icon" aria-label="Toggle sidebar" onClick={onToggleSidebar}>
+      {/* Mobile hamburger — opens overlay */}
+      <Button
+        variant="ghost"
+        size="icon"
+        aria-label="Open navigation menu"
+        className="md:hidden"
+        onClick={onToggleMobile}
+      >
+        <Menu className="size-4" />
+      </Button>
+      {/* Desktop hamburger — collapses/expands persistent sidebar */}
+      <Button
+        variant="ghost"
+        size="icon"
+        aria-label="Toggle sidebar"
+        className="hidden md:inline-flex"
+        onClick={onToggleSidebar}
+      >
         <Menu className="size-4" />
       </Button>
       <div className="relative flex-1 max-w-md">
@@ -26,13 +46,16 @@ export function TopBar({
           className="pl-8"
         />
       </div>
-      <Button variant="ghost" size="icon" aria-label="Notifications" className="relative">
-        <Bell className="size-4" />
-        <span
-          aria-hidden
-          className="absolute right-2 top-2 size-2 rounded-full bg-status-warning"
-        />
-      </Button>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span tabIndex={0}>
+            <Button variant="ghost" size="icon" aria-label="Notifications (coming soon)" disabled>
+              <Bell className="size-4" />
+            </Button>
+          </span>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">Coming soon</TooltipContent>
+      </Tooltip>
       <UserMenu onToggleTheme={onToggleTheme} />
     </header>
   )

@@ -191,10 +191,16 @@ async def test_login_cookie_attributes(
 
 
 @pytest.mark.asyncio
-async def test_login_invalidates_prior_sessions(
+async def test_login_preserves_prior_sessions(
     db_url: str, master_key: bytes, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A second login by the same user invalidates the first session cookie."""
+    """A second login by the same user does NOT invalidate the first session cookie.
+
+    Concurrent sessions from multiple devices are intentionally allowed.
+    Session revocation happens only through change-password (which calls
+    delete_all_user_sessions) or through a future explicit "sign out all
+    devices" flow.  Login itself no longer wipes existing sessions.
+    """
     monkeypatch.setenv("HOMELAB_MONITOR_DB_URL", db_url)
     monkeypatch.setenv("HOMELAB_MONITOR_MASTER_KEY", base64.b64encode(master_key).decode())
     monkeypatch.setenv("HOMELAB_MONITOR_HTTPS_ONLY_COOKIES", "false")
@@ -212,7 +218,7 @@ async def test_login_invalidates_prior_sessions(
             assert resp.status_code == 200  # noqa: PLR2004
             old_session_cookie = client1.cookies.get("homelab_monitor_session")
 
-        # Second login from a fresh client (simulating attacker with stolen creds)
+        # Second login from a fresh client (simulating a second device).
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client2:
             resp = await client2.post(
                 "/api/auth/login",
@@ -220,8 +226,8 @@ async def test_login_invalidates_prior_sessions(
             )
             assert resp.status_code == 200  # noqa: PLR2004
 
-        # Replay the OLD session cookie via a third client; should now be 401.
+        # The OLD session cookie must still be valid — concurrent logins are allowed.
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client3:
             client3.cookies.set("homelab_monitor_session", old_session_cookie)  # type: ignore[reportArgumentType]
             resp = await client3.get("/api/auth/me")
-            assert resp.status_code == 401  # noqa: PLR2004
+            assert resp.status_code == 200  # noqa: PLR2004

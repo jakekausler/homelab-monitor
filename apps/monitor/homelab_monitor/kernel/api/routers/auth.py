@@ -169,9 +169,10 @@ async def login(  # noqa: PLR0913 -- FastAPI Depends parameters
         if not rate_limiter.check_and_record(ip):
             raise RateLimitedProblem()
         raise WrongPasswordProblem()
-    # Session-fixation defense: drop all prior sessions for this user before
-    # minting a fresh one. Same pattern as change-password.
-    await auth_repo.delete_all_user_sessions(user.id)
+    # Concurrent sessions allowed: a successful login mints a NEW session
+    # without revoking other devices' sessions. Sessions are revocable from
+    # Settings -> Auth (later stage) and expire on TTL. Change-password
+    # still revokes all sessions (post-incident posture).
     csrf = make_csrf_token()
     ttl = _session_ttl_seconds()
     session = await auth_repo.create_session(user.id, ip, ttl, csrf)
