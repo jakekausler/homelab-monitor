@@ -102,3 +102,23 @@ async def test_snapshot_after_replace_family(
     assert len(matches) == 1
     assert matches[0]["labels"] == {"k": "new"}
     assert matches[0]["value"] == 99.0  # noqa: PLR2004
+
+
+@pytest.mark.asyncio
+async def test_snapshot_with_base_writer_returns_empty(
+    authenticated_client: AsyncClient,
+) -> None:
+    """Endpoint gracefully returns empty entries when writer is not retaining."""
+    from homelab_monitor.kernel.plugins.io import InMemoryMetricsWriter  # noqa: PLC0415
+
+    app = cast(FastAPI, authenticated_client._transport.app)  # pyright: ignore[reportAttributeAccessIssue, reportPrivateUsage, reportUnknownMemberType]
+    original = app.state.metrics_writer
+    app.state.metrics_writer = InMemoryMetricsWriter()
+    try:
+        resp = await authenticated_client.get("/api/metrics/snapshot")
+        assert resp.status_code == 200  # noqa: PLR2004
+        body = resp.json()
+        assert body["entries"] == []
+        assert body["ts"].endswith("+00:00")
+    finally:
+        app.state.metrics_writer = original

@@ -11,7 +11,7 @@ from homelab_monitor.kernel.api.schemas import (
 )
 from homelab_monitor.kernel.auth.models import User
 from homelab_monitor.kernel.db.time import utc_now_iso
-from homelab_monitor.kernel.plugins.io import MemoryRetainingMetricsWriter
+from homelab_monitor.kernel.plugins.io import MemoryRetainingMetricsWriter, MetricsWriter
 
 router = APIRouter()
 
@@ -19,7 +19,7 @@ router = APIRouter()
 @router.get("/metrics/snapshot", response_model=MetricsSnapshotResponse)
 async def metrics_snapshot(
     _user: User = Depends(require_session()),  # noqa: B008
-    writer: MemoryRetainingMetricsWriter = Depends(get_metrics_writer),  # noqa: B008
+    writer: MetricsWriter = Depends(get_metrics_writer),  # noqa: B008
 ) -> MetricsSnapshotResponse:
     """Return the in-memory writer's latest-value snapshot.
 
@@ -29,6 +29,10 @@ async def metrics_snapshot(
     this endpoint will be retired in favor of direct VM queries. STAGE-014's
     Overview tile is the only consumer.
     """
+    if not isinstance(writer, MemoryRetainingMetricsWriter):
+        # Defensive: if a future stage swaps in a non-retaining writer
+        # (e.g. VM-backed in STAGE-001-015), snapshot is unavailable.
+        return MetricsSnapshotResponse(ts=utc_now_iso(), entries=[])
     entries = [
         MetricsSnapshotEntry(
             name=e.name,

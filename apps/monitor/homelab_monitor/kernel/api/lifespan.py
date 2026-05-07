@@ -114,12 +114,21 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0915
         degraded.append("noop")
     # TODO(STAGE-014): load from /config/plugins/collectors/host.yaml when YAML
     # config-loading lands; until then, defaults are baked into HostCollectorConfig.
+    # TODO(STAGE-014): unify interval/timeout — ClassVar timedelta vs config
+    # int seconds. Sub-second collectors (e.g., timedelta(milliseconds=500))
+    # currently violate CollectorConfig.interval_seconds: int(ge=1) at
+    # registration time. Either widen to float seconds or enforce a 1s
+    # floor in BaseCollector.__init_subclass__.
     try:
         from homelab_monitor.plugins.collectors.builtin.host import HostCollector  # noqa: PLC0415
 
         loader.register(
             HostCollector,
-            {"name": "host", "interval_seconds": 10, "timeout_seconds": 5},
+            {
+                "name": "host",
+                "interval_seconds": int(HostCollector.interval.total_seconds()),
+                "timeout_seconds": int(HostCollector.timeout.total_seconds()),
+            },
         )
     except Exception as exc:  # pragma: no cover -- defensive, host always succeeds
         log.warning("lifespan.collector_register_failed", name="host", error=str(exc))

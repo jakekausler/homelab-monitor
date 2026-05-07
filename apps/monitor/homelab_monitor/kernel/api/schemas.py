@@ -79,7 +79,7 @@ class MetricsSnapshotEntry(BaseModel):
     name: str
     value: float
     labels: dict[str, str]
-    kind: str  # "gauge" | "counter" | "summary"
+    kind: Literal["gauge", "counter", "summary"]
     ts: str  # ISO-8601 UTC of the most recent write for this (name, labels)
 
 

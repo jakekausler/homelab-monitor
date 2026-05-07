@@ -265,6 +265,11 @@
         "description": "Single metric entry in a snapshot.",
         "properties": {
           "kind": {
+            "enum": [
+              "gauge",
+              "counter",
+              "summary"
+            ],
             "title": "Kind",
             "type": "string"
           },

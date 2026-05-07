@@ -54,6 +54,11 @@ select = ["E", "F", "I", "B", "UP", "ANN", "SIM", "PL", "RUF"]
 
 [tool.ruff.lint.per-file-ignores]
 "alembic/versions/*" = ["E501"]
+# test_coverage_gaps.py needs:
+# - PLC0415: inline imports inside each test (prevents cross-test namespace
+#   pollution; tests private functions across many modules).
+# - RUF100: some `# noqa:` comments target rules used elsewhere in the file;
+#   ruff sees them as unused but they document the suppression intent for readers.
 "tests/test_coverage_gaps.py" = ["PLC0415", "RUF100"]
 
 [tool.pytest.ini_options]

@@ -104,6 +104,8 @@ def _patch_psutil_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     monkeypatch.setattr(host_module.psutil, "swap_memory", lambda: _Swap(total=2048, used=128))
 
+    # psutil calls disk_partitions(all=False) as a kwarg, so this stub MUST
+    # accept the keyword `all` exactly. Renaming to `all_` will fail tests.
     def _disk_partitions_stub(all: bool = False) -> list[_Part]:
         del all
         return [_Part(device="/dev/sda1", mountpoint="/", fstype="ext4")]
@@ -534,6 +536,8 @@ async def test_base_metrics_writer_top_n_processes_skipped(
     assert "homelab_host_cpu_percent" in names
 
 
+# Real-psutil smoke test — may fail on container runners without procfs access.
+# Not marked @pytest.mark.smoke because the marker is not yet registered in pyproject.toml.
 @pytest.mark.asyncio
 async def test_run_with_real_psutil() -> None:
     """Smoke test against real psutil — values vary per host, just confirm types/keys."""
@@ -545,3 +549,12 @@ async def test_run_with_real_psutil() -> None:
     assert result.metrics_emitted > 0
     assert any(e.name == "homelab_host_cpu_percent" for e in writer.snapshot())
     assert any(e.name == "homelab_host_memory_bytes" for e in writer.snapshot())
+
+
+def test_build_exclude_pattern_empty_returns_none() -> None:
+    """_build_exclude_pattern returns None for empty input."""
+    from homelab_monitor.plugins.collectors.builtin.host import (  # noqa: PLC0415
+        _build_exclude_pattern,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    assert _build_exclude_pattern([]) is None

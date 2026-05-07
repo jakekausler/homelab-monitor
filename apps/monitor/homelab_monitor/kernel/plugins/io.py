@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, field
-from typing import Protocol, runtime_checkable
+from typing import Literal, Protocol, cast, runtime_checkable
 
 from homelab_monitor.kernel.db.time import utc_now_iso
 
@@ -28,7 +28,7 @@ class MetricEntry:
     a flat dict of label name -> value.
     """
 
-    kind: str
+    kind: Literal["gauge", "counter", "summary"]
     name: str
     value: float
     labels: dict[str, str] = field(default_factory=lambda: {})
@@ -46,7 +46,7 @@ class LatestMetricEntry:
     name: str
     value: float
     labels: dict[str, str]
-    kind: str
+    kind: Literal["gauge", "counter", "summary"]
     ts: str
 
 
@@ -218,7 +218,7 @@ class MemoryRetainingMetricsWriter(InMemoryMetricsWriter):
             name=name,
             value=value,
             labels=dict(labels),
-            kind=kind,
+            kind=cast(Literal["gauge", "counter", "summary"], kind),
             ts=utc_now_iso(),
         )
 
@@ -238,14 +238,18 @@ class MemoryRetainingMetricsWriter(InMemoryMetricsWriter):
         self._set_latest("summary", name, value, labels)
 
     def replace_family(self, name: str, entries: list[tuple[float, dict[str, str]]]) -> None:
-        """Atomically wipe latest-value entries for ``name`` and replace with ``entries``.
+        """Wipe latest-value entries for ``name`` and replace with ``entries``.
 
         Each ``(value, labels)`` becomes a new gauge entry (kind="gauge"). Also
         appended to the inherited ``_entries`` list — history stays append-only.
 
-        Used by the host collector for top-N families. Single-threaded scheduler
-        means concurrent reads of ``snapshot()`` see either the pre- or post-
-        replacement state, never a mix.
+        Atomicity: this method has no awaits, so concurrent ``snapshot()``
+        readers on the same event loop see either pre- or post-replacement
+        state for THIS family. Multi-family ticks (e.g. consecutive
+        replace_family calls for two different metric families) are NOT
+        atomic across families — a snapshot mid-tick can observe one family
+        updated and another stale. Acceptable for v1 Overview tile use case;
+        revisit when VM-backed writer ships in STAGE-001-015.
         """
         stale_keys = [k for k in self._latest if k[0] == name]
         for k in stale_keys:
@@ -254,7 +258,11 @@ class MemoryRetainingMetricsWriter(InMemoryMetricsWriter):
             self.write_gauge(name, value, labels)
 
     def snapshot(self) -> list[LatestMetricEntry]:
-        """Return all currently-retained latest entries (insertion order)."""
+        """Return all currently-retained latest entries (insertion order).
+
+        Returns a defensive list copy; safe to iterate while subsequent
+        writes mutate the underlying ``_latest`` dict.
+        """
         return list(self._latest.values())
 
 

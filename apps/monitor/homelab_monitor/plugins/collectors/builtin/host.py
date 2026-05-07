@@ -13,7 +13,7 @@ from __future__ import annotations
 import re
 import time
 from datetime import timedelta
-from typing import ClassVar
+from typing import ClassVar, NamedTuple
 
 import psutil
 from pydantic import Field
@@ -28,7 +28,28 @@ from homelab_monitor.kernel.plugins.types import (
     TrustLevel,
 )
 
+
+class _ProcRow(NamedTuple):
+    """Single process row captured by ``_collect_process_states``."""
+
+    pid: int
+    name: str
+    cpu_percent: float
+    rss: int
+
+
 _TRACKED_STATES: tuple[str, ...] = ("running", "sleeping", "zombie")
+
+
+def _build_exclude_pattern(devs: list[str]) -> re.Pattern[str] | None:
+    """Compile a regex matching device names that begin with any of ``devs``.
+
+    Returns None when input is empty (no exclusions). Anchored at start.
+    Each device prefix is regex-escaped for literal matching.
+    """
+    if not devs:
+        return None
+    return re.compile(r"^(?:" + "|".join(re.escape(d) for d in devs) + r")")
 
 
 class HostCollectorConfig(CollectorConfig):
@@ -52,6 +73,9 @@ class HostCollector(BaseCollector):
     Each section catches its own psutil errors so a single failing call does not
     kill the whole tick. Aggregated errors land in ``CollectorResult.errors``;
     ``ok=False`` if any section failed.
+
+    KeyboardInterrupt / SystemExit are deliberately NOT caught — they propagate
+    to the scheduler so shutdown is respected.
     """
 
     name: ClassVar[str] = "host"
@@ -84,11 +108,17 @@ class HostCollector(BaseCollector):
             self._collect_disk_io(ctx, exclude_disk_devs),
             self._collect_net_io(ctx),
             self._collect_uptime(ctx),
-            self._collect_process_states(ctx),
-            self._collect_top_processes(ctx, top_n),
         ]:
             emitted += n
             errors.extend(errs)
+
+        n, errs, proc_rows = self._collect_process_states(ctx)
+        emitted += n
+        errors.extend(errs)
+
+        n, errs = self._collect_top_processes(ctx, top_n, proc_rows)
+        emitted += n
+        errors.extend(errs)
 
         return CollectorResult(
             ok=(len(errors) == 0),
@@ -99,6 +129,14 @@ class HostCollector(BaseCollector):
         )
 
     def _collect_cpu(self, ctx: CollectorContext) -> tuple[int, list[str]]:
+        """Emit aggregate + per-core CPU percent.
+
+        FIRST-CALL CAVEAT: psutil.cpu_percent(interval=None) returns 0.0
+        on the first call after module import (no prior delta to compare).
+        The first tick after process boot will emit 0.0 for all CPU
+        metrics. Consumers must tolerate 0.0 readings during the first
+        ~10 seconds of operation.
+        """
         try:
             agg = float(psutil.cpu_percent(interval=None, percpu=False))
             ctx.vm.write_gauge("homelab_host_cpu_percent", agg, {"cpu": "all"})
@@ -145,11 +183,11 @@ class HostCollector(BaseCollector):
         extra_mountpoints: list[str],
         exclude_disk_devs: list[str],
     ) -> tuple[int, list[str]]:
-        exclude_pattern = (
-            re.compile(r"^(?:" + "|".join(exclude_disk_devs) + r")") if exclude_disk_devs else None
-        )
+        exclude_pattern = _build_exclude_pattern(exclude_disk_devs)
         emitted = 0
         errors: list[str] = []
+        # mountpoints already emitted from psutil.disk_partitions(); deduplicates
+        # against extra_mountpoints
         seen: set[str] = set()
 
         try:
@@ -206,9 +244,7 @@ class HostCollector(BaseCollector):
         ctx: CollectorContext,
         exclude_disk_devs: list[str],
     ) -> tuple[int, list[str]]:
-        exclude_pattern = (
-            re.compile(r"^(?:" + "|".join(exclude_disk_devs) + r")") if exclude_disk_devs else None
-        )
+        exclude_pattern = _build_exclude_pattern(exclude_disk_devs)
         try:
             io_per_disk = psutil.disk_io_counters(perdisk=True) or {}
             emitted = 0
@@ -258,18 +294,21 @@ class HostCollector(BaseCollector):
         except Exception as exc:  # pragma: no cover -- defensive psutil failure
             return 0, [f"uptime: {exc}"]
 
-    def _collect_process_states(self, ctx: CollectorContext) -> tuple[int, list[str]]:
-        """Iterate processes once; emit state counts and populate proc_rows on ctx.
+    def _collect_process_states(
+        self, ctx: CollectorContext
+    ) -> tuple[int, list[str], list[_ProcRow]]:
+        """Iterate processes once; emit state counts and return proc_rows.
 
-        proc_rows is stored as a transient attribute for _collect_top_processes to
-        consume in the same tick without a second process_iter call.
+        Returns a 3-tuple: (metrics_emitted, errors, proc_rows). proc_rows is
+        passed explicitly to ``_collect_top_processes`` to avoid cross-tick
+        contamination from instance-level state.
         """
         state_counts: dict[str, int] = {s: 0 for s in _TRACKED_STATES}
-        proc_rows: list[tuple[int, str, float, int]] = []
+        proc_rows: list[_ProcRow] = []
         try:
             for proc in psutil.process_iter(["pid", "name", "cpu_percent", "memory_info"]):
                 try:
-                    info = proc.info  # pyright: ignore[reportAttributeAccessIssue]
+                    info = proc.info  # pyright: ignore[reportAttributeAccessIssue]  # set by process_iter(attrs=...) at runtime
                     status = proc.status()
                 except (psutil.NoSuchProcess, psutil.AccessDenied):
                     continue
@@ -280,7 +319,7 @@ class HostCollector(BaseCollector):
                 cpu_pct = float(info.get("cpu_percent") or 0.0)
                 mem_info = info.get("memory_info")
                 rss = int(getattr(mem_info, "rss", 0) or 0)
-                proc_rows.append((pid, pname, cpu_pct, rss))
+                proc_rows.append(_ProcRow(pid=pid, name=pname, cpu_percent=cpu_pct, rss=rss))
 
             for state in _TRACKED_STATES:
                 ctx.vm.write_gauge(
@@ -288,25 +327,31 @@ class HostCollector(BaseCollector):
                     float(state_counts[state]),
                     {"state": state},
                 )
-            self._proc_rows = proc_rows
-            return len(_TRACKED_STATES), []
+            return len(_TRACKED_STATES), [], proc_rows
         except Exception as exc:  # pragma: no cover -- defensive psutil failure
-            self._proc_rows = []
-            return 0, [f"processes: {exc}"]
+            return 0, [f"processes: {exc}"], []
 
-    def _collect_top_processes(self, ctx: CollectorContext, top_n: int) -> tuple[int, list[str]]:
-        """Emit top-N CPU and top-N RSS families using proc_rows from _collect_process_states."""
-        proc_rows: list[tuple[int, str, float, int]] = getattr(self, "_proc_rows", [])
+    def _collect_top_processes(
+        self,
+        ctx: CollectorContext,
+        top_n: int,
+        proc_rows: list[_ProcRow],
+    ) -> tuple[int, list[str]]:
+        """Emit top-N CPU and top-N RSS families using proc_rows from _collect_process_states.
+
+        ``proc_rows`` is passed explicitly (not read from instance state) to avoid
+        cross-tick contamination if ``_collect_process_states`` raised before assigning.
+        """
         if not isinstance(ctx.vm, MemoryRetainingMetricsWriter) or not proc_rows:
             return 0, []
 
-        top_cpu = sorted(proc_rows, key=lambda r: r[2], reverse=True)[:top_n]
-        top_mem = sorted(proc_rows, key=lambda r: r[3], reverse=True)[:top_n]
+        top_cpu = sorted(proc_rows, key=lambda r: r.cpu_percent, reverse=True)[:top_n]
+        top_mem = sorted(proc_rows, key=lambda r: r.rss, reverse=True)[:top_n]
         cpu_entries: list[tuple[float, dict[str, str]]] = [
-            (cpu, {"name": pname, "pid": str(pid)}) for (pid, pname, cpu, _rss) in top_cpu
+            (r.cpu_percent, {"name": r.name, "pid": str(r.pid)}) for r in top_cpu
         ]
         mem_entries: list[tuple[float, dict[str, str]]] = [
-            (float(rss), {"name": pname, "pid": str(pid)}) for (pid, pname, _cpu, rss) in top_mem
+            (float(r.rss), {"name": r.name, "pid": str(r.pid)}) for r in top_mem
         ]
         ctx.vm.replace_family("homelab_host_top_processes_cpu_percent", cpu_entries)
         ctx.vm.replace_family("homelab_host_top_processes_memory_bytes", mem_entries)
