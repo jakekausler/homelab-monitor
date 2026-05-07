@@ -3,6 +3,10 @@
 Both events conform to the ``BaseEvent`` Protocol (Pydantic ``BaseModel`` with a
 ``kind`` discriminator literal). They are emitted by the alert ingest handler
 (Spec B) and consumed by the dispatcher.
+
+F18: ``severity`` is the ``Severity`` StrEnum, not a bare ``str``. Pydantic v2
+serialises StrEnum to its string value in ``model_dump(mode="json")`` so
+SSE/JSON consumers see the same wire shape as before.
 """
 
 from __future__ import annotations
@@ -11,6 +15,7 @@ from typing import Literal
 
 from pydantic import Field
 
+from homelab_monitor.kernel.alerts.types import Severity
 from homelab_monitor.kernel.events import BaseEvent
 
 
@@ -21,7 +26,7 @@ class AlertFiringEvent(BaseEvent):
     alert_id: str
     fingerprint: str
     source_tool: str
-    severity: str
+    severity: Severity
     status: Literal["firing"] = "firing"
     opened_at: str
     last_seen_at: str
@@ -37,7 +42,7 @@ class AlertResolvedEvent(BaseEvent):
     alert_id: str
     fingerprint: str
     source_tool: str
-    severity: str
+    severity: Severity
     resolved_at: str
     labels: dict[str, str]
     annotations: dict[str, str] = Field(default_factory=dict)

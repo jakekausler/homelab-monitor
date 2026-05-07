@@ -81,6 +81,12 @@ class SseBroker:
         SSE consumer can route by event type.
 
         Non-throwing per Protocol contract. Exceptions are caught and logged.
+
+        NOTE (F9): each ``publish()`` call grabs ``self._lock`` for fan-out.
+        Under burst load (50+ alerts in one Alertmanager batch), the ingest
+        loop serialises on this lock. Acceptable for v1; revisit if alerts/sec
+        ever exceeds ~100. TODO(future): batch publish() into a producer
+        queue and drain on a single fan-out task.
         """
         try:
             async with self._lock:

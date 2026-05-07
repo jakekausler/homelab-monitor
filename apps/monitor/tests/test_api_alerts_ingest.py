@@ -304,3 +304,70 @@ async def test_ingest_does_not_log_full_payload_at_info(
     for record in caplog.records:
         if record.levelno == logging.INFO:
             assert secret_label_value not in record.getMessage()
+
+
+@pytest.mark.asyncio
+async def test_warning_does_not_leak_host_label(
+    api_token_client: AsyncClient,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """F10: WARNING-level records (e.g., severity_invalid) must not leak label values.
+
+    Triggers ``alerts.ingest.severity_invalid`` (invalid severity) AND
+    captures all WARNING records to assert no record contains the host
+    label value.
+    """
+    secret_host = "private-internal-host-9999"
+    payload = _alertmanager_payload(
+        alertname="WarnLeakTest",
+        severity="not_a_real_level",  # forces severity_invalid warning
+        host=secret_host,
+    )
+    with caplog.at_level(logging.WARNING, logger="homelab_monitor"):
+        resp = await api_token_client.post("/api/alerts/ingest", json=payload)
+    assert resp.status_code == 202  # noqa: PLR2004
+
+    warning_records = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert any("alerts.ingest.severity_invalid" in r.getMessage() for r in warning_records), (
+        "expected severity_invalid warning to fire"
+    )
+    for r in warning_records:
+        assert secret_host not in r.getMessage(), (
+            f"WARNING record leaked host label: {r.getMessage()!r}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_ingest_token_with_only_ingest_scope_returns_202(
+    db_url: str,
+    master_key: bytes,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """F21: a token holding ONLY ALERTS_INGEST_WRITE (no other scopes) succeeds."""
+    import base64  # noqa: PLC0415
+
+    monkeypatch.setenv("HOMELAB_MONITOR_DB_URL", db_url)
+    monkeypatch.setenv("HOMELAB_MONITOR_MASTER_KEY", base64.b64encode(master_key).decode())
+
+    from homelab_monitor.kernel.api.app import create_app  # noqa: PLC0415
+
+    app = create_app(lifespan_enabled=True)
+    async with app.router.lifespan_context(app):
+        from homelab_monitor.kernel.auth.api_tokens import make_api_token  # noqa: PLC0415
+        from homelab_monitor.kernel.auth.scopes import Scope  # noqa: PLC0415
+
+        plaintext, _ = make_api_token(prefix="test")
+        await app.state.auth_repo.create_api_token(
+            name="ingest-only-token",
+            scopes={Scope.ALERTS_INGEST_WRITE},  # ONLY this scope
+            plaintext_token=plaintext,
+        )
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://test",
+            headers={"Authorization": f"Bearer {plaintext}"},
+        ) as client:
+            payload = _alertmanager_payload(alertname="ScopeOnly", severity="info")
+            resp = await client.post("/api/alerts/ingest", json=payload)
+            assert resp.status_code == 202  # noqa: PLR2004
+            assert resp.json()["ingested"] == 1

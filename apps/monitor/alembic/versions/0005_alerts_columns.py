@@ -10,6 +10,11 @@ spec §6.1 shape:
 Indexes added (spec §6.1 + listing performance):
 - ix_alerts_source_tool_opened_at  on alerts(source_tool, opened_at)
 - ix_alerts_status_opened_at       on alerts(status, opened_at)
+- ux_alerts_fingerprint_firing     UNIQUE partial index on alerts(fingerprint)
+                                   WHERE status = 'firing'
+                                   (race-safe dedup of concurrent firing
+                                   inserts; resolved rows are excluded so a
+                                   re-fire after resolve creates a new row)
 - ix_alert_outcomes_alert_id       on alert_outcomes(alert_id)
 
 The pre-existing idx_alerts_fingerprint (created in 0001) remains.
@@ -66,6 +71,17 @@ def upgrade() -> None:
             "ix_alerts_status_opened_at",
             ["status", "opened_at"],
         )
+        # Race-safe dedup: concurrent inserts of the same fingerprint while a
+        # row is already firing collide on this unique partial index. The
+        # ingest path catches IntegrityError and re-reads the existing row.
+        # Resolved rows are excluded so a re-fire after resolve still creates
+        # a new row (intentional: distinct lifecycle events).
+        batch_op.create_index(
+            "ux_alerts_fingerprint_firing",
+            ["fingerprint"],
+            unique=True,
+            sqlite_where=sa.text("status = 'firing'"),
+        )
 
     # ----- alert_outcomes -----
     with op.batch_alter_table("alert_outcomes") as batch_op:
@@ -94,6 +110,7 @@ def downgrade() -> None:
         batch_op.drop_column("outcome")
 
     with op.batch_alter_table("alerts") as batch_op:
+        batch_op.drop_index("ux_alerts_fingerprint_firing")
         batch_op.drop_index("ix_alerts_status_opened_at")
         batch_op.drop_index("ix_alerts_source_tool_opened_at")
         batch_op.drop_column("payload_json")

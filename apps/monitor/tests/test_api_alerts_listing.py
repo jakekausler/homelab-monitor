@@ -234,3 +234,10 @@ async def test_listing_token_auth_rejected(api_token_client: AsyncClient) -> Non
     """GET /api/alerts with token auth (no session) returns 401 (session-only endpoint)."""
     resp = await api_token_client.get("/api/alerts")
     assert resp.status_code == 401  # noqa: PLR2004
+
+
+@pytest.mark.asyncio
+async def test_list_alerts_malformed_cursor_returns_400(authenticated_client: AsyncClient) -> None:
+    """Malformed cursor in GET /api/alerts returns 400, not 500."""
+    resp = await authenticated_client.get("/api/alerts?cursor=not-a-cursor")
+    assert resp.status_code == 400  # noqa: PLR2004

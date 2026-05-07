@@ -6,6 +6,7 @@ import pytest
 import structlog
 
 from homelab_monitor.kernel.alerts.events import AlertFiringEvent, AlertResolvedEvent
+from homelab_monitor.kernel.alerts.types import Severity
 from homelab_monitor.kernel.api.sse import SseBroker
 from homelab_monitor.kernel.events import BaseEvent, SchedulerTickEvent
 
@@ -25,7 +26,7 @@ def test_alert_firing_event_conforms_to_baseevent() -> None:
         alert_id="a",
         fingerprint="fp",
         source_tool="alertmanager",
-        severity="warning",
+        severity=Severity.WARNING,
         opened_at="2026-05-07T00:00:00+00:00",
         last_seen_at="2026-05-07T00:00:00+00:00",
         labels={},
@@ -41,7 +42,7 @@ def test_alert_resolved_event_conforms_to_baseevent() -> None:
         alert_id="a",
         fingerprint="fp",
         source_tool="alertmanager",
-        severity="warning",
+        severity=Severity.WARNING,
         resolved_at="2026-05-07T00:00:00+00:00",
         labels={},
         ts="2026-05-07T00:00:00+00:00",
@@ -58,7 +59,7 @@ def test_baseevent_protocol_runtime_checkable() -> None:
         alert_id="a",
         fingerprint="fp",
         source_tool="alertmanager",
-        severity="warning",
+        severity=Severity.WARNING,
         opened_at="2026-05-07T00:00:00+00:00",
         last_seen_at="2026-05-07T00:00:00+00:00",
         labels={},
@@ -76,7 +77,7 @@ async def test_sse_broker_publishes_alert_firing_event() -> None:
         alert_id="a",
         fingerprint="fp",
         source_tool="alertmanager",
-        severity="warning",
+        severity=Severity.WARNING,
         opened_at="2026-05-07T00:00:00+00:00",
         last_seen_at="2026-05-07T00:00:00+00:00",
         labels={"alertname": "Foo"},

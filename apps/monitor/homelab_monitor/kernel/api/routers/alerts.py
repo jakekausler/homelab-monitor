@@ -21,7 +21,7 @@ import json
 from typing import Annotated, Any
 
 import structlog
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict
 from starlette.responses import JSONResponse
 from structlog.stdlib import BoundLogger
@@ -90,13 +90,21 @@ def _alert_to_view(alert: Alert) -> AlertView:
     )
 
 
-def _resolve_severity(item: AlertmanagerV2AlertItem, log: BoundLogger) -> Severity:
-    """Map item.labels['severity'] to a Severity, defaulting to WARNING with a log line."""
+def _resolve_severity(
+    item: AlertmanagerV2AlertItem,
+    fingerprint: str,
+    log: BoundLogger,
+) -> Severity:
+    """Map item.labels['severity'] to a Severity, defaulting to WARNING with a log line.
+
+    F10: log the fingerprint (not the alertname) so WARNING-level records
+    cannot leak label-derived secrets (hostnames, internal IPs, etc.).
+    """
     raw = item.labels.get("severity")
     if not raw:
         log.warning(
             "alerts.ingest.severity_missing",
-            alertname=item.labels.get("alertname", "<unknown>"),
+            fingerprint=fingerprint,
         )
         return Severity.WARNING
     try:
@@ -104,7 +112,7 @@ def _resolve_severity(item: AlertmanagerV2AlertItem, log: BoundLogger) -> Severi
     except ValueError:
         log.warning(
             "alerts.ingest.severity_invalid",
-            alertname=item.labels.get("alertname", "<unknown>"),
+            fingerprint=fingerprint,
             severity_raw=raw,
         )
         return Severity.WARNING
@@ -165,7 +173,7 @@ async def ingest_alerts(
     for item in payload.alerts:
         fingerprint = compute_fingerprint(item)
         source_tool = item.labels.get("source_tool", "alertmanager")
-        severity = _resolve_severity(item, log)
+        severity = _resolve_severity(item, fingerprint, log)
         ts = utc_now_iso()
         labels = dict(item.labels)
         annotations = dict(item.annotations)
@@ -174,12 +182,19 @@ async def ingest_alerts(
         if item.status == "firing":
             existing = await alert_repo.find_active_by_fingerprint(fingerprint)
             if existing is not None:
+                # NOTE (F2): severity / labels / annotations are PINNED at first
+                # fire. Alertmanager severity escalation (warning -> critical)
+                # on the same fingerprint will NOT be reflected here — the
+                # re-fire event uses the row's stored severity. Operators
+                # tracking severity changes should ensure upstream produces
+                # distinct fingerprints per severity tier (e.g., include
+                # severity in the labels hashed by compute_fingerprint).
                 await alert_repo.update_last_seen(existing.id, ts)
                 event = AlertFiringEvent(
                     alert_id=existing.id,
                     fingerprint=fingerprint,
                     source_tool=existing.source_tool,
-                    severity=existing.severity.value,
+                    severity=existing.severity,
                     opened_at=existing.opened_at,
                     last_seen_at=ts,
                     labels=existing.labels,
@@ -187,6 +202,10 @@ async def ingest_alerts(
                     ts=ts,
                 )
             else:
+                # The full Alertmanager item payload (startsAt/endsAt/etc.)
+                # is preserved on the alert row so the operator can inspect
+                # it via GET /api/alerts/{id}; labels/annotations are also
+                # stashed inside payload for round-trip via _row_to_alert.
                 new_alert = Alert(
                     id="",  # repo allocates uuid7
                     fingerprint=fingerprint,
@@ -195,19 +214,20 @@ async def ingest_alerts(
                     status=AlertStatus.FIRING,
                     opened_at=ts,
                     last_seen_at=ts,
-                    payload={
-                        "labels": labels,
-                        "annotations": annotations,
-                    },
+                    payload=json.loads(payload_json),
                     labels=labels,
                     annotations=annotations,
                 )
+                # F8: explicit payload_json kept here because the wire payload
+                # (startsAt/endsAt/generatorURL/...) is richer than what we
+                # synthesise from labels/annotations alone. Pass-through keeps
+                # exact round-trip; remove once payload schema is enforced.
                 new_id = await alert_repo.insert_firing(new_alert, payload_json=payload_json)
                 event = AlertFiringEvent(
                     alert_id=new_id,
                     fingerprint=fingerprint,
                     source_tool=source_tool,
-                    severity=severity.value,
+                    severity=severity,
                     opened_at=ts,
                     last_seen_at=ts,
                     labels=labels,
@@ -234,7 +254,7 @@ async def ingest_alerts(
                 alert_id=existing.id,
                 fingerprint=fingerprint,
                 source_tool=existing.source_tool,
-                severity=existing.severity.value,
+                severity=existing.severity,
                 resolved_at=ts,
                 labels=existing.labels,
                 annotations=existing.annotations,
@@ -271,14 +291,17 @@ async def list_alerts(  # noqa: PLR0913 -- explicit Query parameters
     "more available" via ``next_cursor``. Adding a separate COUNT(*) would
     double the per-request DB cost for negligible operator value.
     """
-    items, next_cursor = await alert_repo.list_alerts(
-        status=status,
-        severity=severity,
-        source_tool=source_tool,
-        fingerprint=fingerprint,
-        limit=limit,
-        cursor=cursor,
-    )
+    try:
+        items, next_cursor = await alert_repo.list_alerts(
+            status=status,
+            severity=severity,
+            source_tool=source_tool,
+            fingerprint=fingerprint,
+            limit=limit,
+            cursor=cursor,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"invalid cursor: {exc}") from exc
     return AlertListResponse(
         items=[_alert_to_view(a) for a in items],
         next_cursor=next_cursor,

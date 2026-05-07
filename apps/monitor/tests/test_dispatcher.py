@@ -8,6 +8,7 @@ import pytest
 import structlog
 
 from homelab_monitor.kernel.alerts.events import AlertFiringEvent
+from homelab_monitor.kernel.alerts.types import Severity
 from homelab_monitor.kernel.dispatch.channels.inproc_dashboard import InprocDashboardChannel
 from homelab_monitor.kernel.dispatch.dispatcher import AlertDispatcher
 from homelab_monitor.kernel.dispatch.types import AlertEvent
@@ -19,7 +20,7 @@ def _make_firing_event() -> AlertFiringEvent:
         alert_id="aid-1",
         fingerprint="fp-1",
         source_tool="alertmanager",
-        severity="warning",
+        severity=Severity.WARNING,
         opened_at="2026-05-07T00:00:00+00:00",
         last_seen_at="2026-05-07T00:00:00+00:00",
         labels={"alertname": "Foo"},

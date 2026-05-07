@@ -27,6 +27,8 @@ from uuid import uuid4
 
 from structlog.contextvars import bound_contextvars
 
+from homelab_monitor.kernel.alerts.events import AlertResolvedEvent
+from homelab_monitor.kernel.alerts.fingerprinting import quarantine_fingerprint
 from homelab_monitor.kernel.db.time import utc_now_iso
 from homelab_monitor.kernel.events import (
     EventSink,
@@ -112,6 +114,44 @@ def _process_runner(
     # introduce a separate ProcessCollector Protocol with the right signature.
     result = asyncio.run(collector.run(ctx))  # type: ignore[arg-type]  # pragma: no cover
     return result, ctx.metrics.drain()  # pragma: no cover
+
+
+_LAST_REASON_PREFIX = "(last reason: "
+_LAST_REASON_SUFFIX = ")"
+
+
+def _extract_last_reason(quarantine_reason: str) -> str | None:
+    """Extract the bare failure-kind from a FailureBudget quarantine reason string.
+
+    ``FailureBudget.record_failure`` formats the reason as::
+
+        "consecutive failures: <n> (last reason: <kind>)"
+
+    where ``<kind>`` is one of ``timeout`` / ``exception`` / ``result_error``.
+    This helper returns ``<kind>`` so the scheduler can recompute the
+    quarantine fingerprint without depending on json_extract scans over
+    scheduler-sourced rows.
+
+    Returns ``None`` if the reason string does not match the expected format
+    (defensive: never raise from inside the resolve path).
+
+    NOTE: Uses str.rfind to extract the LAST occurrence of "(last reason: ".
+    Callers in this codebase pass kind values from a known set
+    (timeout/exception/result_error/group_busy/quarantined), so the inner
+    content cannot itself contain the marker. If a future caller passes a
+    free-form reason, rfind would extract the inner-most occurrence — not
+    necessarily what's intended.
+    """
+    start = quarantine_reason.rfind(_LAST_REASON_PREFIX)
+    if start < 0:
+        return None
+    inner_start = start + len(_LAST_REASON_PREFIX)
+    if not quarantine_reason.endswith(_LAST_REASON_SUFFIX):
+        return None
+    inner_end = len(quarantine_reason) - len(_LAST_REASON_SUFFIX)
+    if inner_end <= inner_start:
+        return None
+    return quarantine_reason[inner_start:inner_end]
 
 
 class Scheduler:
@@ -277,26 +317,40 @@ class Scheduler:
         if self._failure_budget is None:
             msg = "Scheduler was constructed without a FailureBudget"
             raise RuntimeError(msg)
-        await self._failure_budget.clear_quarantine(name, by=by)
 
+        # Reorder per F4/F5: resolve the alert FIRST (using the still-set
+        # quarantine_reason to compute the fingerprint), THEN clear the
+        # budget. mark_resolved is idempotent (rowcount-guarded), so an
+        # operator retry after a partial failure does not double-resolve
+        # or double-audit. Lookup by fingerprint (cheap, indexed) instead
+        # of json_extract scan over scheduler-sourced rows.
         if self._alert_repo is not None and self._alert_dispatcher is not None:
-            active = await self._alert_repo.find_active_quarantine_alert(name)
-            if active is not None:
-                from homelab_monitor.kernel.alerts.events import AlertResolvedEvent  # noqa: PLC0415
+            qstate = self._failure_budget.quarantine_state(name)
+            if qstate is not None and qstate.quarantine_reason is not None:
+                # Reason format from FailureBudget.record_failure:
+                #   "consecutive failures: <n> (last reason: <kind>)"
+                # _emit_quarantine_alert was given the bare <kind> as reason,
+                # so we extract it back out for fingerprinting.
+                last_reason = _extract_last_reason(qstate.quarantine_reason)
+                if last_reason is not None:
+                    fp = quarantine_fingerprint(name, last_reason)
+                    active = await self._alert_repo.find_active_by_fingerprint(fp)
+                    if active is not None:
+                        ts = utc_now_iso()
+                        await self._alert_repo.mark_resolved(active.id, ts)
+                        event = AlertResolvedEvent(
+                            alert_id=active.id,
+                            fingerprint=active.fingerprint,
+                            source_tool="scheduler",
+                            severity=active.severity,
+                            resolved_at=ts,
+                            labels=active.labels,
+                            annotations=active.annotations,
+                            ts=ts,
+                        )
+                        await self._alert_dispatcher.dispatch(event)
 
-                ts = utc_now_iso()
-                await self._alert_repo.mark_resolved(active.id, ts)
-                event = AlertResolvedEvent(
-                    alert_id=active.id,
-                    fingerprint=active.fingerprint,
-                    source_tool="scheduler",
-                    severity=active.severity.value,
-                    resolved_at=ts,
-                    labels=active.labels,
-                    annotations=active.annotations,
-                    ts=ts,
-                )
-                await self._alert_dispatcher.dispatch(event)
+        await self._failure_budget.clear_quarantine(name, by=by)
 
     async def request_immediate_run(self, name: str, trigger: TriggerContext) -> str:
         """Enqueue an out-of-band run for ``name``. Returns the future tick_id.

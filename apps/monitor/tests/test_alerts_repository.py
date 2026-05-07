@@ -72,6 +72,20 @@ async def test_insert_firing_creates_row_and_audit(repo: SqliteRepository) -> No
 
 
 @pytest.mark.asyncio
+async def test_insert_firing_derives_payload_json_when_none(repo: SqliteRepository) -> None:
+    """When payload_json=None, insert_firing serialises alert.payload internally."""
+    ar = AlertRepository(repo)
+    alert, _ = _make_alert(fingerprint="fp-default-pj")
+    # Pass NO payload_json; expect repo to derive it from alert.payload
+    new_id = await ar.insert_firing(alert)
+
+    fetched = await ar.get_alert_by_id(new_id)
+    assert fetched is not None
+    # Verify payload round-trips through serialization
+    assert fetched.payload == alert.payload
+
+
+@pytest.mark.asyncio
 async def test_find_active_by_fingerprint_returns_unresolved(repo: SqliteRepository) -> None:
     ar = AlertRepository(repo)
     alert, pj = _make_alert(fingerprint="fp-B")
@@ -126,6 +140,48 @@ async def test_mark_resolved_sets_status_and_resolved_at(repo: SqliteRepository)
     assert row is not None
     assert row[0] == "resolved"
     assert row[1] == "2026-05-07T03:00:00+00:00"
+
+
+@pytest.mark.asyncio
+async def test_mark_resolved_idempotent_does_not_double_audit(repo: SqliteRepository) -> None:
+    """Calling mark_resolved twice on the same alert does not double-write audit rows.
+
+    The second call is a no-op (rowcount=0) because the alert is already resolved.
+    This tests the coverage branch at repository.py:295 (if result.rowcount > 0).
+    """
+    ar = AlertRepository(repo)
+    alert, pj = _make_alert(fingerprint="fp-idempotent")
+    new_id = await ar.insert_firing(alert, pj)
+
+    # First call: marks as resolved, writes audit row
+    await ar.mark_resolved(new_id, "2026-05-07T03:00:00+00:00")
+
+    # Count audit rows for this alert
+    audit_count_1 = await repo.fetch_one(
+        text("SELECT COUNT(*) FROM audit_log WHERE what = 'alert.resolve' AND after_json LIKE :id"),
+        {"id": f'%"{new_id}"%'},
+    )
+    assert audit_count_1 is not None
+    assert audit_count_1[0] == 1
+
+    # Second call: no-op, should NOT write another audit row
+    await ar.mark_resolved(new_id, "2026-05-07T04:00:00+00:00")
+
+    audit_count_2 = await repo.fetch_one(
+        text("SELECT COUNT(*) FROM audit_log WHERE what = 'alert.resolve' AND after_json LIKE :id"),
+        {"id": f'%"{new_id}"%'},
+    )
+    assert audit_count_2 is not None
+    assert audit_count_2[0] == 1  # Still 1, not 2
+
+    # Verify the row was not modified by the no-op second call
+    row = await repo.fetch_one(
+        text("SELECT status, resolved_at FROM alerts WHERE id = :i"),
+        {"i": new_id},
+    )
+    assert row is not None
+    assert row[0] == "resolved"
+    assert row[1] == "2026-05-07T03:00:00+00:00"  # First call's timestamp
 
 
 @pytest.mark.asyncio
@@ -403,3 +459,19 @@ def test_cannot_deserialize_invalid_severity() -> None:
             labels={},
             annotations={},
         )
+
+
+@pytest.mark.asyncio
+async def test_list_alerts_malformed_cursor_raises_value_error(
+    repo: SqliteRepository,
+) -> None:
+    """F16: a cursor missing the ``|`` separator (or with empty halves) raises ValueError.
+
+    The route handler is responsible for mapping ``ValueError`` to HTTP 400;
+    this test pins the repository contract.
+    """
+    ar = AlertRepository(repo)
+
+    for bad in ("not-a-cursor", "|", "abc|", "|xyz"):
+        with pytest.raises(ValueError, match="invalid cursor format"):
+            await ar.list_alerts(cursor=bad)

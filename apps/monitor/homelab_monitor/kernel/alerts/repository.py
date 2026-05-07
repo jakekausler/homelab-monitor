@@ -15,6 +15,7 @@ from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.engine import Row
+from sqlalchemy.exc import IntegrityError
 
 from homelab_monitor.kernel.alerts.types import (
     Alert,
@@ -42,7 +43,17 @@ class AlertRepository:
 
     @staticmethod
     def _row_to_alert(row: Row[Any]) -> Alert:
-        """Hydrate a SELECT * row (named-tuple style) into an :class:`Alert`."""
+        """Hydrate a SELECT * row (named-tuple style) into an :class:`Alert`.
+
+        F12 invariant: post migration 0005, the behavioural columns
+        (``source_tool``, ``severity``, ``status``, ``opened_at``,
+        ``last_seen_at``, ``payload_json``) are written by every insert path
+        and so are effectively NOT NULL despite being declared nullable in
+        the schema (the migration left them nullable to avoid touching
+        SCAFFOLDING-stage stub rows). The defensive ``str(...)`` casts and
+        the ``"{}"`` fallback for ``payload_json`` exist purely so an old
+        stub row with NULLs cannot crash the hydrator.
+        """
         payload_text = str(row.payload_json) if row.payload_json is not None else "{}"
         payload = json.loads(payload_text)
         # Labels and annotations are stashed inside the payload JSON for
@@ -71,14 +82,21 @@ class AlertRepository:
     # ----- queries -----
 
     async def find_active_by_fingerprint(self, fingerprint: str) -> Alert | None:
-        """Return the most-recent unresolved alert for ``fingerprint``, if any."""
+        """Return the most-recent firing alert for ``fingerprint``, if any.
+
+        Filters on ``status = 'firing'`` (NOT ``resolved_at IS NULL``) so the
+        query can use the ``ux_alerts_fingerprint_firing`` unique partial index
+        added in migration 0005. The two predicates are equivalent under our
+        invariant (firing iff resolved_at IS NULL), but the status form is
+        index-friendly.
+        """
         row = await self._repo.fetch_one(
             text(
                 "SELECT id, fingerprint, source_tool, severity, status, "
                 "opened_at, last_seen_at, resolved_at, ack_at, ack_by, "
                 "runbook_id, payload_json "
                 "FROM alerts "
-                "WHERE fingerprint = :fp AND resolved_at IS NULL "
+                "WHERE fingerprint = :fp AND status = 'firing' "
                 "ORDER BY opened_at DESC LIMIT 1"
             ),
             {"fp": fingerprint},
@@ -133,8 +151,11 @@ class AlertRepository:
         if fingerprint is not None:
             clauses.append("fingerprint = :fingerprint")
             params["fingerprint"] = fingerprint
-        if cursor is not None:
-            cur_opened, cur_id = cursor.split("|", 1)
+        if cursor:
+            parts = cursor.split("|", 1)
+            if len(parts) != 2 or not parts[0] or not parts[1]:  # noqa: PLR2004
+                raise ValueError("invalid cursor format")
+            cur_opened, cur_id = parts
             # Strict tuple comparison: rows older than the cursor row.
             clauses.append(
                 "(opened_at < :cur_opened OR (opened_at = :cur_opened AND id < :cur_id))"
@@ -161,48 +182,75 @@ class AlertRepository:
 
     # ----- mutations -----
 
-    async def insert_firing(self, alert: Alert, payload_json: str) -> str:
+    async def insert_firing(self, alert: Alert, payload_json: str | None = None) -> str:
         """Insert a new firing alert atomically with its audit row.
 
         Returns the newly-allocated ``id``. The supplied ``alert.id`` is
         ignored; this method always allocates a fresh ``uuid7()``. The row is
-        stored with ``status='firing'``, ``opened_at = last_seen_at = now``,
-        ``payload_json`` as supplied (the caller is responsible for encoding
-        labels and annotations into that JSON so :meth:`_row_to_alert` can
-        rehydrate them).
+        stored with ``status='firing'``, ``opened_at = last_seen_at = now``.
+
+        ``payload_json`` is OPTIONAL (F8): if omitted, it is derived from
+        ``alert.payload`` via ``json.dumps(..., sort_keys=True,
+        separators=(",", ":"))``. Existing callers may still pass an
+        explicit ``payload_json`` for back-compat. New callers should pass
+        only the ``Alert`` and let the repository serialise.
+
+        The caller MUST ensure ``alert.payload`` contains
+        ``{"labels": ..., "annotations": ...}`` so ``_row_to_alert`` can
+        rehydrate them on read.
+
+        Race-safety (F1): two concurrent firing inserts of the same
+        fingerprint collide on the ``ux_alerts_fingerprint_firing`` unique
+        partial index (migration 0005). On collision (``IntegrityError``)
+        we re-read the winning row by fingerprint and bump its
+        ``last_seen_at``, returning that row's id. The caller therefore
+        observes the same end state as a sequential insert+update would have
+        produced — at most one firing row per fingerprint at all times.
         """
         new_id = uuid7()
         now = utc_now_iso()
-        async with self._repo.transaction() as conn:
-            await conn.execute(
-                text(
-                    "INSERT INTO alerts (id, fingerprint, source_tool, severity, "
-                    "status, opened_at, last_seen_at, payload_json, created_at) "
-                    "VALUES (:id, :fp, :st, :sev, :status, :opened, :last_seen, :pj, :created)"
-                ),
-                {
-                    "id": new_id,
-                    "fp": alert.fingerprint,
-                    "st": alert.source_tool,
-                    "sev": alert.severity.value,
-                    "status": AlertStatus.FIRING.value,
-                    "opened": now,
-                    "last_seen": now,
-                    "pj": payload_json,
-                    "created": now,
-                },
-            )
-            await insert_audit(
-                conn,
-                who="system",
-                what="alert.fire",
-                after={
-                    "alert_id": new_id,
-                    "fingerprint": alert.fingerprint,
-                    "source_tool": alert.source_tool,
-                    "severity": alert.severity.value,
-                },
-            )
+        if payload_json is None:
+            payload_json = json.dumps(alert.payload, sort_keys=True, separators=(",", ":"))
+        try:
+            async with self._repo.transaction() as conn:
+                await conn.execute(
+                    text(
+                        "INSERT INTO alerts (id, fingerprint, source_tool, severity, "
+                        "status, opened_at, last_seen_at, payload_json, created_at) "
+                        "VALUES (:id, :fp, :st, :sev, :status, :opened, :last_seen, :pj, :created)"
+                    ),
+                    {
+                        "id": new_id,
+                        "fp": alert.fingerprint,
+                        "st": alert.source_tool,
+                        "sev": alert.severity.value,
+                        "status": AlertStatus.FIRING.value,
+                        "opened": now,
+                        "last_seen": now,
+                        "pj": payload_json,
+                        "created": now,
+                    },
+                )
+                await insert_audit(
+                    conn,
+                    who="system",
+                    what="alert.fire",
+                    after={
+                        "alert_id": new_id,
+                        "fingerprint": alert.fingerprint,
+                        "source_tool": alert.source_tool,
+                        "severity": alert.severity.value,
+                    },
+                )
+        except IntegrityError:  # pragma: no cover
+            # Race-condition path: only triggers under genuine concurrent inserts
+            # which single-threaded pytest cannot reproduce. Find the winning row
+            # and bump its last_seen_at; return existing id, not new_id.
+            existing = await self.find_active_by_fingerprint(alert.fingerprint)
+            if existing is None:
+                raise
+            await self.update_last_seen(existing.id, now)
+            return existing.id
         return new_id
 
     async def update_last_seen(self, alert_id: str, ts: str) -> None:
@@ -224,22 +272,34 @@ class AlertRepository:
             )
 
     async def mark_resolved(self, alert_id: str, resolved_at: str) -> None:
-        """Mark the alert resolved (status=resolved, resolved_at=ts)."""
+        """Mark the alert resolved (status=resolved, resolved_at=ts).
+
+        Idempotent: only writes (and only audits) if the row is currently
+        firing. A repeat call on an already-resolved row is a no-op. This
+        also makes the unique partial index ``ux_alerts_fingerprint_firing``
+        safe under the F4 reorder (alert resolved BEFORE budget cleared);
+        a retry of ``Scheduler.clear_quarantine`` will not double-emit a
+        resolved event because rowcount==0 short-circuits the audit.
+        """
         async with self._repo.transaction() as conn:
-            await conn.execute(
-                text("UPDATE alerts SET status = :status, resolved_at = :rt WHERE id = :id"),
+            result = await conn.execute(
+                text(
+                    "UPDATE alerts SET status = :status, resolved_at = :rt "
+                    "WHERE id = :id AND status = 'firing'"
+                ),
                 {
                     "status": AlertStatus.RESOLVED.value,
                     "rt": resolved_at,
                     "id": alert_id,
                 },
             )
-            await insert_audit(
-                conn,
-                who="system",
-                what="alert.resolve",
-                after={"alert_id": alert_id, "resolved_at": resolved_at},
-            )
+            if result.rowcount > 0:
+                await insert_audit(
+                    conn,
+                    who="system",
+                    what="alert.resolve",
+                    after={"alert_id": alert_id, "resolved_at": resolved_at},
+                )
 
     # ----- outcomes -----
 
@@ -307,6 +367,13 @@ class AlertRepository:
 
         Does NOT change ``status`` — an acked alert may still be firing; ack
         is a separate axis from lifecycle.
+
+        F22 caveat: ``ack_by`` is a snapshot of the user.id at ack-time. The
+        FK to ``users.id`` (migration 0005) is RESTRICT/no action by default;
+        if a future stage allows user deletion, the FK either blocks deletion
+        or — if cascaded — leaves a dangling reference. The audit_log row
+        written here is the durable provenance trail; ``ack_by`` is a
+        convenience pointer, not the source of truth.
         """
         async with self._repo.transaction() as conn:
             await conn.execute(
@@ -321,11 +388,15 @@ class AlertRepository:
             )
 
     async def find_active_quarantine_alert(self, collector_name: str) -> Alert | None:
-        """Return the active (firing, unresolved) scheduler-sourced quarantine alert
-        for ``collector_name``, or ``None``.
+        """Return the active (firing) scheduler-sourced quarantine alert for ``collector_name``.
 
-        Used by ``Scheduler.clear_quarantine`` to find the row to mark resolved
-        without recomputing a fingerprint from a possibly-stale reason string.
+        FALLBACK PATH (F4): the primary clear_quarantine flow now looks up the
+        row by recomputing the quarantine fingerprint, which is index-friendly
+        (uses ``ux_alerts_fingerprint_firing``). This method is retained for
+        diagnostic / test use cases where the caller does not have the
+        original reason. It performs a ``json_extract`` scan and is therefore
+        O(n) over scheduler-sourced firing rows; do not use on the hot path.
+
         Filters on ``source_tool='scheduler' AND status='firing' AND
         json_extract(payload_json, '$.collector_name') = :name``.
         """
@@ -337,7 +408,6 @@ class AlertRepository:
                 "FROM alerts "
                 "WHERE source_tool = 'scheduler' "
                 "  AND status = 'firing' "
-                "  AND resolved_at IS NULL "
                 "  AND json_extract(payload_json, '$.collector_name') = :name "
                 "ORDER BY opened_at DESC LIMIT 1"
             ),

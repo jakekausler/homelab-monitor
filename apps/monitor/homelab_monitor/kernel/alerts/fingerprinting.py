@@ -39,6 +39,22 @@ def quarantine_fingerprint(collector_name: str, reason: str) -> str:
     (Spec B). The fingerprint MUST be deterministic so re-firings dedupe to
     the same row, but distinct (collector, reason) pairs MUST yield distinct
     fingerprints.
+
+    F19: serialise via JSON instead of colon-joined string so a
+    ``collector_name`` containing ``":"`` (legal in some user inputs)
+    cannot collide with a different ``(collector_name, reason)`` pair.
+    Compatibility note: this CHANGES the fingerprint format. STAGE-013's
+    alerts table is fresh, so no alert rows persist across the upgrade.
+    Subsequent stages that may persist alerts MUST run a one-shot
+    re-fingerprint migration if any quarantine alerts are in flight.
     """
-    payload = f"collector_quarantined:{collector_name}:{reason}".encode()
+    payload = json.dumps(
+        {
+            "alertname": "collector_quarantined",
+            "name": collector_name,
+            "reason": reason,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()

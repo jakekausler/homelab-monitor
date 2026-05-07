@@ -14,6 +14,7 @@ import structlog
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
+from homelab_monitor.kernel.alerts.repository import AlertRepository
 from homelab_monitor.kernel.db.repository import SqliteRepository
 from homelab_monitor.kernel.plugins import (
     CollectorConfig,
@@ -25,7 +26,10 @@ from homelab_monitor.kernel.plugins.base import BaseCollector, Collector
 from homelab_monitor.kernel.plugins.loader import LoadedCollector
 from homelab_monitor.kernel.plugins.types import CollectorResult, RunKind
 from homelab_monitor.kernel.scheduler.failure_budget import FailureBudget, QuarantineState
-from homelab_monitor.kernel.scheduler.scheduler import Scheduler
+from homelab_monitor.kernel.scheduler.scheduler import (
+    Scheduler,
+    _extract_last_reason,  # pyright: ignore[reportPrivateUsage]
+)
 from homelab_monitor.kernel.secrets.resolver import SyncSecretsResolver
 
 
@@ -530,3 +534,168 @@ async def test_scheduler_without_failure_budget_skips_quarantine_logic(
 
     assert row is not None
     assert row[0] == 0
+
+
+# ----- Tests for _extract_last_reason branches -----
+
+
+def test_extract_last_reason_valid_format() -> None:
+    """_extract_last_reason extracts kind from properly formatted quarantine reason."""
+    reason = "consecutive failures: 3 (last reason: timeout)"
+    result = _extract_last_reason(reason)
+    assert result == "timeout"
+
+
+def test_extract_last_reason_missing_prefix() -> None:
+    """_extract_last_reason returns None if prefix not found (line 140)."""
+    reason = "consecutive failures: 3"
+    result = _extract_last_reason(reason)
+    assert result is None
+
+
+def test_extract_last_reason_missing_suffix() -> None:
+    """_extract_last_reason returns None if suffix not found (line 143)."""
+    reason = "consecutive failures: 3 (last reason: timeout"
+    result = _extract_last_reason(reason)
+    assert result is None
+
+
+def test_extract_last_reason_empty_inner() -> None:
+    """_extract_last_reason returns None if inner content is empty (line 146)."""
+    reason = "consecutive failures: 3 (last reason: )"
+    result = _extract_last_reason(reason)
+    assert result is None
+
+
+# ----- Tests for Scheduler.clear_quarantine branch coverage -----
+
+
+@pytest.mark.asyncio
+async def test_clear_quarantine_without_alert_repo_or_dispatcher_skips(
+    repo_with_migrations: SqliteRepository,
+    logger: structlog.stdlib.BoundLogger,
+) -> None:
+    """Scheduler.clear_quarantine skips alert resolution if alert_repo or dispatcher is None.
+
+    Tests the branch at scheduler.py:320 (if self._alert_repo is not None and ...)
+    """
+    Cls = _make_collector("test_collector")
+    fake_collector = Cls()
+    config = CollectorConfig(name="test_collector")
+    loaded = [LoadedCollector(collector=fake_collector, config=config)]
+
+    budget = FailureBudget(repo_with_migrations, logger)
+    # Manually quarantine
+    budget._consecutive_failures["test_collector"] = 5  # pyright: ignore[reportPrivateUsage]
+    budget._quarantined["test_collector"] = QuarantineState(  # pyright: ignore[reportPrivateUsage]
+        consecutive_failures=5,
+        quarantined_at="2026-05-05T00:00:00Z",
+        quarantine_reason="consecutive failures: 5 (last reason: timeout)",
+    )
+
+    metrics = InMemoryMetricsWriter()
+    # Scheduler with alert_repo=None (alert_dispatcher is also None)
+    scheduler = Scheduler(
+        loaded,
+        _make_ctx_factory(metrics),
+        metrics,
+        failure_budget=budget,
+        alert_repo=None,
+        alert_dispatcher=None,
+    )
+
+    # This should not raise even though alert_repo is None
+    await scheduler.clear_quarantine("test_collector", by="alice")
+    assert budget.is_quarantined("test_collector") is False
+
+
+@pytest.mark.asyncio
+async def test_clear_quarantine_extract_last_reason_returns_none(
+    repo_with_migrations: SqliteRepository,
+    logger: structlog.stdlib.BoundLogger,
+) -> None:
+    """Scheduler.clear_quarantine skips resolution if _extract_last_reason returns None.
+
+    Tests the branch at scheduler.py:328 (if last_reason is not None)
+    """
+    from unittest.mock import AsyncMock  # noqa: PLC0415
+
+    Cls = _make_collector("test_collector")
+    fake_collector = Cls()
+    config = CollectorConfig(name="test_collector")
+    loaded = [LoadedCollector(collector=fake_collector, config=config)]
+
+    budget = FailureBudget(repo_with_migrations, logger)
+    budget._consecutive_failures["test_collector"] = 5  # pyright: ignore[reportPrivateUsage]
+    budget._quarantined["test_collector"] = QuarantineState(  # pyright: ignore[reportPrivateUsage]
+        consecutive_failures=5,
+        quarantined_at="2026-05-05T00:00:00Z",
+        quarantine_reason="malformed reason (no extraction possible)",
+    )
+
+    metrics = InMemoryMetricsWriter()
+    mock_repo = AsyncMock(spec=AlertRepository)
+    mock_dispatcher = AsyncMock()
+
+    scheduler = Scheduler(
+        loaded,
+        _make_ctx_factory(metrics),
+        metrics,
+        failure_budget=budget,
+        alert_repo=mock_repo,
+        alert_dispatcher=mock_dispatcher,
+    )
+
+    # clear_quarantine should complete without calling alert_repo.find_active_by_fingerprint
+    await scheduler.clear_quarantine("test_collector", by="alice")
+
+    # Verify find_active_by_fingerprint was NOT called (because last_reason was None)
+    mock_repo.find_active_by_fingerprint.assert_not_called()
+    assert budget.is_quarantined("test_collector") is False
+
+
+@pytest.mark.asyncio
+async def test_clear_quarantine_no_active_alert_found(
+    repo_with_migrations: SqliteRepository,
+    logger: structlog.stdlib.BoundLogger,
+) -> None:
+    """Scheduler.clear_quarantine skips resolution if no active alert is found.
+
+    Tests the branch at scheduler.py:331 (if active is not None)
+    """
+    from unittest.mock import AsyncMock  # noqa: PLC0415
+
+    Cls = _make_collector("test_collector")
+    fake_collector = Cls()
+    config = CollectorConfig(name="test_collector")
+    loaded = [LoadedCollector(collector=fake_collector, config=config)]
+
+    budget = FailureBudget(repo_with_migrations, logger)
+    budget._consecutive_failures["test_collector"] = 5  # pyright: ignore[reportPrivateUsage]
+    budget._quarantined["test_collector"] = QuarantineState(  # pyright: ignore[reportPrivateUsage]
+        consecutive_failures=5,
+        quarantined_at="2026-05-05T00:00:00Z",
+        quarantine_reason="consecutive failures: 5 (last reason: timeout)",
+    )
+
+    metrics = InMemoryMetricsWriter()
+    mock_repo = AsyncMock(spec=AlertRepository)
+    mock_repo.find_active_by_fingerprint.return_value = None  # No alert found
+    mock_dispatcher = AsyncMock()
+
+    scheduler = Scheduler(
+        loaded,
+        _make_ctx_factory(metrics),
+        metrics,
+        failure_budget=budget,
+        alert_repo=mock_repo,
+        alert_dispatcher=mock_dispatcher,
+    )
+
+    # clear_quarantine should complete without calling mark_resolved
+    await scheduler.clear_quarantine("test_collector", by="alice")
+
+    # Verify find_active_by_fingerprint was called but mark_resolved was NOT
+    mock_repo.find_active_by_fingerprint.assert_called_once()
+    mock_repo.mark_resolved.assert_not_called()
+    assert budget.is_quarantined("test_collector") is False

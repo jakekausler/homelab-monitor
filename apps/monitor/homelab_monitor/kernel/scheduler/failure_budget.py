@@ -27,7 +27,6 @@ Audit event names:
 
 from __future__ import annotations
 
-import json
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -301,8 +300,17 @@ class FailureBudget:
         - Computes ``quarantine_fingerprint(name, reason)``.
         - Looks up the active row by fingerprint:
           - found: bump ``last_seen_at``; reuse opened_at + alert_id.
-          - not found: insert a new firing row.
-        - Builds and dispatches an ``AlertFiringEvent``.
+          - not found: insert a new firing row. ``insert_firing`` is
+            race-safe: a concurrent insert of the same fingerprint is
+            collapsed to ``last_seen`` bump via the
+            ``ux_alerts_fingerprint_firing`` unique partial index (F1).
+
+        Note (F2): the dispatched ``AlertFiringEvent``'s severity, labels,
+        and annotations are pinned at FIRST fire of the fingerprint.
+        Re-fires from a different originating call site (e.g., escalation
+        from warning to critical on the same alertname+labels) will NOT be
+        reflected. Operators tracking severity changes should ensure
+        upstream produces distinct fingerprints per severity tier.
 
         Both ``self._alert_repo`` and ``self._dispatcher`` MUST be non-None
         when this method is called (caller's responsibility).
@@ -343,17 +351,15 @@ class FailureBudget:
                 labels=labels,
                 annotations=annotations,
             )
-            alert_id = await self._alert_repo.insert_firing(
-                new_alert,
-                payload_json=json.dumps(payload, sort_keys=True, separators=(",", ":")),
-            )
+            # F8: payload_json derived from alert.payload by the repo.
+            alert_id = await self._alert_repo.insert_firing(new_alert)
             opened_at = ts
 
         event = AlertFiringEvent(
             alert_id=alert_id,
             fingerprint=fp,
             source_tool="scheduler",
-            severity=Severity.WARNING.value,
+            severity=Severity.WARNING,
             opened_at=opened_at,
             last_seen_at=ts,
             labels=labels,
