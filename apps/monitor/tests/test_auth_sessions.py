@@ -64,7 +64,8 @@ def test_verify_session_cookie_value_tampered_hmac() -> None:
     cookie_val = make_session_cookie_value(session_id, master_key)
     # Flip one character in the HMAC part (after the dot)
     parts = cookie_val.split(".")
-    tampered_hmac = "a" + parts[1][1:]
+    # Flip to a guaranteed-different hex char so the tamper is never a no-op.
+    tampered_hmac = ("b" if parts[1][0] == "a" else "a") + parts[1][1:]
     tampered_val = f"{parts[0]}.{tampered_hmac}"
     result = verify_session_cookie_value(tampered_val, master_key)
     assert result is None
@@ -77,7 +78,8 @@ def test_verify_session_cookie_value_tampered_session_id() -> None:
     cookie_val = make_session_cookie_value(session_id, master_key)
     # Flip one character in the session_id part (before the dot)
     parts = cookie_val.split(".")
-    tampered_sid = "a" + parts[0][1:]
+    # Flip to a guaranteed-different hex char so the tamper is never a no-op.
+    tampered_sid = ("b" if parts[0][0] == "a" else "a") + parts[0][1:]
     tampered_val = f"{tampered_sid}.{parts[1]}"
     result = verify_session_cookie_value(tampered_val, master_key)
     assert result is None

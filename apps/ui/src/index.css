@@ -1,12 +1,62 @@
 @import 'tailwindcss';
 
 @theme {
+  /* base */
   --color-background: #0b0d10;
   --color-foreground: #e4e7ec;
+
+  /* surfaces */
+  --color-card: #11161c;
+  --color-card-foreground: #e4e7ec;
+  --color-popover: #11161c;
+  --color-popover-foreground: #e4e7ec;
+  --color-muted: #1b2129;
+  --color-muted-foreground: #94a1b2;
+  --color-accent: #1f2937;
+  --color-accent-foreground: #e4e7ec;
+  --color-sidebar: #0d1117;
+
+  /* interactive */
+  --color-primary: #60a5fa;
+  --color-primary-foreground: #0b0d10;
+  --color-secondary: #1f2937;
+  --color-secondary-foreground: #e4e7ec;
+  --color-destructive: #ef4444;
+  --color-destructive-foreground: #fff5f5;
+
+  /* form */
+  --color-border: #1f2937;
+  --color-input: #273140;
+  --color-ring: #60a5fa;
+
+  /* status */
+  --color-status-info: #38bdf8;
+  --color-status-success: #34d399;
+  --color-status-warning: #fbbf24;
+  --color-status-critical: #f87171;
 }
 
 :root {
   color-scheme: dark;
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+  --color-background: #f8fafc;
+  --color-foreground: #0f172a;
+  --color-card: #ffffff;
+  --color-card-foreground: #0f172a;
+  --color-popover: #ffffff;
+  --color-popover-foreground: #0f172a;
+  --color-muted: #f1f5f9;
+  --color-muted-foreground: #475569;
+  --color-accent: #e2e8f0;
+  --color-accent-foreground: #0f172a;
+  --color-sidebar: #ffffff;
+  --color-secondary: #e2e8f0;
+  --color-secondary-foreground: #0f172a;
+  --color-border: #e2e8f0;
+  --color-input: #cbd5e1;
 }
 
 @layer base {

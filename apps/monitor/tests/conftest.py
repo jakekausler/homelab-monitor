@@ -24,6 +24,13 @@ from homelab_monitor.kernel.db.migrations import alembic_upgrade_head
 from homelab_monitor.kernel.db.repository import SqliteRepository
 from homelab_monitor.kernel.secrets.repository import AsyncSecretsRepository
 
+# Re-export the uvicorn fixture so tests can request it without importing
+# from the helper module directly.
+from ._uvicorn_fixture import (  # noqa: F401  -- pytest fixture re-export
+    UvicornFixtureValue,  # pyright: ignore[reportUnusedImport]
+    uvicorn_server,  # pyright: ignore[reportUnusedImport]
+)
+
 TEST_USERNAME = "testuser"
 TEST_PASSWORD = "testpassword123"
 

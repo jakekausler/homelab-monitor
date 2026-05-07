@@ -42,3 +42,10 @@ repos:
         entry: bash scripts/export-openapi.sh
         files: ^apps/monitor/homelab_monitor/kernel/api/.*\.py$
         pass_filenames: false
+
+      - id: generate-ui-types
+        name: generate UI types from openapi.json
+        language: system
+        entry: bash scripts/generate-ui-types.sh
+        files: ^packages/shared-types/openapi\.json$
+        pass_filenames: false

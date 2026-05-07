@@ -1,15 +1,19 @@
-"""Request/response middleware for structured logging, request IDs, and auth resolution."""
+"""Request/response middleware for structured logging, request IDs, and auth resolution.
+
+These are pure ASGI callables (not Starlette ``BaseHTTPMiddleware``), because
+``BaseHTTPMiddleware`` buffers streaming response bodies and breaks SSE
+(``/api/events``). See STAGE-001-014 for context.
+"""
 
 from __future__ import annotations
 
 import time
 import uuid
-from collections.abc import Awaitable, Callable
 
 import structlog
-from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.datastructures import MutableHeaders
 from starlette.requests import Request
-from starlette.responses import Response
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from homelab_monitor.kernel.auth.api_tokens import hash_token
 from homelab_monitor.kernel.auth.repository import AuthRepository
@@ -36,27 +40,39 @@ AUTH_EXEMPT_PATHS = frozenset(
 SESSION_COOKIE_NAME = "homelab_monitor_session"
 
 
-class RequestIdMiddleware(BaseHTTPMiddleware):
+class RequestIdMiddleware:
     """Generate or validate X-Request-Id header and bind to structlog context.
 
+    Pure-ASGI middleware (not ``BaseHTTPMiddleware``) so streaming responses
+    pass through unbuffered. See module docstring.
+
     Reads X-Request-Id if present (accepts both 32-char hex and 36-char
-    canonical UUID `8-4-4-4-12`), normalizes to 32-char hex internally and
+    canonical UUID ``8-4-4-4-12``), normalizes to 32-char hex internally and
     in responses. If absent or unparseable, generates a fresh uuid4 hex.
 
-    Binds request_id to structlog.contextvars for the duration of the
-    request, and unbinds it after the response completes (no cross-request
-    leakage). Sets X-Request-Id response header.
+    Binds request_id to ``structlog.contextvars`` for the duration of the
+    request, and resets the binding after the response completes (no
+    cross-request leakage). Sets X-Request-Id response header on the
+    ``http.response.start`` message via a wrapped ``send``.
 
     Why 32-char hex in responses: simpler grep on log lines; clients that
     sent canonical UUIDs see them echoed in 32-char form (acceptable per
     RFC 4122 — the UUID value is the same).
     """
 
-    async def dispatch(
-        self, request: Request, call_next: Callable[..., Awaitable[Response]]
-    ) -> Response:
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
         # Read or generate request_id. Accept both 32-char hex (uuid4().hex)
         # and 36-char canonical UUID (8-4-4-4-12). Normalize to hex32.
+        # Headers built via scope= mutates scope["headers"] to a list, which
+        # downstream code is allowed to assume.
+        request = Request(scope)
         raw = request.headers.get("X-Request-Id", "").strip().lower()
         request_id: str | None = None
         if raw:
@@ -68,31 +84,62 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
         if request_id is None:
             request_id = uuid.uuid4().hex
 
-        # Store on request for downstream access
-        request.state.request_id = request_id
+        # Store on scope state so downstream Request.state.request_id resolves.
+        # Starlette's Request.state property is a State proxy backed by
+        # scope["state"], so writing through the dict here is equivalent to
+        # request.state.request_id = ... (verified in starlette/requests.py).
+        scope.setdefault("state", {})
+        scope["state"]["request_id"] = request_id
 
-        # Bind for the duration of this request only — unbind afterward to
+        # Bind for the duration of this request only — reset afterward to
         # prevent leakage between requests sharing a task context.
         tokens = structlog.contextvars.bind_contextvars(request_id=request_id)
+
+        async def send_wrapper(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                # Set X-Request-Id response header on the start message.
+                # MutableHeaders(scope=message) mutates message["headers"] to
+                # a list and lets us set the header in place before we
+                # forward the message.
+                headers = MutableHeaders(scope=message)
+                headers["X-Request-Id"] = request_id
+            await send(message)
+
         try:
-            response = await call_next(request)
+            await self.app(scope, receive, send_wrapper)
         finally:
             structlog.contextvars.reset_contextvars(**tokens)
 
-        # Set response header
-        response.headers["X-Request-Id"] = request_id
-        return response
 
+class AccessLogMiddleware:
+    """Log a structured JSON entry per request: method, path, status, duration, auth.
 
-class AccessLogMiddleware(BaseHTTPMiddleware):
-    """Log structured JSON entry for each request (method, path, status, duration, auth)."""
+    Pure-ASGI middleware (not ``BaseHTTPMiddleware``). Captures the response
+    status from the ``http.response.start`` message via a wrapped ``send``,
+    and emits the log on response completion (or on exception, with
+    ``status=0`` and ``exception=True``).
+    """
 
-    async def dispatch(
-        self, request: Request, call_next: Callable[..., Awaitable[Response]]
-    ) -> Response:
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        request = Request(scope)
         start = time.perf_counter()
+        status_holder: dict[str, int] = {"status": 0}
+
+        async def send_wrapper(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                # ASGI guarantees status is an int on http.response.start.
+                status_holder["status"] = int(message.get("status", 0))
+            await send(message)
+
         try:
-            response = await call_next(request)
+            await self.app(scope, receive, send_wrapper)
         except Exception:
             duration_ms = round((time.perf_counter() - start) * 1000, 2)
             log = structlog.get_logger()
@@ -107,18 +154,18 @@ class AccessLogMiddleware(BaseHTTPMiddleware):
                 auth=_auth_log_field(request),
             )
             raise
+
         duration_ms = round((time.perf_counter() - start) * 1000, 2)
         log = structlog.get_logger()
         log.info(
             "http.request",
             method=request.method,
             path=request.url.path,
-            status=response.status_code,
+            status=status_holder["status"],
             duration_ms=duration_ms,
             query_count=len(request.query_params),
             auth=_auth_log_field(request),
         )
-        return response
 
 
 def _auth_log_field(request: Request) -> str:
@@ -145,10 +192,15 @@ def _auth_log_field(request: Request) -> str:
     return "unauthenticated"
 
 
-class AuthMiddleware(BaseHTTPMiddleware):
-    """Resolve session cookie OR API token; populate request.state.
+class AuthMiddleware:
+    """Resolve session cookie OR API token; populate ``request.state``.
 
-    NEVER enforces. Route-level `Depends(require_*)` handles enforcement.
+    Pure-ASGI middleware (not ``BaseHTTPMiddleware``). Writes through
+    ``scope["state"]`` so downstream FastAPI dependencies that access
+    ``request.state.*`` see the resolved values.
+
+    NEVER enforces. Route-level ``Depends(require_*)`` handles enforcement.
+
     Sets:
         - request.state.user (User | None)
         - request.state.user_id (int | None)
@@ -158,20 +210,31 @@ class AuthMiddleware(BaseHTTPMiddleware):
         - request.state.auth_kind ("session" | "token" | "unauthenticated")
     """
 
-    async def dispatch(
-        self, request: Request, call_next: Callable[..., Awaitable[Response]]
-    ) -> Response:
-        # Initialize state defaults so dependencies can rely on attribute presence
-        request.state.user = None
-        request.state.user_id = None
-        request.state.session = None
-        request.state.token = None
-        request.state.token_name = None
-        request.state.auth_kind = "unauthenticated"
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        # Initialize state defaults so dependencies can rely on attribute
+        # presence. RequestIdMiddleware (the innermost wrapper, runs first)
+        # already created scope["state"], but use setdefault for safety.
+        state = scope.setdefault("state", {})
+        state["user"] = None
+        state["user_id"] = None
+        state["session"] = None
+        state["token"] = None
+        state["token_name"] = None
+        state["auth_kind"] = "unauthenticated"
+
+        request = Request(scope)
 
         # On exempt paths, skip the (cheap) DB lookups entirely.
         if request.url.path in AUTH_EXEMPT_PATHS:
-            return await call_next(request)
+            await self.app(scope, receive, send)
+            return
 
         # Auth precedence (locked design D2):
         #   1. Authorization: Bearer <token>  → API token (CSRF-IMMUNE)
@@ -191,7 +254,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         elif (cookie_val := request.cookies.get(SESSION_COOKIE_NAME)) is not None:
             await self._resolve_session(request, cookie_val)
 
-        return await call_next(request)
+        await self.app(scope, receive, send)
 
     @staticmethod
     async def _resolve_token(request: Request, plaintext: str) -> None:

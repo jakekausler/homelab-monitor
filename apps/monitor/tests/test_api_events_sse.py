@@ -22,6 +22,8 @@ from homelab_monitor.kernel.api.sse import (  # pyright: ignore[reportPrivateUsa
 )
 from homelab_monitor.kernel.events import SchedulerTickEvent, make_tick_id
 
+from ._uvicorn_fixture import UvicornFixtureValue
+
 # ---------------------------------------------------------------------------
 # Direct broker tests (not through HTTP)
 # ---------------------------------------------------------------------------
@@ -240,93 +242,69 @@ async def test_sse_broker_no_skip_seq_numbers_in_replay(broker: SseBroker) -> No
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    reason="BaseHTTPMiddleware buffers streaming responses; HTTP-SSE coverage deferred. "
-    "Broker logic is fully covered by 7 passing unit tests in this same file. "
-    "Fix requires migrating RequestIdMiddleware/AccessLogMiddleware/AuthMiddleware to"
-    "pure ASGI callables (deferred to STAGE-001-014 or follow-up).",
-    strict=False,
-)
 @pytest.mark.asyncio
 async def test_sse_http_endpoint_smoke(
-    db_path: Path,
-    db_url: str,
-    monkeypatch: pytest.MonkeyPatch,
-    master_key: bytes,
+    uvicorn_server: UvicornFixtureValue,
 ) -> None:
-    """Subscribe via /api/events, publish a tick, assert event delivered with correct format."""
-    monkeypatch.setenv("HOMELAB_MONITOR_DB_URL", db_url)
-    monkeypatch.setenv("HOMELAB_MONITOR_MASTER_KEY", base64.b64encode(master_key).decode())
-    monkeypatch.setenv("HOMELAB_MONITOR_HTTPS_ONLY_COOKIES", "false")
-    monkeypatch.setenv("HOMELAB_MONITOR_BCRYPT_COST", "4")
-    monkeypatch.setenv("HOMELAB_MONITOR_AUTO_MIGRATE", "1")
+    """Subscribe via /api/events over a real socket; trigger a tick; assert it arrives.
 
-    app = create_app(lifespan_enabled=True)
+    Runs uvicorn on an ephemeral port (NOT httpx.ASGITransport, which buffers
+    streaming responses). Triggers a tick by POSTing /api/collectors/noop/retry
+    rather than poking the broker directly — the broker lives on uvicorn's
+    event loop in a background thread and isn't reachable from here.
+    """
+    async with AsyncClient(base_url=uvicorn_server.base_url) as client:
+        # Login to obtain session + csrf cookies.
+        resp = await client.post(
+            "/api/auth/login",
+            json={
+                "username": uvicorn_server.username,
+                "password": uvicorn_server.password,
+            },
+        )
+        assert resp.status_code == 200  # noqa: PLR2004
 
-    async with app.router.lifespan_context(app):
-        # Create an authenticated client
-        auth_repo = app.state.auth_repo
-        from homelab_monitor.kernel.auth.passwords import hash_password  # noqa: PLC0415
+        csrf_token = client.cookies.get("homelab_monitor_csrf")
+        assert csrf_token is not None
+        csrf_headers = {"X-CSRF-Token": csrf_token}
 
-        await auth_repo.create_user("testuser", hash_password("testpassword123", cost=4))
+        async def subscribe_and_collect() -> list[str]:
+            events: list[str] = []
+            async with client.stream("GET", "/api/events") as stream_resp:
+                assert stream_resp.status_code == 200  # noqa: PLR2004
+                async for line in stream_resp.aiter_lines():
+                    if line:
+                        events.append(line)
+                    # event + data + id + blank line per event; collect until
+                    # we've seen at least one full event (>=3 non-blank lines).
+                    if len(events) >= 3:  # noqa: PLR2004
+                        break
+            return events
 
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            # Login to get session cookie
-            resp = await client.post(
-                "/api/auth/login",
-                json={"username": "testuser", "password": "testpassword123"},
-            )
-            assert resp.status_code == 200  # noqa: PLR2004
+        sub_task = asyncio.create_task(subscribe_and_collect())
 
-            # Start SSE subscription in background
-            async def subscribe_and_collect() -> list[str]:
-                events: list[str] = []
-                async with client.stream("GET", "/api/events") as resp:
-                    assert resp.status_code == 200  # noqa: PLR2004
-                    async for line in resp.aiter_lines():
-                        if line:
-                            events.append(line)
-                        if len(events) >= 9:  # noqa: PLR2004  # event + data + id + blank line per event
-                            break
-                return events
+        # Give the subscription a moment to register on the broker.
+        await asyncio.sleep(0.2)
 
-            sub_task = asyncio.create_task(subscribe_and_collect())
+        # Trigger a tick over HTTP (the broker is on uvicorn's loop, not
+        # ours). The noop collector is registered by uvicorn's lifespan.
+        retry_resp = await client.post(
+            "/api/collectors/noop/retry",
+            headers=csrf_headers,
+        )
+        assert retry_resp.status_code == 200  # noqa: PLR2004
 
-            # Give the subscription a moment to establish
-            await asyncio.sleep(0.1)
+        events = await asyncio.wait_for(sub_task, timeout=5.0)
 
-            # Publish a tick via the broker
-            tick_event = SchedulerTickEvent(
-                collector="test_col",
-                tick_id=make_tick_id(),
-                outcome="success",
-                duration_seconds=0.5,
-                ts="2026-05-05T20:57:00Z",
-            )
-            await app.state.broker.publish(tick_event)
+        # Parse the SSE format: event: ...\ndata: ...\nid: ...\n\n
+        assert len(events) >= 3  # noqa: PLR2004
+        event_line = next((e for e in events if e.startswith("event:")), None)
+        data_line = next((e for e in events if e.startswith("data:")), None)
+        id_line = next((e for e in events if e.startswith("id:")), None)
 
-            # Collect events
-            events = await asyncio.wait_for(sub_task, timeout=5.0)
-
-            # Parse the SSE format: event: ...\ndata: ...\nid: ...\n\n
-            assert len(events) >= 3  # noqa: PLR2004
-            # Check for magic value 9 (complete SSE event)
-            assert len(events) >= 9  # noqa: PLR2004  # noqa: PLR2004
-            # Find the event, data, and id lines
-            event_line = None
-            data_line = None
-            id_line = None
-            for _, line in enumerate(events):
-                if line.startswith("event:"):
-                    event_line = line
-                elif line.startswith("data:"):
-                    data_line = line
-                elif line.startswith("id:"):
-                    id_line = line
-
-            assert event_line == "event: collector.tick"
-            assert data_line is not None and data_line.startswith("data: {")
-            assert id_line is not None and id_line.startswith("id: ")
+        assert event_line == "event: collector.tick"
+        assert data_line is not None and data_line.startswith("data: {")
+        assert id_line is not None and id_line.startswith("id: ")
 
 
 @pytest.mark.asyncio
