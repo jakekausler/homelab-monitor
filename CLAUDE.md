@@ -70,6 +70,12 @@ epics/EPIC-XXX-name/STAGE-XXX-YYY.md
 - **Open-source-safe defaults** — generic public release defaults to A behavior on existing user scripts (observe, no edits). Host-specific overrides in the separate repo can be more aggressive.
 - **`nginx-configuator` is the actual directory name** at `/storage/programs/nginx-configuator/` (sic — not "configurator"). Do not "fix" the spelling.
 - **`uv run` working directory** — `uv run --directory apps/monitor <cmd>` runs the command WITH cwd set to `apps/monitor`, so any path arguments must be relative to that directory (e.g., `tests/test_db_migrations.py`, NOT `apps/monitor/tests/test_db_migrations.py`). The Makefile and pre-commit hooks both use this `--directory` form. When invoking `uv run` outside `make`, either match the same pattern or `cd apps/monitor && uv run <cmd>` (without `--directory`) and use repo-relative paths.
+- **Always operate from `/storage/programs/homelab-monitor`.** The bash tool's cwd persists across calls but can be implicitly reset by other tools acting on absolute paths.
+  - **Recovery rule (NON-NEGOTIABLE)**: When you find yourself in a different directory (e.g., `make verify` exits with `make: *** No rule to make target 'verify'`), recover by running `cd /storage/programs/homelab-monitor` AS A STAND-ALONE BASH CALL, with NO other command chained after `&&` or `;`. ONE bash call. ONE command. Then run your next command in a SEPARATE bash call. Do NOT combine `cd` with anything else.
+  - WRONG: `cd /storage/programs/homelab-monitor && make verify` — this chains and is forbidden as a recovery.
+  - RIGHT (recovery): `cd /storage/programs/homelab-monitor` (call 1, alone), then `make verify` (call 2, alone).
+  - For commands that NEED to run from a subdir (e.g., `cd apps/ui && pnpm exec prettier --write .`), chaining `cd subdir && <cmd>` IS allowed because the chain executes in a single shell that can return to the parent dir naturally. The forbidden pattern is specifically chaining `cd /storage/programs/homelab-monitor` (recovering to root) with anything else.
+  - Never `cd` deeper than the repo root for a duration spanning multiple bash calls. The cwd you leave behind persists, and the next call may find itself in the wrong place.
 
 ## Code Review Graph (CRG)
 

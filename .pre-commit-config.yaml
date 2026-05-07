@@ -43,6 +43,14 @@ repos:
         files: ^apps/monitor/homelab_monitor/kernel/api/.*\.py$
         pass_filenames: false
 
+      # NOTE: this hook regenerates apps/ui/src/api/schema.ts when
+      # packages/shared-types/openapi.json changes. The previous hook
+      # (openapi-export) regenerates openapi.json when kernel/api Python
+      # files change. Pre-commit is single-pass, so a commit that touches
+      # the kernel API will:
+      #   1. Trigger openapi-export, which UPDATES openapi.json (commit aborts; user re-stages)
+      #   2. Trigger generate-ui-types on re-commit (because openapi.json changed)
+      # i.e. the two-step flow takes 2 commits or one re-add cycle.
       - id: generate-ui-types
         name: generate UI types from openapi.json
         language: system

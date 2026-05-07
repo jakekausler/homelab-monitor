@@ -92,7 +92,7 @@ export function LoginPage() {
   }
 
   const onSubmit = form.handleSubmit((values) => {
-    // TODO(STAGE-001-XXX): wire `rememberMe` once /api/auth/login accepts it.
+    // TODO(EPIC-013): wire `rememberMe` once /api/auth/login accepts an extended-TTL parameter.
     login.mutate({
       username: values.username,
       password: values.password,
@@ -110,7 +110,12 @@ export function LoginPage() {
         </CardHeader>
         <form
           onSubmit={(e) => {
-            void onSubmit(e)
+            onSubmit(e).catch((err) => {
+              // TanStack Query surfaces errors via mutation state; this catch is
+              // defense-in-depth for unexpected synchronous-throw cases (e.g., zod
+              // schema misconfig) so they don't escape as unhandled rejections.
+              console.error('login submit unexpected error', err)
+            })
           }}
           noValidate
         >
@@ -120,7 +125,7 @@ export function LoginPage() {
               <Input
                 id="username"
                 autoComplete="username"
-                aria-invalid={form.formState.errors.username !== undefined}
+                aria-invalid={form.formState.errors.username !== undefined || undefined}
                 {...form.register('username')}
               />
               {form.formState.errors.username !== undefined && (
@@ -136,7 +141,7 @@ export function LoginPage() {
                   id="password"
                   type={showPassword ? 'text' : 'password'}
                   autoComplete="current-password"
-                  aria-invalid={form.formState.errors.password !== undefined}
+                  aria-invalid={form.formState.errors.password !== undefined || undefined}
                   className="pr-10"
                   {...form.register('password')}
                 />
@@ -156,7 +161,7 @@ export function LoginPage() {
               )}
             </div>
             <label className="flex items-center gap-2 text-sm text-muted-foreground">
-              <input type="checkbox" aria-label="Remember me" {...form.register('rememberMe')} />
+              <input type="checkbox" {...form.register('rememberMe')} />
               Remember me
             </label>
             {errorMessage !== null && (

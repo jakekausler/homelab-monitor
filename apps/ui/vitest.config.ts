@@ -2,8 +2,12 @@ import { mergeConfig } from 'vite'
 import { defineConfig } from 'vitest/config'
 import viteConfig from './vite.config'
 
+// vite.config.ts is a function (uses loadEnv) — resolve it for the vitest
+// context. `command: 'serve'` is correct since vitest does not run a build.
+const resolvedViteConfig = viteConfig({ mode: 'test', command: 'serve' })
+
 export default mergeConfig(
-  viteConfig,
+  resolvedViteConfig,
   defineConfig({
     test: {
       environment: 'jsdom',
@@ -27,7 +31,6 @@ export default mergeConfig(
           'src/test/**',
           'src/api/schema.ts',
           'src/components/ui/**',
-          'src/router.tsx',
           'src/routes/__root.tsx',
           'playwright/**',
           '**/*.test.{ts,tsx}',

@@ -3,15 +3,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { useSSE } from './sse'
 
+let fakeInstances: FakeEventSource[] = []
+
 class FakeEventSource {
-  static instances: FakeEventSource[] = []
   url: string
   listeners: Record<string, ((event: Event) => void)[]> = {}
   closed = false
 
   constructor(url: string) {
     this.url = url
-    FakeEventSource.instances.push(this)
+    fakeInstances.push(this)
   }
 
   addEventListener(name: string, fn: (event: Event) => void) {
@@ -51,7 +52,7 @@ function parser(event: MessageEvent<string>): TickPayload | null {
 }
 
 beforeEach(() => {
-  FakeEventSource.instances = []
+  fakeInstances = []
   vi.useFakeTimers()
 })
 
@@ -69,7 +70,7 @@ describe('useSSE', () => {
       }),
     )
     expect(result.current.status).toBe('connecting')
-    const src = FakeEventSource.instances[0]
+    const src = fakeInstances[0]
     expect(src).toBeDefined()
     if (src === undefined) throw new Error('no source')
 
@@ -98,7 +99,7 @@ describe('useSSE', () => {
         factory: (url) => new FakeEventSource(url) as unknown as EventSource,
       }),
     )
-    const first = FakeEventSource.instances[0]
+    const first = fakeInstances[0]
     if (first === undefined) throw new Error('no source')
     act(() => {
       first.emit('error')
@@ -108,7 +109,7 @@ describe('useSSE', () => {
       vi.advanceTimersByTime(500)
       await Promise.resolve()
     })
-    expect(FakeEventSource.instances.length).toBe(2)
+    expect(fakeInstances.length).toBe(2)
   })
 
   it('reconnect() resets failure counter and forces immediate reopen', () => {
@@ -119,7 +120,7 @@ describe('useSSE', () => {
         factory: (url) => new FakeEventSource(url) as unknown as EventSource,
       }),
     )
-    const first = FakeEventSource.instances[0]
+    const first = fakeInstances[0]
     if (first === undefined) throw new Error('no source')
     act(() => {
       first.emit('error')
@@ -129,7 +130,7 @@ describe('useSSE', () => {
       result.current.reconnect()
     })
     expect(result.current.failureCount).toBe(0)
-    expect(FakeEventSource.instances.length).toBeGreaterThanOrEqual(2)
+    expect(fakeInstances.length).toBeGreaterThanOrEqual(2)
   })
 
   it('closes existing source and clears timer on unmount', () => {
@@ -140,7 +141,7 @@ describe('useSSE', () => {
         factory: (url) => new FakeEventSource(url) as unknown as EventSource,
       }),
     )
-    const first = FakeEventSource.instances[0]
+    const first = fakeInstances[0]
     if (first === undefined) throw new Error('no source')
 
     // Emit error to schedule a backoff timer (failureCount becomes 1)
@@ -156,7 +157,7 @@ describe('useSSE', () => {
       vi.advanceTimersByTime(1000)
     })
     // Only the initial source was ever created
-    expect(FakeEventSource.instances.length).toBe(1)
+    expect(fakeInstances.length).toBe(1)
     expect(first.closed).toBe(true)
   })
 
@@ -168,26 +169,26 @@ describe('useSSE', () => {
         factory: (url) => new FakeEventSource(url) as unknown as EventSource,
       }),
     )
-    const first = FakeEventSource.instances[0]
+    const first = fakeInstances[0]
     if (first === undefined) throw new Error('no source')
 
     // Schedule a backoff timer
     act(() => {
       first.emit('error')
     })
-    expect(FakeEventSource.instances.length).toBe(1)
+    expect(fakeInstances.length).toBe(1)
 
     // Call reconnect() — this should clearTimeout the pending timer and open immediately
     act(() => {
       result.current.reconnect()
     })
-    expect(FakeEventSource.instances.length).toBe(2)
+    expect(fakeInstances.length).toBe(2)
 
     // Advance past the original backoff delay — the cleared timer must NOT fire again
     act(() => {
       vi.advanceTimersByTime(1000)
     })
-    expect(FakeEventSource.instances.length).toBe(2)
+    expect(fakeInstances.length).toBe(2)
   })
 
   it('manual reconnect short-circuits auto-backoff on the subsequent error', () => {
@@ -198,7 +199,7 @@ describe('useSSE', () => {
         factory: (url) => new FakeEventSource(url) as unknown as EventSource,
       }),
     )
-    const first = FakeEventSource.instances[0]
+    const first = fakeInstances[0]
     if (first === undefined) throw new Error('no source')
 
     // Emit error on first source — backoff timer is scheduled
@@ -211,9 +212,9 @@ describe('useSSE', () => {
     act(() => {
       result.current.reconnect()
     })
-    const second = FakeEventSource.instances[1]
+    const second = fakeInstances[1]
     if (second === undefined) throw new Error('no second source')
-    expect(FakeEventSource.instances.length).toBe(2)
+    expect(fakeInstances.length).toBe(2)
 
     // Emit error on the new source while manualReconnectRef is set — the error handler
     // should short-circuit (not increment failureCount, not schedule auto-backoff)
@@ -227,7 +228,7 @@ describe('useSSE', () => {
     act(() => {
       vi.advanceTimersByTime(2000)
     })
-    expect(FakeEventSource.instances.length).toBe(2)
+    expect(fakeInstances.length).toBe(2)
   })
 
   it('does not schedule backoff when status is not error or failureCount is zero', () => {
@@ -240,7 +241,7 @@ describe('useSSE', () => {
     )
     // On mount status is 'connecting' — the scheduling effect bail-out runs.
     // Then emit open to move to 'open' — still no backoff should schedule.
-    const src = FakeEventSource.instances[0]
+    const src = fakeInstances[0]
     if (src === undefined) throw new Error('no source')
     act(() => {
       src.emit('open')
@@ -252,7 +253,7 @@ describe('useSSE', () => {
     act(() => {
       vi.advanceTimersByTime(1000)
     })
-    expect(FakeEventSource.instances.length).toBe(1)
+    expect(fakeInstances.length).toBe(1)
   })
 
   it('line 137: backoff cleanup sets timerRef to null only when it matches the scheduled timer', () => {
@@ -266,7 +267,7 @@ describe('useSSE', () => {
         factory: (url) => new FakeEventSource(url) as unknown as EventSource,
       }),
     )
-    const first = FakeEventSource.instances[0]
+    const first = fakeInstances[0]
     if (first === undefined) throw new Error('no source')
 
     // First error — failureCount becomes 1, backoff timer T1 is scheduled.
@@ -279,9 +280,9 @@ describe('useSSE', () => {
     act(() => {
       vi.advanceTimersByTime(500)
     })
-    expect(FakeEventSource.instances.length).toBe(2)
+    expect(fakeInstances.length).toBe(2)
 
-    const second = FakeEventSource.instances[1]
+    const second = fakeInstances[1]
     if (second === undefined) throw new Error('no second source')
 
     // Second error — failureCount becomes 2, backoff timer T2 is scheduled.
@@ -294,7 +295,7 @@ describe('useSSE', () => {
     act(() => {
       vi.advanceTimersByTime(1000)
     })
-    expect(FakeEventSource.instances.length).toBe(3)
+    expect(fakeInstances.length).toBe(3)
   })
 
   it('lines 65-66: open() closes an existing source before creating a new one', () => {
@@ -309,21 +310,21 @@ describe('useSSE', () => {
       }),
     )
     // Initial source is open (mount created instance[0])
-    expect(FakeEventSource.instances.length).toBe(1)
+    expect(fakeInstances.length).toBe(1)
 
     // First reconnect: closes instance[0], opens instance[1]
     act(() => {
       result.current.reconnect()
     })
-    expect(FakeEventSource.instances[0]?.closed).toBe(true)
-    expect(FakeEventSource.instances.length).toBe(2)
+    expect(fakeInstances[0]?.closed).toBe(true)
+    expect(fakeInstances.length).toBe(2)
 
     // Second reconnect: closes instance[1], opens instance[2]
     act(() => {
       result.current.reconnect()
     })
-    expect(FakeEventSource.instances[1]?.closed).toBe(true)
-    expect(FakeEventSource.instances.length).toBe(3)
+    expect(fakeInstances[1]?.closed).toBe(true)
+    expect(fakeInstances.length).toBe(3)
   })
 
   it('uses the default EventSource factory when no factory option is provided', () => {
@@ -341,7 +342,7 @@ describe('useSSE', () => {
         }),
       )
       // At least one FakeEventSource was created via the default factory path
-      expect(FakeEventSource.instances.length).toBeGreaterThanOrEqual(1)
+      expect(fakeInstances.length).toBeGreaterThanOrEqual(1)
       expect(result.current.status).toBe('connecting')
     } finally {
       globalThis.EventSource = OriginalEventSource

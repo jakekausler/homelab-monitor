@@ -846,6 +846,34 @@ def test_cli_user_cmd_passwd_bad_password_returns_1(
 
 
 @pytest.mark.asyncio
+async def test_resolve_token_empty_plaintext_returns_none() -> None:
+    """_resolve_token returns immediately for empty plaintext (defense-in-depth guard).
+
+    The middleware's dispatch already filters empty Bearer tokens before calling
+    _resolve_token (so this branch is unreachable from normal code paths), but
+    this test pins the defensive contract so future refactors don't accidentally
+    drop the guard.
+    """
+    from unittest.mock import AsyncMock, MagicMock  # noqa: PLC0415
+
+    from homelab_monitor.kernel.api.middleware import AuthMiddleware  # noqa: PLC0415
+    from homelab_monitor.kernel.auth.repository import AuthRepository  # noqa: PLC0415
+
+    # Pin the empty-plaintext early-return contract: if removed, the function
+    # would proceed to hash_token("") and call get_api_token_by_hash. Mock
+    # the repo and assert it is NOT called — that's the actual regression we
+    # need to catch.
+    mock_repo = AsyncMock(spec=AuthRepository)
+    mock_request = MagicMock()
+    mock_request.app.state.auth_repo = mock_repo
+    result = await AuthMiddleware._resolve_token(mock_request, "")  # pyright: ignore[reportPrivateUsage]
+    # The method returns None (implicitly) without touching the DB.
+    assert result is None
+    # Critical: empty-plaintext guard prevents the DB call.
+    mock_repo.get_api_token_by_hash.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_resolve_token_no_auth_repo_skips(
     db_url: str, master_key: bytes, monkeypatch: pytest.MonkeyPatch
 ) -> None:

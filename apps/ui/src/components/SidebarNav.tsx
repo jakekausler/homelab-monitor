@@ -55,13 +55,15 @@ const NAV_ITEMS: NavItem[] = [
 export function SidebarNav({
   collapsed,
   onNavigate,
+  ariaLabel = 'Primary',
 }: {
   collapsed: boolean
   onNavigate?: () => void
+  ariaLabel?: string
 }) {
   return (
     <nav
-      aria-label="Primary"
+      aria-label={ariaLabel}
       className={cn(
         'flex h-full flex-col gap-1 border-r border-border bg-sidebar p-2 transition-[width]',
         collapsed ? 'w-14' : 'w-64',

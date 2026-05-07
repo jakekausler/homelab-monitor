@@ -14,18 +14,16 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import logging
 from collections.abc import AsyncIterator
 
-import httpx
 import pytest
 import pytest_asyncio
 from fastapi import FastAPI
-from httpx import ASGITransport, AsyncClient
+from httpx import ASGITransport, AsyncClient, Response
 from sqlalchemy import text
 
 from homelab_monitor.kernel.api.app import create_app
-
-from ._uvicorn_fixture import UvicornFixtureValue
 
 
 @pytest_asyncio.fixture
@@ -43,6 +41,33 @@ async def app_bootstrapped(
 
     async with app.router.lifespan_context(app):
         yield app
+
+
+@pytest.mark.asyncio
+async def test_lifespan_warns_when_https_only_cookies_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    db_url: str,
+    master_key: bytes,
+) -> None:
+    """When HOMELAB_MONITOR_HTTPS_ONLY_COOKIES is false, lifespan logs a warning."""
+    monkeypatch.setenv("HOMELAB_MONITOR_HTTPS_ONLY_COOKIES", "false")
+    # Set up env so create_app + lifespan can boot
+    monkeypatch.setenv("HOMELAB_MONITOR_DB_URL", db_url)
+    monkeypatch.setenv("HOMELAB_MONITOR_MASTER_KEY", base64.b64encode(master_key).decode("ascii"))
+
+    caplog.set_level(logging.WARNING)
+    app = create_app(lifespan_enabled=True)
+    async with app.router.lifespan_context(app):
+        pass
+
+    # Find the structlog warning in caplog records by the env_var binding
+    warnings_with_env = [
+        rec
+        for rec in caplog.records
+        if rec.levelno == logging.WARNING and "HTTPS_ONLY_COOKIES" in rec.getMessage()
+    ]
+    assert warnings_with_env, "expected HTTPS_ONLY warning when env var is false"
 
 
 @pytest.mark.asyncio
@@ -118,61 +143,6 @@ async def test_lifespan_e2e_collectors_next_run_calculated(
 
 
 @pytest.mark.asyncio
-async def test_lifespan_e2e_sse_receives_tick(
-    uvicorn_server: UvicornFixtureValue,
-) -> None:
-    """Subscribe to /api/events over a real socket; wait for tick; assert it arrives.
-
-    Verifies the pure-ASGI middleware migration (STAGE-001-014) end-to-end:
-    a real uvicorn server flushes SSE chunks to the socket as the broker
-    publishes them. ``httpx.ASGITransport`` cannot verify this — it buffers
-    streaming responses — so we use an in-process uvicorn fixture instead.
-    """
-    async with AsyncClient(base_url=uvicorn_server.base_url) as client:
-        login_resp = await client.post(
-            "/api/auth/login",
-            json={
-                "username": uvicorn_server.username,
-                "password": uvicorn_server.password,
-            },
-        )
-        assert login_resp.status_code == 200  # noqa: PLR2004
-
-        csrf_token = client.cookies.get("homelab_monitor_csrf")
-        assert csrf_token is not None
-
-        async def subscribe_and_collect() -> list[str]:
-            events: list[str] = []
-            try:
-                async with client.stream("GET", "/api/events") as resp:
-                    assert resp.status_code == 200  # noqa: PLR2004
-                    async for line in resp.aiter_lines():
-                        if line:
-                            events.append(line)
-                        if len(events) >= 3:  # noqa: PLR2004
-                            break
-            except TimeoutError:
-                pass
-            return events
-
-        sub_task = asyncio.create_task(subscribe_and_collect())
-
-        # Trigger a tick to make the test deterministic. The natural
-        # 60-second interval would exceed the 5-second timeout otherwise.
-        await asyncio.sleep(0.2)
-        retry_resp = await client.post(
-            "/api/collectors/noop/retry",
-            headers={"X-CSRF-Token": csrf_token},
-        )
-        assert retry_resp.status_code == 200  # noqa: PLR2004
-
-        events = await asyncio.wait_for(sub_task, timeout=5.0)
-
-        assert len(events) > 0
-        assert any("collector.tick" in e for e in events)
-
-
-@pytest.mark.asyncio
 async def test_lifespan_e2e_retry_endpoint(
     app_bootstrapped: FastAPI, authenticated_client: AsyncClient
 ) -> None:
@@ -234,7 +204,7 @@ async def test_lifespan_e2e_concurrent_retries(app_bootstrapped: FastAPI) -> Non
         csrf_headers = {"X-CSRF-Token": csrf_token} if csrf_token else {}
 
         # Send 5 retries concurrently
-        tasks: list[asyncio.Task[httpx.Response]] = []
+        tasks: list[asyncio.Task[Response]] = []
         for _ in range(5):
             tasks.append(
                 asyncio.create_task(

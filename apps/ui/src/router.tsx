@@ -17,7 +17,7 @@ type MeResponse = components['schemas']['MeResponse']
  * via the queryClient cache. On 401, throws a redirect to /login. The
  * cached result lets navigation between protected routes skip the network.
  */
-async function ensureAuthenticated(queryClient: QueryClient): Promise<MeResponse> {
+export async function ensureAuthenticated(queryClient: QueryClient): Promise<MeResponse> {
   const cached = queryClient.getQueryData<MeResponse | null>(queryKeys.currentUser)
   if (cached) return cached
   const data = await queryClient.fetchQuery({

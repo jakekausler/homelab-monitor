@@ -35,7 +35,18 @@ class SseDisconnect:
     """
 
 
+class SseKeepalive:
+    """Sentinel yielded by ``subscribe()`` when the keepalive interval elapses.
+
+    Public so the SSE router can isinstance-check it. Yielding the sentinel
+    from inside ``subscribe()`` (instead of using ``asyncio.wait_for`` from
+    the outer ``gen()``) prevents cancellation from unwinding the generator's
+    ``finally`` block and silently dropping the subscription.
+    """
+
+
 _DISCONNECT = SseDisconnect()
+_KEEPALIVE = SseKeepalive()
 
 
 class SseBroker:
@@ -120,12 +131,19 @@ class SseBroker:
         except Exception:  # pragma: no cover -- broker fail-safe; tested via 7 unit tests
             self._log.exception("sse_broker.publish_failed")
 
-    async def subscribe(self) -> AsyncIterator[_SseEvent | SseDisconnect]:
+    async def subscribe(
+        self, *, keepalive_interval: float | None = None
+    ) -> AsyncIterator[_SseEvent | SseDisconnect | SseKeepalive]:
         """Subscribe to the event stream.
 
         Yields recent events from the ring buffer first (replay), then
         waits for new events. If the consumer's queue fills, the broker
         disconnects them with a sentinel.
+
+        If ``keepalive_interval`` is provided, yields ``SseKeepalive()`` when
+        no real event arrives within that many seconds. The timeout is
+        handled internally so cancellation does not unwind the generator's
+        ``finally`` block (which would silently drop the subscription).
         """
         q: asyncio.Queue[_SseEvent | SseDisconnect] = asyncio.Queue(maxsize=self._queue_maxsize)
         # Replay on connect. Ring buffer length is bounded by replay_capacity,
@@ -141,7 +159,14 @@ class SseBroker:
             self._subscribers.add(q)
         try:
             while True:
-                ev = await q.get()
+                if keepalive_interval is None:
+                    ev = await q.get()
+                else:
+                    try:
+                        ev = await asyncio.wait_for(q.get(), timeout=keepalive_interval)
+                    except TimeoutError:
+                        yield _KEEPALIVE
+                        continue
                 yield ev
         finally:
             async with self._lock:

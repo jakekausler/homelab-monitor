@@ -196,6 +196,12 @@ async def uvicorn_server(
     Set ``HOMELAB_MONITOR_PLUGINS_DIR=/dev/null`` so uvicorn's lifespan
     doesn't try to load subprocess plugins (which spawn forkserver
     children — unnecessary cost and flakiness for SSE tests).
+
+    NOTE: monkeypatch.setenv mutates os.environ which is process-global.
+    Running this fixture under pytest-xdist (parallel workers) is safe ONLY
+    because each worker is a separate process. Tests within the same worker
+    that overlap with this fixture must not depend on the affected env vars
+    mid-test.
     """
     # Private temp DB — do NOT use the shared db_url fixture.
     fd, raw = tempfile.mkstemp(prefix="hm-uvicorn-", suffix=".db")
@@ -212,6 +218,9 @@ async def uvicorn_server(
         base64.b64encode(master_key).decode(),
     )
     monkeypatch.setenv("HOMELAB_MONITOR_HTTPS_ONLY_COOKIES", "false")
+    # bcrypt cost 4 is intentional for test speed (~50x faster than the
+    # production default of 12). The test DB lives in a tempdir and is
+    # unlinked post-test; the trivially-weak hash is never persisted.
     monkeypatch.setenv("HOMELAB_MONITOR_BCRYPT_COST", "4")
     monkeypatch.setenv("HOMELAB_MONITOR_AUTO_MIGRATE", "1")
     # Skip subprocess plugin loading: pointing at a non-directory makes the
@@ -234,5 +243,10 @@ async def uvicorn_server(
         )
     finally:
         await server.stop()
+        # Brief grace for aiosqlite's WAL flush after server.stop() returns.
+        # SQLite WAL files may still be written briefly after the lifespan
+        # teardown; missing_ok=True handles already-cleaned files but a
+        # short sleep prevents flaky cleanup races on slower filesystems.
+        await asyncio.sleep(0.05)
         for suffix in ("", "-wal", "-shm"):
             (db_path.parent / (db_path.name + suffix)).unlink(missing_ok=True)

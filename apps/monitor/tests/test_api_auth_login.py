@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+from http import HTTPStatus
 
 import pytest
 from httpx import AsyncClient
@@ -165,7 +166,11 @@ async def test_login_successful_logins_do_not_consume_budget(
 async def test_login_cookie_attributes(
     db_url: str, master_key: bytes, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Login sets HttpOnly, SameSite=Lax, Path=/, Max-Age."""
+    """Defense-in-depth: Login sets secure cookie attributes (HttpOnly, SameSite, Path, Max-Age).
+
+    Distinct from test_login_valid_credentials_returns_200 which only checks
+    that cookies are present; this test verifies their security attributes.
+    """
     monkeypatch.setenv("HOMELAB_MONITOR_DB_URL", db_url)
     monkeypatch.setenv("HOMELAB_MONITOR_MASTER_KEY", base64.b64encode(master_key).decode())
     monkeypatch.setenv("HOMELAB_MONITOR_HTTPS_ONLY_COOKIES", "false")
@@ -217,6 +222,9 @@ async def test_login_preserves_prior_sessions(
             )
             assert resp.status_code == 200  # noqa: PLR2004
             old_session_cookie = client1.cookies.get("homelab_monitor_session")
+            old_csrf_cookie = client1.cookies.get("homelab_monitor_csrf")
+            assert old_session_cookie is not None
+            assert old_csrf_cookie is not None
 
         # Second login from a fresh client (simulating a second device).
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client2:
@@ -231,3 +239,15 @@ async def test_login_preserves_prior_sessions(
             client3.cookies.set("homelab_monitor_session", old_session_cookie)  # type: ignore[reportArgumentType]
             resp = await client3.get("/api/auth/me")
             assert resp.status_code == 200  # noqa: PLR2004
+
+            # Verify CSRF preservation: the OLD CSRF cookie still works for
+            # state-changing requests on the OLD session.
+            client3.cookies.set("homelab_monitor_csrf", old_csrf_cookie)  # type: ignore[reportArgumentType]
+            resp = await client3.post(
+                "/api/collectors/noop/retry",
+                headers={"X-CSRF-Token": old_csrf_cookie},
+            )
+            # Either 200 (if collector exists) or 404 (collector not found in this test app)
+            # — but NOT 403 (CSRF mismatch) and NOT 401 (session invalid).
+            assert resp.status_code != HTTPStatus.UNAUTHORIZED, "session should still be valid"
+            assert resp.status_code != HTTPStatus.FORBIDDEN, "CSRF should still match"

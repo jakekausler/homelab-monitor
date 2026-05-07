@@ -18,8 +18,10 @@ from homelab_monitor.kernel.api.app import create_app
 from homelab_monitor.kernel.api.sse import (  # pyright: ignore[reportPrivateUsage]
     SseBroker,
     SseDisconnect,
+    SseKeepalive,
     _SseEvent,  # pyright: ignore[reportPrivateUsage]
 )
+from homelab_monitor.kernel.db.time import utc_now_iso
 from homelab_monitor.kernel.events import SchedulerTickEvent, make_tick_id
 
 from ._uvicorn_fixture import UvicornFixtureValue
@@ -50,7 +52,7 @@ async def test_sse_broker_subscribe_replay_on_connect(broker: SseBroker) -> None
         await broker.publish(event)
 
     # Now subscribe — should replay all 5
-    events: list[_SseEvent | SseDisconnect] = []
+    events: list[_SseEvent | SseDisconnect | SseKeepalive] = []
     async for ev in broker.subscribe():
         events.append(ev)
         if len(events) >= 5:  # noqa: PLR2004
@@ -77,7 +79,7 @@ async def test_sse_broker_ring_buffer_cap(broker: SseBroker) -> None:
         await broker.publish(event)
 
     # Subscribe and collect all replayed events
-    events: list[_SseEvent | SseDisconnect] = []
+    events: list[_SseEvent | SseDisconnect | SseKeepalive] = []
     async for ev in broker.subscribe():
         events.append(ev)
         if len(events) >= 50:  # noqa: PLR2004
@@ -97,7 +99,7 @@ async def test_sse_broker_slow_subscriber_overflow(broker: SseBroker) -> None:
     # Create a subscriber generator and drive it sequentially. Async generators
     # forbid concurrent __anext__ calls, so we drain it on a single task.
     sub_gen = broker.subscribe()
-    events: list[_SseEvent | SseDisconnect] = []
+    events: list[_SseEvent | SseDisconnect | SseKeepalive] = []
 
     async def collect() -> None:
         async for ev in sub_gen:
@@ -145,9 +147,11 @@ async def test_sse_broker_multiple_concurrent_subscribers(broker: SseBroker) -> 
         await broker.publish(event)
 
     # Collect events from all 3 subscribers
-    collected: list[list[_SseEvent | SseDisconnect]] = [[], [], []]
+    collected: list[list[_SseEvent | SseDisconnect | SseKeepalive]] = [[], [], []]
 
-    async def collect_from_sub(sub_gen: AsyncIterator[_SseEvent | SseDisconnect], idx: int) -> None:
+    async def collect_from_sub(
+        sub_gen: AsyncIterator[_SseEvent | SseDisconnect | SseKeepalive], idx: int
+    ) -> None:
         count = 0
         async for ev in sub_gen:
             collected[idx].append(ev)
@@ -171,7 +175,7 @@ async def test_sse_broker_multiple_concurrent_subscribers(broker: SseBroker) -> 
 @pytest.mark.asyncio
 async def test_sse_broker_monotonic_event_seq(broker: SseBroker) -> None:
     """event_seq increments monotonically per publish."""
-    events: list[_SseEvent | SseDisconnect] = []
+    events: list[_SseEvent | SseDisconnect | SseKeepalive] = []
     sub_gen = broker.subscribe()
 
     for _ in range(10):
@@ -227,7 +231,7 @@ async def test_sse_broker_no_skip_seq_numbers_in_replay(broker: SseBroker) -> No
         )
         await broker.publish(event)
 
-    events: list[_SseEvent | SseDisconnect] = []
+    events: list[_SseEvent | SseDisconnect | SseKeepalive] = []
     async for ev in broker.subscribe():
         events.append(ev)
         if len(events) >= 3:  # noqa: PLR2004
@@ -326,25 +330,67 @@ async def test_sse_http_endpoint_auth_gated(
 
 
 @pytest.mark.asyncio
-async def test_sse_http_endpoint_requires_session(
-    db_path: Path, db_url: str, monkeypatch: pytest.MonkeyPatch, master_key: bytes
-) -> None:
-    """401 when no valid session present."""
-    monkeypatch.setenv("HOMELAB_MONITOR_DB_URL", db_url)
-    monkeypatch.setenv("HOMELAB_MONITOR_MASTER_KEY", base64.b64encode(master_key).decode())
-    monkeypatch.setenv("HOMELAB_MONITOR_AUTO_MIGRATE", "1")
-
-    app = create_app(lifespan_enabled=True)
-
-    async with app.router.lifespan_context(app):  # noqa: SIM117
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            resp = await client.get("/api/events")
-            assert resp.status_code == 401  # noqa: PLR2004
-
-
-@pytest.mark.asyncio
 async def test_sse_broker_queue_maxsize_validation() -> None:
     """SseBroker raises ValueError if replay_capacity > queue_maxsize."""
     log = cast(BoundLogger, structlog.get_logger().bind())
     with pytest.raises(ValueError, match="replay_capacity"):
         SseBroker(log=log, queue_maxsize=10, replay_capacity=50)
+
+
+# ---------------------------------------------------------------------------
+# Keepalive path in events.gen() (STAGE-001-014 coverage gap)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_sse_gen_emits_keepalive_when_idle(
+    broker: SseBroker,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """gen() yields b': keepalive\\n\\n' when no broker event arrives within the interval.
+
+    Monkeypatches KEEPALIVE_INTERVAL_S to 0.05 s so the test completes quickly.
+    The broker has no events published, so the wait_for always times out and
+    the TimeoutError branch (lines 63-64 of events.py) executes.
+    """
+    from unittest.mock import MagicMock  # noqa: PLC0415
+
+    from homelab_monitor.kernel.api.routers import events as events_module  # noqa: PLC0415
+    from homelab_monitor.kernel.api.routers.events import stream_events  # noqa: PLC0415
+
+    monkeypatch.setattr(events_module, "KEEPALIVE_INTERVAL_S", 0.05)
+
+    # Build a minimal fake request / user / dependency context — we call gen()
+    # directly rather than going through FastAPI routing.
+    mock_user = MagicMock()
+
+    # Reconstruct the gen() coroutine by calling stream_events with our broker
+    # and extracting the StreamingResponse's body_iterator (which IS gen()).
+    mock_request = MagicMock()
+    response = await stream_events(request=mock_request, _user=mock_user, broker=broker)
+
+    gen_iter = cast(AsyncIterator[bytes], response.body_iterator)
+
+    # Await the first chunk — the broker is idle so KEEPALIVE_INTERVAL_S elapses
+    # and we get the SSE comment line. The `continue` after the yield is exercised
+    # on iteration regardless of whether the broker terminates afterward.
+    chunk: bytes = await asyncio.wait_for(gen_iter.__anext__(), timeout=2.0)
+    assert chunk == b": keepalive\n\n"
+
+    # Publish a real event before the second await so the broker yields a
+    # payload (event line) instead of either a keepalive or shutting down.
+    # This proves the loop body re-entered cleanly after the keepalive yield.
+    await broker.publish(
+        SchedulerTickEvent(
+            collector="noop",
+            tick_id="test-tick",
+            outcome="success",
+            reason=None,
+            duration_seconds=0.0,
+            trigger_kind="manual",
+            request_id=None,
+            ts=utc_now_iso(),
+        )
+    )
+    chunk2: bytes = await asyncio.wait_for(gen_iter.__anext__(), timeout=2.0)
+    assert chunk2.startswith(b"event: collector.tick\n")

@@ -72,12 +72,18 @@ export function useSSE<T>({
     sourceRef.current = src
 
     src.addEventListener('open', () => {
+      if (sourceRef.current !== src) return
       setStatus('open')
       failureCountRef.current = 0
       setFailureCount(0)
+      // Clear any pending manual-reconnect flag: a successful open completes the
+      // user-initiated reconnect cycle, so the NEXT error should resume normal
+      // exponential-backoff behavior.
+      manualReconnectRef.current = false
     })
 
     src.addEventListener(topic, (raw: Event) => {
+      if (sourceRef.current !== src) return
       const ev = raw as MessageEvent<string>
       const parsed = parserRef.current(ev)
       if (parsed !== null) {
@@ -86,6 +92,7 @@ export function useSSE<T>({
     })
 
     src.addEventListener('error', () => {
+      if (sourceRef.current !== src) return
       src.close()
       sourceRef.current = null
       if (manualReconnectRef.current) {

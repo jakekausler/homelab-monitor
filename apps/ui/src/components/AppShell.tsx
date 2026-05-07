@@ -1,5 +1,5 @@
 import { Outlet } from '@tanstack/react-router'
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { X } from 'lucide-react'
 
 import { SidebarNav } from '@/components/SidebarNav'
@@ -18,6 +18,23 @@ export function AppShell() {
   const [collapsed, setCollapsed] = useState(false)
   const [mobileOpen, setMobileOpen] = useState(false)
   const [theme, setTheme] = useState<Theme>(readInitialTheme)
+  const sheetRef = useRef<HTMLElement>(null)
+
+  const toggleTheme = useCallback(() => {
+    setTheme((t) => (t === 'dark' ? 'light' : 'dark'))
+  }, [])
+
+  const toggleSidebar = useCallback(() => {
+    setCollapsed((c) => !c)
+  }, [])
+
+  const toggleMobile = useCallback(() => {
+    setMobileOpen((o) => !o)
+  }, [])
+
+  const closeMobile = useCallback(() => {
+    setMobileOpen(false)
+  }, [])
 
   // Theme effect — unchanged
   useEffect(() => {
@@ -45,27 +62,26 @@ export function AppShell() {
     }
   }, [mobileOpen])
 
-  const toggleTheme = useCallback(() => {
-    setTheme((t) => (t === 'dark' ? 'light' : 'dark'))
-  }, [])
+  // Close mobile sidebar on Esc key
+  useEffect(() => {
+    if (!mobileOpen) return
+    function handler(e: KeyboardEvent) {
+      if (e.key === 'Escape') closeMobile()
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [mobileOpen, closeMobile])
 
-  const toggleSidebar = useCallback(() => {
-    setCollapsed((c) => !c)
-  }, [])
-
-  const toggleMobile = useCallback(() => {
-    setMobileOpen((o) => !o)
-  }, [])
-
-  const closeMobile = useCallback(() => {
-    setMobileOpen(false)
-  }, [])
+  // Focus trap: set focus on sheet when opened
+  useEffect(() => {
+    if (mobileOpen) sheetRef.current?.focus()
+  }, [mobileOpen])
 
   return (
     <div className="flex h-screen w-full bg-background text-foreground">
       {/* Desktop sidebar — hidden on mobile */}
       <div className="hidden md:flex">
-        <SidebarNav collapsed={collapsed} />
+        <SidebarNav collapsed={collapsed} ariaLabel="Primary" />
       </div>
 
       {/* Mobile overlay — only rendered when open, hidden on desktop */}
@@ -78,7 +94,11 @@ export function AppShell() {
             aria-hidden="true"
           />
           {/* Sheet */}
+          {/* TODO(a11y): Replace custom sheet with @radix-ui/react-dialog for proper
+              focus trap. Current impl handles Esc + initial focus only. */}
           <aside
+            ref={sheetRef}
+            tabIndex={-1}
             className="fixed inset-y-0 left-0 z-50 flex w-full max-w-xs flex-col bg-sidebar md:hidden"
             role="dialog"
             aria-modal="true"
@@ -95,7 +115,7 @@ export function AppShell() {
                 <X className="size-5" />
               </button>
             </div>
-            <SidebarNav collapsed={false} onNavigate={closeMobile} />
+            <SidebarNav collapsed={false} onNavigate={closeMobile} ariaLabel="Mobile primary" />
           </aside>
         </>
       )}

@@ -49,6 +49,31 @@ describe('AppShell', () => {
     expect(screen.queryByText('homelab-monitor')).not.toBeInTheDocument()
   })
 
+  it('opens the mobile sidebar when "Open navigation menu" is clicked', async () => {
+    renderShell()
+    expect(screen.queryByRole('dialog', { name: 'Navigation menu' })).not.toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Open navigation menu' }))
+    expect(screen.getByRole('dialog', { name: 'Navigation menu' })).toBeInTheDocument()
+  })
+
+  it('closes the mobile sidebar when the Close menu button is clicked', async () => {
+    renderShell()
+    await userEvent.click(screen.getByRole('button', { name: 'Open navigation menu' }))
+    expect(screen.getByRole('dialog', { name: 'Navigation menu' })).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Close menu' }))
+    expect(screen.queryByRole('dialog', { name: 'Navigation menu' })).not.toBeInTheDocument()
+  })
+
+  it('closes the mobile sidebar when Esc is pressed', async () => {
+    renderShell()
+    await userEvent.click(screen.getByRole('button', { name: 'Open navigation menu' }))
+    expect(screen.getByRole('dialog', { name: 'Navigation menu' })).toBeInTheDocument()
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    })
+    expect(screen.queryByRole('dialog', { name: 'Navigation menu' })).not.toBeInTheDocument()
+  })
+
   it('toggles the theme data-attribute on the document root', async () => {
     renderShell()
     // Initial theme is 'dark' (default when localStorage is empty)

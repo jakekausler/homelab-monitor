@@ -60,7 +60,7 @@ def _critical_abort(log: BoundLogger, event: str, **fields: object) -> NoReturn:
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0915  -- spec-mandated bootstrap sequence
+async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912, PLR0915  -- spec-mandated bootstrap sequence
     """Bootstrap sequence with hybrid abort/degrade per D1."""
     configure_logging()
     log = cast(BoundLogger, structlog.get_logger().bind(component="lifespan"))
@@ -70,6 +70,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0915
         master_key = load_master_key()
     except MasterKeyError as exc:
         _critical_abort(log, "lifespan.master_key_missing", error=str(exc))
+
+    # 1b. HTTPS_ONLY_COOKIES check
+    https_only_value = os.environ.get("HOMELAB_MONITOR_HTTPS_ONLY_COOKIES", "true")
+    if https_only_value.strip().lower() in ("false", "0", "no"):
+        log.warning(
+            "HTTPS_ONLY_COOKIES is disabled; session cookies will be sent over plain HTTP. "
+            "This is intended for local development only. Do NOT enable in production.",
+            env_var="HOMELAB_MONITOR_HTTPS_ONLY_COOKIES",
+        )
 
     # 2. Engine
     engine = get_engine(url=os.environ.get("HOMELAB_MONITOR_DB_URL"))

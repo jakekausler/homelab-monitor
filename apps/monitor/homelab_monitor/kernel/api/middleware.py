@@ -19,6 +19,9 @@ from homelab_monitor.kernel.auth.api_tokens import hash_token
 from homelab_monitor.kernel.auth.repository import AuthRepository
 from homelab_monitor.kernel.auth.sessions import verify_session_cookie_value
 
+# Module-level logger for AccessLogMiddleware to avoid re-creation on each request.
+_access_log = structlog.get_logger("homelab_monitor.kernel.api.access_log")
+
 # Paths that NEVER require auth resolution to populate request.state.user
 # (the resolver still runs but produces auth_kind="unauthenticated").
 # Enforcement decisions happen in route-level Depends, not here.
@@ -142,8 +145,7 @@ class AccessLogMiddleware:
             await self.app(scope, receive, send_wrapper)
         except Exception:
             duration_ms = round((time.perf_counter() - start) * 1000, 2)
-            log = structlog.get_logger()
-            log.warning(
+            _access_log.warning(
                 "http.request",
                 method=request.method,
                 path=request.url.path,
@@ -156,8 +158,7 @@ class AccessLogMiddleware:
             raise
 
         duration_ms = round((time.perf_counter() - start) * 1000, 2)
-        log = structlog.get_logger()
-        log.info(
+        _access_log.info(
             "http.request",
             method=request.method,
             path=request.url.path,
@@ -249,8 +250,13 @@ class AuthMiddleware:
         # If you add a new auth scheme, evaluate it BEFORE the cookie branch
         # and document the precedence here.
         auth_header = request.headers.get("authorization", "")
+        bearer_token: str | None = None
         if auth_header.lower().startswith("bearer "):
-            await self._resolve_token(request, auth_header[len("bearer ") :].strip())
+            candidate = auth_header[len("bearer ") :].strip()
+            if candidate:
+                bearer_token = candidate
+        if bearer_token is not None:
+            await self._resolve_token(request, bearer_token)
         elif (cookie_val := request.cookies.get(SESSION_COOKIE_NAME)) is not None:
             await self._resolve_session(request, cookie_val)
 
