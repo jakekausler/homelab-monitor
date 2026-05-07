@@ -2,21 +2,30 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict
+
+from homelab_monitor.kernel.alerts.types import AlertOutcome, AlertStatus, Severity
 
 # Re-export the canonical error envelope from errors.py so external callers
 # can import either `from kernel.api.schemas` or `from kernel.api.errors`.
 from homelab_monitor.kernel.api.errors import ErrorEnvelope, ErrorPayload
 
 __all__ = [
+    "AckResponse",
+    "AlertDetailResponse",
+    "AlertListResponse",
+    "AlertView",
     "CollectorStatus",
+    "DismissResponse",
     "ErrorEnvelope",
     "ErrorPayload",
     "HealthzResponse",
+    "IngestResponse",
     "MetricsSnapshotEntry",
     "MetricsSnapshotResponse",
+    "OutcomeView",
     "RetryResponse",
     "VersionResponse",
 ]
@@ -89,3 +98,77 @@ class MetricsSnapshotResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
     ts: str  # snapshot capture time (ISO-8601 UTC)
     entries: list[MetricsSnapshotEntry]
+
+
+class AlertView(BaseModel):
+    """Public projection of an Alert row for API responses."""
+
+    model_config = ConfigDict(extra="forbid")
+    id: str
+    fingerprint: str
+    source_tool: str
+    severity: Severity
+    status: AlertStatus
+    opened_at: str
+    last_seen_at: str
+    resolved_at: str | None = None
+    ack_at: str | None = None
+    ack_by: int | None = None
+    runbook_id: str | None = None
+    labels: dict[str, str]
+    annotations: dict[str, str]
+
+
+class OutcomeView(BaseModel):
+    """One alert_outcomes row in API responses."""
+
+    model_config = ConfigDict(extra="forbid")
+    outcome: AlertOutcome
+    decided_at: str
+    decided_by: int | None = None
+
+
+class AlertListResponse(BaseModel):
+    """Response for GET /api/alerts.
+
+    NOTE: ``total`` is intentionally omitted; cursor pagination would require a
+    separate COUNT query. The frontend can infer "has more" from
+    ``next_cursor is not None``.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    items: list[AlertView]
+    next_cursor: str | None = None
+
+
+class AlertDetailResponse(BaseModel):
+    """Response for GET /api/alerts/{id}."""
+
+    model_config = ConfigDict(extra="forbid")
+    alert: AlertView
+    outcomes: list[OutcomeView]
+    payload: dict[str, Any]
+
+
+class IngestResponse(BaseModel):
+    """Response for POST /api/alerts/ingest."""
+
+    model_config = ConfigDict(extra="forbid")
+    received: int
+    ingested: int
+
+
+class AckResponse(BaseModel):
+    """Response for POST /api/alerts/{id}/ack."""
+
+    model_config = ConfigDict(extra="forbid")
+    alert_id: str
+    ack_at: str
+
+
+class DismissResponse(BaseModel):
+    """Response for POST /api/alerts/{id}/dismiss."""
+
+    model_config = ConfigDict(extra="forbid")
+    alert_id: str
+    dismissed_at: str

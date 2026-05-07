@@ -1,6 +1,328 @@
 {
   "components": {
     "schemas": {
+      "AckResponse": {
+        "additionalProperties": false,
+        "description": "Response for POST /api/alerts/{id}/ack.",
+        "properties": {
+          "ack_at": {
+            "title": "Ack At",
+            "type": "string"
+          },
+          "alert_id": {
+            "title": "Alert Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "alert_id",
+          "ack_at"
+        ],
+        "title": "AckResponse",
+        "type": "object"
+      },
+      "AlertDetailResponse": {
+        "additionalProperties": false,
+        "description": "Response for GET /api/alerts/{id}.",
+        "properties": {
+          "alert": {
+            "$ref": "#/components/schemas/AlertView"
+          },
+          "outcomes": {
+            "items": {
+              "$ref": "#/components/schemas/OutcomeView"
+            },
+            "title": "Outcomes",
+            "type": "array"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "title": "Payload",
+            "type": "object"
+          }
+        },
+        "required": [
+          "alert",
+          "outcomes",
+          "payload"
+        ],
+        "title": "AlertDetailResponse",
+        "type": "object"
+      },
+      "AlertListResponse": {
+        "additionalProperties": false,
+        "description": "Response for GET /api/alerts.\n\nNOTE: ``total`` is intentionally omitted; cursor pagination would require a\nseparate COUNT query. The frontend can infer \"has more\" from\n``next_cursor is not None``.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AlertView"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "AlertListResponse",
+        "type": "object"
+      },
+      "AlertOutcome": {
+        "description": "Operator/system decision recorded against an alert.",
+        "enum": [
+          "acked",
+          "dismissed",
+          "auto_fixed",
+          "escalated"
+        ],
+        "title": "AlertOutcome",
+        "type": "string"
+      },
+      "AlertStatus": {
+        "description": "Alert lifecycle status.",
+        "enum": [
+          "firing",
+          "resolved"
+        ],
+        "title": "AlertStatus",
+        "type": "string"
+      },
+      "AlertView": {
+        "additionalProperties": false,
+        "description": "Public projection of an Alert row for API responses.",
+        "properties": {
+          "ack_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ack At"
+          },
+          "ack_by": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ack By"
+          },
+          "annotations": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Annotations",
+            "type": "object"
+          },
+          "fingerprint": {
+            "title": "Fingerprint",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Labels",
+            "type": "object"
+          },
+          "last_seen_at": {
+            "title": "Last Seen At",
+            "type": "string"
+          },
+          "opened_at": {
+            "title": "Opened At",
+            "type": "string"
+          },
+          "resolved_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolved At"
+          },
+          "runbook_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Runbook Id"
+          },
+          "severity": {
+            "$ref": "#/components/schemas/Severity"
+          },
+          "source_tool": {
+            "title": "Source Tool",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/AlertStatus"
+          }
+        },
+        "required": [
+          "id",
+          "fingerprint",
+          "source_tool",
+          "severity",
+          "status",
+          "opened_at",
+          "last_seen_at",
+          "labels",
+          "annotations"
+        ],
+        "title": "AlertView",
+        "type": "object"
+      },
+      "AlertmanagerV2AlertItem": {
+        "additionalProperties": false,
+        "description": "One alert entry inside an Alertmanager v2 webhook payload.",
+        "properties": {
+          "annotations": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Annotations",
+            "type": "object"
+          },
+          "endsAt": {
+            "default": "",
+            "title": "Endsat",
+            "type": "string"
+          },
+          "fingerprint": {
+            "default": "",
+            "title": "Fingerprint",
+            "type": "string"
+          },
+          "generatorURL": {
+            "default": "",
+            "title": "Generatorurl",
+            "type": "string"
+          },
+          "labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Labels",
+            "type": "object"
+          },
+          "startsAt": {
+            "title": "Startsat",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "firing",
+              "resolved"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "labels",
+          "startsAt"
+        ],
+        "title": "AlertmanagerV2AlertItem",
+        "type": "object"
+      },
+      "AlertmanagerV2Payload": {
+        "additionalProperties": false,
+        "description": "Top-level Alertmanager v2 webhook payload.\n\nOnly the fields STAGE-013 cares about are declared; ``extra=\"forbid\"`` is\nintentional so unknown fields surface as bugs to fix instead of silent\ndrops. Spec B (the ``/api/alerts/ingest`` handler) parses this.",
+        "properties": {
+          "alerts": {
+            "items": {
+              "$ref": "#/components/schemas/AlertmanagerV2AlertItem"
+            },
+            "title": "Alerts",
+            "type": "array"
+          },
+          "commonAnnotations": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Commonannotations",
+            "type": "object"
+          },
+          "commonLabels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Commonlabels",
+            "type": "object"
+          },
+          "externalURL": {
+            "default": "",
+            "title": "Externalurl",
+            "type": "string"
+          },
+          "groupKey": {
+            "default": "",
+            "title": "Groupkey",
+            "type": "string"
+          },
+          "groupLabels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Grouplabels",
+            "type": "object"
+          },
+          "receiver": {
+            "default": "",
+            "title": "Receiver",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "firing",
+              "resolved"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "version": {
+            "default": "4",
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "alerts"
+        ],
+        "title": "AlertmanagerV2Payload",
+        "type": "object"
+      },
       "ChangePasswordRequest": {
         "additionalProperties": false,
         "properties": {
@@ -127,6 +449,45 @@
         "title": "CollectorStatus",
         "type": "object"
       },
+      "CommentBody": {
+        "additionalProperties": false,
+        "description": "Optional comment body for ack/dismiss endpoints.",
+        "properties": {
+          "comment": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Comment"
+          }
+        },
+        "title": "CommentBody",
+        "type": "object"
+      },
+      "DismissResponse": {
+        "additionalProperties": false,
+        "description": "Response for POST /api/alerts/{id}/dismiss.",
+        "properties": {
+          "alert_id": {
+            "title": "Alert Id",
+            "type": "string"
+          },
+          "dismissed_at": {
+            "title": "Dismissed At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "alert_id",
+          "dismissed_at"
+        ],
+        "title": "DismissResponse",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -209,6 +570,26 @@
           "degraded_collectors"
         ],
         "title": "HealthzResponse",
+        "type": "object"
+      },
+      "IngestResponse": {
+        "additionalProperties": false,
+        "description": "Response for POST /api/alerts/ingest.",
+        "properties": {
+          "ingested": {
+            "title": "Ingested",
+            "type": "integer"
+          },
+          "received": {
+            "title": "Received",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "received",
+          "ingested"
+        ],
+        "title": "IngestResponse",
         "type": "object"
       },
       "LoginRequest": {
@@ -326,6 +707,36 @@
         "title": "MetricsSnapshotResponse",
         "type": "object"
       },
+      "OutcomeView": {
+        "additionalProperties": false,
+        "description": "One alert_outcomes row in API responses.",
+        "properties": {
+          "decided_at": {
+            "title": "Decided At",
+            "type": "string"
+          },
+          "decided_by": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decided By"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/AlertOutcome"
+          }
+        },
+        "required": [
+          "outcome",
+          "decided_at"
+        ],
+        "title": "OutcomeView",
+        "type": "object"
+      },
       "RetryResponse": {
         "additionalProperties": false,
         "description": "Response for POST /api/collectors/{name}/retry.",
@@ -350,6 +761,16 @@
         ],
         "title": "RetryResponse",
         "type": "object"
+      },
+      "Severity": {
+        "description": "Alert severity. Spec \u00a78 defines info/warning/critical for STAGE-013.",
+        "enum": [
+          "info",
+          "warning",
+          "critical"
+        ],
+        "title": "Severity",
+        "type": "string"
       },
       "UserResponse": {
         "additionalProperties": false,
@@ -448,6 +869,323 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/alerts": {
+      "get": {
+        "description": "List alerts with optional filters and cursor pagination.\n\nNOTE: ``total`` is omitted by design \u2014 cursor pagination already conveys\n\"more available\" via ``next_cursor``. Adding a separate COUNT(*) would\ndouble the per-request DB cost for negligible operator value.",
+        "operationId": "list_alerts_api_alerts_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/AlertStatus"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "severity",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/Severity"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Severity"
+            }
+          },
+          {
+            "in": "query",
+            "name": "source_tool",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Source Tool"
+            }
+          },
+          {
+            "in": "query",
+            "name": "fingerprint",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fingerprint"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlertListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Alerts",
+        "tags": [
+          "alerts"
+        ]
+      }
+    },
+    "/api/alerts/ingest": {
+      "post": {
+        "description": "Ingest an Alertmanager v2 webhook payload.\n\nFor each alert in ``payload.alerts``:\n\n- Compute the fingerprint via ``compute_fingerprint``.\n- If ``status == \"firing\"``: dedupe by fingerprint. Bump ``last_seen_at`` if\n  a row exists, else insert a new firing row. Dispatch ``AlertFiringEvent``.\n- If ``status == \"resolved\"``: look up the active row by fingerprint. If\n  found, mark resolved + dispatch ``AlertResolvedEvent``. If not found,\n  log INFO + skip (no row created).\n\nReturns 202 with ``{\"received\": int, \"ingested\": int}``. ``ingested`` counts\nitems that produced a state change (firing dedup-or-insert OR resolved\nmatching an active row).",
+        "operationId": "ingest_alerts_api_alerts_ingest_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AlertmanagerV2Payload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngestResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Ingest Alerts",
+        "tags": [
+          "alerts"
+        ]
+      }
+    },
+    "/api/alerts/{alert_id}": {
+      "get": {
+        "description": "Return the alert + outcome history + raw payload.",
+        "operationId": "get_alert_api_alerts__alert_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "alert_id",
+            "required": true,
+            "schema": {
+              "title": "Alert Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlertDetailResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Alert",
+        "tags": [
+          "alerts"
+        ]
+      }
+    },
+    "/api/alerts/{alert_id}/ack": {
+      "post": {
+        "description": "Ack an alert. Records an outcome row + sets ack_at/ack_by columns.",
+        "operationId": "ack_alert_api_alerts__alert_id__ack_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "alert_id",
+            "required": true,
+            "schema": {
+              "title": "Alert Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CommentBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AckResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Ack Alert",
+        "tags": [
+          "alerts"
+        ]
+      }
+    },
+    "/api/alerts/{alert_id}/dismiss": {
+      "post": {
+        "description": "Dismiss an alert. Records an outcome row; does NOT modify status.\n\nA dismissed alert may still be firing \u2014 dismissal is operator intent\n(\"don't show me this\") not lifecycle.",
+        "operationId": "dismiss_alert_api_alerts__alert_id__dismiss_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "alert_id",
+            "required": true,
+            "schema": {
+              "title": "Alert Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CommentBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DismissResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Dismiss Alert",
+        "tags": [
+          "alerts"
+        ]
+      }
+    },
     "/api/auth/change-password": {
       "post": {
         "description": "Verify current password; change to new; rotate session.",

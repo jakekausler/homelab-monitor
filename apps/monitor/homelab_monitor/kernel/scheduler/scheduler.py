@@ -22,6 +22,7 @@ import os
 from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from structlog.contextvars import bound_contextvars
@@ -45,6 +46,10 @@ from homelab_monitor.kernel.plugins.process_context import (
 )
 from homelab_monitor.kernel.plugins.types import CollectorConfig, CollectorResult, RunKind
 from homelab_monitor.kernel.scheduler.failure_budget import FailureBudget
+
+if TYPE_CHECKING:
+    from homelab_monitor.kernel.alerts.repository import AlertRepository
+    from homelab_monitor.kernel.dispatch.dispatcher import AlertDispatcher
 
 
 @dataclass(frozen=True, slots=True)
@@ -132,13 +137,16 @@ class Scheduler:
     deferred. ASYNC and THREAD modes are unaffected.
     """
 
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         loaded: list[LoadedCollector],
         ctx_factory: Callable[[Collector], CollectorContext],
         self_metrics: MetricsWriter,
         config: SchedulerConfig | None = None,
         failure_budget: FailureBudget | None = None,
+        *,
+        alert_repo: AlertRepository | None = None,
+        alert_dispatcher: AlertDispatcher | None = None,
     ) -> None:
         """Stash dependencies; do NOT touch the event loop here.
 
@@ -146,12 +154,18 @@ class Scheduler:
         produce the :class:`CollectorContext` handed to the collector's ``run``
         method. The factory pattern lets STAGE-001-010 wire real DB / HTTP /
         log handles without the scheduler caring about construction details.
+
+        ``alert_repo`` and ``alert_dispatcher`` (STAGE-001-013) are optional
+        and only used by :meth:`clear_quarantine` to mark the corresponding
+        active alert resolved + dispatch ``AlertResolvedEvent``.
         """
         self._loaded: list[LoadedCollector] = list(loaded)
         self._ctx_factory: Callable[[Collector], CollectorContext] = ctx_factory
         self._self_metrics: MetricsWriter = self_metrics
         self._config: SchedulerConfig = config if config is not None else SchedulerConfig()
         self._failure_budget: FailureBudget | None = failure_budget
+        self._alert_repo: AlertRepository | None = alert_repo
+        self._alert_dispatcher: AlertDispatcher | None = alert_dispatcher
         self._group_locks: dict[str, asyncio.Lock] = {}
         self._configs: dict[str, CollectorConfig] = {lc.collector.name: lc.config for lc in loaded}
 
@@ -247,6 +261,11 @@ class Scheduler:
         ``POST /api/collectors/{name}/retry`` endpoint will call this with the
         authenticated user's identifier as ``by``.
 
+        STAGE-001-013 additionally marks any active scheduler-sourced
+        quarantine alert for this collector as resolved + dispatches an
+        ``AlertResolvedEvent``. Skipped silently when alert_repo/dispatcher
+        are not wired.
+
         Args:
             name: Collector name.
             by: Actor identifier for audit purposes.
@@ -259,6 +278,25 @@ class Scheduler:
             msg = "Scheduler was constructed without a FailureBudget"
             raise RuntimeError(msg)
         await self._failure_budget.clear_quarantine(name, by=by)
+
+        if self._alert_repo is not None and self._alert_dispatcher is not None:
+            active = await self._alert_repo.find_active_quarantine_alert(name)
+            if active is not None:
+                from homelab_monitor.kernel.alerts.events import AlertResolvedEvent  # noqa: PLC0415
+
+                ts = utc_now_iso()
+                await self._alert_repo.mark_resolved(active.id, ts)
+                event = AlertResolvedEvent(
+                    alert_id=active.id,
+                    fingerprint=active.fingerprint,
+                    source_tool="scheduler",
+                    severity=active.severity.value,
+                    resolved_at=ts,
+                    labels=active.labels,
+                    annotations=active.annotations,
+                    ts=ts,
+                )
+                await self._alert_dispatcher.dispatch(event)
 
     async def request_immediate_run(self, name: str, trigger: TriggerContext) -> str:
         """Enqueue an out-of-band run for ``name``. Returns the future tick_id.

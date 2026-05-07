@@ -26,11 +26,22 @@ class TriggerContext:
     request_id: str | None = None
 
 
-class SchedulerTickEvent(BaseModel):
-    """Event published by scheduler after every tick outcome."""
+class BaseEvent(BaseModel):
+    """Base for all SSE event payloads. Subclasses MUST override `kind`.
+
+    Concrete events declare `kind: Literal["..."]` to discriminate at the
+    SSE wire layer; Pydantic supports Literal-narrowing of an inherited
+    str field.
+    """
 
     model_config = ConfigDict(extra="forbid")
-    kind: Literal["collector.tick"] = "collector.tick"
+    kind: str
+
+
+class SchedulerTickEvent(BaseEvent):
+    """Event published by scheduler after every tick outcome."""
+
+    kind: Literal["collector.tick"] = "collector.tick"  # pyright: ignore[reportIncompatibleVariableOverride]
     collector: str
     tick_id: str
     outcome: Literal["success", "failure", "shutdown", "skipped"]
@@ -49,11 +60,14 @@ class EventSink(Protocol):
     (lifespan) injects an EventSink implementation (e.g., SseBroker) that
     handles delivery, buffering, and backpressure.
 
+    Accepts any ``BaseEvent``-conforming value: scheduler ticks, alert firing,
+    alert resolved, etc. The implementation dispatches on ``event.kind``.
+
     MUST NOT raise — the implementation is responsible for catching its own
     errors so scheduler ticks are never disturbed by sink failures.
     """
 
-    async def publish(self, event: SchedulerTickEvent) -> None:
+    async def publish(self, event: BaseEvent) -> None:
         """Publish an event to subscribers."""
         ...
 
@@ -61,7 +75,7 @@ class EventSink(Protocol):
 class NullEventSink:
     """No-op EventSink for tests and contexts with no subscribers."""
 
-    async def publish(self, event: SchedulerTickEvent) -> None:
+    async def publish(self, event: BaseEvent) -> None:
         del event
 
 

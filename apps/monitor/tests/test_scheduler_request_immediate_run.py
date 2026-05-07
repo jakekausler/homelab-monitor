@@ -12,6 +12,7 @@ import pytest
 import structlog
 
 from homelab_monitor.kernel.events import (
+    BaseEvent,
     SchedulerTickEvent,
     TriggerContext,
 )
@@ -84,7 +85,8 @@ class _TestEventSink:
     def __init__(self) -> None:
         self.events: list[SchedulerTickEvent] = []
 
-    async def publish(self, event: SchedulerTickEvent) -> None:
+    async def publish(self, event: BaseEvent) -> None:
+        assert isinstance(event, SchedulerTickEvent)
         self.events.append(event)
 
 

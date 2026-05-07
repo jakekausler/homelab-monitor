@@ -11,7 +11,7 @@ from typing import Any
 
 from structlog.stdlib import BoundLogger
 
-from homelab_monitor.kernel.events import SchedulerTickEvent
+from homelab_monitor.kernel.events import BaseEvent
 
 # Public type alias documenting the SSE event payload shape; today this is a
 # JSON dict produced by SchedulerTickEvent.model_dump(mode="json").
@@ -74,8 +74,11 @@ class SseBroker:
         self._queue_maxsize = queue_maxsize
         self._lock = asyncio.Lock()
 
-    async def publish(self, event: SchedulerTickEvent) -> None:
-        """Publish a scheduler tick event to all subscribers.
+    async def publish(self, event: BaseEvent) -> None:
+        """Publish an event (scheduler tick or alert) to all subscribers.
+
+        The event's ``kind`` discriminator is propagated to subscribers so the
+        SSE consumer can route by event type.
 
         Non-throwing per Protocol contract. Exceptions are caught and logged.
         """
@@ -84,7 +87,7 @@ class SseBroker:
                 self._seq += 1
                 wrapped = _SseEvent(
                     seq=self._seq,
-                    kind="collector.tick",
+                    kind=event.kind,
                     payload=event.model_dump(mode="json"),
                 )
                 self._ring.append(wrapped)

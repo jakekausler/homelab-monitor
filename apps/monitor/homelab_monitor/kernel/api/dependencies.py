@@ -22,8 +22,10 @@ from homelab_monitor.kernel.auth.scopes import Scope, parse_scopes
 if TYPE_CHECKING:
     import httpx
 
+    from homelab_monitor.kernel.alerts.repository import AlertRepository
     from homelab_monitor.kernel.api.sse import SseBroker
     from homelab_monitor.kernel.db.repository import SqliteRepository
+    from homelab_monitor.kernel.dispatch.dispatcher import AlertDispatcher
     from homelab_monitor.kernel.plugins.io import MetricsWriter
     from homelab_monitor.kernel.plugins.loader import PluginLoader
     from homelab_monitor.kernel.scheduler.failure_budget import FailureBudget
@@ -159,6 +161,26 @@ def get_master_key(request: Request) -> bytes:
         attr="master_key",
         code="master_key_unavailable",
         message="master key is not loaded",
+    )
+
+
+def get_alert_repo(request: Request) -> AlertRepository:
+    """Get the alert repository from app state."""
+    return _require_state(
+        request,
+        attr="alert_repo",
+        code="alert_repo_unavailable",
+        message="alert repository is not initialized",
+    )
+
+
+def get_alert_dispatcher(request: Request) -> AlertDispatcher:
+    """Get the alert dispatcher from app state."""
+    return _require_state(
+        request,
+        attr="alert_dispatcher",
+        code="alert_dispatcher_unavailable",
+        message="alert dispatcher is not initialized",
     )
 
 

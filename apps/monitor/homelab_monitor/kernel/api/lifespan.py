@@ -15,11 +15,14 @@ import structlog
 from fastapi import FastAPI
 from structlog.stdlib import BoundLogger
 
+from homelab_monitor.kernel.alerts.repository import AlertRepository
 from homelab_monitor.kernel.api.sse import SseBroker
 from homelab_monitor.kernel.db.engine import dispose_engine, get_engine
 from homelab_monitor.kernel.db.migrations import MigrationsPendingError, run_migrations
 from homelab_monitor.kernel.db.repository import SqliteRepository
 from homelab_monitor.kernel.db.time import utc_now_iso
+from homelab_monitor.kernel.dispatch.channels.inproc_dashboard import InprocDashboardChannel
+from homelab_monitor.kernel.dispatch.dispatcher import AlertDispatcher
 from homelab_monitor.kernel.logging import configure_logging
 from homelab_monitor.kernel.plugins.base import Collector
 from homelab_monitor.kernel.plugins.context import CollectorContext
@@ -165,7 +168,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0915
     logs_writer = InMemoryLogsWriter()
     ssh_factory = _StubSshFactory()
     broker = SseBroker(log)
-    failure_budget = FailureBudget(repo, log)
+    alert_repo = AlertRepository(repo)
+    alert_dispatcher = AlertDispatcher(
+        channels=[InprocDashboardChannel(broker)],
+        log=log,
+    )
+    failure_budget = FailureBudget(
+        repo,
+        log,
+        alert_repo=alert_repo,
+        dispatcher=alert_dispatcher,
+    )
 
     def ctx_factory(c: Collector) -> CollectorContext:
         """Build a CollectorContext for a collector."""
@@ -189,6 +202,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0915
         metrics_writer,
         SchedulerConfig(event_sink=broker),
         failure_budget=failure_budget,
+        alert_repo=alert_repo,
+        alert_dispatcher=alert_dispatcher,
     )
     await scheduler.start()
 
@@ -198,6 +213,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0915
     app.state.scheduler = scheduler
     app.state.repo = repo
     app.state.broker = broker
+    app.state.alert_repo = alert_repo
+    app.state.alert_dispatcher = alert_dispatcher
     app.state.ttl_resolver = ttl_resolver
     app.state.http_client = http_client
     app.state.metrics_writer = metrics_writer

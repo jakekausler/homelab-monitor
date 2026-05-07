@@ -27,15 +27,21 @@ Audit event names:
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from dataclasses import dataclass
 
 from sqlalchemy import text
 from structlog.stdlib import BoundLogger
 
+from homelab_monitor.kernel.alerts.events import AlertFiringEvent
+from homelab_monitor.kernel.alerts.fingerprinting import quarantine_fingerprint
+from homelab_monitor.kernel.alerts.repository import AlertRepository
+from homelab_monitor.kernel.alerts.types import Alert, AlertStatus, Severity
 from homelab_monitor.kernel.db.audit import insert_audit
 from homelab_monitor.kernel.db.repository import SqliteRepository
 from homelab_monitor.kernel.db.time import utc_now_iso
+from homelab_monitor.kernel.dispatch.dispatcher import AlertDispatcher
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,12 +68,15 @@ class FailureBudget:
     ``is_quarantined``.
     """
 
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         repo: SqliteRepository,
         log: BoundLogger,
         clock: Callable[[], str] | None = None,
         default_threshold: int = 5,
+        *,
+        alert_repo: AlertRepository | None = None,
+        dispatcher: AlertDispatcher | None = None,
     ) -> None:
         """Stash dependencies; do NOT touch the DB here.
 
@@ -78,11 +87,18 @@ class FailureBudget:
                 Injected for deterministic testing.
             default_threshold: Consecutive failures before quarantine.
                 Per-collector override via ``CollectorConfig.quarantine_after``.
+            alert_repo: Optional ``AlertRepository`` for writing quarantine alert
+                rows on entry. When ``None``, quarantine emits no alert.
+            dispatcher: Optional ``AlertDispatcher`` for fanning out
+                ``AlertFiringEvent`` on quarantine entry. When ``None``, no
+                event is dispatched.
         """
         self._repo = repo
         self._log = log
         self._clock: Callable[[], str] = clock if clock is not None else utc_now_iso
         self._default_threshold = default_threshold
+        self._alert_repo = alert_repo
+        self._dispatcher = dispatcher
         self._consecutive_failures: dict[str, int] = {}
         self._quarantined: dict[str, QuarantineState] = {}
         self._loaded: bool = False
@@ -259,9 +275,92 @@ class FailureBudget:
             quarantined_at=quarantined_at,
         )
 
-        # SCAFFOLDING: STAGE-001-013 will dispatch a real alert here via the
-        # alert ingestor. For now, the WARNING log + audit_log row are the
-        # only signal.
+        # STAGE-001-013 Spec B: dispatch an AlertFiringEvent through the alert
+        # subsystem so the dashboard sees a real alert row + SSE event for
+        # collector quarantines. Skipped silently when alert_repo or dispatcher
+        # was not wired (unit tests that exercise quarantine logic without the
+        # alert subsystem still pass).
+        if self._alert_repo is not None and self._dispatcher is not None:
+            await self._emit_quarantine_alert(
+                name=name,
+                reason=reason,
+                consecutive_failures=new_count,
+                ts=quarantined_at,
+            )
+
+    async def _emit_quarantine_alert(
+        self,
+        *,
+        name: str,
+        reason: str,
+        consecutive_failures: int,
+        ts: str,
+    ) -> None:
+        """Persist + dispatch a collector-quarantine alert.
+
+        - Computes ``quarantine_fingerprint(name, reason)``.
+        - Looks up the active row by fingerprint:
+          - found: bump ``last_seen_at``; reuse opened_at + alert_id.
+          - not found: insert a new firing row.
+        - Builds and dispatches an ``AlertFiringEvent``.
+
+        Both ``self._alert_repo`` and ``self._dispatcher`` MUST be non-None
+        when this method is called (caller's responsibility).
+        """
+        assert self._alert_repo is not None
+        assert self._dispatcher is not None
+
+        fp = quarantine_fingerprint(name, reason)
+        labels = {
+            "alertname": "collector_quarantined",
+            "collector_name": name,
+            "reason": reason,
+        }
+        annotations: dict[str, str] = {}
+
+        existing = await self._alert_repo.find_active_by_fingerprint(fp)
+        if existing is not None:
+            await self._alert_repo.update_last_seen(existing.id, ts)
+            alert_id = existing.id
+            opened_at = existing.opened_at
+        else:
+            payload: dict[str, object] = {
+                "labels": labels,
+                "annotations": annotations,
+                "collector_name": name,
+                "reason": reason,
+                "consecutive_failures": consecutive_failures,
+            }
+            new_alert = Alert(
+                id="",  # repo allocates uuid7
+                fingerprint=fp,
+                source_tool="scheduler",
+                severity=Severity.WARNING,
+                status=AlertStatus.FIRING,
+                opened_at=ts,
+                last_seen_at=ts,
+                payload=payload,
+                labels=labels,
+                annotations=annotations,
+            )
+            alert_id = await self._alert_repo.insert_firing(
+                new_alert,
+                payload_json=json.dumps(payload, sort_keys=True, separators=(",", ":")),
+            )
+            opened_at = ts
+
+        event = AlertFiringEvent(
+            alert_id=alert_id,
+            fingerprint=fp,
+            source_tool="scheduler",
+            severity=Severity.WARNING.value,
+            opened_at=opened_at,
+            last_seen_at=ts,
+            labels=labels,
+            annotations=annotations,
+            ts=ts,
+        )
+        await self._dispatcher.dispatch(event)
 
     async def clear_quarantine(self, name: str, by: str = "operator") -> None:
         """Reset counter, clear DB quarantine state, write audit row.
