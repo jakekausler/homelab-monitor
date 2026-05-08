@@ -269,8 +269,23 @@ or related tests.
 
 ## STAGE-001-016: VictoriaLogs + vector
 
-- [ ] vector tails docker logs and a planted log line is queryable in VL
-- [ ] Per-stream byte cap kicks in on a flooded stream
+- [x] GET /api/logs/query with cookie+CSRF returns 200 + LogsQueryResponse shape parsed from VL native NDJSON.
+- [x] GET /api/logs/query without auth returns 401.
+- [x] GET /api/logs/query with VL HTTP 500 surfaces as 502 upstream_unavailable.
+- [x] GET /api/logs/query with expr length > 4096 returns 400 invalid_expr.
+- [x] GET /api/logs/streams returns the in-process state populated by LogStreamBudgetCollector.
+- [x] VictoriaLogsWriter.ingest() puts on bounded queue without blocking; QueueFull drops + increments dropped_count.
+- [x] VictoriaLogsWriter flusher batches up to 100 events / 1s timeout, POSTs NDJSON to /insert/jsonline.
+- [x] VictoriaLogsWriter on HTTP error increments error_count + logs warning, doesn't crash worker.
+- [x] VictoriaLogsWriter.aclose() drains remaining queue then returns.
+- [x] MultiplexLogsWriter fans out ingest() to all wrapped writers in registration order.
+- [x] LogStreamBudgetCollector at 60s queries VL stats, emits homelab_log_stream_bytes_today + lines_per_sec gauges.
+- [x] LogStreamBudgetCollector on VL HTTP failure returns CollectorResult with errors populated.
+- [x] docker compose -f deploy/compose/docker-compose.yml config exits 0 (compose validity with new VL + vector).
+- [x] deploy/vector/vector.toml is well-formed TOML.
+- [x] data_vl volume mounted RW into victorialogs and RO into monitor (for SelfDiskCollector "vl" slot accounting).
+- [x] HOMELAB_MONITOR_VL_RETENTION_DAYS env var documented in .env.example with default 30.
+- [x] load_log_stream_budget_config() returns DiskBudgetConfig defaults when YAML absent; YAML overrides values.
 
 ## STAGE-001-017: Alertmanager + vmalert (metrics) + first rule
 
