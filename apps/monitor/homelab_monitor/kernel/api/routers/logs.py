@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
 import httpx
@@ -31,6 +33,7 @@ _HTTP_OK = 200
 _MAX_EXPR_LEN = 4096
 _DEFAULT_LIMIT = 100
 _MAX_LIMIT = 5000
+_MAX_RANGE_DAYS = 30
 
 
 @router.get("/logs/query", response_model=LogsQueryResponse)
@@ -62,6 +65,37 @@ async def logs_query(  # noqa: PLR0913
             message="expression too long",
         )
 
+    # Validate ISO-8601 start/end
+    try:
+        start_dt = datetime.fromisoformat(start)
+        end_dt = datetime.fromisoformat(end)
+    except ValueError as exc:
+        raise HttpProblem(
+            status_code=400,
+            code="invalid_time_format",
+            message="start and end must be ISO-8601 timestamps",
+        ) from exc
+
+    # Normalize tzinfo to avoid TypeError on naive vs aware mix.
+    if start_dt.tzinfo is None:
+        start_dt = start_dt.replace(tzinfo=UTC)
+    if end_dt.tzinfo is None:
+        end_dt = end_dt.replace(tzinfo=UTC)
+
+    if start_dt >= end_dt:
+        raise HttpProblem(
+            status_code=400,
+            code="invalid_range",
+            message="end must be after start",
+        )
+
+    if (end_dt - start_dt) > timedelta(days=_MAX_RANGE_DAYS):
+        raise HttpProblem(
+            status_code=400,
+            code="range_too_wide",
+            message=f"time range cannot exceed {_MAX_RANGE_DAYS} days",
+        )
+
     params = {"query": expr, "start": start, "end": end, "limit": str(limit)}
     try:
         resp = await http_client.get(
@@ -83,6 +117,8 @@ async def logs_query(  # noqa: PLR0913
             status=resp.status_code,
             body=resp.text[:200],
         )
+        # SECURITY: do NOT relay resp.text to the client. VL error bodies may
+        # contain log line excerpts that could leak data across queries.
         raise HttpProblem(
             status_code=502,
             code="upstream_unavailable",
@@ -96,8 +132,6 @@ async def logs_query(  # noqa: PLR0913
         if not raw_line.strip():
             continue
         try:
-            import json  # noqa: PLC0415
-
             obj_raw: object = json.loads(raw_line)
         except ValueError:
             continue
@@ -124,4 +158,5 @@ async def logs_streams(
 
     Auth: cookie session required. CSRF NOT enforced on GET.
     """
-    return LogsStreamsResponse(streams=list(state.values()))
+    # Snapshot the dict to avoid race with collector mid-iteration.
+    return LogsStreamsResponse(streams=list(dict(state).values()))

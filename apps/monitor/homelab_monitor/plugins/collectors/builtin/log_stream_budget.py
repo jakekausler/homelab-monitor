@@ -145,6 +145,10 @@ class LogStreamBudgetCollector(BaseCollector):
             )
             emitted += 2
 
+        # Returning ok=False causes the scheduler to count this as a failure
+        # (homelab_collector_run_failure_total{reason="result_error"}) and
+        # trip quarantine after consecutive failures hit the threshold.
+        # See scheduler.py:678-689 + failure_budget.py:179-214.
         return CollectorResult(
             ok=True,
             metrics_emitted=emitted,

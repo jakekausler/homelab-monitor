@@ -1,13 +1,13 @@
-# Vector pipeline: docker_logs + journald -> normalize -> throttle -> VictoriaLogs
+# Vector log shipper config for homelab-monitor.
 #
-# Sources:
-#   - docker_logs: scrapes containers matching VECTOR_DOCKER_INCLUDE (regex).
-#   - journald: opt-in via VECTOR_JOURNALD_ENABLED=true. When unmounted/disabled
-#     vector logs an error but the rest of the pipeline keeps running.
+# v1 behavior:
+# - docker_logs source: scrapes ALL containers visible via the docker socket.
+#   Future stage will add per-container filtering when the homelab-overrides
+#   repo is wired up.
+# - journald source: enabled unconditionally. Errors quietly if /var/log/journal
+#   is not mounted (vector continues running other sources).
 #
-# Sink: VictoriaLogs at http://victorialogs:9428/insert/jsonline (NDJSON).
-# Throttle: 50 lines/sec/stream to keep a single noisy container from blowing
-# the per-stream byte budget enforced by the LogStreamBudgetCollector.
+# Per-stream throttle (50 lines/sec/service) is enforced by the throttle transform.
 
 [sources.docker_logs]
 type = "docker_logs"
@@ -25,10 +25,10 @@ type = "remap"
 inputs = ["docker_logs", "journald"]
 source = '''
 .host = get_hostname!()
-if !exists(.service) {
+if !exists(.service) || is_null(.service) {
   .service = .container_name || ._SYSTEMD_UNIT || "unknown"
 }
-if !exists(.severity) {
+if !exists(.severity) || is_null(.severity) {
   .severity = .level || .PRIORITY || "info"
 }
 '''
@@ -39,7 +39,13 @@ inputs = ["add_labels"]
 source = '''
 parsed, err = parse_json(.message)
 if err == null && is_object(parsed) {
+  trusted_host = .host
+  trusted_service = .service
+  trusted_severity = .severity
   . = merge(., parsed) ?? .
+  .host = trusted_host
+  .service = trusted_service
+  .severity = trusted_severity
 }
 '''
 
@@ -63,4 +69,13 @@ inputs = ["throttle"]
 uri = "http://victorialogs:9428/insert/jsonline"
 encoding.codec = "json"
 framing.method = "newline_delimited"
-request.headers."Content-Type" = "application/x-ndjson"
+
+[sinks.vl.request]
+retry_attempts = 3
+timeout_secs = 10
+headers."Content-Type" = "application/x-ndjson"
+
+[sinks.vl.buffer]
+type = "memory"
+max_events = 10000
+when_full = "drop_newest"

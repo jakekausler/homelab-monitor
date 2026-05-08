@@ -14,6 +14,7 @@ the worker (best-effort: monitoring must not fail because logs ingest stalled).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 from typing import cast
 
@@ -34,19 +35,17 @@ _HTTP_OK_MAX = 300
 class VictoriaLogsWriter:
     """Implements :class:`LogsWriter` against a VictoriaLogs HTTP endpoint."""
 
-    def __init__(  # noqa: PLR0913
+    def __init__(
         self,
         *,
         vl_url: str,
         http_client: httpx.AsyncClient,
-        loop: asyncio.AbstractEventLoop,
         queue_size: int = _DEFAULT_QUEUE_SIZE,
         batch_size: int = _DEFAULT_BATCH_SIZE,
         batch_timeout_s: float = _DEFAULT_BATCH_TIMEOUT_S,
     ) -> None:
         self._vl_url = vl_url.rstrip("/")
         self._http_client = http_client
-        self._loop = loop
         self._batch_size = batch_size
         self._batch_timeout_s = batch_timeout_s
         self._queue: asyncio.Queue[dict[str, str]] = asyncio.Queue(maxsize=queue_size)
@@ -73,6 +72,8 @@ class VictoriaLogsWriter:
             self._queue.put_nowait(event)
         except asyncio.QueueFull:
             self.dropped_count += 1
+            # TODO: emit homelab_log_writer_dropped_total Prometheus counter.
+            # Currently exposed only via instance attribute. Track in follow-up stage.
             self._log.warning(
                 "vl_writer.queue_full",
                 dropped_count=self.dropped_count,
@@ -88,20 +89,32 @@ class VictoriaLogsWriter:
         counted but do not propagate.
         """
         while not (self._stop.is_set() and self._queue.empty()):
-            batch: list[dict[str, str]] = []
-            # Wait for first event, OR for stop signal.
             try:
-                first = await asyncio.wait_for(self._queue.get(), timeout=self._batch_timeout_s)
-                batch.append(first)
-            except TimeoutError:
-                continue
-            # Drain up to batch_size - 1 more without waiting.
-            while len(batch) < self._batch_size:
+                batch: list[dict[str, str]] = []
+                # Wait for first event, OR for stop signal.
                 try:
-                    batch.append(self._queue.get_nowait())
-                except asyncio.QueueEmpty:
-                    break
-            await self._post_batch(batch)
+                    first = await asyncio.wait_for(self._queue.get(), timeout=self._batch_timeout_s)
+                    if first.get("_sentinel") == "":
+                        continue
+                    batch.append(first)
+                except TimeoutError:
+                    continue
+                # Drain up to batch_size - 1 more without waiting.
+                while len(batch) < self._batch_size:
+                    try:
+                        item = self._queue.get_nowait()
+                        if item.get("_sentinel") == "":
+                            continue
+                        batch.append(item)
+                    except asyncio.QueueEmpty:
+                        break
+                await self._post_batch(batch)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self.error_count += 1
+                self._log.warning("vl_writer.flusher_unexpected_error", error=str(exc))
+                await asyncio.sleep(0.1)  # avoid tight loop if exceptions persist
 
     async def _post_batch(self, batch: list[dict[str, str]]) -> None:
         """POST a batch of log events to VL as NDJSON.
@@ -140,3 +153,5 @@ class VictoriaLogsWriter:
     async def aclose(self) -> None:
         """Signal the worker to drain and exit. Caller awaits the worker task."""
         self._stop.set()
+        with contextlib.suppress(asyncio.QueueFull):
+            self._queue.put_nowait({"_sentinel": ""})

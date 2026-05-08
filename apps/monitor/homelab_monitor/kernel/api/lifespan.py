@@ -237,7 +237,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
     vl_writer = VictoriaLogsWriter(
         vl_url=vl_url,
         http_client=http_client,
-        loop=asyncio.get_running_loop(),
     )
     flusher_task = asyncio.create_task(vl_writer.run_flusher())
     logs_writer = MultiplexLogsWriter([in_memory_logs_writer, vl_writer])
@@ -273,6 +272,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
         )
 
     collectors = loader.load_all()
+    # TODO(refactor): inject log_stream_state via CollectorContext rather
+    # than mutating private attrs post-construction. Currently this is the
+    # cleanest path because the loader doesn't support DI on registration.
+    # Revisit when adding the next stateful collector.
     for c in collectors:
         if isinstance(c, LogStreamBudgetCollector):
             c._state = log_stream_state  # pyright: ignore[reportPrivateUsage]

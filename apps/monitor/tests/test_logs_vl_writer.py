@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 
 import httpx
 import pytest
@@ -20,7 +21,6 @@ async def test_ingest_enqueues_event() -> None:
         writer = VictoriaLogsWriter(
             vl_url=_VL_URL,
             http_client=client,
-            loop=asyncio.get_running_loop(),
             queue_size=10,
         )
         writer.ingest("svc.host", "hello")
@@ -38,7 +38,6 @@ async def test_ingest_drops_when_queue_full() -> None:
         writer = VictoriaLogsWriter(
             vl_url=_VL_URL,
             http_client=client,
-            loop=asyncio.get_running_loop(),
             queue_size=2,
         )
         writer.ingest("s", "1")
@@ -60,7 +59,6 @@ async def test_run_flusher_batches_and_posts(httpx_mock: HTTPXMock) -> None:
         writer = VictoriaLogsWriter(
             vl_url=_VL_URL,
             http_client=client,
-            loop=asyncio.get_running_loop(),
             batch_size=10,
             batch_timeout_s=0.05,
         )
@@ -92,7 +90,6 @@ async def test_run_flusher_handles_500_error(httpx_mock: HTTPXMock) -> None:
         writer = VictoriaLogsWriter(
             vl_url=_VL_URL,
             http_client=client,
-            loop=asyncio.get_running_loop(),
             batch_size=1,
             batch_timeout_s=0.05,
         )
@@ -112,7 +109,6 @@ async def test_run_flusher_handles_transport_error(httpx_mock: HTTPXMock) -> Non
         writer = VictoriaLogsWriter(
             vl_url=_VL_URL,
             http_client=client,
-            loop=asyncio.get_running_loop(),
             batch_size=1,
             batch_timeout_s=0.05,
         )
@@ -136,7 +132,6 @@ async def test_aclose_drains_remaining_queue(httpx_mock: HTTPXMock) -> None:
         writer = VictoriaLogsWriter(
             vl_url=_VL_URL,
             http_client=client,
-            loop=asyncio.get_running_loop(),
             batch_size=100,
             batch_timeout_s=0.05,
         )
@@ -147,3 +142,68 @@ async def test_aclose_drains_remaining_queue(httpx_mock: HTTPXMock) -> None:
         await writer.aclose()
         await task
         assert writer._queue.empty()  # pyright: ignore[reportPrivateUsage]
+
+
+@pytest.mark.asyncio
+async def test_vl_writer_recovers_after_500() -> None:
+    """Worker stays alive after a 500; next batch posts successfully."""
+    transport_responses = [
+        httpx.Response(500, text="server error"),  # first batch fails
+        httpx.Response(204),  # second batch succeeds
+    ]
+
+    request_count = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal request_count
+        resp = transport_responses[min(request_count, len(transport_responses) - 1)]
+        request_count += 1
+        return resp
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport, base_url="http://vl") as client:
+        writer = VictoriaLogsWriter(
+            vl_url="http://vl",
+            http_client=client,
+            queue_size=10,
+            batch_size=1,
+            batch_timeout_s=0.1,
+        )
+        flusher_task = asyncio.create_task(writer.run_flusher())
+        try:
+            writer.ingest("svc", "first event")
+            await asyncio.sleep(0.5)  # allow first batch to fail
+            assert writer.error_count >= 1
+
+            writer.ingest("svc", "second event")
+            await asyncio.sleep(0.5)  # allow second batch to succeed
+            assert request_count >= 2  # noqa: PLR2004 -- both batches attempted
+        finally:
+            await writer.aclose()
+            with contextlib.suppress(asyncio.CancelledError):
+                await flusher_task
+
+
+@pytest.mark.asyncio
+async def test_vl_writer_cancellation_clean() -> None:
+    """Cancelling flusher mid-run completes without spurious errors."""
+    transport = httpx.MockTransport(lambda req: httpx.Response(204))
+    async with httpx.AsyncClient(transport=transport, base_url="http://vl") as client:
+        writer = VictoriaLogsWriter(
+            vl_url="http://vl",
+            http_client=client,
+            queue_size=10,
+            batch_size=1,
+            batch_timeout_s=0.1,
+        )
+        flusher_task = asyncio.create_task(writer.run_flusher())
+        try:
+            writer.ingest("svc", "x")
+            await asyncio.sleep(0.05)
+            flusher_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await flusher_task
+            assert flusher_task.cancelled()
+        finally:
+            with contextlib.suppress(Exception):
+                await writer.aclose()

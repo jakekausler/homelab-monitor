@@ -6,7 +6,12 @@ from pathlib import Path
 
 import pytest
 
-from homelab_monitor.kernel.config import DiskBudgetConfig, load_disk_budget_config
+from homelab_monitor.kernel.config import (
+    DiskBudgetConfig,
+    LogStreamBudgetConfig,
+    load_disk_budget_config,
+    load_log_stream_budget_config,
+)
 
 
 def test_load_returns_defaults_when_file_missing(
@@ -101,12 +106,6 @@ def test_load_empty_disk_budget_section(monkeypatch: pytest.MonkeyPatch, tmp_pat
 
 
 # --- LogStreamBudgetConfig ---------------------------------------------------------------
-
-
-from homelab_monitor.kernel.config import (  # noqa: E402
-    LogStreamBudgetConfig,
-    load_log_stream_budget_config,
-)
 
 
 def test_log_stream_budget_defaults_when_file_missing(
