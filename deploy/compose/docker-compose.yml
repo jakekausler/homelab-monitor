@@ -18,13 +18,16 @@ services:
       HOMELAB_MONITOR_DB_URL: ${HOMELAB_MONITOR_DB_URL:-sqlite+aiosqlite:////data/homelab-monitor.db}
       HOMELAB_MONITOR_MASTER_KEY: ${HOMELAB_MONITOR_MASTER_KEY}
       HOMELAB_MONITOR_VM_URL: http://victoriametrics:8428
+      HOMELAB_MONITOR_VL_URL: http://victorialogs:9428
       HOMELAB_MONITOR_HTTPS_ONLY_COOKIES: ${HOMELAB_MONITOR_HTTPS_ONLY_COOKIES:-true}
       HOMELAB_MONITOR_AUTO_MIGRATE: "1"
       HOMELAB_MONITOR_VM_DATA_DIR: /var/vm-data
+      HOMELAB_MONITOR_VL_DATA_DIR: /var/vl-data
       HOMELAB_MONITOR_BACKUP_ROOT: /storage/backup/homelab-monitor
     volumes:
       - data_monitor:/data
       - data_vm:/var/vm-data:ro
+      - data_vl:/var/vl-data:ro
       - data_backup:/storage/backup/homelab-monitor
     depends_on:
       victoriametrics:
@@ -72,6 +75,42 @@ services:
       victoriametrics:
         condition: service_healthy
 
+  victorialogs:
+    image: victoriametrics/victoria-logs:v0.30.0-victorialogs
+    container_name: homelab-victorialogs
+    restart: unless-stopped
+    networks:
+      - homelab-monitor-net
+    command:
+      - "-storageDataPath=/storage"
+      - "-retentionPeriod=${HOMELAB_MONITOR_VL_RETENTION_DAYS:-30}d"
+      - "-httpListenAddr=:9428"
+    volumes:
+      - data_vl:/storage
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://localhost:9428/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+  vector:
+    image: timberio/vector:0.41.1-debian
+    container_name: homelab-vector
+    restart: unless-stopped
+    networks:
+      - homelab-monitor-net
+    volumes:
+      - ../vector/vector.toml:/etc/vector/vector.toml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/log/journal:/var/log/journal:ro
+    environment:
+      VECTOR_DOCKER_INCLUDE: ${VECTOR_DOCKER_INCLUDE:-^homelab-}
+      VECTOR_JOURNALD_ENABLED: ${VECTOR_JOURNALD_ENABLED:-false}
+    depends_on:
+      victorialogs:
+        condition: service_healthy
+
 networks:
   homelab-monitor-net:
     name: homelab-monitor-net
@@ -80,4 +119,5 @@ volumes:
   data_monitor:
   data_vm:
   data_vmagent:
+  data_vl:
   data_backup:

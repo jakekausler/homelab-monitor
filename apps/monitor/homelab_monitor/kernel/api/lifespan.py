@@ -26,6 +26,8 @@ from homelab_monitor.kernel.db.time import utc_now_iso
 from homelab_monitor.kernel.dispatch.channels.inproc_dashboard import InprocDashboardChannel
 from homelab_monitor.kernel.dispatch.dispatcher import AlertDispatcher
 from homelab_monitor.kernel.logging import configure_logging
+from homelab_monitor.kernel.logs.multiplex import MultiplexLogsWriter
+from homelab_monitor.kernel.logs.vl_writer import VictoriaLogsWriter
 from homelab_monitor.kernel.metrics.multiplex import MultiplexMetricsWriter
 from homelab_monitor.kernel.metrics.prometheus_writer import PrometheusRegistryWriter
 from homelab_monitor.kernel.plugins.base import Collector
@@ -41,6 +43,10 @@ from homelab_monitor.kernel.scheduler.scheduler import Scheduler, SchedulerConfi
 from homelab_monitor.kernel.secrets.master_key import MasterKeyError, load_master_key
 from homelab_monitor.kernel.secrets.repository import AsyncSecretsRepository
 from homelab_monitor.kernel.secrets.ttl_resolver import TtlCachingSecretsResolver
+from homelab_monitor.plugins.collectors.builtin.log_stream_budget import (
+    LogStreamBudgetCollector,
+    LogStreamState,
+)
 
 
 class _StubSshFactory:
@@ -178,6 +184,23 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
         log.warning("lifespan.collector_register_failed", name="self_disk", error=str(exc))
         degraded.append("self_disk")
 
+    try:
+        loader.register(
+            LogStreamBudgetCollector,
+            {
+                "name": "log_stream_budget",
+                "interval_seconds": int(LogStreamBudgetCollector.interval.total_seconds()),
+                "timeout_seconds": int(LogStreamBudgetCollector.timeout.total_seconds()),
+            },
+        )
+    except Exception as exc:  # pragma: no cover -- defensive
+        log.warning(
+            "lifespan.collector_register_failed",
+            name="log_stream_budget",
+            error=str(exc),
+        )
+        degraded.append("log_stream_budget")
+
     plugins_env = os.environ.get("HOMELAB_MONITOR_PLUGINS_DIR")
     if plugins_env is not None:
         plugins_dir: Path | None = Path(plugins_env)
@@ -209,7 +232,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
     prom_registry = CollectorRegistry()
     prom_writer = PrometheusRegistryWriter(prom_registry)
     metrics_writer = MultiplexMetricsWriter([in_memory_metrics_writer, prom_writer])
-    logs_writer = InMemoryLogsWriter()
+    in_memory_logs_writer = InMemoryLogsWriter()
+    vl_url = os.environ.get("HOMELAB_MONITOR_VL_URL", "http://victorialogs:9428")
+    vl_writer = VictoriaLogsWriter(
+        vl_url=vl_url,
+        http_client=http_client,
+        loop=asyncio.get_running_loop(),
+    )
+    flusher_task = asyncio.create_task(vl_writer.run_flusher())
+    logs_writer = MultiplexLogsWriter([in_memory_logs_writer, vl_writer])
+    log_stream_state: LogStreamState = {}
     ssh_factory = _StubSshFactory()
     broker = SseBroker(log)
     alert_repo = AlertRepository(repo)
@@ -240,8 +272,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
             ha=None,
         )
 
+    collectors = loader.load_all()
+    for c in collectors:
+        if isinstance(c, LogStreamBudgetCollector):
+            c._state = log_stream_state  # pyright: ignore[reportPrivateUsage]
+            c._vl_url = vl_url.rstrip("/")  # pyright: ignore[reportPrivateUsage]
+            c._http_client = http_client  # pyright: ignore[reportPrivateUsage]
     scheduler = Scheduler(
-        loader.load_all(),
+        collectors,
         ctx_factory,
         metrics_writer,
         SchedulerConfig(event_sink=broker),
@@ -265,6 +303,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
     app.state.in_memory_metrics_writer = in_memory_metrics_writer
     app.state.prom_registry = prom_registry
     app.state.logs_writer = logs_writer
+    app.state.in_memory_logs_writer = in_memory_logs_writer
+    app.state.vl_writer = vl_writer
+    app.state.log_stream_state = log_stream_state
     app.state.loader = loader
     app.state.failure_budget = failure_budget
 
@@ -295,5 +336,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
         refresh_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await refresh_task
+        await vl_writer.aclose()
+        with contextlib.suppress(asyncio.CancelledError):
+            await flusher_task
         await http_client.aclose()
         await dispose_engine()

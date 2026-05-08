@@ -24,6 +24,10 @@ __all__ = [
     "ErrorPayload",
     "HealthzResponse",
     "IngestResponse",
+    "LogsQueryEntry",
+    "LogsQueryResponse",
+    "LogsStreamSummary",
+    "LogsStreamsResponse",
     "MetricsRangeResponse",
     "MetricsSnapshotEntry",
     "MetricsSnapshotResponse",
@@ -221,3 +225,39 @@ class BackupResponse(BaseModel):
     ended_at: str
     size_bytes: int
     errors: list[str]
+
+
+class LogsQueryEntry(BaseModel):
+    """A single log line from a VictoriaLogs ``/select/logsql/query`` response."""
+
+    model_config = ConfigDict(extra="forbid")
+    stream: str
+    line: str
+    ts: str
+    fields: dict[str, str]
+
+
+class LogsQueryResponse(BaseModel):
+    """Response for GET /api/logs/query."""
+
+    model_config = ConfigDict(extra="forbid")
+    entries: list[LogsQueryEntry]
+    next_cursor: str | None = None
+
+
+class LogsStreamSummary(BaseModel):
+    """Per-stream byte/rate summary for the streams panel."""
+
+    model_config = ConfigDict(extra="forbid")
+    host: str
+    service: str
+    last_seen: str
+    lines_per_sec: float
+    bytes_today: int
+
+
+class LogsStreamsResponse(BaseModel):
+    """Response for GET /api/logs/streams."""
+
+    model_config = ConfigDict(extra="forbid")
+    streams: list[LogsStreamSummary]

@@ -29,10 +29,16 @@ if TYPE_CHECKING:
     from homelab_monitor.kernel.backup.service import BackupService
     from homelab_monitor.kernel.db.repository import SqliteRepository
     from homelab_monitor.kernel.dispatch.dispatcher import AlertDispatcher
-    from homelab_monitor.kernel.plugins.io import MemoryRetainingMetricsWriter, MetricsWriter
+    from homelab_monitor.kernel.plugins.io import (
+        InMemoryLogsWriter,
+        LogsWriter,
+        MemoryRetainingMetricsWriter,
+        MetricsWriter,
+    )
     from homelab_monitor.kernel.plugins.loader import PluginLoader
     from homelab_monitor.kernel.scheduler.failure_budget import FailureBudget
     from homelab_monitor.kernel.scheduler.scheduler import Scheduler
+    from homelab_monitor.plugins.collectors.builtin.log_stream_budget import LogStreamState
 
 
 def _require_state(request: Request, *, attr: str, code: str, message: str) -> Any:  # noqa: ANN401 -- generic state object, type varies per dependency
@@ -226,6 +232,41 @@ def get_backup_service(request: Request) -> BackupService:
         attr="backup_service",
         code="backup_service_unavailable",
         message="backup service is not initialized",
+    )
+
+
+def get_logs_writer(request: Request) -> LogsWriter:
+    """Get the multiplex logs writer from app state."""
+    return _require_state(
+        request,
+        attr="logs_writer",
+        code="logs_unavailable",
+        message="logs writer is not initialized",
+    )
+
+
+def get_in_memory_logs_writer(request: Request) -> InMemoryLogsWriter:
+    """Get the in-memory logs writer (test/snapshot path) from app state."""
+    return _require_state(
+        request,
+        attr="in_memory_logs_writer",
+        code="logs_unavailable",
+        message="in-memory logs writer is not initialized",
+    )
+
+
+def get_vl_url() -> str:
+    """Return the VictoriaLogs base URL from env, defaulting to compose hostname."""
+    return os.environ.get("HOMELAB_MONITOR_VL_URL", "http://victorialogs:9428")
+
+
+def get_log_stream_state(request: Request) -> LogStreamState:
+    """Get the per-stream summary state map (updated by the budget collector)."""
+    return _require_state(
+        request,
+        attr="log_stream_state",
+        code="logs_unavailable",
+        message="log stream state not initialized",
     )
 
 

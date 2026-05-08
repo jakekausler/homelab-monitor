@@ -688,6 +688,121 @@
         "title": "LoginResponse",
         "type": "object"
       },
+      "LogsQueryEntry": {
+        "additionalProperties": false,
+        "description": "A single log line from a VictoriaLogs ``/select/logsql/query`` response.",
+        "properties": {
+          "fields": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Fields",
+            "type": "object"
+          },
+          "line": {
+            "title": "Line",
+            "type": "string"
+          },
+          "stream": {
+            "title": "Stream",
+            "type": "string"
+          },
+          "ts": {
+            "title": "Ts",
+            "type": "string"
+          }
+        },
+        "required": [
+          "stream",
+          "line",
+          "ts",
+          "fields"
+        ],
+        "title": "LogsQueryEntry",
+        "type": "object"
+      },
+      "LogsQueryResponse": {
+        "additionalProperties": false,
+        "description": "Response for GET /api/logs/query.",
+        "properties": {
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/LogsQueryEntry"
+            },
+            "title": "Entries",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "entries"
+        ],
+        "title": "LogsQueryResponse",
+        "type": "object"
+      },
+      "LogsStreamSummary": {
+        "additionalProperties": false,
+        "description": "Per-stream byte/rate summary for the streams panel.",
+        "properties": {
+          "bytes_today": {
+            "title": "Bytes Today",
+            "type": "integer"
+          },
+          "host": {
+            "title": "Host",
+            "type": "string"
+          },
+          "last_seen": {
+            "title": "Last Seen",
+            "type": "string"
+          },
+          "lines_per_sec": {
+            "title": "Lines Per Sec",
+            "type": "number"
+          },
+          "service": {
+            "title": "Service",
+            "type": "string"
+          }
+        },
+        "required": [
+          "host",
+          "service",
+          "last_seen",
+          "lines_per_sec",
+          "bytes_today"
+        ],
+        "title": "LogsStreamSummary",
+        "type": "object"
+      },
+      "LogsStreamsResponse": {
+        "additionalProperties": false,
+        "description": "Response for GET /api/logs/streams.",
+        "properties": {
+          "streams": {
+            "items": {
+              "$ref": "#/components/schemas/LogsStreamSummary"
+            },
+            "title": "Streams",
+            "type": "array"
+          }
+        },
+        "required": [
+          "streams"
+        ],
+        "title": "LogsStreamsResponse",
+        "type": "object"
+      },
       "MeResponse": {
         "additionalProperties": false,
         "properties": {
@@ -1568,6 +1683,101 @@
           }
         },
         "summary": "Healthz"
+      }
+    },
+    "/api/logs/query": {
+      "get": {
+        "description": "Proxy a LogsQL query to VictoriaLogs.\n\nAuth: cookie session required. CSRF NOT enforced on GET.\n\nSurfaces transport / non-200 errors as 502 ``upstream_unavailable`` so the\nfrontend can fall back to its synthetic baseline.",
+        "operationId": "logs_query_api_logs_query_get",
+        "parameters": [
+          {
+            "description": "LogsQL expression",
+            "in": "query",
+            "name": "expr",
+            "required": true,
+            "schema": {
+              "description": "LogsQL expression",
+              "title": "Expr",
+              "type": "string"
+            }
+          },
+          {
+            "description": "ISO-8601 UTC start time",
+            "in": "query",
+            "name": "start",
+            "required": true,
+            "schema": {
+              "description": "ISO-8601 UTC start time",
+              "title": "Start",
+              "type": "string"
+            }
+          },
+          {
+            "description": "ISO-8601 UTC end time",
+            "in": "query",
+            "name": "end",
+            "required": true,
+            "schema": {
+              "description": "ISO-8601 UTC end time",
+              "title": "End",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 5000,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogsQueryResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Logs Query"
+      }
+    },
+    "/api/logs/streams": {
+      "get": {
+        "description": "Return the in-process per-stream summary updated by the budget collector.\n\nAuth: cookie session required. CSRF NOT enforced on GET.",
+        "operationId": "logs_streams_api_logs_streams_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogsStreamsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Logs Streams"
       }
     },
     "/api/metrics/range": {

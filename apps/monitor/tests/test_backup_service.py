@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import asyncio
-import collections
+import os
 import sqlite3
 import subprocess
 from pathlib import Path
+from typing import NamedTuple
 
 import httpx
 import pytest
@@ -331,9 +332,12 @@ async def test_run_backup_collects_sqlite_failure_in_errors(
     _make_vm_snapshot_dir(vm_data_dir, snapshot_name)
     transport = _vm_handler_factory(snapshot_name)
 
+    def _fake_to_thread(fn: object, *args: object, **kwargs: object) -> object:
+        return _raise_runtime_error()
+
     monkeypatch.setattr(
         "homelab_monitor.kernel.backup.service.asyncio.to_thread",
-        lambda fn, *args, **kwargs: _raise_runtime_error(),
+        _fake_to_thread,
     )
 
     async with httpx.AsyncClient(transport=transport, base_url="http://x") as c:
@@ -366,10 +370,17 @@ async def test_backup_sqlite_aborts_on_low_disk(
     backup_root = tmp_path / "backups"
     backup_root.mkdir()
 
-    _DiskUsage = collections.namedtuple("_DiskUsage", ["total", "used", "free"])
+    class _DiskUsage(NamedTuple):
+        total: int
+        used: int
+        free: int
+
+    def _fake_disk_usage(path: object) -> _DiskUsage:
+        return _DiskUsage(total=1000, used=999, free=1)
+
     monkeypatch.setattr(
         "homelab_monitor.kernel.backup.service.shutil.disk_usage",
-        lambda path: _DiskUsage(total=1000, used=999, free=1),
+        _fake_disk_usage,
     )
 
     async with httpx.AsyncClient() as c:
@@ -515,42 +526,47 @@ async def test_copy_tree_falls_back_to_cp_r_on_cross_filesystem(
         call_count["n"] += 1
         # src_dir gets dev=1, target_dir.parent gets dev=2
         if self == src_dir:
-            return type(result)(
-                st_mode=result.st_mode,
-                st_ino=result.st_ino,
-                st_dev=1,
-                st_nlink=result.st_nlink,
-                st_uid=result.st_uid,
-                st_gid=result.st_gid,
-                st_size=result.st_size,
-                st_atime=result.st_atime,
-                st_mtime=result.st_mtime,
-                st_ctime=result.st_ctime,
+            return os.stat_result(
+                (  # pyright: ignore[reportReturnType]
+                    result.st_mode,
+                    result.st_ino,
+                    1,
+                    result.st_nlink,
+                    result.st_uid,
+                    result.st_gid,
+                    result.st_size,
+                    result.st_atime,
+                    result.st_mtime,
+                    result.st_ctime,
+                )
             )
         if self == target_dir.parent:
-            return type(result)(
-                st_mode=result.st_mode,
-                st_ino=result.st_ino,
-                st_dev=2,
-                st_nlink=result.st_nlink,
-                st_uid=result.st_uid,
-                st_gid=result.st_gid,
-                st_size=result.st_size,
-                st_atime=result.st_atime,
-                st_mtime=result.st_mtime,
-                st_ctime=result.st_ctime,
+            return os.stat_result(
+                (  # pyright: ignore[reportReturnType]
+                    result.st_mode,
+                    result.st_ino,
+                    2,
+                    result.st_nlink,
+                    result.st_uid,
+                    result.st_gid,
+                    result.st_size,
+                    result.st_atime,
+                    result.st_mtime,
+                    result.st_ctime,
+                )
             )
         return result
 
     monkeypatch.setattr(Path, "stat", fake_stat)
 
     invoked_cmds: list[list[str]] = []
+    _real_subprocess_run = subprocess.run
 
     def capturing_run(cmd: list[str], **kwargs: object) -> object:
         invoked_cmds.append(cmd)
         # Actually run cp -r so target_dir gets created properly
         check = kwargs.pop("check", False)
-        return subprocess.run(cmd, check=check, **kwargs)  # type: ignore[call-overload]
+        return _real_subprocess_run(cmd, check=check, **kwargs)  # type: ignore[call-overload]
 
     monkeypatch.setattr("homelab_monitor.kernel.backup.service.subprocess.run", capturing_run)
 

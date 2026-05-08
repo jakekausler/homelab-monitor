@@ -224,7 +224,8 @@ async def test_self_disk_collector_skips_shrink_during_cooldown(
     # --- third tick after cooldown expires: should emit again ---
     fake_now = collector._last_decision_ts + 301.0  # type: ignore[operator]
     monkeypatch.setattr(
-        "homelab_monitor.plugins.collectors.builtin.self_disk.time.monotonic", lambda: fake_now
+        "homelab_monitor.plugins.collectors.builtin.self_disk.time.monotonic",
+        lambda: fake_now,  # pyright: ignore[reportUnknownLambdaType]
     )
 
     writer3 = MemoryRetainingMetricsWriter()

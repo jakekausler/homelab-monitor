@@ -1,0 +1,66 @@
+# Vector pipeline: docker_logs + journald -> normalize -> throttle -> VictoriaLogs
+#
+# Sources:
+#   - docker_logs: scrapes containers matching VECTOR_DOCKER_INCLUDE (regex).
+#   - journald: opt-in via VECTOR_JOURNALD_ENABLED=true. When unmounted/disabled
+#     vector logs an error but the rest of the pipeline keeps running.
+#
+# Sink: VictoriaLogs at http://victorialogs:9428/insert/jsonline (NDJSON).
+# Throttle: 50 lines/sec/stream to keep a single noisy container from blowing
+# the per-stream byte budget enforced by the LogStreamBudgetCollector.
+
+[sources.docker_logs]
+type = "docker_logs"
+include_containers = []
+exclude_containers = []
+auto_partial_merge = true
+
+[sources.journald]
+type = "journald"
+include_units = []
+current_boot_only = true
+
+[transforms.add_labels]
+type = "remap"
+inputs = ["docker_logs", "journald"]
+source = '''
+.host = get_hostname!()
+if !exists(.service) {
+  .service = .container_name || ._SYSTEMD_UNIT || "unknown"
+}
+if !exists(.severity) {
+  .severity = .level || .PRIORITY || "info"
+}
+'''
+
+[transforms.parse_json]
+type = "remap"
+inputs = ["add_labels"]
+source = '''
+parsed, err = parse_json(.message)
+if err == null && is_object(parsed) {
+  . = merge(., parsed) ?? .
+}
+'''
+
+[transforms.drop_noise]
+type = "filter"
+inputs = ["parse_json"]
+condition = '''
+.message != null && .message != ""
+'''
+
+[transforms.throttle]
+type = "throttle"
+inputs = ["drop_noise"]
+threshold = 50
+window_secs = 1
+key_field = "service"
+
+[sinks.vl]
+type = "http"
+inputs = ["throttle"]
+uri = "http://victorialogs:9428/insert/jsonline"
+encoding.codec = "json"
+framing.method = "newline_delimited"
+request.headers."Content-Type" = "application/x-ndjson"

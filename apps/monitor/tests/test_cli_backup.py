@@ -29,7 +29,7 @@ def _setup_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, snapshot_name: s
     db_path = tmp_path / "src.sqlite"
     _seed_sqlite(db_path)
     db_url = f"sqlite+aiosqlite:///{db_path}"
-    alembic_upgrade_head(db_url.replace("sqlite+aiosqlite://", "sqlite://", 1))
+    alembic_upgrade_head(db_url)
     monkeypatch.setenv("HOMELAB_MONITOR_DB_URL", db_url)
     monkeypatch.setenv("HOMELAB_MONITOR_VM_URL", "http://victoriametrics:8428")
     vm_data = tmp_path / "vm-data"
