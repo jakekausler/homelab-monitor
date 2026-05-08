@@ -37,7 +37,7 @@ After EPIC-001 is complete, the system has: a working CI pipeline, a verified de
 | STAGE-001-013 | Alert ingestor + first `inproc-dashboard` channel     | Complete    |
 | STAGE-001-014 | UI shell + login + Overview live-tile                 | Complete |
 | STAGE-001-015 | VictoriaMetrics + vmagent                             | Complete |
-| STAGE-001-015A | Backup + disk budget + minimal test rig extension    | Build (Complete) |
+| STAGE-001-015A | Backup + disk budget + minimal test rig extension    | Refinement (Complete) |
 | STAGE-001-016 | VictoriaLogs + vector                                 | Not Started |
 | STAGE-001-017 | Alertmanager + vmalert (metrics) + first rule         | Not Started |
 | STAGE-001-018 | vmalert (logs) + first log-derived rule               | Not Started |

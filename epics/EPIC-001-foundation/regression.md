@@ -327,6 +327,21 @@ or related tests.
 - [ ] `docker build --check -f apps/monitor/Dockerfile .` exits 0 (Dockerfile syntax validity).
 - [ ] Backfill race regression — HostCpuTile must apply range backfill even when SSE ticks first. Verify by running `cd apps/ui && pnpm exec vitest run src/components/tiles/HostCpuTile.test.tsx` — the test "applies range backfill even after SSE has ticked" must pass.
 
+## STAGE-001-015A: Backup + disk budget + minimal test rig extension
+
+- [ ] `POST /api/admin/backup` with cookie+CSRF returns 200 + BackupResponse. SQLite snapshot file created at returned sqlite_path. Audit row written.
+- [ ] `POST /api/admin/backup` with API token bearing scope admin:backup:write returns 200.
+- [ ] `POST /api/admin/backup` without auth returns 401; without CSRF returns 403; with token lacking scope returns 403.
+- [ ] `hm backup run` with unreachable VM exits 1, errors list mentions VM, but SQLite snapshot IS created at the expected path.
+- [ ] `hm backup list` with empty backup root prints `{"sqlite": [], "vm": []}` exit 0.
+- [ ] `hm backup retention --keep N` applies retention, removes files beyond Nth-most-recent, returns count via JSON.
+- [ ] SelfDiskCollector emits homelab_self_disk_used_bytes/budget_bytes/used_pct gauges. At >95% used_pct, emits homelab_self_disk_shrink_total{tier} counter + writes critical-severity audit row.
+- [ ] `docker compose -f deploy/compose/docker-compose.test.yml config -q` exits 0 (test rig compose validity).
+- [ ] `docker build --check -f apps/monitor/Dockerfile.test .` exits 0.
+- [ ] `bash -n scripts/run-integration.sh` exits 0 (script syntax valid).
+- [ ] `deploy/vmalert/metrics/self_disk.yaml` parses as YAML, contains 3 alert rules (SelfDiskWarn, SelfDiskError, SelfDiskCritical).
+- [ ] `load_disk_budget_config()` returns DiskBudgetConfig defaults when YAML file missing; HOMELAB_MONITOR_DISK_BUDGET_GB env overrides total_gb.
+
 ## STAGE-001-021: Full integration test rig + canonical e2e test
 
 - [ ] `docker compose -f deploy/compose/docker-compose.test.yml up --abort-on-container-exit --exit-code-from integration-tests` exits 0
