@@ -184,6 +184,7 @@ def _make_collector(
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 @pytest.mark.asyncio
 async def test_quarantine_round_trip_real_db(
     real_repo: SqliteRepository,
@@ -286,6 +287,7 @@ async def test_quarantine_round_trip_real_db(
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 @pytest.mark.asyncio
 async def test_quarantine_persists_across_restart(
     real_repo: SqliteRepository,
@@ -366,6 +368,7 @@ async def test_quarantine_persists_across_restart(
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 @pytest.mark.asyncio
 async def test_clear_quarantine_via_scheduler(
     real_repo: SqliteRepository,
@@ -466,6 +469,7 @@ async def test_clear_quarantine_via_scheduler(
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 @pytest.mark.asyncio
 async def test_concurrency_group_serializes_collectors(
     real_repo: SqliteRepository,
@@ -531,6 +535,7 @@ async def test_concurrency_group_serializes_collectors(
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 @pytest.mark.asyncio
 async def test_group_busy_skip_emits_metric(
     real_repo: SqliteRepository,
@@ -594,6 +599,7 @@ async def test_group_busy_skip_emits_metric(
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 @pytest.mark.asyncio
 async def test_quarantine_after_override_fires_early(
     real_repo: SqliteRepository,

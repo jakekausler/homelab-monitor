@@ -193,6 +193,7 @@ class _ProcCrashCollector(BaseCollector):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 @pytest.mark.asyncio
 async def test_real_kernel_types_plumbing(
     real_repo: SqliteRepository,
@@ -239,6 +240,7 @@ async def test_real_kernel_types_plumbing(
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 @pytest.mark.asyncio
 async def test_long_running_tick_precision(
     real_repo: SqliteRepository,
@@ -306,6 +308,7 @@ async def test_long_running_tick_precision(
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 @pytest.mark.asyncio
 async def test_mixed_run_kind_concurrency(
     real_repo: SqliteRepository,
@@ -380,6 +383,7 @@ async def test_mixed_run_kind_concurrency(
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 @pytest.mark.asyncio
 async def test_process_worker_hard_crash_isolated(
     real_repo: SqliteRepository,
@@ -440,6 +444,7 @@ async def test_process_worker_hard_crash_isolated(
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 @pytest.mark.asyncio
 async def test_scheduler_restart_metrics_are_independent(
     real_repo: SqliteRepository,
@@ -500,6 +505,7 @@ async def test_scheduler_restart_metrics_are_independent(
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 @pytest.mark.asyncio
 async def test_high_cardinality_hash_offset_spread() -> None:
     """20 collectors at 2s intervals: hash-offset spreads first ticks across [0, 2s].

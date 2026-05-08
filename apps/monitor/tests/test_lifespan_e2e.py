@@ -43,6 +43,7 @@ async def app_bootstrapped(
         yield app
 
 
+@pytest.mark.slow
 @pytest.mark.asyncio
 async def test_lifespan_warns_when_https_only_cookies_disabled(
     monkeypatch: pytest.MonkeyPatch,
@@ -70,6 +71,7 @@ async def test_lifespan_warns_when_https_only_cookies_disabled(
     assert warnings_with_env, "expected HTTPS_ONLY warning when env var is false"
 
 
+@pytest.mark.slow
 @pytest.mark.asyncio
 async def test_lifespan_e2e_healthz_up(app_bootstrapped: FastAPI) -> None:
     """GET /api/healthz returns 200 with db: up, scheduler: running."""
@@ -84,6 +86,7 @@ async def test_lifespan_e2e_healthz_up(app_bootstrapped: FastAPI) -> None:
         assert data.get("scheduler") == "running"
 
 
+@pytest.mark.slow
 @pytest.mark.asyncio
 async def test_lifespan_e2e_collectors_loaded(
     app_bootstrapped: FastAPI, authenticated_client: AsyncClient

@@ -67,6 +67,9 @@ addopts = "--strict-markers --strict-config -ra"
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
+markers = [
+    "slow: real-time e2e tests using wall-clock sleeps; deselect with `-m \"not slow\"`",
+]
 
 [tool.coverage.run]
 source = ["homelab_monitor"]

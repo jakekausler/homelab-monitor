@@ -154,6 +154,7 @@ def _write_plugin(  # noqa: PLR0913
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 @pytest.mark.asyncio
 async def test_hello_world_plugin_via_collector_class_factory() -> None:
     """Load the shipped hello-subprocess-plugin via make_subprocess_collector.
@@ -192,6 +193,7 @@ async def test_hello_world_plugin_via_collector_class_factory() -> None:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 @pytest.mark.asyncio
 async def test_all_five_protocol_line_types_parsed_correctly(tmp_path: Path) -> None:
     """Bash plugin emits all 5 line types; every piece is verified in the result.
@@ -242,6 +244,7 @@ echo '{"type":"result","ok":true,"summary":"all 5 types"}'
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 @pytest.mark.asyncio
 async def test_timeout_sigterm_then_sigkill_wall_clock() -> None:
     """SIGTERM-ignoring plugin with 1s timeout; full kill takes ~3s.
@@ -291,6 +294,7 @@ sleep 30
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 @pytest.mark.asyncio
 async def test_untrusted_plugin_secrets_filtered_to_manifest_declarations(
     tmp_path: Path,
@@ -351,6 +355,7 @@ echo '{"type":"result","ok":true}'
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 @pytest.mark.asyncio
 async def test_loader_persist_to_db_inserts_and_is_idempotent(
     real_repo: SqliteRepository,

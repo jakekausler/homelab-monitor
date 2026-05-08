@@ -246,6 +246,7 @@ async def test_sse_broker_no_skip_seq_numbers_in_replay(broker: SseBroker) -> No
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 @pytest.mark.asyncio
 async def test_sse_http_endpoint_smoke(
     uvicorn_server: UvicornFixtureValue,

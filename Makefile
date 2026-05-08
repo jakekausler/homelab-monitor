@@ -1,4 +1,4 @@
-.PHONY: setup verify verify-ci lint format format-check typecheck test dev backend-dev openapi-export clean crg-init ui-verify ui-dev ui-build ui-test
+.PHONY: setup verify verify-ci lint format format-check typecheck test test-fast test-nocov dev backend-dev openapi-export clean crg-init ui-verify ui-dev ui-build ui-test _verify-parallel
 
 .DEFAULT_GOAL := verify
 
@@ -17,7 +17,17 @@ setup:
 		echo "  Tip: run 'make crg-init' once to install the Code Review Graph daemon (optional)."; \
 	fi
 
-verify: lint format-check typecheck test ui-verify
+verify: lint format-check typecheck _verify-parallel
+
+.PHONY: _verify-parallel
+_verify-parallel:
+	@echo "Running backend tests and UI verify in parallel..."
+	@bash -c '\
+	  ($(MAKE) test 2>&1 | sed "s/^/[backend] /"; exit $${PIPESTATUS[0]}) & p1=$$!; \
+	  ($(MAKE) ui-verify 2>&1 | sed "s/^/[ui] /"; exit $${PIPESTATUS[0]}) & p2=$$!; \
+	  wait $$p1; r1=$$?; \
+	  wait $$p2; r2=$$?; \
+	  exit $$((r1 + r2))'
 
 lint:
 	uv run --directory $(MONITOR_DIR) ruff check .
@@ -33,6 +43,14 @@ typecheck:
 
 test:
 	uv run --directory $(MONITOR_DIR) pytest --cov=homelab_monitor --cov-report=term-missing
+
+.PHONY: test-fast
+test-fast:
+	uv run --directory $(MONITOR_DIR) pytest -m "not slow" --no-cov
+
+.PHONY: test-nocov
+test-nocov:
+	uv run --directory $(MONITOR_DIR) pytest --no-cov
 
 backend-dev:
 	uv run --directory $(MONITOR_DIR) uvicorn homelab_monitor.kernel.api.app:create_app \
