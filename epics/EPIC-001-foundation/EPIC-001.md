@@ -36,7 +36,7 @@ After EPIC-001 is complete, the system has: a working CI pipeline, a verified de
 | STAGE-001-012 | First built-in `host` collector                       | Complete    |
 | STAGE-001-013 | Alert ingestor + first `inproc-dashboard` channel     | Complete    |
 | STAGE-001-014 | UI shell + login + Overview live-tile                 | Complete |
-| STAGE-001-015 | VictoriaMetrics + vmagent                             | Refinement (Complete) |
+| STAGE-001-015 | VictoriaMetrics + vmagent                             | Complete |
 | STAGE-001-015A | Backup + disk budget + minimal test rig extension    | Not Started |
 | STAGE-001-016 | VictoriaLogs + vector                                 | Not Started |
 | STAGE-001-017 | Alertmanager + vmalert (metrics) + first rule         | Not Started |
@@ -45,7 +45,7 @@ After EPIC-001 is complete, the system has: a working CI pipeline, a verified de
 | STAGE-001-020 | Grafana + dashboards-as-code provisioning             | Not Started |
 | STAGE-001-021 | Full integration test rig + canonical e2e test        | Not Started |
 
-## Current Stage: STAGE-001-015
+## Current Stage: STAGE-001-015A
 ## Current Phase: Not Started
 
 ## Cross-stage acceptance criteria
