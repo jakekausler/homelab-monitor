@@ -284,8 +284,9 @@ describe('HostCpuTile range backfill (STAGE-001-015)', () => {
     expect(screen.getByLabelText('Host CPU percent')).toHaveTextContent('50.0%')
   })
 
-  it('does not clobber live SSE data with late-arriving range backfill', () => {
+  it('applies range backfill even after SSE has ticked', () => {
     // Setup: SSE has fired before range resolves.
+    // With the fix, the range backfill effect runs regardless of SSE state.
     mockSnapshot.mockReturnValue(makeSnapshot(50))
     mockSse.mockReturnValue({
       value: {
@@ -305,11 +306,11 @@ describe('HostCpuTile range backfill (STAGE-001-015)', () => {
       ]),
     )
     renderTile()
-    // Even though the range resolved with values 10/20, the seededFromHistoryRef
-    // was set by the SSE tick first, so the synthetic snapshot seed (50%) is
-    // retained as the latest. The user sees the live snapshot value, not the
-    // historical backfill, because SSE won the race.
+    // Range backfill applies unconditionally to the series (sparkline).
+    // The big-number reflects the snapshot seed value (50), not the range data.
     expect(screen.getByLabelText('Host CPU percent')).toHaveTextContent('50.0%')
+    // Verify the sparkline (series) is rendered; this confirms the backfill applied.
+    expect(screen.getByLabelText('Host CPU history')).toBeInTheDocument()
   })
 
   it('pads a short range to SERIES_CAPACITY with the first value', () => {

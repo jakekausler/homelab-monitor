@@ -158,7 +158,6 @@ export function HostCpuTile() {
 
   useEffect(() => {
     if (sse.value === null) return
-    seededFromHistoryRef.current = true
     void refetchRef.current()
     // eslint-disable-next-line react-hooks/set-state-in-effect,@eslint-react/set-state-in-effect -- intentional: seeding/updating state from non-React source (snapshot, SSE event)
     setLastUpdatedAt(sse.value.ts)
