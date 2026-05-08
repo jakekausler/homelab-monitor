@@ -316,6 +316,17 @@ or related tests.
 - The 2 SSE pytest tests (`test_sse_http_endpoint_smoke`, `test_lifespan_e2e_sse_receives_tick`) pass against the in-process uvicorn fixture.
 - `make verify` exits 0 deterministically (no flakes from probabilistic tamper tests, no async timing flakes).
 
+## STAGE-001-015: VictoriaMetrics + vmagent
+
+- [ ] `GET /metrics` endpoint serves Prometheus exposition format without auth. Verify by running: `curl -sS http://localhost:9090/metrics | head -20` — should show Prometheus text starting with `# HELP` lines.
+- [ ] `GET /api/metrics/range` proxies to VictoriaMetrics. Verify with VM running: authenticated GET `/api/metrics/range?expr=homelab_host_cpu_percent&start=...&end=...&step=10s` returns matrix data.
+- [ ] `GET /api/metrics/snapshot` continues to return latest in-memory values (regression after writer multiplex landing).
+- [ ] HostCpuTile range backfill happy path. With VM running, opening Overview should populate the sparkline with 60 historical points within 1-2s. SSE-driven appends continue afterward.
+- [ ] HostCpuTile range backfill graceful failure. With VM unreachable (502/timeout), the synthetic baseline retains; tile remains functional via snapshot + SSE.
+- [ ] `docker compose -f deploy/compose/docker-compose.yml config` exits 0 (compose file validity).
+- [ ] `docker build --check -f apps/monitor/Dockerfile .` exits 0 (Dockerfile syntax validity).
+- [ ] Backfill race regression — HostCpuTile must apply range backfill even when SSE ticks first. Verify by running `cd apps/ui && pnpm exec vitest run src/components/tiles/HostCpuTile.test.tsx` — the test "applies range backfill even after SSE has ticked" must pass.
+
 ## STAGE-001-021: Full integration test rig + canonical e2e test
 
 - [ ] `docker compose -f deploy/compose/docker-compose.test.yml up --abort-on-container-exit --exit-code-from integration-tests` exits 0
