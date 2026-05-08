@@ -32,10 +32,12 @@ groups:
           summary: "Host memory above 90% for 10m"
           description: 'Host {{ $labels.host }} memory utilization {{ $value | humanizePercentage }}'
 
-      # TODO(STAGE-001-018+): Uncomment once FailureBudget emits
+      # TODO: Uncomment once FailureBudget emits
       # `homelab_collector_quarantine_count` on quarantine state change.
-      # The synthetic AlertFiringEvent in scheduler.failure_budget covers this
-      # case until the gauge is wired.
+      # Currently FailureBudget records quarantine state in the `collectors`
+      # table and emits structured logs only — no gauge yet. The synthetic
+      # AlertFiringEvent in scheduler.failure_budget covers this case until
+      # the gauge is wired. Tracked separately from the EPIC-001 stages.
       # - alert: CollectorQuarantined
       #   expr: homelab_collector_quarantine_count > 0
       #   for: 0m

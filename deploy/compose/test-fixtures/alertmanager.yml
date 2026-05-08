@@ -14,4 +14,7 @@ receivers:
         http_config:
           authorization:
             type: Bearer
+            # NOT a secret — fixture-only token; the test webhook receiver
+            # accepts any Bearer (or none). Left as-is so AM config validates
+            # with the real schema.
             credentials: 'test-fixture-token-not-real'

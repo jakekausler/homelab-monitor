@@ -27,7 +27,20 @@ def _default_vl_url() -> str:
     """Resolve VL ingest URL from $VL_URL or default to compose-network DNS."""
     import os  # noqa: PLC0415  -- inline to keep import surface narrow at module load
 
-    return os.environ.get("VL_URL", "http://victorialogs:9428").rstrip("/")
+    url = os.environ.get("VL_URL", "http://victorialogs:9428").rstrip("/")
+    # Safety: refuse to plant logs into anything that looks like production.
+    url_lower = url.lower()
+    if (
+        "victorialogs" not in url_lower
+        and "127.0.0.1" not in url_lower
+        and "localhost" not in url_lower
+    ):
+        msg = (
+            f"plant_log_lines refuses to target {url!r}: only compose-network "
+            "DNS (victorialogs) or loopback are permitted."
+        )
+        raise RuntimeError(msg)
+    return url
 
 
 def plant_log_lines(  # noqa: PLR0913
@@ -56,7 +69,9 @@ def plant_log_lines(  # noqa: PLR0913
         severity: value for the `severity` log field (info|warning|error|critical).
         message: text for `_msg`. The rule's phrase filter must match this literal.
         count: number of records to plant. Must be >= 1.
-        base_time: timestamp anchor (UTC). If None, uses ``datetime.now(UTC)``.
+        base_time: timestamp anchor (must be tz-aware; converted to UTC).
+            If None, uses ``datetime.now(UTC)``. Sub-millisecond precision
+            is truncated; use ``interval_ms >= 1`` for unique timestamps.
         interval_ms: gap between successive records' timestamps. Default 100ms.
         extra_fields: additional indexed log fields merged into each record.
         vl_url: explicit VL base URL; if None, reads $VL_URL or defaults to
@@ -73,6 +88,11 @@ def plant_log_lines(  # noqa: PLR0913
     assert count >= 1, "plant_log_lines requires count >= 1"
 
     base = base_time or datetime.now(UTC)
+    if base.tzinfo is None:
+        msg = "plant_log_lines requires tz-aware base_time (use datetime.now(UTC))"
+        raise ValueError(msg)
+    # Convert to UTC if some other tz was supplied:
+    base = base.astimezone(UTC)
     extras = extra_fields or {}
 
     lines: list[str] = []

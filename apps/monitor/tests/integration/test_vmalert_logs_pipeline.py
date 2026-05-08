@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 import time
 from collections.abc import Iterator
 from pathlib import Path
@@ -46,33 +47,15 @@ WAIT_FOR_ALERT_S = 90
 
 
 def _start_test_webhook() -> subprocess.Popen[bytes]:
-    """Start a tiny FastAPI receiver in the BACKGROUND on port 9090.
+    """Spawn the webhook receiver subprocess (see helpers/test_webhook_server.py).
 
     The receiver appends every POSTed alerts payload to WEBHOOK_RECEIVED_FILE
     and returns 202. Auth is accepted permissively (any Bearer or none).
     """
     WEBHOOK_RECEIVED_FILE.unlink(missing_ok=True)
     return subprocess.Popen(
-        [
-            "python",
-            "-c",
-            (
-                "import json, sys\n"
-                "from pathlib import Path\n"
-                "from fastapi import FastAPI, Request\n"
-                "import uvicorn\n"
-                "OUT = Path('/tmp/received-alerts.jsonl')\n"
-                "app = FastAPI()\n"
-                "@app.post('/api/alerts/ingest')\n"
-                "async def ingest(req: Request):\n"
-                "    body = await req.json()\n"
-                "    with OUT.open('a') as f:\n"
-                "        f.write(json.dumps(body) + '\\n')\n"
-                "    return {'received': len(body.get('alerts', [])),"
-                "             'ingested': len(body.get('alerts', []))}\n"
-                "uvicorn.run(app, host='0.0.0.0', port=9090, log_level='warning')\n"
-            ),
-        ]
+        [sys.executable, "-m", "tests.integration.helpers.test_webhook_server"],
+        cwd=str(Path(__file__).resolve().parent.parent.parent),
     )
 
 
@@ -86,7 +69,10 @@ def _wait_for_alert_with_label(
             for line in WEBHOOK_RECEIVED_FILE.read_text().splitlines():
                 if not line.strip():
                     continue
-                payload = json.loads(line)
+                try:
+                    payload = json.loads(line)
+                except json.JSONDecodeError:  # pragma: no cover -- defensive
+                    continue
                 for alert in payload.get("alerts", []):
                     if (
                         alert.get("labels", {}).get(label_key) == label_val
@@ -112,18 +98,27 @@ def test_webhook() -> Iterator[None]:
             pytest.skip(f"{name} not reachable — start docker-compose.test.yml")
 
     proc = _start_test_webhook()
-    # Wait for webhook to be ready
-    deadline = time.time() + 10
-    while time.time() < deadline:
+    try:
+        # Wait for receiver to bind port 9090.
+        deadline = time.time() + 10
+        while time.time() < deadline:
+            try:
+                httpx.get("http://localhost:9090/openapi.json", timeout=1.0)
+                break
+            except httpx.HTTPError:
+                time.sleep(0.2)
+        else:  # pragma: no cover -- defensive
+            msg = "test webhook receiver did not start within 10s"
+            raise RuntimeError(msg)
+        yield
+    finally:
+        proc.terminate()
         try:
-            httpx.get("http://localhost:9090/openapi.json", timeout=1.0)
-            break
-        except httpx.HTTPError:
-            time.sleep(0.2)
-    yield
-    proc.terminate()
-    proc.wait(timeout=5)
-    WEBHOOK_RECEIVED_FILE.unlink(missing_ok=True)
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:  # pragma: no cover -- defensive
+            proc.kill()
+            proc.wait(timeout=5)
+        WEBHOOK_RECEIVED_FILE.unlink(missing_ok=True)
 
 
 @pytest.mark.integration
@@ -213,7 +208,10 @@ def test_kernel_oom_alert_resolves_when_lines_age_out(test_webhook: None) -> Non
             for line in WEBHOOK_RECEIVED_FILE.read_text().splitlines():
                 if not line.strip():
                     continue
-                payload = json.loads(line)
+                try:
+                    payload = json.loads(line)
+                except json.JSONDecodeError:  # pragma: no cover -- defensive
+                    continue
                 for a in payload.get("alerts", []):
                     if (
                         a.get("labels", {}).get("host") == "testhost-resolve"

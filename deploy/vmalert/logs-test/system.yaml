@@ -12,6 +12,10 @@
 groups:
   - name: system_logs
     type: vlogs
+    # interval: 5s gives ~6 evaluations per 30s window — sufficient resolution
+    # for the integration test to observe transitions (firing + resolved).
+    # DO NOT raise to match production's 30s; the test would only get 1 eval
+    # per window.
     interval: 5s
     rules:
       - alert: KernelOOM
