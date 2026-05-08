@@ -11,8 +11,10 @@ from dataclasses import asdict
 from pathlib import Path
 
 import httpx
+from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from homelab_monitor.kernel.backup.service import BackupService
+from homelab_monitor.kernel.db.repository import SqliteRepository
 
 
 # argparse exposes no public type for sub-parsers; using the private alias is the
@@ -33,6 +35,12 @@ def add_subparser(
     backup.set_defaults(func=_handle)
 
 
+async def _close_service_and_engine(service: BackupService, engine: AsyncEngine) -> None:
+    """Helper for sync _cmd_list cleanup (since it doesn't await elsewhere)."""
+    await service.aclose()
+    await engine.dispose()
+
+
 def _handle(args: argparse.Namespace) -> int:
     """Dispatch ``hm backup <cmd>``."""
     sub = getattr(args, "backup_cmd", None)
@@ -44,57 +52,72 @@ def _handle(args: argparse.Namespace) -> int:
     if sub == "list":
         return _cmd_list()
     if sub == "retention":
-        return _cmd_retention(int(args.keep))
+        return asyncio.run(_cmd_retention(int(args.keep)))
     print(f"unknown subcommand: {sub}", file=sys.stderr)  # pragma: no cover
     return 2  # pragma: no cover
 
 
-def _build_service_sync() -> BackupService:
+def _build_service_sync() -> tuple[BackupService, AsyncEngine]:
     """Construct a BackupService from env vars (no app.state)."""
     db_url = os.environ.get(
         "HOMELAB_MONITOR_DB_URL", "sqlite+aiosqlite:////data/homelab-monitor.db"
     )
     prefix = "sqlite+aiosqlite:///"
-    db_path = Path(db_url[len(prefix) :] if db_url.startswith(prefix) else db_url)
+    db_path_str = db_url[len(prefix) :] if db_url.startswith(prefix) else db_url
+    db_path = Path(db_path_str)
     vm_url = os.environ.get("HOMELAB_MONITOR_VM_URL", "http://victoriametrics:8428")
     vm_data_dir = Path(os.environ.get("HOMELAB_MONITOR_VM_DATA_DIR", "/var/vm-data"))
     backup_root = Path(
         os.environ.get("HOMELAB_MONITOR_BACKUP_ROOT", "/storage/backup/homelab-monitor")
     )
     # CLI gets its own short-lived AsyncClient; not the app.state one.
-    client = httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=5.0))
-    return BackupService(
+    vm_timeout_s = float(os.environ.get("HOMELAB_MONITOR_VM_TIMEOUT_S", "30.0"))
+    client = httpx.AsyncClient(timeout=httpx.Timeout(vm_timeout_s, connect=5.0))
+
+    engine = create_async_engine(db_url)
+    repo = SqliteRepository(engine)
+
+    service = BackupService(
+        db=repo,
         db_path=db_path,
         vm_url=vm_url,
         vm_data_dir=vm_data_dir,
         backup_root=backup_root,
         http_client=client,
     )
+    return service, engine
 
 
 async def _cmd_run() -> int:
     """``hm backup run``: execute a full backup, print summary."""
-    service = _build_service_sync()
+    service, engine = _build_service_sync()
     try:
-        result = await service.run_backup()
+        result = await service.run_backup(who=f"cli:{os.geteuid()}", ip=None)
     finally:
-        # Close the per-CLI httpx client we created above.
-        await service._http.aclose()  # pyright: ignore[reportPrivateUsage]
+        await service.aclose()
+        await engine.dispose()
     print(json.dumps(asdict(result), indent=2))
     return 1 if result.errors else 0
 
 
 def _cmd_list() -> int:
     """``hm backup list``: list existing backups as JSON."""
-    service = _build_service_sync()
-    listing = service.list_backups()
+    service, engine = _build_service_sync()
+    try:
+        listing = service.list_backups()
+    finally:
+        asyncio.run(_close_service_and_engine(service, engine))
     print(json.dumps(listing, indent=2))
     return 0
 
 
-def _cmd_retention(keep: int) -> int:
+async def _cmd_retention(keep: int) -> int:
     """``hm backup retention --keep N``: apply retention to both components."""
-    service = _build_service_sync()
-    deleted = service.apply_retention(keep=keep)
+    service, engine = _build_service_sync()
+    try:
+        deleted = await service.apply_retention(keep=keep, who=f"cli:{os.geteuid()}", ip=None)
+    finally:
+        await service.aclose()
+        await engine.dispose()
     print(json.dumps(deleted, indent=2))
     return 0

@@ -53,6 +53,8 @@ COPY --from=builder /app/apps/monitor /app/apps/monitor
 
 WORKDIR /app/apps/monitor
 
+# TODO: Add non-root user when production Dockerfile gets one (epic-security).
+
 # Default entrypoint runs the integration suite. Override at run-time
 # (e.g. `docker run ... pytest tests/integration/test_smoke.py::specific_test`).
 CMD ["python", "-m", "pytest", "-m", "integration", "tests/integration/", "-v"]

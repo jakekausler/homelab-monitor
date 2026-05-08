@@ -2,6 +2,11 @@
 # Picked up by the vmalert sidecar in STAGE-001-018.
 # Until then, this file exists as a static config for forward-compatibility.
 
+# These rules go live in STAGE-001-018 (vmalert deployment).
+# Note: SelfDiskWarn and SelfDiskError use `for: 5m`, which won't fire
+# in short-running test rigs (-retentionPeriod=1d). SelfDiskCritical
+# fires immediately at >95%.
+
 groups:
   - name: self_disk
     interval: 30s

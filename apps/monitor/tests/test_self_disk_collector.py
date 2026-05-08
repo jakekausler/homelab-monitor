@@ -25,6 +25,9 @@ def _ctx(
     repo: SqliteRepository,
 ) -> CollectorContext:
     """Minimal CollectorContext for the disk collector."""
+    # TODO: Extract make_test_ctx() helper to conftest.py when 3+ test files
+    # need a CollectorContext fixture. Currently duplicated in test_host_collector.py
+    # and test_self_disk_collector.py.
     return CollectorContext(
         config=cfg,
         db=repo,
@@ -174,6 +177,68 @@ async def test_run_does_not_emit_shrink_below_critical(
     assert result.ok
     shrink = [e for e in writer.snapshot() if e.name == "homelab_self_disk_shrink_total"]
     assert shrink == []
+
+
+@pytest.mark.asyncio
+async def test_self_disk_collector_skips_shrink_during_cooldown(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    repo: SqliteRepository,
+) -> None:
+    """Shrink counter/audit fire on first tick over threshold; suppressed during cooldown."""
+    paths = _setup_dirs(monkeypatch, tmp_path)
+    monkeypatch.setenv("HOMELAB_MONITOR_DISK_BUDGET_GB", "0.000001")  # force > 95%
+    (paths["vm"] / "big").write_bytes(b"x" * 1024)
+
+    collector = SelfDiskCollector()
+
+    # --- first tick: should emit shrink counter + audit row ---
+    writer1 = MemoryRetainingMetricsWriter()
+    cfg = CollectorConfig(name="self_disk")
+    result1 = await collector.run(_ctx(writer1, cfg, repo))
+    assert result1.ok
+
+    shrink1 = [e for e in writer1.snapshot() if e.name == "homelab_self_disk_shrink_total"]
+    assert len(shrink1) == 1, "first tick must emit shrink counter"
+
+    rows1 = await repo.fetch_all(
+        text("SELECT who FROM audit_log WHERE what = :w"),
+        {"w": "auto_shrink_decision"},
+    )
+    assert len(rows1) == 1, "first tick must write audit row"
+
+    # --- second tick immediately after: cooldown active, nothing new emitted ---
+    writer2 = MemoryRetainingMetricsWriter()
+    result2 = await collector.run(_ctx(writer2, cfg, repo))
+    assert result2.ok
+
+    shrink2 = [e for e in writer2.snapshot() if e.name == "homelab_self_disk_shrink_total"]
+    assert shrink2 == [], "second tick within cooldown must NOT emit shrink counter"
+
+    rows2 = await repo.fetch_all(
+        text("SELECT who FROM audit_log WHERE what = :w"),
+        {"w": "auto_shrink_decision"},
+    )
+    assert len(rows2) == 1, "second tick within cooldown must NOT write new audit row"
+
+    # --- third tick after cooldown expires: should emit again ---
+    fake_now = collector._last_decision_ts + 301.0  # type: ignore[operator]
+    monkeypatch.setattr(
+        "homelab_monitor.plugins.collectors.builtin.self_disk.time.monotonic", lambda: fake_now
+    )
+
+    writer3 = MemoryRetainingMetricsWriter()
+    result3 = await collector.run(_ctx(writer3, cfg, repo))
+    assert result3.ok
+
+    shrink3 = [e for e in writer3.snapshot() if e.name == "homelab_self_disk_shrink_total"]
+    assert len(shrink3) == 1, "tick after cooldown expires must emit shrink counter again"
+
+    rows3 = await repo.fetch_all(
+        text("SELECT who FROM audit_log WHERE what = :w"),
+        {"w": "auto_shrink_decision"},
+    )
+    assert len(rows3) == 2, "tick after cooldown expires must write new audit row"  # noqa: PLR2004
 
 
 @pytest.mark.asyncio

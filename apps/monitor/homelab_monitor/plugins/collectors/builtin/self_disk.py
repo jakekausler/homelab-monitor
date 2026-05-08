@@ -24,21 +24,20 @@ from homelab_monitor.kernel.plugins.types import CollectorResult, RunKind, Trust
 
 _BYTES_PER_GIB = 1024**3
 _CRITICAL_PCT = 95.0
+_SHRINK_COOLDOWN_S = 300.0  # 5 minutes
 
 
 def _dir_size_bytes(path: Path) -> int:
-    """Sum file sizes in path recursively. Returns 0 if missing.
-
-    Symlinks are NOT followed (Path.rglob does not by default).
-    """
+    """Return total bytes of files under path. Does not follow symlinks."""
     if not path.exists():
         return 0
     total = 0
-    for p in path.rglob("*"):
-        if p.is_file():
+    for root, _dirs, files in os.walk(path, followlinks=False):
+        for name in files:
             try:
-                total += p.stat().st_size
-            except OSError:  # pragma: no cover -- defensive: race with deletion
+                fpath = Path(root) / name
+                total += fpath.stat().st_size
+            except OSError:  # pragma: no cover
                 continue
     return total
 
@@ -63,6 +62,10 @@ class SelfDiskCollector(BaseCollector):
     concurrency_group: ClassVar[str] = "self_disk"
     run_kind: ClassVar[RunKind] = RunKind.ASYNC
     trust_level: ClassVar[TrustLevel] = TrustLevel.BUILTIN
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._last_decision_ts: float | None = None
 
     async def run(self, ctx: CollectorContext) -> CollectorResult:
         """Run a single tick. Emits 9 metrics + (conditionally) audit + counter."""
@@ -89,6 +92,11 @@ class SelfDiskCollector(BaseCollector):
             os.environ.get("HOMELAB_MONITOR_RUNBOOK_TRANSCRIPTS_DIR", "/data/runbook-transcripts")
         )
 
+        # NOTE: runbook_transcripts shares cfg.sqlite_ratio with the sqlite slot
+        # (the spec's "10% SQLite + audit + runbook" budget is a combined
+        # allocation). Grafana panels summing budget_bytes across slots will
+        # double-count this 10%. Consumers should sum only {vm, vl, sqlite}
+        # OR use a unified "control_plane_used_bytes" derived metric.
         slots = {
             "vm": (vm_dir, cfg.vm_ratio),
             "vl": (vl_dir, cfg.vl_ratio),
@@ -128,27 +136,35 @@ class SelfDiskCollector(BaseCollector):
         emitted += 1
 
         if used_pct > _CRITICAL_PCT:
-            # TODO(future-stage): replace metric-only signaling with actual VM
-            # retention reduction (`-retentionPeriod` rewrite + restart). For v1
-            # we emit the counter + audit row and rely on SelfDiskCritical
-            # vmalert to notify the operator.
-            tier = "v1"
-            ctx.vm.write_counter(
-                "homelab_self_disk_shrink_total",
-                1.0,
-                {"tier": tier},
+            # Apply 5-minute cooldown to prevent decision spam
+            now = time.monotonic()
+            in_cooldown = (
+                self._last_decision_ts is not None
+                and (now - self._last_decision_ts) < _SHRINK_COOLDOWN_S
             )
-            emitted += 1
-            try:
-                await audit_write(
-                    ctx.db,
-                    who="system:self_disk_shrinker",
-                    what="auto_shrink_decision",
-                    before={"used_pct": used_pct},
-                    after={"tier": tier, "action": "metric_only_emitted"},
+            if not in_cooldown:
+                self._last_decision_ts = now
+                # TODO(future-stage): replace metric-only signaling with actual VM
+                # retention reduction (`-retentionPeriod` rewrite + restart). For v1
+                # we emit the counter + audit row and rely on SelfDiskCritical
+                # vmalert to notify the operator.
+                tier = "v1"
+                ctx.vm.write_counter(
+                    "homelab_self_disk_shrink_total",
+                    1.0,
+                    {"tier": tier},
                 )
-            except Exception as exc:  # pragma: no cover -- defensive: db failure mid-tick
-                errors.append(f"audit: {exc}")
+                emitted += 1
+                try:
+                    await audit_write(
+                        ctx.db,
+                        who="system:self_disk_shrinker",
+                        what="auto_shrink_decision",
+                        before={"used_pct": used_pct},
+                        after={"tier": tier, "action": "metric_only_emitted"},
+                    )
+                except Exception as exc:  # pragma: no cover -- defensive: db failure mid-tick
+                    errors.append(f"audit: {exc}")
 
         return CollectorResult(
             ok=(len(errors) == 0),

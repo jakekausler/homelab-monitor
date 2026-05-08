@@ -64,12 +64,10 @@ def _critical_abort(log: BoundLogger, event: str, **fields: object) -> NoReturn:
 
 
 def _extract_sqlite_path(db_url: str) -> str:
-    """Extract the filesystem path from a sqlite+aiosqlite URL.
-
-    e.g. ``sqlite+aiosqlite:////data/homelab-monitor.db`` -> ``/data/homelab-monitor.db``.
-    For non-SQLite URLs, returns the URL unchanged (BackupService will fail with
-    a clear error when sqlite3.connect() rejects it).
-    """
+    """Strip the SQLAlchemy prefix from a sqlite+aiosqlite DSN."""
+    if ":memory:" in db_url:
+        msg = "BackupService cannot operate on in-memory SQLite (:memory: detected)"
+        raise ValueError(msg)
     prefix = "sqlite+aiosqlite:///"
     if db_url.startswith(prefix):
         return db_url[len(prefix) :]
@@ -282,6 +280,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
             os.environ.get("HOMELAB_MONITOR_BACKUP_ROOT", "/storage/backup/homelab-monitor")
         ),
         http_client=http_client,
+        db=repo,
     )
     app.state.backup_service = backup_service
 

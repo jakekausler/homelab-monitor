@@ -79,6 +79,7 @@ async def test_backup_with_admin_token_succeeds(
         prefix = "sqlite+aiosqlite:///"
         sqlite_db_path = Path(db_url[len(prefix) :]) if db_url.startswith(prefix) else Path(db_url)
         app.state.backup_service = BackupService(
+            db=app.state.repo,
             db_path=sqlite_db_path,
             vm_url="http://x",
             vm_data_dir=vm_data_dir,
@@ -105,12 +106,12 @@ async def test_backup_with_admin_token_succeeds(
             assert body["vm_snapshot_path"]
             assert body["errors"] == []
 
-            # Audit row written
+            # Audit row written (completed event)
             async with app.state.repo.engine.begin() as conn:
                 rows = (
                     await conn.execute(
                         text("SELECT who, what, after_json FROM audit_log WHERE what = :w"),
-                        {"w": "admin.backup_run"},
+                        {"w": "admin.backup_run.completed"},
                     )
                 ).all()
             assert len(rows) == 1
@@ -143,6 +144,7 @@ async def test_backup_cookie_with_csrf_succeeds(
         app.state.repo.engine.url.database  # pyright: ignore[reportAttributeAccessIssue,reportUnknownMemberType,reportUnknownArgumentType,reportUnknownVariableType]
     )
     app.state.backup_service = BackupService(  # pyright: ignore[reportUnknownMemberType,reportUnknownArgumentType]
+        db=app.state.repo,  # pyright: ignore[reportUnknownMemberType,reportUnknownArgumentType]
         db_path=sqlite_db_path,
         vm_url="http://x",
         vm_data_dir=vm_data_dir,

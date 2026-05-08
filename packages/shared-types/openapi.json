@@ -325,7 +325,7 @@
       },
       "BackupResponse": {
         "additionalProperties": false,
-        "description": "Response for POST /api/admin/backup.",
+        "description": "Response shape for POST /api/admin/backup.\n\nNote: errors is a list[str] (best-effort partial-success pattern)\nrather than the standard ErrorEnvelope. Backups proceed even when\none component (SQLite or VM) fails; the errors list captures\ncomponent-specific failures while still returning the partial\npaths that succeeded.",
         "properties": {
           "ended_at": {
             "title": "Ended At",
@@ -1013,7 +1013,7 @@
   "paths": {
     "/api/admin/backup": {
       "post": {
-        "description": "Run a full backup (SQLite + VM snapshot). Returns the result.",
+        "description": "Run a full backup (SQLite + VM snapshot). Audit rows written by BackupService.",
         "operationId": "run_backup_api_admin_backup_post",
         "responses": {
           "200": {

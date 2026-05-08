@@ -204,7 +204,14 @@ class DismissResponse(BaseModel):
 
 
 class BackupResponse(BaseModel):
-    """Response for POST /api/admin/backup."""
+    """Response shape for POST /api/admin/backup.
+
+    Note: errors is a list[str] (best-effort partial-success pattern)
+    rather than the standard ErrorEnvelope. Backups proceed even when
+    one component (SQLite or VM) fails; the errors list captures
+    component-specific failures while still returning the partial
+    paths that succeeded.
+    """
 
     model_config = ConfigDict(extra="forbid")
     snapshot_id: str

@@ -12,6 +12,7 @@ import httpx
 import pytest
 
 from homelab_monitor.cli.main import main
+from homelab_monitor.kernel.db.migrations import alembic_upgrade_head
 
 
 def _seed_sqlite(path: Path) -> None:
@@ -27,7 +28,9 @@ def _setup_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, snapshot_name: s
     """Configure env vars for the backup CLI to use tmp_path."""
     db_path = tmp_path / "src.sqlite"
     _seed_sqlite(db_path)
-    monkeypatch.setenv("HOMELAB_MONITOR_DB_URL", f"sqlite+aiosqlite:///{db_path}")
+    db_url = f"sqlite+aiosqlite:///{db_path}"
+    alembic_upgrade_head(db_url.replace("sqlite+aiosqlite://", "sqlite://", 1))
+    monkeypatch.setenv("HOMELAB_MONITOR_DB_URL", db_url)
     monkeypatch.setenv("HOMELAB_MONITOR_VM_URL", "http://victoriametrics:8428")
     vm_data = tmp_path / "vm-data"
     snap_dir = vm_data / "snapshots" / snapshot_name

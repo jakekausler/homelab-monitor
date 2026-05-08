@@ -8,6 +8,10 @@
 #
 # Volumes are NOT persisted (no top-level volumes block); each `up` is fresh.
 
+# NOTE: VM data volume is anonymous — each `up` creates a new ephemeral
+# volume. Local devs running `up` repeatedly should `docker compose down -v`
+# periodically to clean up.
+
 name: homelab-monitor-test
 
 services:
