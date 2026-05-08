@@ -301,12 +301,13 @@ or related tests.
 - [ ] Verify `HOMELAB_MONITOR_ALERTMANAGER_URL=disabled` env var causes render-on-boot to skip the AM `/-/reload` call.
 - [ ] When AM template path is set, verify rendered config contains the auto-minted token plaintext that matches `secrets.get("alertmanager-ingest-token")`.
 
-## STAGE-001-018: vmalert (logs) + first log-derived rule
+### STAGE-001-018 (vmalert-logs + first log-derived rule)
 
-- [ ] LogsQL rule fires when a planted "Out of memory" pattern appears in vector input
-- [ ] Webhook is delivered with `source_tool="vmalert-logs"` (not `vmalert-metrics`) on the alert row
-- [ ] After planted lines stop, `SshFailedLoginBurst` alert auto-resolves within 10 minutes
-- [ ] `KernelOOM` alert fires at severity `critical` (not `warning`)
+- [ ] Run `docker compose -f deploy/compose/docker-compose.test.yml up -d alertmanager victoriametrics victorialogs vmalert-metrics vmalert-logs-test`. Verify all containers reach `healthy` state without manual `docker start` workaround. Confirms healthchecks use 127.0.0.1.
+- [ ] Verify vmalert-logs `/api/v1/rules` lists `KernelOOM` (severity=error, source_tool=vmalert-logs) and `SshFailedLoginBurst` (severity=warning, source_tool=vmalert-logs) under group `system_logs` (type=vlogs).
+- [ ] Verify vmalert-metrics `/api/v1/rules` includes `LogStreamBudgetOverrun` (severity=warning, source_tool=vmalert-metrics, target_kind=log_stream).
+- [ ] Run the slow integration test from inside the test rig: `docker compose -f deploy/compose/docker-compose.test.yml run integration-tests pytest tests/integration/test_vmalert_logs_pipeline.py -v -m slow`. All 4 tests should pass.
+- [ ] When VictoriaLogs is bumped to a new version, re-validate `_time` field accepts RFC3339 format produced by `vl_planter.py`. (VL v0.30.0 was the first version where epoch millis stopped working.)
 
 ## STAGE-001-019: Karma + kthxbye
 
