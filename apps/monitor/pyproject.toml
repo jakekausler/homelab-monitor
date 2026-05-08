@@ -26,6 +26,7 @@ dev = [
     "pytest-asyncio>=0.24",
     "pytest-cov>=6.0",
     "pytest-httpx>=0.34",
+    "pytest-xdist>=3.6",
     "ruff>=0.8",
     "pyright>=1.1.388",
     "freezegun>=1.5",
@@ -63,7 +64,7 @@ select = ["E", "F", "I", "B", "UP", "ANN", "SIM", "PL", "RUF"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-addopts = "--strict-markers --strict-config -ra"
+addopts = "--strict-markers --strict-config -ra -n auto"
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
@@ -74,6 +75,7 @@ markers = [
 [tool.coverage.run]
 source = ["homelab_monitor"]
 branch = true
+parallel = true
 
 [tool.coverage.report]
 fail_under = 100

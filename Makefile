@@ -80,7 +80,7 @@ clean:
 	find . -type d -name ".pytest_cache" -exec rm -rf {} +
 	find . -type d -name ".ruff_cache" -exec rm -rf {} +
 	find . -type d -name ".pyright" -exec rm -rf {} +
-	find . -path './.venv*' -prune -o \( -name '.coverage' -type f \) -exec rm -f {} +
+	find . -path './.venv*' -prune -o \( -name '.coverage*' -type f \) -exec rm -f {} +
 	find . -path './.venv*' -prune -o \( -type d -name 'htmlcov' \) -exec rm -rf {} +
 	find ./apps -path '*/node_modules' -type d -prune -exec rm -rf {} + 2>/dev/null || true
 	find ./apps -name 'dist' -type d -prune -exec rm -rf {} + 2>/dev/null || true
