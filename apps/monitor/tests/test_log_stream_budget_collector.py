@@ -202,3 +202,56 @@ async def test_run_skips_unparseable_values(
     assert result.ok
     assert len(state) == 1
     assert ("h2", "s2") in state
+
+
+@pytest.mark.asyncio
+async def test_collect_no_http_client_returns_error_result(
+    repo: SqliteRepository,
+) -> None:
+    """When both collector._http_client and ctx.http are None, result is ok=False."""
+    state: LogStreamState = {}
+    collector = LogStreamBudgetCollector(state=state, vl_url=_VL_URL, http_client=None)
+    writer = MemoryRetainingMetricsWriter()
+    cfg = CollectorConfig(name="log_stream_budget")
+    # Build a context with http=None to exercise lines 62-64
+    ctx = CollectorContext(
+        config=cfg,
+        db=repo,
+        vm=writer,
+        vl=InMemoryLogsWriter(),
+        http=None,  # pyright: ignore[reportArgumentType]
+        ssh=None,  # pyright: ignore[reportArgumentType]
+        secrets=None,  # pyright: ignore[reportArgumentType]
+        log=structlog.get_logger().bind(collector="log_stream_budget"),  # pyright: ignore[reportArgumentType]
+        ha=None,
+    )
+    result = await collector.run(ctx)
+    assert result.ok is False
+    assert "http_client_unavailable" in result.errors
+
+
+@pytest.mark.asyncio
+async def test_collect_skips_non_dict_stream_item(
+    repo: SqliteRepository,
+    httpx_mock: HTTPXMock,
+) -> None:
+    """Non-dict items in the streams list are skipped; valid dict items are processed."""
+    httpx_mock.add_response(
+        url=f"{_VL_URL}/select/logsql/stats",
+        method="GET",
+        json={
+            "streams": [
+                "bad-non-dict-string",
+                {"host": "h", "service": "s", "bytes_today": 10, "lines_per_sec": 1.0},
+            ]
+        },
+    )
+    state: LogStreamState = {}
+    async with httpx.AsyncClient() as client:
+        collector = LogStreamBudgetCollector(state=state, vl_url=_VL_URL, http_client=client)
+        writer = MemoryRetainingMetricsWriter()
+        cfg = CollectorConfig(name="log_stream_budget")
+        result = await collector.run(_ctx(writer, cfg, repo, client))
+    assert result.ok
+    assert len(state) == 1
+    assert ("h", "s") in state

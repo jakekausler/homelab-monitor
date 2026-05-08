@@ -625,6 +625,345 @@ def test_list_backups_empty_root(tmp_path: Path, repo: SqliteRepository) -> None
     asyncio.run(async_test())
 
 
+@pytest.mark.asyncio
+async def test_run_backup_audit_requested_failure_is_captured(
+    tmp_path: Path,
+    repo: SqliteRepository,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Audit insert failure before backup is captured with 'audit_requested:' prefix."""
+    src_db = tmp_path / "src.sqlite"
+    _make_seed_db(src_db)
+    vm_data_dir = tmp_path / "vm"
+    vm_data_dir.mkdir()
+    backup_root = tmp_path / "backups"
+    snapshot_name = "20260508_084812-auditfail"
+    _make_vm_snapshot_dir(vm_data_dir, snapshot_name)
+    transport = _vm_handler_factory(snapshot_name)
+
+    call_count = {"n": 0}
+    real_insert = None
+
+    async def _failing_insert(*args: object, **kwargs: object) -> None:
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            raise RuntimeError("db locked")
+        if real_insert is not None:
+            await real_insert(*args, **kwargs)  # pyright: ignore[reportArgumentType]
+
+    import homelab_monitor.kernel.backup.service as backup_service_mod  # noqa: PLC0415
+
+    real_insert = backup_service_mod.insert_audit
+    monkeypatch.setattr(backup_service_mod, "insert_audit", _failing_insert)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://x") as c:
+        service = BackupService(
+            db=repo,
+            db_path=src_db,
+            vm_url="http://x",
+            vm_data_dir=vm_data_dir,
+            backup_root=backup_root,
+            http_client=c,
+        )
+        result = await service.run_backup(who="test")
+
+    assert any(e.startswith("audit_requested:") for e in result.errors)
+
+
+@pytest.mark.asyncio
+async def test_run_backup_audit_completed_failure_is_logged_only(
+    tmp_path: Path,
+    repo: SqliteRepository,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Audit insert failure after backup is only logged, not added to result.errors."""
+    src_db = tmp_path / "src.sqlite"
+    _make_seed_db(src_db)
+    vm_data_dir = tmp_path / "vm"
+    vm_data_dir.mkdir()
+    backup_root = tmp_path / "backups"
+    snapshot_name = "20260508_084812-auditfail2"
+    _make_vm_snapshot_dir(vm_data_dir, snapshot_name)
+    transport = _vm_handler_factory(snapshot_name)
+
+    call_count = {"n": 0}
+    real_insert = None
+
+    async def _failing_on_second(*args: object, **kwargs: object) -> None:
+        call_count["n"] += 1
+        if call_count["n"] == 2:  # second call = completed audit  # noqa: PLR2004
+            raise RuntimeError("db gone")
+        if real_insert is not None:
+            await real_insert(*args, **kwargs)  # pyright: ignore[reportArgumentType]
+
+    import homelab_monitor.kernel.backup.service as backup_service_mod  # noqa: PLC0415
+
+    real_insert = backup_service_mod.insert_audit
+    monkeypatch.setattr(backup_service_mod, "insert_audit", _failing_on_second)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://x") as c:
+        service = BackupService(
+            db=repo,
+            db_path=src_db,
+            vm_url="http://x",
+            vm_data_dir=vm_data_dir,
+            backup_root=backup_root,
+            http_client=c,
+        )
+        result = await service.run_backup(who="test")
+
+    # The backup itself should succeed; audit failure must NOT appear in errors
+    assert not any(e.startswith("audit_") for e in result.errors)
+
+
+@pytest.mark.asyncio
+async def test_backup_vm_subprocess_called_process_error(
+    tmp_path: Path,
+    repo: SqliteRepository,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CalledProcessError from cp in _copy_tree is reported with 'vm:' prefix in result.errors."""
+    src_db = tmp_path / "src.sqlite"
+    _make_seed_db(src_db)
+    vm_data_dir = tmp_path / "vm"
+    vm_data_dir.mkdir()
+    backup_root = tmp_path / "backups"
+    snapshot_name = "20260508_084812-cpfail"
+    _make_vm_snapshot_dir(vm_data_dir, snapshot_name)
+    transport = _vm_handler_factory(snapshot_name)
+
+    def _failing_run(cmd: list[str], **kwargs: object) -> object:
+        raise subprocess.CalledProcessError(1, cmd, stderr=b"permission denied")
+
+    monkeypatch.setattr("homelab_monitor.kernel.backup.service.subprocess.run", _failing_run)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://x") as c:
+        service = BackupService(
+            db=repo,
+            db_path=src_db,
+            vm_url="http://x",
+            vm_data_dir=vm_data_dir,
+            backup_root=backup_root,
+            http_client=c,
+        )
+        result = await service.run_backup(who="test")
+
+    assert any(e.startswith("vm:") for e in result.errors)
+
+
+@pytest.mark.asyncio
+async def test_apply_retention_with_vm_backups(
+    tmp_path: Path,
+    repo: SqliteRepository,
+) -> None:
+    """apply_retention removes older vm snapshot dirs, keeping only the newest N."""
+    backup_root = tmp_path / "b"
+    backup_root.mkdir()
+    vm_dir = backup_root / "vm"
+    vm_dir.mkdir()
+    for ts in ("20260101-000000", "20260102-000000", "20260103-000000"):
+        d = vm_dir / ts
+        d.mkdir()
+        (d / "data").write_bytes(b"x")
+
+    async with httpx.AsyncClient() as c:
+        service = BackupService(
+            db=repo,
+            db_path=Path("/dev/null"),
+            vm_url="http://x",
+            vm_data_dir=tmp_path / "vm",
+            backup_root=backup_root,
+            http_client=c,
+        )
+        deleted = await service.apply_retention(keep=1, who="test")
+
+    assert deleted["vm"] == 2  # noqa: PLR2004
+    remaining = [p.name for p in vm_dir.iterdir() if p.is_dir()]
+    assert remaining == ["20260103-000000"]
+
+
+@pytest.mark.asyncio
+async def test_apply_retention_audit_exception_is_swallowed(
+    tmp_path: Path,
+    repo: SqliteRepository,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Audit insert failure during apply_retention is swallowed; still returns deleted dict."""
+    backup_root = tmp_path / "b"
+    backup_root.mkdir()
+    (backup_root / "vm").mkdir()
+    (backup_root / "sqlite-20260101-000000.sqlite").write_bytes(b"")
+
+    import homelab_monitor.kernel.backup.service as backup_service_mod  # noqa: PLC0415
+
+    async def _always_raise(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("audit table gone")
+
+    monkeypatch.setattr(backup_service_mod, "insert_audit", _always_raise)
+
+    async with httpx.AsyncClient() as c:
+        service = BackupService(
+            db=repo,
+            db_path=Path("/dev/null"),
+            vm_url="http://x",
+            vm_data_dir=tmp_path / "vm",
+            backup_root=backup_root,
+            http_client=c,
+        )
+        deleted = await service.apply_retention(keep=5, who="test")
+
+    assert isinstance(deleted, dict)
+    assert "sqlite" in deleted
+    assert "vm" in deleted
+
+
+def test_list_backups_with_no_vm_root(tmp_path: Path, repo: SqliteRepository) -> None:
+    """list_backups returns empty vm list when backup_root/vm/ doesn't exist."""
+    backup_root = tmp_path / "b"
+    backup_root.mkdir()
+    (backup_root / "sqlite-20260101-000000.sqlite").write_bytes(b"")
+    # No vm/ subdir created
+
+    async def async_test() -> None:
+        async with httpx.AsyncClient() as client:
+            service = BackupService(
+                db=repo,
+                db_path=Path("/dev/null"),
+                vm_url="http://x",
+                vm_data_dir=tmp_path / "vm",
+                backup_root=backup_root,
+                http_client=client,
+            )
+            listing = service.list_backups()
+            assert listing["vm"] == []
+            assert listing["sqlite"] == ["sqlite-20260101-000000.sqlite"]
+
+    asyncio.run(async_test())
+
+
+def test_list_backups_skips_non_dir_entries_in_vm(tmp_path: Path, repo: SqliteRepository) -> None:
+    """list_backups skips regular files inside backup_root/vm/."""
+    backup_root = tmp_path / "b"
+    backup_root.mkdir()
+    vm_root = backup_root / "vm"
+    vm_root.mkdir()
+    (vm_root / ".placeholder").write_bytes(b"")  # regular file, not a dir
+    (vm_root / "20260101-000000").mkdir()
+
+    async def async_test() -> None:
+        async with httpx.AsyncClient() as client:
+            service = BackupService(
+                db=repo,
+                db_path=Path("/dev/null"),
+                vm_url="http://x",
+                vm_data_dir=tmp_path / "vm",
+                backup_root=backup_root,
+                http_client=client,
+            )
+            listing = service.list_backups()
+            assert listing["vm"] == ["20260101-000000"]
+
+    asyncio.run(async_test())
+
+
+@pytest.mark.asyncio
+async def test_apply_retention_with_no_vm_root(tmp_path: Path, repo: SqliteRepository) -> None:
+    """apply_retention succeeds when vm/ subdir doesn't exist; deleted['vm'] == 0."""
+    backup_root = tmp_path / "b"
+    backup_root.mkdir()
+    # Two sqlite files, no vm/ dir
+    (backup_root / "sqlite-20260101-000000.sqlite").write_bytes(b"")
+    (backup_root / "sqlite-20260102-000000.sqlite").write_bytes(b"")
+
+    async with httpx.AsyncClient() as c:
+        service = BackupService(
+            db=repo,
+            db_path=Path("/dev/null"),
+            vm_url="http://x",
+            vm_data_dir=tmp_path / "vm",
+            backup_root=backup_root,
+            http_client=c,
+        )
+        deleted = await service.apply_retention(keep=1, who="test")
+
+    assert deleted["vm"] == 0
+    assert deleted["sqlite"] == 1
+
+
+def test_copy_tree_cross_filesystem_called_process_error(
+    tmp_path: Path,
+    repo: SqliteRepository,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CalledProcessError on the cross-filesystem cp -r path raises RuntimeError."""
+    src_dir = tmp_path / "src"
+    src_dir.mkdir()
+    (src_dir / "file.bin").write_bytes(b"x")
+    target_dir = tmp_path / "target"
+
+    # Patch subprocess.run to always raise CalledProcessError.
+    def _failing_run(cmd: list[str], **kwargs: object) -> object:
+        raise subprocess.CalledProcessError(1, cmd, stderr="no space left on device")
+
+    monkeypatch.setattr("homelab_monitor.kernel.backup.service.subprocess.run", _failing_run)
+
+    # Force same_fs=False by making Path.stat return different st_dev values
+    # ONLY for src_dir and target_dir.parent. All other paths fall through to
+    # the real stat so internal pathlib calls (e.g. mkdir's is_dir check) work.
+    _real_stat = Path.stat
+
+    def _mock_stat(self: Path, *, follow_symlinks: bool = True) -> os.stat_result:
+        real = _real_stat(self, follow_symlinks=follow_symlinks)
+        if self == src_dir:
+            return os.stat_result(
+                (
+                    real.st_mode,
+                    real.st_ino,
+                    10,
+                    real.st_nlink,
+                    real.st_uid,
+                    real.st_gid,
+                    real.st_size,
+                    real.st_atime,
+                    real.st_mtime,
+                    real.st_ctime,
+                )
+            )
+        if self == target_dir.parent:
+            return os.stat_result(
+                (
+                    real.st_mode,
+                    real.st_ino,
+                    99,
+                    real.st_nlink,
+                    real.st_uid,
+                    real.st_gid,
+                    real.st_size,
+                    real.st_atime,
+                    real.st_mtime,
+                    real.st_ctime,
+                )
+            )
+        return real
+
+    monkeypatch.setattr(Path, "stat", _mock_stat)
+
+    async def _run() -> None:
+        async with httpx.AsyncClient() as c:
+            service = BackupService(
+                db=repo,
+                db_path=Path("/dev/null"),
+                vm_url="http://x",
+                vm_data_dir=tmp_path / "vm",
+                backup_root=tmp_path / "backups",
+                http_client=c,
+            )
+            with pytest.raises(RuntimeError, match="cp failed"):
+                service._copy_tree(src_dir, target_dir)  # pyright: ignore[reportPrivateUsage]
+
+    asyncio.run(_run())
+
+
 def test_list_backups_lists_existing(tmp_path: Path, repo: SqliteRepository) -> None:
     backup_root = tmp_path / "b"
     backup_root.mkdir()

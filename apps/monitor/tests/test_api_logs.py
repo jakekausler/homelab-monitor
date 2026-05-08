@@ -42,13 +42,18 @@ async def test_query_proxies_vl_success(
         ' "_time": "2026-05-07T00:00:01+00:00", "level": "info"}\n'
     )
     httpx_mock.add_response(
-        url="http://vl-test:9428/select/logsql/query?query=%2A&start=a&end=b&limit=100",
+        url="http://vl-test:9428/select/logsql/query?query=%2A&start=2026-05-07T00%3A00%3A00Z&end=2026-05-07T01%3A00%3A00Z&limit=100",
         method="GET",
         text=ndjson,
     )
     resp = await authenticated_client.get(
         "/api/logs/query",
-        params={"expr": "*", "start": "a", "end": "b", "limit": 100},
+        params={
+            "expr": "*",
+            "start": "2026-05-07T00:00:00Z",
+            "end": "2026-05-07T01:00:00Z",
+            "limit": 100,
+        },
     )
     assert resp.status_code == 200  # noqa: PLR2004
     body = resp.json()
@@ -67,14 +72,19 @@ async def test_query_502_on_vl_error(
     """VL returning 500 surfaces as 502 ``upstream_unavailable``."""
     monkeypatch.setenv("HOMELAB_MONITOR_VL_URL", "http://vl-test:9428")
     httpx_mock.add_response(
-        url="http://vl-test:9428/select/logsql/query?query=%2A&start=a&end=b&limit=100",
+        url="http://vl-test:9428/select/logsql/query?query=%2A&start=2026-05-07T00%3A00%3A00Z&end=2026-05-07T01%3A00%3A00Z&limit=100",
         method="GET",
         status_code=500,
         text="vl error",
     )
     resp = await authenticated_client.get(
         "/api/logs/query",
-        params={"expr": "*", "start": "a", "end": "b", "limit": 100},
+        params={
+            "expr": "*",
+            "start": "2026-05-07T00:00:00Z",
+            "end": "2026-05-07T01:00:00Z",
+            "limit": 100,
+        },
     )
     assert resp.status_code == 502  # noqa: PLR2004
     assert resp.json()["error"]["code"] == "upstream_unavailable"
@@ -91,7 +101,12 @@ async def test_query_502_on_transport_error(
     httpx_mock.add_exception(httpx.ConnectError("refused"))
     resp = await authenticated_client.get(
         "/api/logs/query",
-        params={"expr": "*", "start": "a", "end": "b", "limit": 100},
+        params={
+            "expr": "*",
+            "start": "2026-05-07T00:00:00Z",
+            "end": "2026-05-07T01:00:00Z",
+            "limit": 100,
+        },
     )
     assert resp.status_code == 502  # noqa: PLR2004
 
@@ -120,13 +135,18 @@ async def test_query_tolerates_blank_lines(
     monkeypatch.setenv("HOMELAB_MONITOR_VL_URL", "http://vl-test:9428")
     ndjson = '\n{"_stream_id": "s", "_msg": "x", "_time": "t"}\n\n'
     httpx_mock.add_response(
-        url="http://vl-test:9428/select/logsql/query?query=%2A&start=a&end=b&limit=100",
+        url="http://vl-test:9428/select/logsql/query?query=%2A&start=2026-05-07T00%3A00%3A00Z&end=2026-05-07T01%3A00%3A00Z&limit=100",
         method="GET",
         text=ndjson,
     )
     resp = await authenticated_client.get(
         "/api/logs/query",
-        params={"expr": "*", "start": "a", "end": "b", "limit": 100},
+        params={
+            "expr": "*",
+            "start": "2026-05-07T00:00:00Z",
+            "end": "2026-05-07T01:00:00Z",
+            "limit": 100,
+        },
     )
     assert resp.status_code == 200  # noqa: PLR2004
     assert len(resp.json()["entries"]) == 1
@@ -142,13 +162,18 @@ async def test_query_skips_malformed_json_line(
     monkeypatch.setenv("HOMELAB_MONITOR_VL_URL", "http://vl-test:9428")
     ndjson = 'not-json\n{"_stream_id": "s", "_msg": "ok", "_time": "t"}\n'
     httpx_mock.add_response(
-        url="http://vl-test:9428/select/logsql/query?query=%2A&start=a&end=b&limit=100",
+        url="http://vl-test:9428/select/logsql/query?query=%2A&start=2026-05-07T00%3A00%3A00Z&end=2026-05-07T01%3A00%3A00Z&limit=100",
         method="GET",
         text=ndjson,
     )
     resp = await authenticated_client.get(
         "/api/logs/query",
-        params={"expr": "*", "start": "a", "end": "b", "limit": 100},
+        params={
+            "expr": "*",
+            "start": "2026-05-07T00:00:00Z",
+            "end": "2026-05-07T01:00:00Z",
+            "limit": 100,
+        },
     )
     assert resp.status_code == 200  # noqa: PLR2004
     assert len(resp.json()["entries"]) == 1
@@ -195,3 +220,103 @@ async def test_streams_returns_populated_state(
     assert len(streams) == 1
     assert streams[0]["host"] == "hostA"
     assert streams[0]["bytes_today"] == 1024  # noqa: PLR2004
+
+
+@pytest.mark.asyncio
+async def test_query_rejects_invalid_timestamp_format(
+    authenticated_client: AsyncClient,
+) -> None:
+    """Non-ISO-8601 start timestamp returns 400 with code 'invalid_time_format'."""
+    resp = await authenticated_client.get(
+        "/api/logs/query",
+        params={
+            "expr": "*",
+            "start": "not-a-date",
+            "end": "2026-05-07T01:00:00Z",
+        },
+    )
+    assert resp.status_code == 400  # noqa: PLR2004
+    assert resp.json()["error"]["code"] == "invalid_time_format"
+
+
+@pytest.mark.asyncio
+async def test_query_rejects_inverted_range(
+    authenticated_client: AsyncClient,
+) -> None:
+    """end before start returns 400 with code 'invalid_range'."""
+    resp = await authenticated_client.get(
+        "/api/logs/query",
+        params={
+            "expr": "*",
+            "start": "2026-05-07T01:00:00Z",
+            "end": "2026-05-07T00:00:00Z",
+        },
+    )
+    assert resp.status_code == 400  # noqa: PLR2004
+    assert resp.json()["error"]["code"] == "invalid_range"
+
+
+@pytest.mark.asyncio
+async def test_query_rejects_range_too_wide(
+    authenticated_client: AsyncClient,
+) -> None:
+    """Range exceeding MAX_RANGE_DAYS (30) returns 400 with code 'range_too_wide'."""
+    resp = await authenticated_client.get(
+        "/api/logs/query",
+        params={
+            "expr": "*",
+            "start": "2026-01-01T00:00:00Z",
+            "end": "2026-04-01T00:00:00Z",  # 90 days
+        },
+    )
+    assert resp.status_code == 400  # noqa: PLR2004
+    assert resp.json()["error"]["code"] == "range_too_wide"
+
+
+@pytest.mark.asyncio
+async def test_query_accepts_naive_timestamps(
+    authenticated_client: AsyncClient,
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Naive (tz-less) ISO timestamps are accepted and normalized to UTC."""
+    monkeypatch.setenv("HOMELAB_MONITOR_VL_URL", "http://vl-test:9428")
+    httpx_mock.add_response(method="GET", text="")
+    resp = await authenticated_client.get(
+        "/api/logs/query",
+        params={
+            "expr": "*",
+            "start": "2026-05-07T00:00:00",
+            "end": "2026-05-07T01:00:00",
+        },
+    )
+    assert resp.status_code == 200  # noqa: PLR2004
+
+
+@pytest.mark.asyncio
+async def test_query_skips_non_dict_json_line(
+    authenticated_client: AsyncClient,
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """NDJSON lines that parse as non-dict JSON (e.g., arrays) are skipped."""
+    monkeypatch.setenv("HOMELAB_MONITOR_VL_URL", "http://vl-test:9428")
+    ndjson = '[1,2,3]\n{"_stream_id": "s", "_msg": "kept", "_time": "2026-05-07T00:00:00+00:00"}\n'
+    httpx_mock.add_response(
+        url="http://vl-test:9428/select/logsql/query?query=%2A&start=2026-05-07T00%3A00%3A00Z&end=2026-05-07T01%3A00%3A00Z&limit=100",
+        method="GET",
+        text=ndjson,
+    )
+    resp = await authenticated_client.get(
+        "/api/logs/query",
+        params={
+            "expr": "*",
+            "start": "2026-05-07T00:00:00Z",
+            "end": "2026-05-07T01:00:00Z",
+            "limit": 100,
+        },
+    )
+    assert resp.status_code == 200  # noqa: PLR2004
+    body = resp.json()
+    assert len(body["entries"]) == 1
+    assert body["entries"][0]["line"] == "kept"

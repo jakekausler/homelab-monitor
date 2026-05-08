@@ -312,7 +312,7 @@ describe('HostCpuTile range backfill (STAGE-001-015)', () => {
     // Verify the sparkline (series) contains the backfilled data values.
     // The sparkline is built from the 2-sample range [10, 20], padded to
     // SERIES_CAPACITY=60 with the first value (10).
-    const sparkline = screen.getByLabelText('Host CPU history') as SVGSVGElement
+    const sparkline = screen.getByLabelText('Host CPU history') as unknown as SVGSVGElement
     const values = sparkline.getAttribute('data-values')?.split(',').map(Number) ?? []
     expect(values).toContain(10) // first sample
     expect(values).toContain(20) // second sample

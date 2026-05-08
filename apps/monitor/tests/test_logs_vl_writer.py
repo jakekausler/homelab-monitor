@@ -207,3 +207,79 @@ async def test_vl_writer_cancellation_clean() -> None:
         finally:
             with contextlib.suppress(Exception):
                 await writer.aclose()
+
+
+@pytest.mark.asyncio
+async def test_flusher_skips_sentinel_in_drain(httpx_mock: HTTPXMock) -> None:
+    """Sentinel items in the drain loop are skipped; only real events are posted."""
+    httpx_mock.add_response(
+        url=f"{_VL_URL}/insert/jsonline",
+        method="POST",
+        status_code=200,
+    )
+    async with httpx.AsyncClient() as client:
+        writer = VictoriaLogsWriter(
+            vl_url=_VL_URL,
+            http_client=client,
+            batch_size=10,
+            batch_timeout_s=0.05,
+        )
+        # Enqueue a real event first, then a sentinel, then another real event.
+        writer.ingest("s", "real-one")
+        writer._queue.put_nowait({"_sentinel": ""})  # pyright: ignore[reportPrivateUsage]
+        writer.ingest("s", "real-two")
+
+        task = asyncio.create_task(writer.run_flusher())
+        await asyncio.sleep(0.3)
+        await writer.aclose()
+        await task
+
+    requests = httpx_mock.get_requests()
+    assert len(requests) >= 1
+    all_body = "".join(r.read().decode() for r in requests)
+    assert "real-one" in all_body
+    assert "real-two" in all_body
+    assert "_sentinel" not in all_body
+
+
+@pytest.mark.asyncio
+async def test_flusher_handles_unexpected_exception(httpx_mock: HTTPXMock) -> None:
+    """An unexpected exception inside _post_batch is counted and flusher continues."""
+    call_count = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            raise RuntimeError("boom")
+        return httpx.Response(200)
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as client:
+        writer = VictoriaLogsWriter(
+            vl_url="http://vl-test",
+            http_client=client,
+            batch_size=1,
+            batch_timeout_s=0.05,
+        )
+        writer.ingest("s", "first")
+        task = asyncio.create_task(writer.run_flusher())
+        await asyncio.sleep(0.4)
+        await writer.aclose()
+        await task
+
+    assert writer.error_count >= 1
+
+
+@pytest.mark.asyncio
+async def test_post_batch_empty_is_noop() -> None:
+    """_post_batch with an empty list makes no HTTP requests."""
+    async with httpx.AsyncClient() as client:
+        writer = VictoriaLogsWriter(
+            vl_url=_VL_URL,
+            http_client=client,
+            batch_size=10,
+            batch_timeout_s=0.05,
+        )
+        # pytest-httpx will raise if any unexpected request is made.
+        await writer._post_batch([])  # pyright: ignore[reportPrivateUsage]
+    assert writer.error_count == 0

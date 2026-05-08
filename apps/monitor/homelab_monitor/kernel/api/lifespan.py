@@ -277,7 +277,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
     # cleanest path because the loader doesn't support DI on registration.
     # Revisit when adding the next stateful collector.
     for c in collectors:
-        if isinstance(c, LogStreamBudgetCollector):
+        # only fires when LogStreamBudgetCollector is loaded (integration-only)
+        if isinstance(c, LogStreamBudgetCollector):  # pragma: no cover
             c._state = log_stream_state  # pyright: ignore[reportPrivateUsage]
             c._vl_url = vl_url.rstrip("/")  # pyright: ignore[reportPrivateUsage]
             c._http_client = http_client  # pyright: ignore[reportPrivateUsage]
