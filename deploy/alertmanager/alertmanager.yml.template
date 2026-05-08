@@ -19,6 +19,9 @@ route:
 receivers:
   - name: 'monitor-webhook'
     webhook_configs:
+      # TODO: hardcoded for docker-compose deployment target.
+      # If/when k8s/nomad/bare-metal support is added, parameterize via env-var
+      # substitution at render time (similar to ALERTMANAGER_INGEST_TOKEN).
       - url: 'http://homelab-monitor-monitor:9090/api/alerts/ingest'
         send_resolved: true
         http_config:

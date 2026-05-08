@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import logging
-from contextlib import suppress
+import tempfile
 from pathlib import Path
 from unittest import mock
 
 import httpx
 import pytest
+import structlog
 from pytest_httpx import HTTPXMock
 from sqlalchemy import text
 
@@ -22,10 +23,12 @@ from homelab_monitor.kernel.alertmanager.render import (
     render_config,
     render_on_boot,
 )
+from homelab_monitor.kernel.auth.repository import AuthRepository
 from homelab_monitor.kernel.auth.scopes import Scope
 from homelab_monitor.kernel.db.repository import SqliteRepository
 from homelab_monitor.kernel.secrets.repository import AsyncSecretsRepository
 
+# Two audit rows expected: api_token.create + secret.set, both with who=BOOTSTRAP_WHO.
 _MIN_AUDIT_ROWS = 2
 
 
@@ -34,11 +37,7 @@ async def test_ensure_ingest_token_mints_when_absent(
     repo: SqliteRepository, master_key: bytes
 ) -> None:
     """Fresh DB, no token, no secret → mint both api_token + secret rows."""
-    import structlog  # noqa: PLC0415
-
-    auth_repo = __import__(
-        "homelab_monitor.kernel.auth.repository", fromlist=["AuthRepository"]
-    ).AuthRepository(repo)
+    auth_repo = AuthRepository(repo)
     secrets_repo = AsyncSecretsRepository(repo, master_key)
     log = structlog.get_logger()
 
@@ -72,11 +71,7 @@ async def test_ensure_ingest_token_reuses_when_both_present(
     repo: SqliteRepository, master_key: bytes
 ) -> None:
     """Pre-seed token + secret, call ensure → no new audit rows."""
-    import structlog  # noqa: PLC0415
-
-    auth_repo = __import__(
-        "homelab_monitor.kernel.auth.repository", fromlist=["AuthRepository"]
-    ).AuthRepository(repo)
+    auth_repo = AuthRepository(repo)
     secrets_repo = AsyncSecretsRepository(repo, master_key)
     log = structlog.get_logger()
 
@@ -116,11 +111,7 @@ async def test_ensure_ingest_token_remints_when_secret_missing(
     repo: SqliteRepository, master_key: bytes
 ) -> None:
     """Token row present, secret absent → re-mints both."""
-    import structlog  # noqa: PLC0415
-
-    auth_repo = __import__(
-        "homelab_monitor.kernel.auth.repository", fromlist=["AuthRepository"]
-    ).AuthRepository(repo)
+    auth_repo = AuthRepository(repo)
     secrets_repo = AsyncSecretsRepository(repo, master_key)
     log = structlog.get_logger()
 
@@ -154,11 +145,7 @@ async def test_ensure_ingest_token_remints_when_token_row_missing(
     repo: SqliteRepository, master_key: bytes
 ) -> None:
     """Secret present, token row absent → re-mints."""
-    import structlog  # noqa: PLC0415
-
-    auth_repo = __import__(
-        "homelab_monitor.kernel.auth.repository", fromlist=["AuthRepository"]
-    ).AuthRepository(repo)
+    auth_repo = AuthRepository(repo)
     secrets_repo = AsyncSecretsRepository(repo, master_key)
     log = structlog.get_logger()
 
@@ -190,11 +177,7 @@ async def test_ensure_ingest_token_never_logs_plaintext(
     repo: SqliteRepository, master_key: bytes, caplog: pytest.LogCaptureFixture
 ) -> None:
     """Mint a token; plaintext never appears in any log record."""
-    import structlog  # noqa: PLC0415
-
-    auth_repo = __import__(
-        "homelab_monitor.kernel.auth.repository", fromlist=["AuthRepository"]
-    ).AuthRepository(repo)
+    auth_repo = AuthRepository(repo)
     secrets_repo = AsyncSecretsRepository(repo, master_key)
 
     # Capture logs at INFO level for homelab_monitor
@@ -213,8 +196,6 @@ async def test_ensure_ingest_token_never_logs_plaintext(
 
 def test_render_config_substitutes_placeholder(tmp_path: Path) -> None:
     """Template has placeholder, rendered output contains the actual token."""
-    import structlog  # noqa: PLC0415
-
     template_file = tmp_path / "template.yml"
     output_file = tmp_path / "output.yml"
     template_file.write_text(f"token: {TEMPLATE_PLACEHOLDER}\n")
@@ -236,42 +217,8 @@ def test_render_config_substitutes_placeholder(tmp_path: Path) -> None:
     assert TEMPLATE_PLACEHOLDER not in content
 
 
-def test_render_config_atomic_replace(tmp_path: Path) -> None:
-    """render_config uses os.replace for atomic write."""
-    import structlog  # noqa: PLC0415
-
-    template_file = tmp_path / "template.yml"
-    output_file = tmp_path / "output.yml"
-    template_file.write_text(f"key: {TEMPLATE_PLACEHOLDER}\n")
-
-    log = structlog.get_logger()
-    token = "test_token_xyz"
-
-    # Mock os.replace to verify it's called
-    with (
-        mock.patch("os.replace") as mock_replace,
-        mock.patch("tempfile.mkstemp") as mock_mkstemp,
-        mock.patch("os.fdopen", create=True),
-        mock.patch("builtins.open", mock.mock_open()),
-        mock.patch("os.unlink"),
-    ):
-        # Simulate successful mkstemp
-        mock_mkstemp.return_value = (99, "/tmp/fake_tmp")
-        with suppress(Exception):
-            render_config(
-                template_path=template_file,
-                output_path=output_file,
-                token=token,
-                log=log,
-            )
-        # Verify os.replace was called
-        assert mock_replace.called
-
-
 def test_render_config_template_missing_raises(tmp_path: Path) -> None:
     """Template path absent → FileNotFoundError raised + warning log."""
-    import structlog  # noqa: PLC0415
-
     template_file = tmp_path / "nonexistent.yml"
     output_file = tmp_path / "output.yml"
 
@@ -288,8 +235,6 @@ def test_render_config_template_missing_raises(tmp_path: Path) -> None:
 
 def test_render_config_creates_parent_dirs(tmp_path: Path) -> None:
     """Output parent doesn't exist → directory created and file written."""
-    import structlog  # noqa: PLC0415
-
     template_file = tmp_path / "template.yml"
     output_file = tmp_path / "nested" / "dir" / "output.yml"
     template_file.write_text(f"key: {TEMPLATE_PLACEHOLDER}\n")
@@ -317,8 +262,6 @@ async def test_alertmanager_reloader_success(httpx_mock: HTTPXMock) -> None:
     """POST /-/reload returns 200 → returns True, emits ok log."""
     httpx_mock.add_response(status_code=200)
 
-    import structlog  # noqa: PLC0415
-
     log = structlog.get_logger()
     client = httpx.AsyncClient()
     reloader = AlertmanagerReloader(
@@ -336,8 +279,6 @@ async def test_alertmanager_reloader_success(httpx_mock: HTTPXMock) -> None:
 async def test_alertmanager_reloader_unreachable_returns_false(httpx_mock: HTTPXMock) -> None:
     """HTTP error (e.g., ECONNREFUSED) → returns False, emits unreachable log."""
     httpx_mock.add_exception(httpx.ConnectError("Connection refused"))
-
-    import structlog  # noqa: PLC0415
 
     log = structlog.get_logger()
     client = httpx.AsyncClient()
@@ -357,8 +298,6 @@ async def test_alertmanager_reloader_non_200_returns_false(httpx_mock: HTTPXMock
     """503 response → returns False, emits non_200 log."""
     httpx_mock.add_response(status_code=503)
 
-    import structlog  # noqa: PLC0415
-
     log = structlog.get_logger()
     client = httpx.AsyncClient()
     reloader = AlertmanagerReloader(
@@ -377,11 +316,7 @@ async def test_render_on_boot_swallows_render_errors(
     repo: SqliteRepository, master_key: bytes, tmp_path: Path
 ) -> None:
     """Missing template → function returns None (doesn't raise), logs warning."""
-    import structlog  # noqa: PLC0415
-
-    auth_repo = __import__(
-        "homelab_monitor.kernel.auth.repository", fromlist=["AuthRepository"]
-    ).AuthRepository(repo)
+    auth_repo = AuthRepository(repo)
     secrets_repo = AsyncSecretsRepository(repo, master_key)
     log = structlog.get_logger()
 
@@ -410,11 +345,7 @@ async def test_render_on_boot_skips_reload_when_am_url_none(
     repo: SqliteRepository, master_key: bytes, tmp_path: Path, httpx_mock: HTTPXMock
 ) -> None:
     """am_url=None → no HTTP call made."""
-    import structlog  # noqa: PLC0415
-
-    auth_repo = __import__(
-        "homelab_monitor.kernel.auth.repository", fromlist=["AuthRepository"]
-    ).AuthRepository(repo)
+    auth_repo = AuthRepository(repo)
     secrets_repo = AsyncSecretsRepository(repo, master_key)
     log = structlog.get_logger()
 
@@ -448,11 +379,7 @@ async def test_render_on_boot_full_happy_path(
     repo: SqliteRepository, master_key: bytes, tmp_path: Path, httpx_mock: HTTPXMock
 ) -> None:
     """Fresh DB + valid template + mocked AM 200 → renders + reloads."""
-    import structlog  # noqa: PLC0415
-
-    auth_repo = __import__(
-        "homelab_monitor.kernel.auth.repository", fromlist=["AuthRepository"]
-    ).AuthRepository(repo)
+    auth_repo = AuthRepository(repo)
     secrets_repo = AsyncSecretsRepository(repo, master_key)
     log = structlog.get_logger()
 
@@ -486,8 +413,6 @@ async def test_render_on_boot_full_happy_path(
 
 def test_render_config_raises_on_write_failure(tmp_path: Path) -> None:
     """OSError during atomic replace → log warning + re-raise."""
-    import structlog  # noqa: PLC0415
-
     template_file = tmp_path / "alertmanager.yml.template"
     template_file.write_text(f"token: {TEMPLATE_PLACEHOLDER}\n")
     output_file = tmp_path / "alertmanager.yml"
@@ -507,10 +432,8 @@ def test_render_config_raises_on_write_failure(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_render_on_boot_swallows_ensure_token_failure(tmp_path: Path) -> None:
-    """ensure_ingest_token raising → render_on_boot logs warning and returns (no raise)."""
+    """ensure_ingest_token raising → render_on_boot logs error and returns (no raise)."""
     from unittest.mock import AsyncMock  # noqa: PLC0415
-
-    import structlog  # noqa: PLC0415
 
     log = structlog.get_logger()
     template_file = tmp_path / "alertmanager.yml.template"
@@ -534,3 +457,41 @@ async def test_render_on_boot_swallows_ensure_token_failure(tmp_path: Path) -> N
     await client.aclose()
 
     assert result is None
+
+
+def test_render_config_cleans_up_tmp_file_on_replace_failure(tmp_path: Path) -> None:
+    """OSError during os.replace → temp file is unlinked, then re-raised."""
+    template_file = tmp_path / "alertmanager.yml.template"
+    template_file.write_text(f"token: {TEMPLATE_PLACEHOLDER}\n")
+    output_file = tmp_path / "alertmanager.yml"
+    log = structlog.get_logger()
+
+    # Track tmp file paths created.
+    tmp_files_seen: list[str] = []
+    real_mkstemp = tempfile.mkstemp
+
+    def _spy_mkstemp(
+        suffix: str | None = None,
+        prefix: str | None = None,
+        dir: str | None = None,
+        text: bool = False,
+    ) -> tuple[int, str]:
+        fd, path = real_mkstemp(suffix=suffix, prefix=prefix, dir=dir, text=text)
+        tmp_files_seen.append(path)
+        return fd, path
+
+    with (
+        mock.patch("tempfile.mkstemp", side_effect=_spy_mkstemp),
+        mock.patch("os.replace", side_effect=OSError("disk full")),
+        pytest.raises(OSError, match="disk full"),
+    ):
+        render_config(
+            template_path=template_file,
+            output_path=output_file,
+            token="test-token",
+            log=log,  # type: ignore
+        )
+
+    # Verify the tmp file was created AND cleaned up
+    assert len(tmp_files_seen) == 1
+    assert not Path(tmp_files_seen[0]).exists(), "temp file should have been unlinked"

@@ -346,8 +346,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
         )
     )
     am_url = os.environ.get("HOMELAB_MONITOR_ALERTMANAGER_URL", "http://alertmanager:9093")
-    # When the env var is the literal "disabled", skip the reload entirely (used in tests).
-    am_reload_url: str | None = None if am_url.lower() == "disabled" else am_url
+    # When the env var is one of these sentinels, skip the reload entirely (used in tests + ops).
+    am_reload_url: str | None = (
+        None if am_url.strip().lower() in {"disabled", "", "false", "0", "none"} else am_url
+    )
 
     from homelab_monitor.kernel.alertmanager.render import render_on_boot  # noqa: PLC0415
 

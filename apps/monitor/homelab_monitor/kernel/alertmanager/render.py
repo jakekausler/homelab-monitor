@@ -189,9 +189,14 @@ async def render_on_boot(  # noqa: PLR0913 -- explicit DI for testability
 ) -> None:
     """Top-level boot orchestration: ensure token → render → (optional) reload.
 
-    NEVER raises on render or reload failure. Render failures are logged at
-    WARNING and swallowed (lifespan continues). Reload failures are also
-    swallowed (the file is source of truth; AM will pick it up at start).
+    NEVER raises on any failure path. Failures are logged and swallowed so
+    lifespan continues:
+      - ensure_ingest_token failures: logged at ERROR with traceback (rare;
+        indicates DB or secrets store breakage).
+      - render_config failures: logged at WARNING (template missing or disk
+        full).
+      - reload failures: logged at WARNING (file is source of truth; AM picks
+        it up at next start).
 
     This is the function called from lifespan. ``am_url`` may be ``None`` to
     skip the reload step entirely (used in tests + first-boot when AM isn't
@@ -200,7 +205,7 @@ async def render_on_boot(  # noqa: PLR0913 -- explicit DI for testability
     try:
         token = await ensure_ingest_token(auth_repo, secrets_repo, log=log)
     except Exception as exc:
-        log.warning("alertmanager.bootstrap.failed", error=str(exc))
+        log.error("alertmanager.bootstrap.failed", error=str(exc), exc_info=True)
         return
     try:
         render_config(

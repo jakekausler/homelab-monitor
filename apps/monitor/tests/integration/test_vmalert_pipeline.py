@@ -43,4 +43,4 @@ def test_vmalert_loads_host_rules() -> None:
         for group in data.get("data", {}).get("groups", [])
         for rule in group.get("rules", [])
     }
-    assert {"HostHighCPU", "HostHighMemory", "CollectorQuarantined"}.issubset(rule_names)
+    assert {"HostHighCPU", "HostHighMemory"}.issubset(rule_names)

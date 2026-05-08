@@ -32,16 +32,17 @@ groups:
           summary: "Host memory above 90% for 10m"
           description: 'Host {{ $labels.host }} memory utilization {{ $value | humanizePercentage }}'
 
-      # TODO(STAGE-001-018+): emit `homelab_collector_quarantine_count` gauge from
-      # FailureBudget on quarantine-state change so this rule can fire. Until then
-      # the scheduler's synthetic AlertFiringEvent path covers this case.
-      - alert: CollectorQuarantined
-        expr: homelab_collector_quarantine_count > 0
-        for: 0m
-        labels:
-          severity: warning
-          source_tool: vmalert-metrics
-          target_kind: collector
-        annotations:
-          summary: "Collector quarantined"
-          description: '{{ $value }} collector(s) quarantined'
+      # TODO(STAGE-001-018+): Uncomment once FailureBudget emits
+      # `homelab_collector_quarantine_count` on quarantine state change.
+      # The synthetic AlertFiringEvent in scheduler.failure_budget covers this
+      # case until the gauge is wired.
+      # - alert: CollectorQuarantined
+      #   expr: homelab_collector_quarantine_count > 0
+      #   for: 0m
+      #   labels:
+      #     severity: warning
+      #     source_tool: vmalert-metrics
+      #     target_kind: collector
+      #   annotations:
+      #     summary: "Collector quarantined"
+      #     description: '{{ $value }} collector(s) quarantined'

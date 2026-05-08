@@ -121,6 +121,9 @@ services:
       - homelab-monitor-net
     command:
       - "--config.file=/etc/alertmanager/alertmanager.yml"
+      # TODO(security): /-/reload is unauthenticated on homelab-monitor-net.
+      # Acceptable for trusted single-tenant homelab; gate with --web.config.file
+      # basic-auth if multi-tenant or untrusted-network exposure becomes relevant.
       - "--storage.path=/alertmanager"
     volumes:
       - data_alertmanager_config:/etc/alertmanager:ro
