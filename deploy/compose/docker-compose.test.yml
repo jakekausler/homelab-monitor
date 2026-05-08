@@ -27,7 +27,7 @@ services:
       - "-retentionPeriod=1d"
       - "-httpListenAddr=:8428"
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O-", "http://localhost:8428/health"]
+      test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1:8428/health"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -45,7 +45,7 @@ services:
       - "-retentionPeriod=1d"
       - "-httpListenAddr=:9428"
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O-", "http://localhost:9428/health"]
+      test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1:9428/health"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -85,7 +85,7 @@ services:
     volumes:
       - ./test-fixtures/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O-", "http://localhost:9093/-/healthy"]
+      test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1:9093/-/healthy"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -111,7 +111,7 @@ services:
       victoriametrics:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O-", "http://localhost:8880/-/health"]
+      test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1:8880/-/health"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -137,7 +137,7 @@ services:
       victorialogs:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O-", "http://localhost:8880/-/health"]
+      test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1:8880/-/health"]
       interval: 5s
       timeout: 3s
       retries: 10

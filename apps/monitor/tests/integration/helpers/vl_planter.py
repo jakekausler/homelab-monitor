@@ -7,7 +7,7 @@ canonical e2e test).
 VictoriaLogs ingest endpoint contract (verified against v0.30.0 docs):
     POST {vl_url}/insert/jsonline
     Content-Type: application/x-ndjson  (one JSON object per line)
-    Special fields: _time (RFC3339Nano OR epoch nanoseconds OR epoch millis),
+    Special fields: _time (RFC3339 format only),
                     _msg  (log message text)
     All other fields become indexed log labels (host, service, severity, ...).
 
@@ -17,7 +17,7 @@ VL accepts batched ingest (multiple NDJSON lines per request) — single POST.
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -73,14 +73,14 @@ def plant_log_lines(  # noqa: PLR0913
     assert count >= 1, "plant_log_lines requires count >= 1"
 
     base = base_time or datetime.now(UTC)
-    base_ms = int(base.timestamp() * 1000)
     extras = extra_fields or {}
 
     lines: list[str] = []
     for i in range(count):
-        ts_ms = base_ms + (i * interval_ms)
+        ts = base + timedelta(milliseconds=i * interval_ms)
+        ts_rfc3339 = ts.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
         record: dict[str, Any] = {
-            "_time": ts_ms,
+            "_time": ts_rfc3339,
             "_msg": message,
             "host": host,
             "service": service,
