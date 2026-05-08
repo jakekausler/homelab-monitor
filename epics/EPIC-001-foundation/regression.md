@@ -293,6 +293,14 @@ or related tests.
 - [ ] Alert reaches the in-process dashboard channel
 - [ ] When the metric recovers, "resolved" notification is emitted
 
+### STAGE-001-017 (Alertmanager + vmalert metrics)
+
+- [ ] Run `docker compose -f deploy/compose/docker-compose.test.yml up -d alertmanager vmalert-metrics victoriametrics`. Verify alertmanager `/-/healthy` returns OK and vmalert `/api/v1/rules` shows all 6 rules (`HostHighCPU`, `HostHighMemory`, `CollectorQuarantined`, `SelfDiskWarn`, `SelfDiskError`, `SelfDiskCritical`).
+- [ ] Boot a fresh monitor instance with empty DB. Verify `alertmanager-ingest` token row is auto-minted, secret `alertmanager-ingest-token` is created, audit log has `who="system:alertmanager-bootstrap"`. Boot a SECOND time. Verify only ONE token row remains and no new mint audit row was added.
+- [ ] After STAGE-001-018 emits `homelab_collector_quarantine_count`: verify the `CollectorQuarantined` vmalert rule fires when a collector quarantines, routes through Alertmanager → `/api/alerts/ingest`, and produces an `alert.firing` SSE event.
+- [ ] Verify `HOMELAB_MONITOR_ALERTMANAGER_URL=disabled` env var causes render-on-boot to skip the AM `/-/reload` call.
+- [ ] When AM template path is set, verify rendered config contains the auto-minted token plaintext that matches `secrets.get("alertmanager-ingest-token")`.
+
 ## STAGE-001-018: vmalert (logs) + first log-derived rule
 
 - [ ] LogsQL rule fires when a planted "Out of memory" pattern appears in vector input
