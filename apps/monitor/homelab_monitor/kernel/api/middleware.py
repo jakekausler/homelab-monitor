@@ -150,7 +150,7 @@ class AccessLogMiddleware:
                 method=request.method,
                 path=request.url.path,
                 status=0,
-                exception=True,
+                had_exception=True,
                 duration_ms=duration_ms,
                 query_count=len(request.query_params),
                 auth=_auth_log_field(request),

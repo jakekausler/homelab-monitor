@@ -10,8 +10,8 @@ from fastapi import APIRouter, Depends
 from starlette.requests import Request
 
 from homelab_monitor.kernel.api.dependencies import (
+    get_in_memory_metrics_writer,
     get_loader,
-    get_metrics_writer,
     get_scheduler,
     require_session,
 )
@@ -20,7 +20,7 @@ from homelab_monitor.kernel.api.schemas import CollectorStatus, RetryResponse
 from homelab_monitor.kernel.auth.models import User
 from homelab_monitor.kernel.db.time import utc_now_iso
 from homelab_monitor.kernel.events import TriggerContext
-from homelab_monitor.kernel.plugins.io import InMemoryMetricsWriter
+from homelab_monitor.kernel.plugins.io import MemoryRetainingMetricsWriter
 from homelab_monitor.kernel.plugins.loader import PluginLoader
 from homelab_monitor.kernel.plugins.types import PLUGIN_NAME_PATTERN
 
@@ -36,7 +36,7 @@ router = APIRouter()
 async def list_collectors(
     _user: User = Depends(require_session()),  # noqa: B008
     loader: PluginLoader = Depends(get_loader),  # noqa: B008
-    metrics: InMemoryMetricsWriter = Depends(get_metrics_writer),  # noqa: B008
+    metrics: MemoryRetainingMetricsWriter = Depends(get_in_memory_metrics_writer),  # noqa: B008
     scheduler: Scheduler = Depends(get_scheduler),  # noqa: B008
 ) -> list[CollectorStatus]:
     """List all loaded collectors with their status."""

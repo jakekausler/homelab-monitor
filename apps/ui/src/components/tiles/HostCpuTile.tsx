@@ -3,12 +3,52 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Sparkline } from '@/components/tiles/Sparkline'
-import { useMetricsSnapshot } from '@/api/queries'
+import { useMetricsRange, useMetricsSnapshot } from '@/api/queries'
 import { useSSE } from '@/lib/sse'
 
 const HOST_CPU_METRIC = 'homelab_host_cpu_percent'
 const HOST_CPU_LABEL = 'all'
 const SERIES_CAPACITY = 60
+const RANGE_LOOKBACK_S = 600 // 10 minutes
+const RANGE_STEP = '10s'
+const RANGE_EXPR = `${HOST_CPU_METRIC}{cpu="${HOST_CPU_LABEL}"}`
+
+/**
+ * Compute fixed start/end ISO strings for the initial range query.
+ * Memoize per-mount via useMemo so the query key is stable across renders.
+ */
+function rangeWindow(): { start: string; end: string } {
+  const endMs = Date.now()
+  const startMs = endMs - RANGE_LOOKBACK_S * 1000
+  return {
+    start: new Date(startMs).toISOString(),
+    end: new Date(endMs).toISOString(),
+  }
+}
+
+/**
+ * Convert a VM matrix `values` array into a SERIES_CAPACITY-length number[].
+ * Pads short series with the first value; trims long series to the trailing
+ * SERIES_CAPACITY samples. Returns null if the array is empty/unparseable.
+ */
+function buildSeriesFromVMValues(
+  values: ReadonlyArray<ReadonlyArray<number | string>>,
+): number[] | null {
+  const parsed: number[] = []
+  for (const pair of values) {
+    if (pair.length < 2) continue
+    const raw = pair[1]!
+    const n = typeof raw === 'string' ? Number(raw) : raw
+    if (Number.isFinite(n)) parsed.push(n)
+  }
+  if (parsed.length === 0) return null
+  if (parsed.length >= SERIES_CAPACITY) {
+    return parsed.slice(parsed.length - SERIES_CAPACITY)
+  }
+  // Pad start with the first sample so the sparkline starts visually steady.
+  const padded = Array<number>(SERIES_CAPACITY - parsed.length).fill(parsed[0]!)
+  return [...padded, ...parsed]
+}
 
 function formatUpdatedAt(iso: string): string {
   // Backend timestamps are ISO-8601 UTC. Format in the user's local TZ.
@@ -65,6 +105,11 @@ export function HostCpuTile() {
   const [latest, setLatest] = useState<number | null>(null)
   const [lastUpdatedAt, setLastUpdatedAt] = useState<string | null>(null)
   const seededRef = useRef(false)
+  const seededFromHistoryRef = useRef(false)
+
+  // Compute window ONCE per mount; memoize for stable query key.
+  const { start: rangeStart, end: rangeEnd } = useMemo(() => rangeWindow(), [])
+  const range = useMetricsRange(RANGE_EXPR, rangeStart, rangeEnd, RANGE_STEP)
 
   // Seed once from /api/metrics/snapshot on first successful fetch.
   useEffect(() => {
@@ -74,14 +119,32 @@ export function HostCpuTile() {
       (e) => e.name === HOST_CPU_METRIC && e.labels['cpu'] === HOST_CPU_LABEL,
     )
     if (entry !== undefined) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: seeding/updating state from non-React source (snapshot, SSE event)
+      // eslint-disable-next-line react-hooks/set-state-in-effect,@eslint-react/set-state-in-effect -- intentional: seeding/updating state from non-React source (snapshot, SSE event)
       setLatest(entry.value)
       setSeries(Array<number>(SERIES_CAPACITY).fill(entry.value))
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: seeding/updating state from non-React source (snapshot, SSE event)
+      // eslint-disable-next-line react-hooks/set-state-in-effect,@eslint-react/set-state-in-effect -- intentional: seeding/updating state from non-React source (snapshot, SSE event)
       setLastUpdatedAt(entry.ts)
     }
     seededRef.current = true
   }, [snapshot.data])
+
+  // Optimistic backfill: replace synthetic series with VM history once.
+  // Fires AT MOST once per mount. If SSE has already started feeding live
+  // ticks (seededFromHistoryRef set by the SSE path's first tick — see
+  // below), we skip — live data is more valuable than backfill.
+  useEffect(() => {
+    if (seededFromHistoryRef.current) return
+    if (range.data === undefined) return
+    const result = range.data.data.result.find((r) => r.metric['cpu'] === HOST_CPU_LABEL)
+    if (result === undefined) return
+    const built = buildSeriesFromVMValues(result.values)
+    if (built === null) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: seeding state from one-shot historical query
+    setSeries(built)
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: seeding state from one-shot historical query
+    setLatest(built[built.length - 1]!)
+    seededFromHistoryRef.current = true
+  }, [range.data])
 
   // On every host tick, re-fetch the snapshot to pick up the new CPU value.
   // SCAFFOLDING: in STAGE-001-015 we replace the snapshot fetch with a
@@ -95,8 +158,9 @@ export function HostCpuTile() {
 
   useEffect(() => {
     if (sse.value === null) return
+    seededFromHistoryRef.current = true
     void refetchRef.current()
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: seeding/updating state from non-React source (snapshot, SSE event)
+    // eslint-disable-next-line react-hooks/set-state-in-effect,@eslint-react/set-state-in-effect -- intentional: seeding/updating state from non-React source (snapshot, SSE event)
     setLastUpdatedAt(sse.value.ts)
   }, [sse.value])
 

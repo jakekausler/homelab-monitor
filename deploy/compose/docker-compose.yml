@@ -1,0 +1,78 @@
+# homelab-monitor compose stack: monitor + VictoriaMetrics + vmagent.
+# Single file by design (per STAGE-001-015 design decision A).
+# Networks/volumes are namespaced; do NOT collide with the operator's existing
+# stacks even when --project-name is not set.
+
+name: homelab-monitor
+
+services:
+  monitor:
+    image: ghcr.io/${GITHUB_REPOSITORY:-jakekausler/homelab-monitor}:${IMAGE_TAG:-latest}
+    container_name: homelab-monitor
+    restart: unless-stopped
+    networks:
+      - homelab-monitor-net
+    ports:
+      - "${HOMELAB_MONITOR_PORT:-9090}:9090"
+    environment:
+      HOMELAB_MONITOR_DB_URL: ${HOMELAB_MONITOR_DB_URL:-sqlite+aiosqlite:////data/homelab-monitor.db}
+      HOMELAB_MONITOR_MASTER_KEY: ${HOMELAB_MONITOR_MASTER_KEY}
+      HOMELAB_MONITOR_VM_URL: http://victoriametrics:8428
+      HOMELAB_MONITOR_HTTPS_ONLY_COOKIES: ${HOMELAB_MONITOR_HTTPS_ONLY_COOKIES:-true}
+      HOMELAB_MONITOR_AUTO_MIGRATE: "1"
+    volumes:
+      - data_monitor:/data
+    depends_on:
+      victoriametrics:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9090/api/healthz').read()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  victoriametrics:
+    image: victoriametrics/victoria-metrics:v1.107.0
+    container_name: homelab-vm
+    restart: unless-stopped
+    networks:
+      - homelab-monitor-net
+    command:
+      - "-storageDataPath=/storage"
+      - "-retentionPeriod=90d"
+      - "-httpListenAddr=:8428"
+    volumes:
+      - data_vm:/storage
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://localhost:8428/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  vmagent:
+    image: victoriametrics/vmagent:v1.107.0
+    container_name: homelab-vmagent
+    restart: unless-stopped
+    networks:
+      - homelab-monitor-net
+    command:
+      - "-promscrape.config=/etc/vmagent/scrape.yaml"
+      - "-remoteWrite.url=http://victoriametrics:8428/api/v1/write"
+      - "-remoteWrite.tmpDataPath=/vmagentdata"
+    volumes:
+      - ./vmagent/scrape.yaml:/etc/vmagent/scrape.yaml:ro
+      - data_vmagent:/vmagentdata
+    depends_on:
+      victoriametrics:
+        condition: service_healthy
+
+networks:
+  homelab-monitor-net:
+    name: homelab-monitor-net
+
+volumes:
+  data_monitor:
+  data_vm:
+  data_vmagent:

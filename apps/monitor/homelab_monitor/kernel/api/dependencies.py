@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
@@ -21,12 +22,13 @@ from homelab_monitor.kernel.auth.scopes import Scope, parse_scopes
 
 if TYPE_CHECKING:
     import httpx
+    from prometheus_client import CollectorRegistry
 
     from homelab_monitor.kernel.alerts.repository import AlertRepository
     from homelab_monitor.kernel.api.sse import SseBroker
     from homelab_monitor.kernel.db.repository import SqliteRepository
     from homelab_monitor.kernel.dispatch.dispatcher import AlertDispatcher
-    from homelab_monitor.kernel.plugins.io import MetricsWriter
+    from homelab_monitor.kernel.plugins.io import MemoryRetainingMetricsWriter, MetricsWriter
     from homelab_monitor.kernel.plugins.loader import PluginLoader
     from homelab_monitor.kernel.scheduler.failure_budget import FailureBudget
     from homelab_monitor.kernel.scheduler.scheduler import Scheduler
@@ -92,6 +94,38 @@ def get_metrics_writer(request: Request) -> MetricsWriter:
         code="metrics_unavailable",
         message="metrics writer is not initialized",
     )
+
+
+def get_in_memory_metrics_writer(request: Request) -> MemoryRetainingMetricsWriter:
+    """Get the in-memory (snapshot-capable) metrics writer from app state."""
+    return _require_state(
+        request,
+        attr="in_memory_metrics_writer",
+        code="metrics_unavailable",
+        message="in-memory metrics writer is not initialized",
+    )
+
+
+def get_in_memory_metrics_writer_optional(
+    request: Request,
+) -> MemoryRetainingMetricsWriter | None:
+    """Return the in-memory metrics writer, or ``None`` if lifespan disabled."""
+    return getattr(request.app.state, "in_memory_metrics_writer", None)
+
+
+def get_prom_registry(request: Request) -> CollectorRegistry:
+    """Get the prometheus_client CollectorRegistry from app state."""
+    return _require_state(
+        request,
+        attr="prom_registry",
+        code="metrics_unavailable",
+        message="prometheus registry is not initialized",
+    )
+
+
+def get_vm_url() -> str:
+    """Return the VictoriaMetrics base URL from env, defaulting to the compose hostname."""
+    return os.environ.get("HOMELAB_MONITOR_VM_URL", "http://victoriametrics:8428")
 
 
 def get_http_client(request: Request) -> httpx.AsyncClient:

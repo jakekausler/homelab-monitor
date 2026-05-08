@@ -151,7 +151,7 @@ async def test_lifespan_e2e_retry_endpoint(
 ) -> None:
     """POST /api/collectors/noop/retry returns 200 with tick_id; quarantine cleared; tick fired."""
     # Before retry, record metric count
-    metrics_before = len(app_bootstrapped.state.metrics_writer.recorded)
+    metrics_before = len(app_bootstrapped.state.in_memory_metrics_writer.recorded)
 
     # Retry the noop collector
     csrf_token = authenticated_client.cookies.get("homelab_monitor_csrf")
@@ -169,7 +169,7 @@ async def test_lifespan_e2e_retry_endpoint(
     await asyncio.sleep(0.5)
 
     # Check that a tick was recorded (metrics should have increased)
-    metrics_after = len(app_bootstrapped.state.metrics_writer.recorded)
+    metrics_after = len(app_bootstrapped.state.in_memory_metrics_writer.recorded)
     # At least one new metric should have been recorded
     assert metrics_after >= metrics_before
 
@@ -234,7 +234,7 @@ async def test_lifespan_e2e_concurrent_retries(app_bootstrapped: FastAPI) -> Non
         while asyncio.get_event_loop().time() < deadline:
             tick_metrics = [
                 m
-                for m in app_bootstrapped.state.metrics_writer.recorded
+                for m in app_bootstrapped.state.in_memory_metrics_writer.recorded
                 if m.name == "homelab_collector_run_success_total"
             ]
             if len(tick_metrics) >= 5:  # noqa: PLR2004

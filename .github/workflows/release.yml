@@ -1,4 +1,4 @@
-# Activates on v* tags only. Container Dockerfile lands in STAGE-001-015; this workflow is scaffolding until then.
+# Activates on v* tags only. Builds + publishes the multi-arch container image.
 
 name: Release
 
@@ -45,15 +45,11 @@ jobs:
       - name: Build UI bundle
         run: pnpm --filter ui run build
 
-      # TODO: STAGE-001-015 — Finalize Docker context strategy. UI bundle (apps/ui/dist/)
-      # must be copied into the Docker context before the image build. Using repo-root
-      # context (`.`) as the canonical monorepo pattern; the Dockerfile will reference
-      # apps/ui/dist/ and apps/monitor/ from there. Review COPY paths in the Dockerfile
-      # when it lands.
       - name: Build and push backend image (multi-arch)
         uses: docker/build-push-action@v7
         with:
           context: .
+          file: apps/monitor/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |

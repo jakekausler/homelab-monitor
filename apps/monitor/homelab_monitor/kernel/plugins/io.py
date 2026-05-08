@@ -63,8 +63,10 @@ class LogEntry:
 class MetricsWriter(Protocol):
     """Minimal symmetric metrics-write surface.
 
-    Buffering / batching is the impl's concern (real ``VictoriaMetricsWriter`` in
-    STAGE-001-015), not the contract's. All three methods take a single observation.
+    Production wires this to a ``MultiplexMetricsWriter`` that fans out to
+    ``MemoryRetainingMetricsWriter`` (for ``/api/metrics/snapshot``) AND
+    ``PrometheusRegistryWriter`` (for ``/metrics`` scrape by vmagent into
+    VictoriaMetrics). All three methods take a single observation.
     """
 
     def write_gauge(self, name: str, value: float, labels: dict[str, str]) -> None:

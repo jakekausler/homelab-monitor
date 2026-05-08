@@ -1,4 +1,4 @@
-.PHONY: setup verify verify-ci lint format format-check typecheck test test-fast test-nocov dev backend-dev openapi-export clean crg-init ui-verify ui-dev ui-build ui-test _verify-parallel
+.PHONY: setup verify verify-ci lint format format-check typecheck test test-fast test-nocov dev backend-dev openapi-export clean crg-init ui-verify ui-dev ui-build ui-test _verify-parallel compose-up compose-down compose-build compose-logs
 
 .DEFAULT_GOAL := verify
 
@@ -59,6 +59,22 @@ backend-dev:
 
 openapi-export:
 	bash scripts/export-openapi.sh
+
+# ---------------------------------------------------------------------------
+# Compose / container helpers (STAGE-001-015).
+# ---------------------------------------------------------------------------
+
+compose-build:
+	docker compose -f deploy/compose/docker-compose.yml build
+
+compose-up:
+	docker compose -f deploy/compose/docker-compose.yml up -d
+
+compose-down:
+	docker compose -f deploy/compose/docker-compose.yml down
+
+compose-logs:
+	docker compose -f deploy/compose/docker-compose.yml logs -f
 
 dev: backend-dev
 

@@ -1,0 +1,15 @@
+# vmagent scrape configuration for the homelab-monitor stack.
+# Single static job — scrapes the monitor's /metrics exposition endpoint.
+
+global:
+  scrape_interval: 15s
+  scrape_timeout: 10s
+
+scrape_configs:
+  - job_name: monitor
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - monitor:9090
+        labels:
+          service: homelab-monitor

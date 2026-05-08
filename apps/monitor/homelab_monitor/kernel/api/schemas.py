@@ -23,10 +23,13 @@ __all__ = [
     "ErrorPayload",
     "HealthzResponse",
     "IngestResponse",
+    "MetricsRangeResponse",
     "MetricsSnapshotEntry",
     "MetricsSnapshotResponse",
     "OutcomeView",
     "RetryResponse",
+    "VMRangeData",
+    "VMRangeResult",
     "VersionResponse",
 ]
 
@@ -98,6 +101,31 @@ class MetricsSnapshotResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
     ts: str  # snapshot capture time (ISO-8601 UTC)
     entries: list[MetricsSnapshotEntry]
+
+
+class VMRangeResult(BaseModel):
+    """One series in a VictoriaMetrics ``/api/v1/query_range`` response."""
+
+    model_config = ConfigDict(extra="forbid")
+    metric: dict[str, str]
+    # Each pair is [unix_timestamp_seconds_float, value_as_string]
+    values: list[list[float | str]]
+
+
+class VMRangeData(BaseModel):
+    """``data`` field of a VictoriaMetrics range response."""
+
+    model_config = ConfigDict(extra="forbid")
+    resultType: str  # mirrors VM JSON key
+    result: list[VMRangeResult]
+
+
+class MetricsRangeResponse(BaseModel):
+    """Response for GET /api/metrics/range — passes through VM's range shape."""
+
+    model_config = ConfigDict(extra="forbid")
+    status: str  # "success" on happy path
+    data: VMRangeData
 
 
 class AlertView(BaseModel):

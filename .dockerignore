@@ -1,0 +1,32 @@
+# Ignore everything by default; explicitly include what the build needs.
+**
+
+# Re-include build inputs.
+!apps/monitor/pyproject.toml
+!apps/monitor/uv.lock
+!apps/monitor/homelab_monitor/
+!apps/monitor/Dockerfile
+!apps/ui/dist/
+!packages/shared-types/
+
+# Strip noise even from the included paths.
+**/__pycache__/
+**/*.pyc
+**/.pytest_cache/
+**/.coverage
+**/.coverage.*
+**/coverage.xml
+**/htmlcov/
+**/.mypy_cache/
+**/.ruff_cache/
+**/.venv/
+**/node_modules/
+**/.git/
+**/.github/
+.code-review-graph/
+epics/
+docs/
+runbooks/
+homelab-monitor-overrides/
+.idea/
+.vscode/

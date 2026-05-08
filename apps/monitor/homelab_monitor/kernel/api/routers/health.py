@@ -5,19 +5,24 @@ from __future__ import annotations
 import os
 from typing import Literal
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from sqlalchemy import text
 from starlette.requests import Request
 
 from homelab_monitor import __version__
+from homelab_monitor.kernel.api.dependencies import get_in_memory_metrics_writer_optional
 from homelab_monitor.kernel.api.schemas import HealthzResponse, VersionResponse
 from homelab_monitor.kernel.db.time import utc_now_iso
+from homelab_monitor.kernel.plugins.io import MemoryRetainingMetricsWriter
 
 router = APIRouter()
 
 
 @router.get("/healthz", response_model=HealthzResponse)
-async def healthz(request: Request) -> HealthzResponse:
+async def healthz(
+    request: Request,
+    metrics: MemoryRetainingMetricsWriter | None = Depends(get_in_memory_metrics_writer_optional),  # noqa: B008
+) -> HealthzResponse:
     """Health check endpoint.
 
     Returns overall system health plus detailed status fields. Tolerant of
@@ -31,7 +36,6 @@ async def healthz(request: Request) -> HealthzResponse:
 
     repo = getattr(state, "repo", None)
     scheduler = getattr(state, "scheduler", None)
-    metrics = getattr(state, "metrics_writer", None)
     failure_budget = getattr(state, "failure_budget", None)
     degraded = getattr(state, "degraded_collectors", []) or []
 
@@ -50,11 +54,9 @@ async def healthz(request: Request) -> HealthzResponse:
 
     last_tick_at: str | None = None
     failed_5m = 0
-    has_tick_at = hasattr(metrics, "last_tick_at")
-    has_failures = hasattr(metrics, "failures_in_window")
-    if metrics is not None and has_tick_at and has_failures:
-        last_tick_at = metrics.last_tick_at()  # pyright: ignore[reportAttributeAccessIssue]
-        failed_5m = metrics.failures_in_window(300)  # pyright: ignore[reportAttributeAccessIssue]
+    if metrics is not None:
+        last_tick_at = metrics.last_tick_at()
+        failed_5m = metrics.failures_in_window(300)
 
     quarantined: list[str] = []
     if failure_budget is not None:

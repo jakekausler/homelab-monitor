@@ -641,6 +641,25 @@
         "title": "MeResponse",
         "type": "object"
       },
+      "MetricsRangeResponse": {
+        "additionalProperties": false,
+        "description": "Response for GET /api/metrics/range \u2014 passes through VM's range shape.",
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/VMRangeData"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "data"
+        ],
+        "title": "MetricsRangeResponse",
+        "type": "object"
+      },
       "MetricsSnapshotEntry": {
         "additionalProperties": false,
         "description": "Single metric entry in a snapshot.",
@@ -789,6 +808,65 @@
           "username"
         ],
         "title": "UserResponse",
+        "type": "object"
+      },
+      "VMRangeData": {
+        "additionalProperties": false,
+        "description": "``data`` field of a VictoriaMetrics range response.",
+        "properties": {
+          "result": {
+            "items": {
+              "$ref": "#/components/schemas/VMRangeResult"
+            },
+            "title": "Result",
+            "type": "array"
+          },
+          "resultType": {
+            "title": "Resulttype",
+            "type": "string"
+          }
+        },
+        "required": [
+          "resultType",
+          "result"
+        ],
+        "title": "VMRangeData",
+        "type": "object"
+      },
+      "VMRangeResult": {
+        "additionalProperties": false,
+        "description": "One series in a VictoriaMetrics ``/api/v1/query_range`` response.",
+        "properties": {
+          "metric": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Metric",
+            "type": "object"
+          },
+          "values": {
+            "items": {
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "type": "array"
+            },
+            "title": "Values",
+            "type": "array"
+          }
+        },
+        "required": [
+          "metric",
+          "values"
+        ],
+        "title": "VMRangeResult",
         "type": "object"
       },
       "ValidationError": {
@@ -1406,9 +1484,85 @@
         "summary": "Healthz"
       }
     },
+    "/api/metrics/range": {
+      "get": {
+        "description": "Proxy a PromQL range query to VictoriaMetrics.\n\nAuth: cookie session required. CSRF NOT enforced on GET.\n\nOn any non-200 response from VM, on a transport error, or on a timeout,\nsurfaces as 502 ``upstream_unavailable`` so the frontend can fall back\nto its synthetic baseline.",
+        "operationId": "metrics_range_api_metrics_range_get",
+        "parameters": [
+          {
+            "description": "PromQL expression",
+            "in": "query",
+            "name": "expr",
+            "required": true,
+            "schema": {
+              "description": "PromQL expression",
+              "title": "Expr",
+              "type": "string"
+            }
+          },
+          {
+            "description": "ISO-8601 UTC start time",
+            "in": "query",
+            "name": "start",
+            "required": true,
+            "schema": {
+              "description": "ISO-8601 UTC start time",
+              "title": "Start",
+              "type": "string"
+            }
+          },
+          {
+            "description": "ISO-8601 UTC end time",
+            "in": "query",
+            "name": "end",
+            "required": true,
+            "schema": {
+              "description": "ISO-8601 UTC end time",
+              "title": "End",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Resolution step (e.g. '10s', '1m')",
+            "in": "query",
+            "name": "step",
+            "required": false,
+            "schema": {
+              "default": "10s",
+              "description": "Resolution step (e.g. '10s', '1m')",
+              "title": "Step",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetricsRangeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Metrics Range"
+      }
+    },
     "/api/metrics/snapshot": {
       "get": {
-        "description": "Return the in-memory writer's latest-value snapshot.\n\nAuth: cookie session required. CSRF NOT enforced on GET.\n\nSCAFFOLDING: when a real VictoriaMetrics-backed writer ships in STAGE-001-015,\nthis endpoint will be retired in favor of direct VM queries. STAGE-014's\nOverview tile is the only consumer.",
+        "description": "Return the in-memory writer's latest-value snapshot.\n\nAuth: cookie session required. CSRF NOT enforced on GET.\n\nBacked by ``MemoryRetainingMetricsWriter`` (one half of the production\nmultiplex). The VM-backed scrape path is exposed through ``/metrics/range``.",
         "operationId": "metrics_snapshot_api_metrics_snapshot_get",
         "responses": {
           "200": {
@@ -1442,6 +1596,23 @@
           }
         },
         "summary": "Version"
+      }
+    },
+    "/metrics": {
+      "get": {
+        "description": "Return the prometheus_client text-format exposition.\n\nAuth: NONE (intentional \u2014 internal scrape only). ``CONTENT_TYPE_LATEST``\nis ``text/plain; version=0.0.4; charset=utf-8``.",
+        "operationId": "metrics_exposition_metrics_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Metrics Exposition"
       }
     }
   }

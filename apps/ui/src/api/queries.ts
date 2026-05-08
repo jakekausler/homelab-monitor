@@ -15,6 +15,7 @@ type LoginResponse = components['schemas']['LoginResponse']
 type VersionResponse = components['schemas']['VersionResponse']
 type CollectorStatus = components['schemas']['CollectorStatus']
 type MetricsSnapshotResponse = components['schemas']['MetricsSnapshotResponse']
+type MetricsRangeResponse = components['schemas']['MetricsRangeResponse']
 type AlertListResponse = components['schemas']['AlertListResponse']
 
 export const queryKeys = {
@@ -22,6 +23,8 @@ export const queryKeys = {
   version: ['version'] as const,
   collectors: ['collectors'] as const,
   metricsSnapshot: ['metrics', 'snapshot'] as const,
+  metricsRange: (expr: string, start: string, end: string, step: string) =>
+    ['metrics', 'range', expr, start, end, step] as const,
   alerts: (params: { status?: 'firing' | 'resolved' }) => ['alerts', params] as const,
 }
 
@@ -76,6 +79,34 @@ export function useMetricsSnapshot(): UseQueryResult<MetricsSnapshotResponse, Ap
     },
     staleTime: Infinity,
     refetchOnWindowFocus: false,
+  })
+}
+
+/**
+ * Fetch a historical range of metrics from VictoriaMetrics through the
+ * monitor's /api/metrics/range proxy. Used for one-shot backfills (e.g.,
+ * the Host CPU tile's 10-minute synthetic-baseline replacement).
+ *
+ * `staleTime: Infinity` — historical data does not need to refetch unless
+ * the args change. `retry: 1` — single transient flake is tolerated; deeper
+ * failures fall through to the consumer (which keeps its synthetic baseline).
+ */
+export function useMetricsRange(
+  expr: string,
+  start: string,
+  end: string,
+  step: string,
+): UseQueryResult<MetricsRangeResponse, ApiError> {
+  return useQuery({
+    queryKey: queryKeys.metricsRange(expr, start, end, step),
+    queryFn: async () => {
+      const result = await apiClient.GET('/api/metrics/range', {
+        params: { query: { expr, start, end, step } },
+      })
+      return unwrap(result)
+    },
+    staleTime: Infinity,
+    retry: 1,
   })
 }
 

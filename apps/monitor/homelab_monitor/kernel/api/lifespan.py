@@ -13,6 +13,7 @@ from typing import Any, NoReturn, cast
 import httpx
 import structlog
 from fastapi import FastAPI
+from prometheus_client import CollectorRegistry
 from structlog.stdlib import BoundLogger
 
 from homelab_monitor.kernel.alerts.repository import AlertRepository
@@ -24,6 +25,8 @@ from homelab_monitor.kernel.db.time import utc_now_iso
 from homelab_monitor.kernel.dispatch.channels.inproc_dashboard import InprocDashboardChannel
 from homelab_monitor.kernel.dispatch.dispatcher import AlertDispatcher
 from homelab_monitor.kernel.logging import configure_logging
+from homelab_monitor.kernel.metrics.multiplex import MultiplexMetricsWriter
+from homelab_monitor.kernel.metrics.prometheus_writer import PrometheusRegistryWriter
 from homelab_monitor.kernel.plugins.base import Collector
 from homelab_monitor.kernel.plugins.context import CollectorContext
 from homelab_monitor.kernel.plugins.io import (
@@ -173,7 +176,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
         limits=httpx.Limits(max_connections=50, max_keepalive_connections=20),
         timeout=httpx.Timeout(10.0, connect=5.0),
     )
-    metrics_writer = MemoryRetainingMetricsWriter()
+    in_memory_metrics_writer = MemoryRetainingMetricsWriter()
+    prom_registry = CollectorRegistry()
+    prom_writer = PrometheusRegistryWriter(prom_registry)
+    metrics_writer = MultiplexMetricsWriter([in_memory_metrics_writer, prom_writer])
     logs_writer = InMemoryLogsWriter()
     ssh_factory = _StubSshFactory()
     broker = SseBroker(log)
@@ -227,6 +233,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
     app.state.ttl_resolver = ttl_resolver
     app.state.http_client = http_client
     app.state.metrics_writer = metrics_writer
+    app.state.in_memory_metrics_writer = in_memory_metrics_writer
+    app.state.prom_registry = prom_registry
     app.state.logs_writer = logs_writer
     app.state.loader = loader
     app.state.failure_budget = failure_budget
