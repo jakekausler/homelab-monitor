@@ -164,7 +164,7 @@ class _ProcHealthyCollector(BaseCollector):
     """PROCESS collector that writes one counter per tick and returns ok=True."""
 
     name: ClassVar[str] = "proc_healthy"
-    interval: ClassVar[timedelta] = timedelta(seconds=2)
+    interval: ClassVar[timedelta] = timedelta(seconds=0.4)
     timeout: ClassVar[timedelta] = timedelta(seconds=5)
     run_kind: ClassVar[RunKind] = RunKind.PROCESS
 
@@ -179,7 +179,7 @@ class _ProcCrashCollector(BaseCollector):
     """PROCESS collector that hard-crashes the worker with os._exit(1)."""
 
     name: ClassVar[str] = "proc_crash"
-    interval: ClassVar[timedelta] = timedelta(seconds=2)
+    interval: ClassVar[timedelta] = timedelta(seconds=0.4)
     timeout: ClassVar[timedelta] = timedelta(seconds=5)
     run_kind: ClassVar[RunKind] = RunKind.PROCESS
 
@@ -208,8 +208,8 @@ async def test_real_kernel_types_plumbing(
     metrics = InMemoryMetricsWriter()
     ctx_factory = _make_real_ctx_factory(real_repo, metrics)
 
-    cls_a = _make_collector("e2e_real_a", interval_s=1.0)
-    cls_b = _make_collector("e2e_real_b", interval_s=2.0)
+    cls_a = _make_collector("e2e_real_a", interval_s=0.2)
+    cls_b = _make_collector("e2e_real_b", interval_s=0.4)
 
     loaded = [
         LoadedCollector(collector=cls_a(), config=CollectorConfig(name="e2e_real_a")),
@@ -218,7 +218,7 @@ async def test_real_kernel_types_plumbing(
 
     scheduler = Scheduler(loaded, ctx_factory, metrics)
     await scheduler.start()
-    await asyncio.sleep(5.0)
+    await asyncio.sleep(1.0)
     await scheduler.stop()
 
     success_a = _count(metrics, "homelab_collector_run_success_total", {"name": "e2e_real_a"})
@@ -333,10 +333,10 @@ async def test_mixed_run_kind_concurrency(
         time.sleep(0.01)  # simulate sync work
         return CollectorResult(ok=True)
 
-    cls_async = _make_collector("e2e_mixed_async", interval_s=2.0)
+    cls_async = _make_collector("e2e_mixed_async", interval_s=0.4)
     cls_thread = _make_collector(
         "e2e_mixed_thread",
-        interval_s=2.0,
+        interval_s=0.4,
         run_kind=RunKind.THREAD,
         run_impl=_thread_impl,
     )
@@ -357,7 +357,7 @@ async def test_mixed_run_kind_concurrency(
         SchedulerConfig(process_pool_size=1),
     )
     await scheduler.start()
-    await asyncio.sleep(8.0)
+    await asyncio.sleep(2.0)
     await scheduler.stop()
 
     async_ticks = _count(
@@ -403,7 +403,7 @@ async def test_process_worker_hard_crash_isolated(
     metrics = InMemoryMetricsWriter()
     ctx_factory = _make_real_ctx_factory(real_repo, metrics)
 
-    cls_healthy = _make_collector("e2e_crash_companion", interval_s=2.0)
+    cls_healthy = _make_collector("e2e_crash_companion", interval_s=0.4)
 
     loaded = [
         LoadedCollector(
@@ -423,7 +423,7 @@ async def test_process_worker_hard_crash_isolated(
         SchedulerConfig(process_pool_size=1),
     )
     await scheduler.start()
-    await asyncio.sleep(8.0)
+    await asyncio.sleep(2.0)
     await scheduler.stop()
 
     crash_failures = _count(
@@ -461,14 +461,14 @@ async def test_scheduler_restart_metrics_are_independent(
     test creates two separate Scheduler instances with separate InMemoryMetricsWriter
     instances and verifies neither bleeds metrics into the other.
     """
-    cls = _make_collector("e2e_restart", interval_s=1.0)
+    cls = _make_collector("e2e_restart", interval_s=0.2)
 
     # First run
     metrics_1 = InMemoryMetricsWriter()
     loaded_1 = [LoadedCollector(collector=cls(), config=CollectorConfig(name="e2e_restart"))]
     sched_1 = Scheduler(loaded_1, _make_real_ctx_factory(real_repo, metrics_1), metrics_1)
     await sched_1.start()
-    await asyncio.sleep(3.0)
+    await asyncio.sleep(1.0)
     await sched_1.stop()
     count_1 = _count(metrics_1, "homelab_collector_run_success_total", {"name": "e2e_restart"})
 
@@ -477,7 +477,7 @@ async def test_scheduler_restart_metrics_are_independent(
     loaded_2 = [LoadedCollector(collector=cls(), config=CollectorConfig(name="e2e_restart"))]
     sched_2 = Scheduler(loaded_2, _make_real_ctx_factory(real_repo, metrics_2), metrics_2)
     await sched_2.start()
-    await asyncio.sleep(3.0)
+    await asyncio.sleep(1.0)
     await sched_2.stop()
     count_2 = _count(metrics_2, "homelab_collector_run_success_total", {"name": "e2e_restart"})
 
@@ -571,7 +571,7 @@ async def test_high_cardinality_hash_offset_spread() -> None:
     scheduler = Scheduler(loaded, ctx_factory, metrics)
     start_wall = time.monotonic()
     await scheduler.start()
-    await asyncio.sleep(5.0)
+    await asyncio.sleep(4.0)
     await scheduler.stop()
 
     # All 20 collectors must have fired at least once

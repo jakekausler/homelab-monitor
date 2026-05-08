@@ -515,7 +515,7 @@ async def test_concurrency_group_serializes_collectors(
     ctx_factory = _make_real_ctx_factory(real_repo, metrics)
     scheduler = Scheduler(loaded, ctx_factory, metrics)
     await scheduler.start()
-    await asyncio.sleep(3.0)  # ~10 ticks each; plenty for overlap if lock broken
+    await asyncio.sleep(1.5)  # ~5 ticks each; sufficient to observe overlap if lock broken
     await scheduler.stop()
 
     assert max_concurrent <= 1, (
@@ -583,7 +583,7 @@ async def test_group_busy_skip_emits_metric(
     ctx_factory = _make_real_ctx_factory(real_repo, metrics)
     scheduler = Scheduler(loaded, ctx_factory, metrics)
     await scheduler.start()
-    await asyncio.sleep(3.0)
+    await asyncio.sleep(1.5)
     await scheduler.stop()
 
     skipped_busy = _count(

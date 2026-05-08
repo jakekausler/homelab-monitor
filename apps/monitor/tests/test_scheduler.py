@@ -842,7 +842,9 @@ echo '{"type":"result","ok":true,"summary":"scheduler test"}'
     metrics = InMemoryMetricsWriter()
     sched = Scheduler(loaded, _make_ctx_factory(metrics), metrics)
     await sched.start()
-    await asyncio.sleep(6.0)  # Allow one tick to complete (5s interval + buffer)
+    # SubprocessManifest enforces interval >= 5s (security/blast-radius floor),
+    # so we cannot compress this further without changing production validation.
+    await asyncio.sleep(6.0)
     await sched.stop()
 
     success_count = _count_metric(
