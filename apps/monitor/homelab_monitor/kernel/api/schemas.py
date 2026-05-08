@@ -17,6 +17,7 @@ __all__ = [
     "AlertDetailResponse",
     "AlertListResponse",
     "AlertView",
+    "BackupResponse",
     "CollectorStatus",
     "DismissResponse",
     "ErrorEnvelope",
@@ -200,3 +201,16 @@ class DismissResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
     alert_id: str
     dismissed_at: str
+
+
+class BackupResponse(BaseModel):
+    """Response for POST /api/admin/backup."""
+
+    model_config = ConfigDict(extra="forbid")
+    snapshot_id: str
+    sqlite_path: str | None = None
+    vm_snapshot_path: str | None = None
+    started_at: str
+    ended_at: str
+    size_bytes: int
+    errors: list[str]

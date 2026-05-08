@@ -14,6 +14,17 @@ def test_scope_enum_values() -> None:
     assert Scope.READ_STATUS.value == "read:status"
 
 
+def test_scope_admin_backup_write_value() -> None:
+    """ADMIN_BACKUP_WRITE serializes to 'admin:backup:write'."""
+    assert Scope.ADMIN_BACKUP_WRITE.value == "admin:backup:write"
+
+
+def test_parse_admin_backup_scope() -> None:
+    """parse_scopes parses 'admin:backup:write' to Scope.ADMIN_BACKUP_WRITE."""
+    result = parse_scopes("admin:backup:write")
+    assert result == {Scope.ADMIN_BACKUP_WRITE}
+
+
 def test_parse_scopes_empty_string() -> None:
     """parse_scopes('') returns empty set."""
     result = parse_scopes("")

@@ -1,0 +1,48 @@
+# Integration test stack for homelab-monitor.
+#
+# Two usage modes:
+#   1. CI:    `docker compose -f docker-compose.test.yml up --abort-on-container-exit`
+#             — runs `integration-tests` against `victoriametrics`, exits when done.
+#   2. Local: `docker compose -f docker-compose.test.yml up -d victoriametrics`
+#             — brings up only VM; run host pytest with VM_URL=http://localhost:8428.
+#
+# Volumes are NOT persisted (no top-level volumes block); each `up` is fresh.
+
+name: homelab-monitor-test
+
+services:
+  victoriametrics:
+    image: victoriametrics/victoria-metrics:v1.107.0
+    container_name: homelab-vm-test
+    networks:
+      - homelab-monitor-test-net
+    ports:
+      - "127.0.0.1:8428:8428"
+    command:
+      - "-storageDataPath=/storage"
+      - "-retentionPeriod=1d"
+      - "-httpListenAddr=:8428"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://localhost:8428/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  integration-tests:
+    build:
+      context: ../..
+      dockerfile: apps/monitor/Dockerfile.test
+    container_name: homelab-integration-tests
+    networks:
+      - homelab-monitor-test-net
+    environment:
+      VM_URL: http://victoriametrics:8428
+      HOMELAB_MONITOR_DB_URL: "sqlite+aiosqlite:///:memory:"
+    depends_on:
+      victoriametrics:
+        condition: service_healthy
+
+networks:
+  homelab-monitor-test-net:
+    name: homelab-monitor-test-net

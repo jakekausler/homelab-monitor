@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import re
-from typing import cast
+from typing import Literal, cast
 
 import httpx
 import structlog
@@ -168,8 +168,10 @@ async def metrics_range(  # noqa: PLR0913
                     with contextlib.suppress(ValueError, TypeError, IndexError):
                         values.append([float(pair[0]), str(pair[1])])  # pyright: ignore[reportUnknownArgumentType]
         parsed_results.append(VMRangeResult(metric=metric, values=values))
+    status_raw = str(body.get("status", "success"))
+    status: Literal["success", "error"] = "success" if status_raw == "success" else "error"
     return MetricsRangeResponse(
-        status=str(body.get("status", "success")),
+        status=status,
         data=VMRangeData(
             resultType=str(data.get("resultType", "matrix")),
             result=parsed_results,

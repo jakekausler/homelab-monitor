@@ -13,6 +13,7 @@ from homelab_monitor.kernel.api.middleware import (
     RequestIdMiddleware,
 )
 from homelab_monitor.kernel.api.routers import (
+    admin,
     alerts,
     collectors,
     events,
@@ -65,6 +66,7 @@ def create_app(*, lifespan_enabled: bool = True) -> FastAPI:
     app.include_router(events.router, prefix="/api")
     app.include_router(metrics.router, prefix="/api")
     app.include_router(alerts.router, prefix="/api")
+    app.include_router(admin.router, prefix="/api")
     app.include_router(observability.router)  # mounted at root: /metrics
 
     return app

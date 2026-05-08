@@ -18,6 +18,7 @@ from structlog.stdlib import BoundLogger
 
 from homelab_monitor.kernel.alerts.repository import AlertRepository
 from homelab_monitor.kernel.api.sse import SseBroker
+from homelab_monitor.kernel.backup.service import BackupService
 from homelab_monitor.kernel.db.engine import dispose_engine, get_engine
 from homelab_monitor.kernel.db.migrations import MigrationsPendingError, run_migrations
 from homelab_monitor.kernel.db.repository import SqliteRepository
@@ -60,6 +61,19 @@ def _critical_abort(log: BoundLogger, event: str, **fields: object) -> NoReturn:
     log.critical(event, **fields)
     os._exit(1)
     raise SystemExit(1)  # pragma: no cover -- defensive; os._exit terminates first
+
+
+def _extract_sqlite_path(db_url: str) -> str:
+    """Extract the filesystem path from a sqlite+aiosqlite URL.
+
+    e.g. ``sqlite+aiosqlite:////data/homelab-monitor.db`` -> ``/data/homelab-monitor.db``.
+    For non-SQLite URLs, returns the URL unchanged (BackupService will fail with
+    a clear error when sqlite3.connect() rejects it).
+    """
+    prefix = "sqlite+aiosqlite:///"
+    if db_url.startswith(prefix):
+        return db_url[len(prefix) :]
+    return db_url
 
 
 @asynccontextmanager
@@ -148,6 +162,23 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
     except Exception as exc:  # pragma: no cover -- defensive, host always succeeds
         log.warning("lifespan.collector_register_failed", name="host", error=str(exc))
         degraded.append("host")
+
+    try:
+        from homelab_monitor.plugins.collectors.builtin.self_disk import (  # noqa: PLC0415
+            SelfDiskCollector,
+        )
+
+        loader.register(
+            SelfDiskCollector,
+            {
+                "name": "self_disk",
+                "interval_seconds": int(SelfDiskCollector.interval.total_seconds()),
+                "timeout_seconds": int(SelfDiskCollector.timeout.total_seconds()),
+            },
+        )
+    except Exception as exc:  # pragma: no cover -- defensive, self_disk always succeeds
+        log.warning("lifespan.collector_register_failed", name="self_disk", error=str(exc))
+        degraded.append("self_disk")
 
     plugins_env = os.environ.get("HOMELAB_MONITOR_PLUGINS_DIR")
     if plugins_env is not None:
@@ -238,6 +269,22 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
     app.state.logs_writer = logs_writer
     app.state.loader = loader
     app.state.failure_budget = failure_budget
+
+    # 8. Backup service (admin endpoint + CLI share this instance).
+    db_path_str = _extract_sqlite_path(
+        os.environ.get("HOMELAB_MONITOR_DB_URL", "sqlite+aiosqlite:////data/homelab-monitor.db")
+    )
+    backup_service = BackupService(
+        db_path=Path(db_path_str),
+        vm_url=os.environ.get("HOMELAB_MONITOR_VM_URL", "http://victoriametrics:8428"),
+        vm_data_dir=Path(os.environ.get("HOMELAB_MONITOR_VM_DATA_DIR", "/var/vm-data")),
+        backup_root=Path(
+            os.environ.get("HOMELAB_MONITOR_BACKUP_ROOT", "/storage/backup/homelab-monitor")
+        ),
+        http_client=http_client,
+    )
+    app.state.backup_service = backup_service
+
     app.state.degraded_collectors = degraded
 
     app.state.started_at = utc_now_iso()

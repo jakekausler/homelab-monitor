@@ -1,0 +1,58 @@
+# syntax=docker/dockerfile:1.7
+# Multi-stage build for homelab-monitor INTEGRATION TESTING.
+#
+# This image is used by the `integration-tests` service in
+# deploy/compose/docker-compose.test.yml. Do NOT use this image in production —
+# it contains dev dependencies (pytest, ruff, etc.) and the entrypoint runs the
+# integration test suite, not uvicorn.
+#
+# BUILD CONTEXT: repo root.
+
+FROM python:3.12-slim AS builder
+
+ENV UV_LINK_MODE=copy \
+    UV_COMPILE_BYTECODE=1 \
+    UV_PROJECT_ENVIRONMENT=/opt/venv
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends curl ca-certificates \
+ && rm -rf /var/lib/apt/lists/* \
+ && curl -LsSf https://astral.sh/uv/install.sh | sh \
+ && mv /root/.local/bin/uv /usr/local/bin/uv
+
+WORKDIR /app
+
+COPY pyproject.toml uv.lock ./
+COPY apps/monitor/pyproject.toml ./apps/monitor/
+COPY apps/monitor/homelab_monitor/__init__.py ./apps/monitor/homelab_monitor/__init__.py
+
+WORKDIR /app/apps/monitor
+# Sync WITH dev dependencies (pytest, etc.).
+RUN uv sync --directory . --frozen --extra dev --no-install-project
+
+WORKDIR /app
+COPY apps/monitor ./apps/monitor
+WORKDIR /app/apps/monitor
+RUN uv sync --directory . --frozen --extra dev
+
+
+FROM python:3.12-slim AS runtime
+
+ENV PATH="/opt/venv/bin:${PATH}" \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates curl \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY --from=builder /opt/venv /opt/venv
+COPY --from=builder /app/apps/monitor /app/apps/monitor
+
+WORKDIR /app/apps/monitor
+
+# Default entrypoint runs the integration suite. Override at run-time
+# (e.g. `docker run ... pytest tests/integration/test_smoke.py::specific_test`).
+CMD ["python", "-m", "pytest", "-m", "integration", "tests/integration/", "-v"]

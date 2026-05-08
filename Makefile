@@ -1,4 +1,4 @@
-.PHONY: setup verify verify-ci lint format format-check typecheck test test-fast test-nocov dev backend-dev openapi-export clean crg-init ui-verify ui-dev ui-build ui-test _verify-parallel compose-up compose-down compose-build compose-logs
+.PHONY: setup verify verify-ci lint format format-check typecheck test test-fast test-nocov dev backend-dev openapi-export clean crg-init ui-verify ui-dev ui-build ui-test _verify-parallel compose-up compose-down compose-build compose-logs integration
 
 .DEFAULT_GOAL := verify
 
@@ -75,6 +75,9 @@ compose-down:
 
 compose-logs:
 	docker compose -f deploy/compose/docker-compose.yml logs -f
+
+integration:
+	bash scripts/run-integration.sh
 
 dev: backend-dev
 

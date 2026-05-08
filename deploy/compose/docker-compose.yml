@@ -20,8 +20,12 @@ services:
       HOMELAB_MONITOR_VM_URL: http://victoriametrics:8428
       HOMELAB_MONITOR_HTTPS_ONLY_COOKIES: ${HOMELAB_MONITOR_HTTPS_ONLY_COOKIES:-true}
       HOMELAB_MONITOR_AUTO_MIGRATE: "1"
+      HOMELAB_MONITOR_VM_DATA_DIR: /var/vm-data
+      HOMELAB_MONITOR_BACKUP_ROOT: /storage/backup/homelab-monitor
     volumes:
       - data_monitor:/data
+      - data_vm:/var/vm-data:ro
+      - data_backup:/storage/backup/homelab-monitor
     depends_on:
       victoriametrics:
         condition: service_healthy
@@ -76,3 +80,4 @@ volumes:
   data_monitor:
   data_vm:
   data_vmagent:
+  data_backup:

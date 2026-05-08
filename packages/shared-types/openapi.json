@@ -323,6 +323,66 @@
         "title": "AlertmanagerV2Payload",
         "type": "object"
       },
+      "BackupResponse": {
+        "additionalProperties": false,
+        "description": "Response for POST /api/admin/backup.",
+        "properties": {
+          "ended_at": {
+            "title": "Ended At",
+            "type": "string"
+          },
+          "errors": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Errors",
+            "type": "array"
+          },
+          "size_bytes": {
+            "title": "Size Bytes",
+            "type": "integer"
+          },
+          "snapshot_id": {
+            "title": "Snapshot Id",
+            "type": "string"
+          },
+          "sqlite_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sqlite Path"
+          },
+          "started_at": {
+            "title": "Started At",
+            "type": "string"
+          },
+          "vm_snapshot_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vm Snapshot Path"
+          }
+        },
+        "required": [
+          "snapshot_id",
+          "started_at",
+          "ended_at",
+          "size_bytes",
+          "errors"
+        ],
+        "title": "BackupResponse",
+        "type": "object"
+      },
       "ChangePasswordRequest": {
         "additionalProperties": false,
         "properties": {
@@ -951,6 +1011,28 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/admin/backup": {
+      "post": {
+        "description": "Run a full backup (SQLite + VM snapshot). Returns the result.",
+        "operationId": "run_backup_api_admin_backup_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Run Backup",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
     "/api/alerts": {
       "get": {
         "description": "List alerts with optional filters and cursor pagination.\n\nNOTE: ``total`` is omitted by design \u2014 cursor pagination already conveys\n\"more available\" via ``next_cursor``. Adding a separate COUNT(*) would\ndouble the per-request DB cost for negligible operator value.",

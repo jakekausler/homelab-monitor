@@ -11,6 +11,7 @@ class Scope(StrEnum):
     HEARTBEAT_WRITE = "heartbeat:write"
     ALERTS_INGEST_WRITE = "alerts:ingest:write"
     READ_STATUS = "read:status"
+    ADMIN_BACKUP_WRITE = "admin:backup:write"
 
 
 def parse_scopes(stored: str) -> set[Scope]:

@@ -1,0 +1,34 @@
+# vmalert rules for self_disk collector metrics.
+# Picked up by the vmalert sidecar in STAGE-001-018.
+# Until then, this file exists as a static config for forward-compatibility.
+
+groups:
+  - name: self_disk
+    interval: 30s
+    rules:
+      - alert: SelfDiskWarn
+        expr: homelab_self_disk_used_pct > 70
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Self disk usage warning"
+          description: "Disk usage is {{ $value }}% (warn at 70%)"
+
+      - alert: SelfDiskError
+        expr: homelab_self_disk_used_pct > 85
+        for: 5m
+        labels:
+          severity: error
+        annotations:
+          summary: "Self disk usage error"
+          description: "Disk usage is {{ $value }}% (error at 85%)"
+
+      - alert: SelfDiskCritical
+        expr: homelab_self_disk_used_pct > 95
+        for: 0s
+        labels:
+          severity: critical
+        annotations:
+          summary: "Self disk usage critical"
+          description: "Disk usage is {{ $value }}% — auto-shrink decision logged"
