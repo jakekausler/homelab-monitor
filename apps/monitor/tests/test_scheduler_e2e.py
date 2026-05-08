@@ -15,8 +15,8 @@ short intervals (50-200ms). These tests fill the gaps:
   6. High-cardinality same-interval collectors — 20 collectors at 2s intervals;
      hash-offset must spread first ticks across [0, 1] second window.
 
-Wall-clock note: each test uses intervals ≥ 1s. Total suite wall-time is
-roughly 30 + 12 + 15 + 12 + 8 = ~80s (under the 1-3 minute target).
+Wall-clock note: each test uses intervals ≥ 0.2s. Total suite wall-time is
+roughly 6 + 12 + 15 + 12 + 8 = ~53s (under the 1-3 minute target).
 """
 
 from __future__ import annotations
@@ -245,60 +245,66 @@ async def test_real_kernel_types_plumbing(
 async def test_long_running_tick_precision(
     real_repo: SqliteRepository,
 ) -> None:
-    """4 collectors at 1s/2s/5s/10s run for 30s; tick counts stay within ±15%.
+    """4 collectors at 0.2s/0.4s/1s/2s run for 6s; tick counts stay within ±15%.
 
     This is the primary wall-clock realism test. Unit tests run 1-2s windows;
-    this exercises the absolute-deadline math over a 30-tick cycle. Generous
-    ±15% tolerance accounts for CI scheduling jitter without hiding real drift.
+    this exercises the absolute-deadline math over a 30-tick cycle of the fastest
+    collector. Generous ±15% tolerance accounts for CI scheduling jitter without
+    hiding real drift.
 
-    Expected ticks in 30s (ignoring initial offset, which is ≤ interval):
-      - 1s → ~29  (we allow 24-34)
-      - 2s → ~14  (we allow 10-19)
-      - 5s → ~5   (we allow 3-8)
-      - 10s → ~2  (we allow 1-4)
+    Intervals are scaled by 1/5 vs the original 30s design so the same number
+    of ticks are observed in 6s instead of 30s. Drift-detection sensitivity is
+    identical: it derives from tick count of the fastest collector (~29), not
+    from raw wall-clock seconds.
+
+    Expected ticks in 6s (ignoring initial offset, which is ≤ interval):
+      - 0.2s → ~29  (we allow 24-34)
+      - 0.4s → ~14  (we allow 10-19)
+      - 1.0s → ~5   (we allow 3-8)
+      - 2.0s → ~2   (we allow 1-4)
     """
     metrics = InMemoryMetricsWriter()
     ctx_factory = _make_real_ctx_factory(real_repo, metrics)
 
+    cls_200ms = _make_collector("e2e_200ms", interval_s=0.2)
+    cls_400ms = _make_collector("e2e_400ms", interval_s=0.4)
     cls_1s = _make_collector("e2e_1s", interval_s=1.0)
     cls_2s = _make_collector("e2e_2s", interval_s=2.0)
-    cls_5s = _make_collector("e2e_5s", interval_s=5.0)
-    cls_10s = _make_collector("e2e_10s", interval_s=10.0)
 
     loaded = [
+        LoadedCollector(collector=cls_200ms(), config=CollectorConfig(name="e2e_200ms")),
+        LoadedCollector(collector=cls_400ms(), config=CollectorConfig(name="e2e_400ms")),
         LoadedCollector(collector=cls_1s(), config=CollectorConfig(name="e2e_1s")),
         LoadedCollector(collector=cls_2s(), config=CollectorConfig(name="e2e_2s")),
-        LoadedCollector(collector=cls_5s(), config=CollectorConfig(name="e2e_5s")),
-        LoadedCollector(collector=cls_10s(), config=CollectorConfig(name="e2e_10s")),
     ]
 
     scheduler = Scheduler(loaded, ctx_factory, metrics)
     await scheduler.start()
-    await asyncio.sleep(30.0)
+    await asyncio.sleep(6.0)
     await scheduler.stop()
 
+    c200ms = _count(metrics, "homelab_collector_run_success_total", {"name": "e2e_200ms"})
+    c400ms = _count(metrics, "homelab_collector_run_success_total", {"name": "e2e_400ms"})
     c1s = _count(metrics, "homelab_collector_run_success_total", {"name": "e2e_1s"})
     c2s = _count(metrics, "homelab_collector_run_success_total", {"name": "e2e_2s"})
-    c5s = _count(metrics, "homelab_collector_run_success_total", {"name": "e2e_5s"})
-    c10s = _count(metrics, "homelab_collector_run_success_total", {"name": "e2e_10s"})
 
     assert (
-        24 <= c1s <= 34  # noqa: PLR2004
-    ), f"1s collector: expected 24-34 ticks in 30s, got {c1s}"
+        24 <= c200ms <= 34  # noqa: PLR2004
+    ), f"0.2s collector: expected 24-34 ticks in 6s, got {c200ms}"
     assert (
-        10 <= c2s <= 19  # noqa: PLR2004
-    ), f"2s collector: expected 10-19 ticks in 30s, got {c2s}"
+        10 <= c400ms <= 19  # noqa: PLR2004
+    ), f"0.4s collector: expected 10-19 ticks in 6s, got {c400ms}"
     assert (
-        3 <= c5s <= 8  # noqa: PLR2004
-    ), f"5s collector: expected 3-8 ticks in 30s, got {c5s}"
+        3 <= c1s <= 8  # noqa: PLR2004
+    ), f"1s collector: expected 3-8 ticks in 6s, got {c1s}"
     assert (
-        1 <= c10s <= 4  # noqa: PLR2004
-    ), f"10s collector: expected 1-4 ticks in 30s, got {c10s}"
+        1 <= c2s <= 4  # noqa: PLR2004
+    ), f"2s collector: expected 1-4 ticks in 6s, got {c2s}"
 
     # No failures should occur with healthy collectors
     total_failures = sum(
         _count(metrics, "homelab_collector_run_failure_total", {"name": n})
-        for n in ("e2e_1s", "e2e_2s", "e2e_5s", "e2e_10s")
+        for n in ("e2e_200ms", "e2e_400ms", "e2e_1s", "e2e_2s")
     )
     assert total_failures == 0, f"unexpected failures in long-run: {total_failures}"
 
