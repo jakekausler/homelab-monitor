@@ -355,6 +355,39 @@ class AuthRepository:
             rotated_at=cast("str | None", row[5]),
         )
 
+    async def get_api_token_by_name(self, name: str) -> ApiToken | None:
+        """Return the API token row whose ``name`` column matches; ``None`` if absent.
+
+        Used by the alertmanager render module to detect whether the bootstrap
+        token has already been minted, so we don't mint duplicates on every boot.
+        """
+        row = await self._repo.fetch_one(
+            text(
+                "SELECT id, name, scopes, created_at, last_used_at, rotated_at "
+                "FROM api_tokens WHERE name = :n"
+            ),
+            {"n": name},
+        )
+        if row is None:
+            return None
+        return ApiToken(
+            id=str(row[0]),
+            name=str(row[1]),
+            scopes=str(row[2]),
+            created_at=str(row[3]),
+            last_used_at=cast("str | None", row[4]),
+            rotated_at=cast("str | None", row[5]),
+        )
+
+    async def delete_api_token_by_name(self, name: str) -> bool:
+        """Delete an API token row by name. Returns True if a row was deleted."""
+        async with self._repo.transaction() as conn:
+            result = await conn.execute(
+                text("DELETE FROM api_tokens WHERE name = :name"),
+                {"name": name},
+            )
+            return bool(result.rowcount > 0)
+
     async def list_api_tokens(self) -> list[ApiToken]:
         """Return all API tokens ordered by created_at descending."""
         rows = await self._repo.fetch_all(

@@ -415,3 +415,61 @@ async def test_update_token_last_used_writes_timestamp(repo: SqliteRepository) -
     fetched = await auth_repo.get_api_token_by_hash(hash_val)
     assert fetched is not None
     assert fetched.last_used_at is not None
+
+
+@pytest.mark.asyncio
+async def test_get_api_token_by_name_existing_returns_row(repo: SqliteRepository) -> None:
+    """get_api_token_by_name returns token by name; missing returns None."""
+    auth_repo = AuthRepository(repo)
+    plaintext = "homelab_test_abc123"
+    scopes = {Scope.HEARTBEAT_WRITE, Scope.ALERTS_INGEST_WRITE}
+
+    created = await auth_repo.create_api_token(
+        name="alertmanager-ingest",
+        scopes=scopes,
+        plaintext_token=plaintext,
+    )
+
+    fetched = await auth_repo.get_api_token_by_name("alertmanager-ingest")
+    assert fetched is not None
+    assert fetched.id == created.id
+    assert fetched.name == "alertmanager-ingest"
+    assert fetched.scopes == created.scopes
+
+
+@pytest.mark.asyncio
+async def test_get_api_token_by_name_missing_returns_none(repo: SqliteRepository) -> None:
+    """get_api_token_by_name with absent name returns None."""
+    auth_repo = AuthRepository(repo)
+    fetched = await auth_repo.get_api_token_by_name("nonexistent-token")
+    assert fetched is None
+
+
+@pytest.mark.asyncio
+async def test_get_api_token_by_name_uniqueness(repo: SqliteRepository) -> None:
+    """get_api_token_by_name returns correct token when multiple exist."""
+    auth_repo = AuthRepository(repo)
+    plaintext1 = "homelab_test_token1"
+    plaintext2 = "homelab_test_token2"
+    scopes = {Scope.HEARTBEAT_WRITE}
+
+    token1 = await auth_repo.create_api_token(
+        name="token-alpha",
+        scopes=scopes,
+        plaintext_token=plaintext1,
+    )
+    token2 = await auth_repo.create_api_token(
+        name="token-beta",
+        scopes=scopes,
+        plaintext_token=plaintext2,
+    )
+
+    # Look up token1 by name
+    fetched1 = await auth_repo.get_api_token_by_name("token-alpha")
+    assert fetched1 is not None
+    assert fetched1.id == token1.id
+
+    # Look up token2 by name
+    fetched2 = await auth_repo.get_api_token_by_name("token-beta")
+    assert fetched2 is not None
+    assert fetched2.id == token2.id

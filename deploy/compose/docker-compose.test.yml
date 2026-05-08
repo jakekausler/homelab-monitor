@@ -47,6 +47,52 @@ services:
       victoriametrics:
         condition: service_healthy
 
+  # Sidecars for the slow vmalert pipeline test. Default `make test` skips this
+  # via the integration-tests --abort-on-container-exit path (these services
+  # have no abort-on-container-exit since they are long-running).
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    container_name: homelab-alertmanager-test
+    networks:
+      - homelab-monitor-test-net
+    command:
+      - "--config.file=/etc/alertmanager/alertmanager.yml"
+      - "--storage.path=/alertmanager"
+    volumes:
+      - ./test-fixtures/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://localhost:9093/-/healthy"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  vmalert-metrics:
+    image: victoriametrics/vmalert:v1.107.0
+    container_name: homelab-vmalert-metrics-test
+    networks:
+      - homelab-monitor-test-net
+    command:
+      - "-datasource.url=http://victoriametrics:8428"
+      - "-notifier.url=http://alertmanager:9093"
+      - "-rule=/etc/vmalert/metrics/*.yaml"
+      - "-evaluationInterval=5s"
+      - "-configCheckInterval=10s"
+      - "-httpListenAddr=:8880"
+    volumes:
+      - ../vmalert/metrics:/etc/vmalert/metrics:ro
+    depends_on:
+      alertmanager:
+        condition: service_healthy
+      victoriametrics:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://localhost:8880/-/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
 networks:
   homelab-monitor-test-net:
     name: homelab-monitor-test-net

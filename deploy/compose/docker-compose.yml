@@ -29,6 +29,8 @@ services:
       - data_vm:/var/vm-data:ro
       - data_vl:/var/vl-data:ro
       - data_backup:/storage/backup/homelab-monitor
+      - ../alertmanager/alertmanager.yml.template:/etc/alertmanager-template/alertmanager.yml.template:ro
+      - data_alertmanager_config:/var/alertmanager-config
     depends_on:
       victoriametrics:
         condition: service_healthy
@@ -111,6 +113,54 @@ services:
       victorialogs:
         condition: service_healthy
 
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    container_name: homelab-alertmanager
+    restart: unless-stopped
+    networks:
+      - homelab-monitor-net
+    command:
+      - "--config.file=/etc/alertmanager/alertmanager.yml"
+      - "--storage.path=/alertmanager"
+    volumes:
+      - data_alertmanager_config:/etc/alertmanager:ro
+    depends_on:
+      monitor:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://localhost:9093/-/healthy"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  vmalert-metrics:
+    image: victoriametrics/vmalert:v1.107.0
+    container_name: homelab-vmalert-metrics
+    restart: unless-stopped
+    networks:
+      - homelab-monitor-net
+    command:
+      - "-datasource.url=http://victoriametrics:8428"
+      - "-notifier.url=http://alertmanager:9093"
+      - "-rule=/etc/vmalert/metrics/*.yaml"
+      - "-evaluationInterval=30s"
+      - "-configCheckInterval=30s"
+      - "-httpListenAddr=:8880"
+    volumes:
+      - ../vmalert/metrics:/etc/vmalert/metrics:ro
+    depends_on:
+      alertmanager:
+        condition: service_healthy
+      victoriametrics:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://localhost:8880/-/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
 networks:
   homelab-monitor-net:
     name: homelab-monitor-net
@@ -121,3 +171,4 @@ volumes:
   data_vmagent:
   data_vl:
   data_backup:
+  data_alertmanager_config:

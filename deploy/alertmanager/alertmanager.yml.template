@@ -1,0 +1,27 @@
+# Alertmanager v0.27.x configuration template.
+# Rendered at FastAPI lifespan startup — `${ALERTMANAGER_INGEST_TOKEN}` is replaced
+# with the API token plaintext minted via `system:alertmanager-bootstrap`.
+# Source of truth for routing, group_by, and timing parameters: design spec §8.4.
+#
+# DO NOT manually edit the rendered output at /etc/alertmanager/alertmanager.yml —
+# it is overwritten on every monitor boot. Edit this template instead.
+
+global:
+  resolve_timeout: 5m
+
+route:
+  group_by: ['alertname', 'target_kind']
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  receiver: 'monitor-webhook'
+
+receivers:
+  - name: 'monitor-webhook'
+    webhook_configs:
+      - url: 'http://homelab-monitor-monitor:9090/api/alerts/ingest'
+        send_resolved: true
+        http_config:
+          authorization:
+            type: Bearer
+            credentials: '${ALERTMANAGER_INGEST_TOKEN}'

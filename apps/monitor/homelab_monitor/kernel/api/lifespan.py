@@ -331,6 +331,36 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
 
     app.state.degraded_collectors = degraded
 
+    # 8b. Alertmanager render-on-boot (idempotent: reuses token if present).
+    # Failures here are logged and swallowed; lifespan continues.
+    am_template_path = Path(
+        os.environ.get(
+            "HOMELAB_MONITOR_ALERTMANAGER_TEMPLATE",
+            "/etc/alertmanager-template/alertmanager.yml.template",
+        )
+    )
+    am_output_path = Path(
+        os.environ.get(
+            "HOMELAB_MONITOR_ALERTMANAGER_OUTPUT",
+            "/var/alertmanager-config/alertmanager.yml",
+        )
+    )
+    am_url = os.environ.get("HOMELAB_MONITOR_ALERTMANAGER_URL", "http://alertmanager:9093")
+    # When the env var is the literal "disabled", skip the reload entirely (used in tests).
+    am_reload_url: str | None = None if am_url.lower() == "disabled" else am_url
+
+    from homelab_monitor.kernel.alertmanager.render import render_on_boot  # noqa: PLC0415
+
+    await render_on_boot(
+        auth_repo=auth_repo,
+        secrets_repo=secrets_repo,
+        template_path=am_template_path,
+        output_path=am_output_path,
+        am_url=am_reload_url,
+        http_client=http_client,
+        log=log,
+    )
+
     app.state.started_at = utc_now_iso()
 
     try:
