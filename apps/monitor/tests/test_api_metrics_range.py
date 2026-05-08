@@ -325,3 +325,58 @@ async def test_range_skips_unparseable_value_pair(
     result = body["data"]["result"][0]
     # The unparseable pair is suppressed; only the valid pair remains.
     assert result["values"] == [[1714867210.0, "1"]]
+
+
+@pytest.mark.asyncio
+async def test_range_handles_vm_status_error(
+    authenticated_client: AsyncClient,
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """VM returning HTTP 200 with status='error' should surface as 502."""
+    monkeypatch.setenv("HOMELAB_MONITOR_VM_URL", "http://vm-test:8428")
+    httpx_mock.add_response(
+        url="http://vm-test:8428/api/v1/query_range?query=bad&start=a&end=b&step=10s",
+        method="GET",
+        json={
+            "status": "error",
+            "errorType": "queryParseError",
+            "error": "syntax error",
+        },
+    )
+    resp = await authenticated_client.get(
+        "/api/metrics/range",
+        params={"expr": "bad", "start": "a", "end": "b", "step": "10s"},
+    )
+    expected_status = 502
+    assert resp.status_code == expected_status
+    assert resp.json()["error"]["code"] == "upstream_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_range_rejects_long_expr(
+    authenticated_client: AsyncClient,
+) -> None:
+    """Expression longer than 4096 chars is rejected with 400."""
+    long_expr = "a" * 5000
+    resp = await authenticated_client.get(
+        "/api/metrics/range",
+        params={"expr": long_expr, "start": "a", "end": "b", "step": "10s"},
+    )
+    expected_status = 400
+    assert resp.status_code == expected_status
+    assert resp.json()["error"]["code"] == "invalid_expr"
+
+
+@pytest.mark.asyncio
+async def test_range_rejects_invalid_step(
+    authenticated_client: AsyncClient,
+) -> None:
+    """Step with invalid format is rejected with 400."""
+    resp = await authenticated_client.get(
+        "/api/metrics/range",
+        params={"expr": "up", "start": "a", "end": "b", "step": "bogus"},
+    )
+    expected_status = 400
+    assert resp.status_code == expected_status
+    assert resp.json()["error"]["code"] == "invalid_step"

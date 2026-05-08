@@ -124,7 +124,7 @@ class MetricsRangeResponse(BaseModel):
     """Response for GET /api/metrics/range — passes through VM's range shape."""
 
     model_config = ConfigDict(extra="forbid")
-    status: str  # "success" on happy path
+    status: Literal["success", "error"]
     data: VMRangeData
 
 

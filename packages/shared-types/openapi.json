@@ -649,6 +649,10 @@
             "$ref": "#/components/schemas/VMRangeData"
           },
           "status": {
+            "enum": [
+              "success",
+              "error"
+            ],
             "title": "Status",
             "type": "string"
           }

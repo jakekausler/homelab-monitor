@@ -2,8 +2,9 @@
 **
 
 # Re-include build inputs.
+!pyproject.toml
+!uv.lock
 !apps/monitor/pyproject.toml
-!apps/monitor/uv.lock
 !apps/monitor/homelab_monitor/
 !apps/monitor/Dockerfile
 !apps/ui/dist/
@@ -26,6 +27,9 @@
 .code-review-graph/
 epics/
 docs/
+
+# runbooks/ is intentionally excluded — auto-fix runbooks (EPIC-009)
+# are mounted at runtime from /storage/runbooks, not baked into the image.
 runbooks/
 homelab-monitor-overrides/
 .idea/

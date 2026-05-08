@@ -1,6 +1,10 @@
 # vmagent scrape configuration for the homelab-monitor stack.
 # Single static job — scrapes the monitor's /metrics exposition endpoint.
 
+# TODO(multi-host): add external_labels (e.g., instance, deployment) when scaling
+# beyond a single homelab-monitor instance. Without external_labels, samples
+# from multiple instances would silently merge.
+
 global:
   scrape_interval: 15s
   scrape_timeout: 10s

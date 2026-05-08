@@ -15,7 +15,9 @@ const RANGE_EXPR = `${HOST_CPU_METRIC}{cpu="${HOST_CPU_LABEL}"}`
 
 /**
  * Compute fixed start/end ISO strings for the initial range query.
- * Memoize per-mount via useMemo so the query key is stable across renders.
+ * Compute once per mount via useState initializer so the
+ * query key is stable across renders (useState initializer runs exactly once
+ * per mount, unlike useMemo which React may drop).
  */
 function rangeWindow(): { start: string; end: string } {
   const endMs = Date.now()
@@ -105,10 +107,10 @@ export function HostCpuTile() {
   const [latest, setLatest] = useState<number | null>(null)
   const [lastUpdatedAt, setLastUpdatedAt] = useState<string | null>(null)
   const seededRef = useRef(false)
-  const seededFromHistoryRef = useRef(false)
+  const historyBackfilledRef = useRef(false)
 
-  // Compute window ONCE per mount; memoize for stable query key.
-  const { start: rangeStart, end: rangeEnd } = useMemo(() => rangeWindow(), [])
+  // Compute window ONCE per mount; use useState initializer for per-mount guarantee.
+  const [{ start: rangeStart, end: rangeEnd }] = useState(() => rangeWindow())
   const range = useMetricsRange(RANGE_EXPR, rangeStart, rangeEnd, RANGE_STEP)
 
   // Seed once from /api/metrics/snapshot on first successful fetch.
@@ -130,10 +132,10 @@ export function HostCpuTile() {
 
   // Optimistic backfill: replace synthetic series with VM history once.
   // Fires AT MOST once per mount. If SSE has already started feeding live
-  // ticks (seededFromHistoryRef set by the SSE path's first tick — see
+  // ticks (historyBackfilledRef set by the SSE path's first tick — see
   // below), we skip — live data is more valuable than backfill.
   useEffect(() => {
-    if (seededFromHistoryRef.current) return
+    if (historyBackfilledRef.current) return
     if (range.data === undefined) return
     const result = range.data.data.result.find((r) => r.metric['cpu'] === HOST_CPU_LABEL)
     if (result === undefined) return
@@ -143,7 +145,7 @@ export function HostCpuTile() {
     setSeries(built)
     // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: seeding state from one-shot historical query
     setLatest(built[built.length - 1]!)
-    seededFromHistoryRef.current = true
+    historyBackfilledRef.current = true
   }, [range.data])
 
   // On every host tick, re-fetch the snapshot to pick up the new CPU value.

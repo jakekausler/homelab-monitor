@@ -114,3 +114,4 @@ verify-ci:
 	$(MAKE) verify
 	@command -v code-review-graph >/dev/null 2>&1 || { echo "ERROR: code-review-graph missing — run 'make crg-init'"; exit 1; }
 	uv tool run code-review-graph build
+	docker compose -f deploy/compose/docker-compose.yml config -q

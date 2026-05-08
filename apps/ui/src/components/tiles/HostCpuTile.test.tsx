@@ -309,8 +309,14 @@ describe('HostCpuTile range backfill (STAGE-001-015)', () => {
     // Range backfill applies unconditionally to the series (sparkline).
     // The big-number reflects the snapshot seed value (50), not the range data.
     expect(screen.getByLabelText('Host CPU percent')).toHaveTextContent('50.0%')
-    // Verify the sparkline (series) is rendered; this confirms the backfill applied.
-    expect(screen.getByLabelText('Host CPU history')).toBeInTheDocument()
+    // Verify the sparkline (series) contains the backfilled data values.
+    // The sparkline is built from the 2-sample range [10, 20], padded to
+    // SERIES_CAPACITY=60 with the first value (10).
+    const sparkline = screen.getByLabelText('Host CPU history') as SVGSVGElement
+    const values = sparkline.getAttribute('data-values')?.split(',').map(Number) ?? []
+    expect(values).toContain(10) // first sample
+    expect(values).toContain(20) // second sample
+    expect(values.length).toBe(60) // padded to SERIES_CAPACITY
   })
 
   it('pads a short range to SERIES_CAPACITY with the first value', () => {

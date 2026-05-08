@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import re
 from typing import cast
 
 import httpx
@@ -11,6 +12,7 @@ from fastapi import APIRouter, Depends, Query
 from structlog.stdlib import BoundLogger
 
 from homelab_monitor.kernel.api.dependencies import (
+    get_http_client,
     get_in_memory_metrics_writer,
     get_vm_url,
     require_session,
@@ -32,6 +34,9 @@ router = APIRouter()
 _VM_TIMEOUT_S = 5.0
 _HTTP_OK = 200
 _PAIR_MIN_LEN = 2
+_MAX_EXPR_LEN = 4096
+_MAX_RANGE_POINTS = 11000  # Prometheus convention
+_STEP_RE = re.compile(r"^\d+(ms|s|m|h|d)$")
 
 
 @router.get("/metrics/snapshot", response_model=MetricsSnapshotResponse)
@@ -60,13 +65,14 @@ async def metrics_snapshot(
 
 
 @router.get("/metrics/range", response_model=MetricsRangeResponse)
-async def metrics_range(
+async def metrics_range(  # noqa: PLR0913
     expr: str = Query(..., description="PromQL expression"),
     start: str = Query(..., description="ISO-8601 UTC start time"),
     end: str = Query(..., description="ISO-8601 UTC end time"),
     step: str = Query("10s", description="Resolution step (e.g. '10s', '1m')"),
     _user: User = Depends(require_session()),  # noqa: B008
     vm_url: str = Depends(get_vm_url),
+    http_client: httpx.AsyncClient = Depends(get_http_client),  # noqa: B008
 ) -> MetricsRangeResponse:
     """Proxy a PromQL range query to VictoriaMetrics.
 
@@ -80,11 +86,31 @@ async def metrics_range(
         BoundLogger,
         structlog.get_logger().bind(component="metrics_range"),
     )
+
+    # Validate expr length
+    if len(expr) > _MAX_EXPR_LEN:
+        raise HttpProblem(
+            status_code=400,
+            code="invalid_expr",
+            message="expression too long",
+        )
+
+    # Validate step format
+    if not _STEP_RE.match(step):
+        raise HttpProblem(
+            status_code=400,
+            code="invalid_step",
+            message="step must match /^\\d+(ms|s|m|h|d)$/",
+        )
+
     params = {"query": expr, "start": start, "end": end, "step": step}
     try:
-        async with httpx.AsyncClient(timeout=_VM_TIMEOUT_S) as client:
-            resp = await client.get(f"{vm_url}/api/v1/query_range", params=params)
-    except httpx.HTTPError as exc:
+        resp = await http_client.get(
+            f"{vm_url}/api/v1/query_range",
+            params=params,
+            timeout=_VM_TIMEOUT_S,
+        )
+    except (httpx.TimeoutException, httpx.RequestError) as exc:
         log.warning("metrics_range.upstream_error", error=str(exc), expr=expr)
         raise HttpProblem(
             status_code=502,
@@ -108,6 +134,21 @@ async def metrics_range(
     # VM shape: {"status": "success", "data": {"resultType": "matrix",
     #            "result": [{"metric": {...}, "values": [[ts, "str"], ...]}]}}
     body = cast(dict[str, object], body_raw) if isinstance(body_raw, dict) else {}
+
+    # Check for VM error response (HTTP 200 but status != "success")
+    if body.get("status") != "success":
+        error_type = body.get("errorType", "unknown")
+        error_msg = body.get("error", "")
+        log.warning(
+            "metrics_range.vm_error_response",
+            error_type=error_type,
+            error_msg=str(error_msg)[:200],
+        )
+        raise HttpProblem(
+            status_code=502,
+            code="upstream_unavailable",
+            message=f"VictoriaMetrics returned error: {error_type}",
+        )
     body_data = body.get("data")
     data = cast(dict[str, object], body_data) if isinstance(body_data, dict) else {}
     result_raw = data.get("result")

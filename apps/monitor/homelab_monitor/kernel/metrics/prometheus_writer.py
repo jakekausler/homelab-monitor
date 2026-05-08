@@ -14,6 +14,7 @@ matching metric and re-emits each entry as a gauge.
 
 from __future__ import annotations
 
+import threading
 from typing import cast
 
 import structlog
@@ -32,6 +33,7 @@ class PrometheusRegistryWriter:
         # registration per metric name; cross-labelname-set emits are an
         # error. We keep the labelnames so we can log+skip mismatches.
         self._metrics: dict[str, tuple[frozenset[str], MetricWrapperBase]] = {}
+        self._lock = threading.RLock()
         self._log: BoundLogger = cast(
             BoundLogger,
             structlog.get_logger().bind(component="prometheus_writer"),
@@ -44,46 +46,50 @@ class PrometheusRegistryWriter:
         labels: dict[str, str],
     ) -> MetricWrapperBase | None:
         """Look up or register a metric. Returns None on labelname mismatch."""
-        labelnames = frozenset(labels.keys())
-        cached = self._metrics.get(name)
-        if cached is not None:
-            existing_names, existing_metric = cached
-            if existing_names != labelnames:
-                self._log.warning(
-                    "prometheus_writer.labelnames_mismatch",
-                    metric=name,
-                    expected=sorted(existing_names),
-                    got=sorted(labelnames),
-                )
-                return None
-            return existing_metric
+        with self._lock:
+            labelnames = frozenset(labels.keys())
+            cached = self._metrics.get(name)
+            if cached is not None:
+                existing_names, existing_metric = cached
+                if existing_names != labelnames:
+                    self._log.warning(
+                        "prometheus_writer.labelnames_mismatch",
+                        metric=name,
+                        expected=sorted(existing_names),
+                        got=sorted(labelnames),
+                    )
+                    return None
+                return existing_metric
 
-        # First time seeing this metric name: register it.
-        labelnames_tuple = tuple(sorted(labelnames))
-        metric: MetricWrapperBase
-        if kind == "gauge":
-            metric = Gauge(
-                name,
-                f"homelab-monitor gauge: {name}",
-                labelnames=labelnames_tuple,
-                registry=self._registry,
-            )
-        elif kind == "counter":
-            metric = Counter(
-                name,
-                f"homelab-monitor counter: {name}",
-                labelnames=labelnames_tuple,
-                registry=self._registry,
-            )
-        else:  # kind == "summary"
-            metric = Summary(
-                name,
-                f"homelab-monitor summary: {name}",
-                labelnames=labelnames_tuple,
-                registry=self._registry,
-            )
-        self._metrics[name] = (labelnames, metric)
-        return metric
+            # First time seeing this metric name: register it.
+            # TODO(epic-plugin-safety): subprocess plugins emit untrusted label values;
+            # label-value cardinality is unbounded today. Revisit with quota when EPIC-009
+            # (or whichever epic adds plugin sandboxing) lands.
+            labelnames_tuple = tuple(sorted(labelnames))
+            metric: MetricWrapperBase
+            if kind == "gauge":
+                metric = Gauge(
+                    name,
+                    f"homelab-monitor gauge: {name}",
+                    labelnames=labelnames_tuple,
+                    registry=self._registry,
+                )
+            elif kind == "counter":
+                metric = Counter(
+                    name,
+                    f"homelab-monitor counter: {name}",
+                    labelnames=labelnames_tuple,
+                    registry=self._registry,
+                )
+            else:  # kind == "summary"
+                metric = Summary(
+                    name,
+                    f"homelab-monitor summary: {name}",
+                    labelnames=labelnames_tuple,
+                    registry=self._registry,
+                )
+            self._metrics[name] = (labelnames, metric)
+            return metric
 
     def write_gauge(self, name: str, value: float, labels: dict[str, str]) -> None:
         """Set a gauge value (registers the gauge on first emit)."""
@@ -126,9 +132,10 @@ class PrometheusRegistryWriter:
         and any entry has mismatching labelnames, that entry is dropped (with
         a warning) — the OTHER entries still flow.
         """
-        cached = self._metrics.get(name)
-        if cached is not None:
-            _, metric = cached
-            metric.clear()
-        for value, labels in entries:
-            self.write_gauge(name, value, labels)
+        with self._lock:
+            cached = self._metrics.get(name)
+            if cached is not None:
+                _, metric = cached
+                metric.clear()
+            for value, labels in entries:
+                self.write_gauge(name, value, labels)

@@ -47,6 +47,7 @@ export function Sparkline({
       height={height}
       viewBox={`0 0 ${String(width)} ${String(height)}`}
       className={cn('text-primary', className)}
+      data-values={values.join(',')}
     >
       <path
         d={path}

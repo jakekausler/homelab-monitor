@@ -23,18 +23,20 @@ RUN apt-get update \
 WORKDIR /app
 
 # Copy only the metadata first for better Docker layer caching.
-COPY apps/monitor/pyproject.toml apps/monitor/uv.lock ./apps/monitor/
+# Workspace root lockfile + pyproject; workspace member pyproject.
+COPY pyproject.toml uv.lock ./
+COPY apps/monitor/pyproject.toml ./apps/monitor/
 COPY apps/monitor/homelab_monitor/__init__.py ./apps/monitor/homelab_monitor/__init__.py
 
 # Sync into the venv at /opt/venv.
 WORKDIR /app/apps/monitor
-RUN uv sync --frozen --no-dev --no-install-project
+RUN uv sync --directory . --frozen --no-dev --no-install-project
 
 # Copy the rest of the monitor source and re-sync (installs the project itself).
 WORKDIR /app
 COPY apps/monitor ./apps/monitor
 WORKDIR /app/apps/monitor
-RUN uv sync --frozen --no-dev
+RUN uv sync --directory . --frozen --no-dev
 
 
 FROM python:3.12-slim AS runtime

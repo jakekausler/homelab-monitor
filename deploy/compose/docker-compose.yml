@@ -13,7 +13,7 @@ services:
     networks:
       - homelab-monitor-net
     ports:
-      - "${HOMELAB_MONITOR_PORT:-9090}:9090"
+      - "127.0.0.1:${HOMELAB_MONITOR_PORT:-9090}:9090"
     environment:
       HOMELAB_MONITOR_DB_URL: ${HOMELAB_MONITOR_DB_URL:-sqlite+aiosqlite:////data/homelab-monitor.db}
       HOMELAB_MONITOR_MASTER_KEY: ${HOMELAB_MONITOR_MASTER_KEY}
