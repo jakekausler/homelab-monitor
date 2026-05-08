@@ -38,14 +38,14 @@ After EPIC-001 is complete, the system has: a working CI pipeline, a verified de
 | STAGE-001-014 | UI shell + login + Overview live-tile                 | Complete |
 | STAGE-001-015 | VictoriaMetrics + vmagent                             | Complete |
 | STAGE-001-015A | Backup + disk budget + minimal test rig extension    | Complete |
-| STAGE-001-016 | VictoriaLogs + vector                                 | Refinement (Complete) |
+| STAGE-001-016 | VictoriaLogs + vector                                 | Complete |
 | STAGE-001-017 | Alertmanager + vmalert (metrics) + first rule         | Not Started |
 | STAGE-001-018 | vmalert (logs) + first log-derived rule               | Not Started |
 | STAGE-001-019 | Karma + kthxbye                                       | Not Started |
 | STAGE-001-020 | Grafana + dashboards-as-code provisioning             | Not Started |
 | STAGE-001-021 | Full integration test rig + canonical e2e test        | Not Started |
 
-## Current Stage: STAGE-001-016
+## Current Stage: STAGE-001-017
 ## Current Phase: Not Started
 
 ## Cross-stage acceptance criteria
