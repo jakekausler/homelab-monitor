@@ -1,0 +1,35 @@
+# Test-window counterpart of deploy/vmalert/logs/system.yaml.
+# Used ONLY by docker-compose.test.yml (vmalert-logs-test service).
+#
+# Differences vs production:
+#   - _time:30s vs _time:5m (faster firing for the slow integration test)
+#   - SshFailedLoginBurst threshold lowered to >2 (test plants 3 lines)
+#   - Same group/alert names, same labels, same annotations, same source_tool.
+#
+# Production rules at deploy/vmalert/logs/system.yaml — keep BOTH files in sync
+# for label/annotation changes; only `_time:` and `filter` thresholds may diverge.
+
+groups:
+  - name: system_logs
+    type: vlogs
+    interval: 5s
+    rules:
+      - alert: KernelOOM
+        expr: '_time:30s service:="kernel" "Out of memory" "kill_process" | stats by (host) count() as oom_count | filter oom_count:>0'
+        labels:
+          severity: error
+          source_tool: vmalert-logs
+          target_kind: host
+        annotations:
+          summary: "Kernel OOM killed a process on {{ $labels.host }}"
+          description: 'Out-of-memory event detected on host {{ $labels.host }} ({{ $value }} occurrence(s) in 30s)'
+
+      - alert: SshFailedLoginBurst
+        expr: '_time:30s service:="sshd" "Failed password" | stats by (host) count() as fail_count | filter fail_count:>2'
+        labels:
+          severity: warning
+          source_tool: vmalert-logs
+          target_kind: host
+        annotations:
+          summary: "SSH brute force burst on {{ $labels.host }}"
+          description: '{{ $value }} failed SSH login attempts in 30s on {{ $labels.host }}'

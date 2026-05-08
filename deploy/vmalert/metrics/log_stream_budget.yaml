@@ -1,0 +1,26 @@
+# Cross-listed metric rule: alerts when a log stream's per-second rate
+# approaches vector's hardcoded 50/s throttle.
+#
+# Backing metric: homelab_log_stream_lines_per_sec{host,service}
+# emitted by LogStreamBudgetCollector (STAGE-001-016).
+#
+# Lives under deploy/vmalert/metrics/ because it queries VictoriaMetrics
+# (PromQL), not VictoriaLogs (LogsQL). vmalert-metrics evaluates this rule.
+# Listed in STAGE-001-018 deliverables for completeness with the log-rules epic.
+#
+# Threshold: 45 lines/sec = 90% of vector's hardcoded 50/s throttle.
+
+groups:
+  - name: log_stream_budget
+    interval: 30s
+    rules:
+      - alert: LogStreamBudgetOverrun
+        expr: homelab_log_stream_lines_per_sec > 45
+        for: 5m
+        labels:
+          severity: warning
+          source_tool: vmalert-metrics
+          target_kind: log_stream
+        annotations:
+          summary: 'Log stream {{ $labels.host }}/{{ $labels.service }} approaching throttle limit'
+          description: '{{ $labels.service }} on {{ $labels.host }} at {{ $value }} lines/sec (vector throttle = 50/s)'

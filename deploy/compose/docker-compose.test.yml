@@ -33,6 +33,24 @@ services:
       retries: 10
       start_period: 5s
 
+  victorialogs:
+    image: victoriametrics/victoria-logs:v0.30.0-victorialogs
+    container_name: homelab-vl-test
+    networks:
+      - homelab-monitor-test-net
+    ports:
+      - "127.0.0.1:9428:9428"
+    command:
+      - "-storageDataPath=/storage"
+      - "-retentionPeriod=1d"
+      - "-httpListenAddr=:9428"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://localhost:9428/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
   integration-tests:
     build:
       context: ../..
@@ -42,9 +60,15 @@ services:
       - homelab-monitor-test-net
     environment:
       VM_URL: http://victoriametrics:8428
+      VL_URL: http://victorialogs:9428
+      AM_URL: http://alertmanager:9093
+      VMALERT_URL: http://vmalert-metrics:8880
+      VMALERT_LOGS_URL: http://vmalert-logs-test:8880
       HOMELAB_MONITOR_DB_URL: "sqlite+aiosqlite:///:memory:"
     depends_on:
       victoriametrics:
+        condition: service_healthy
+      victorialogs:
         condition: service_healthy
 
   # Sidecars for the slow vmalert pipeline test. Default `make test` skips this
@@ -85,6 +109,32 @@ services:
       alertmanager:
         condition: service_healthy
       victoriametrics:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://localhost:8880/-/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  vmalert-logs-test:
+    image: victoriametrics/vmalert:v1.107.0
+    container_name: homelab-vmalert-logs-test
+    networks:
+      - homelab-monitor-test-net
+    command:
+      - "-datasource.url=http://victorialogs:9428"
+      - "-notifier.url=http://alertmanager:9093"
+      - "-rule=/etc/vmalert/logs/*.yaml"
+      - "-evaluationInterval=5s"
+      - "-configCheckInterval=10s"
+      - "-httpListenAddr=:8880"
+    volumes:
+      - ../vmalert/logs-test:/etc/vmalert/logs:ro
+    depends_on:
+      alertmanager:
+        condition: service_healthy
+      victorialogs:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "-q", "-O-", "http://localhost:8880/-/health"]

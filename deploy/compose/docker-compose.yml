@@ -164,6 +164,33 @@ services:
       retries: 3
       start_period: 10s
 
+  vmalert-logs:
+    image: victoriametrics/vmalert:v1.107.0
+    container_name: homelab-vmalert-logs
+    restart: unless-stopped
+    networks:
+      - homelab-monitor-net
+    command:
+      - "-datasource.url=http://victorialogs:9428"
+      - "-notifier.url=http://alertmanager:9093"
+      - "-rule=/etc/vmalert/logs/*.yaml"
+      - "-evaluationInterval=30s"
+      - "-configCheckInterval=30s"
+      - "-httpListenAddr=:8880"
+    volumes:
+      - ../vmalert/logs:/etc/vmalert/logs:ro
+    depends_on:
+      alertmanager:
+        condition: service_healthy
+      victorialogs:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://localhost:8880/-/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
 networks:
   homelab-monitor-net:
     name: homelab-monitor-net

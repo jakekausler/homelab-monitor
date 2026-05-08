@@ -1,0 +1,37 @@
+# vmalert-logs rules: log-derived alerts via LogsQL queries against VictoriaLogs.
+#
+# Severity vocabulary locked: info / warning / error / critical (spec §8.2).
+# Source tool: vmalert-logs (vs vmalert-metrics for metric-derived alerts).
+# Group `type: vlogs` is REQUIRED so vmalert dispatches the expression to its
+# LogsQL parser rather than the PromQL parser (otherwise the rule fails to load).
+#
+# Test counterpart: deploy/vmalert/logs-test/system.yaml (shorter windows for
+# fast-firing integration tests). Production windows are 5m; test windows are 30s.
+#
+# LogsQL alerting expressions must end in a `stats` pipe so vmalert can extract
+# a numeric series, optionally followed by a `filter` pipe for the threshold.
+
+groups:
+  - name: system_logs
+    type: vlogs
+    interval: 30s
+    rules:
+      - alert: KernelOOM
+        expr: '_time:5m service:="kernel" "Out of memory" "kill_process" | stats by (host) count() as oom_count | filter oom_count:>0'
+        labels:
+          severity: error
+          source_tool: vmalert-logs
+          target_kind: host
+        annotations:
+          summary: "Kernel OOM killed a process on {{ $labels.host }}"
+          description: 'Out-of-memory event detected on host {{ $labels.host }} ({{ $value }} occurrence(s) in 5m)'
+
+      - alert: SshFailedLoginBurst
+        expr: '_time:5m service:="sshd" "Failed password" | stats by (host) count() as fail_count | filter fail_count:>10'
+        labels:
+          severity: warning
+          source_tool: vmalert-logs
+          target_kind: host
+        annotations:
+          summary: "SSH brute force burst on {{ $labels.host }}"
+          description: '{{ $value }} failed SSH login attempts in 5m on {{ $labels.host }}'
