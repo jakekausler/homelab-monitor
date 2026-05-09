@@ -4,9 +4,11 @@ import type { QueryClient } from '@tanstack/react-query'
 import { apiClient } from '@/api/client'
 import { queryKeys } from '@/api/queries'
 import { Route as rootRoute } from '@/routes/__root'
+import { AlertsPage } from '@/routes/Alerts'
 import { LoginPage } from '@/routes/Login'
 import { OverviewPage } from '@/routes/Overview'
 import { AppShell } from '@/components/AppShell'
+import { ErrorDisplay } from '@/components/ErrorDisplay'
 
 import type { components } from '@/api/schema'
 
@@ -68,9 +70,15 @@ const overviewRoute = createRoute({
   component: OverviewPage,
 })
 
+const alertsRoute = createRoute({
+  getParentRoute: () => protectedLayoutRoute,
+  path: '/alerts',
+  component: AlertsPage,
+})
+
 const routeTree: AnyRoute = rootRoute.addChildren([
   loginRoute,
-  protectedLayoutRoute.addChildren([indexRoute, overviewRoute]),
+  protectedLayoutRoute.addChildren([indexRoute, overviewRoute, alertsRoute]),
 ])
 
 export function createAppRouter(queryClient: QueryClient) {
@@ -78,6 +86,7 @@ export function createAppRouter(queryClient: QueryClient) {
     routeTree,
     context: { queryClient },
     defaultPreload: 'intent',
+    defaultErrorComponent: ErrorDisplay,
   })
 }
 

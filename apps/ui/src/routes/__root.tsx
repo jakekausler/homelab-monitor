@@ -1,5 +1,6 @@
 import type { QueryClient } from '@tanstack/react-query'
 import { Outlet, createRootRouteWithContext } from '@tanstack/react-router'
+import { ErrorDisplay } from '@/components/ErrorDisplay'
 import { TooltipProvider } from '@/components/ui/tooltip'
 
 interface RouterContext {
@@ -12,4 +13,5 @@ export const Route = createRootRouteWithContext<RouterContext>()({
       <Outlet />
     </TooltipProvider>
   ),
+  errorComponent: ErrorDisplay,
 })

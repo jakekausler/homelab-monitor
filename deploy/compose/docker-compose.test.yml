@@ -91,6 +91,38 @@ services:
       retries: 10
       start_period: 5s
 
+  karma:
+    image: ghcr.io/prymitive/karma:v0.129
+    container_name: homelab-karma-test
+    networks:
+      - homelab-monitor-test-net
+    volumes:
+      - ../karma/karma.yml:/karma.yml:ro
+    command: ["--config.file=/karma.yml"]
+    depends_on:
+      alertmanager:
+        condition: service_healthy
+    # No healthcheck — Karma's image is distroless (no wget/curl/sh), and no
+    # service `depends_on` Karma's health. Karma starts <2s after AM is healthy.
+
+  kthxbye:
+    image: ghcr.io/prymitive/kthxbye:v0.16
+    container_name: homelab-kthxbye-test
+    networks:
+      - homelab-monitor-test-net
+    command:
+      - "-alertmanager.uri=http://alertmanager:9093"
+      # kthxbye enforces extend-by > extend-if-expiring-in; values below
+      # are compressed for fast tests but maintain the required ordering.
+      - "-extend-by=30s"
+      - "-extend-if-expiring-in=15s"
+      - "-interval=5s"
+      - "-max-duration=2m"
+      - "-extend-with-prefix=ACK!"
+    depends_on:
+      alertmanager:
+        condition: service_healthy
+
   vmalert-metrics:
     image: victoriametrics/vmalert:v1.107.0
     container_name: homelab-vmalert-metrics-test

@@ -21,7 +21,11 @@ export default defineConfig(({ mode }) => {
       proxy: {
         '/api': {
           target: API_PROXY_TARGET,
-          changeOrigin: true,
+          // Preserve the browser's Origin/Host so the backend's same-origin
+          // check (kernel/api/routers/karma.py::_verify_origin) sees the
+          // dev-server origin rather than the proxy target. In production
+          // the monitor serves the UI itself; this dev setup imitates that.
+          changeOrigin: false,
         },
       },
     },

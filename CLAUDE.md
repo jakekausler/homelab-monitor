@@ -41,6 +41,51 @@ Each stage goes through 4 phases, each typically in a separate session:
 | `/code-review-graph:review-delta` | Review changes since last commit |
 | `/code-review-graph:review-pr` | Full PR review with blast-radius analysis |
 
+## Local Refinement / dev environment
+
+Frontend stage Refinement requires a logged-in browser session against a running backend. The standard setup:
+
+```bash
+# 1. Generate a master key + write env file
+mkdir -p /tmp/hm-refine
+cat > /tmp/hm-refine/.env <<EOF
+HOMELAB_MONITOR_DB_URL=sqlite+aiosqlite:////tmp/hm-refine/homelab.db
+HOMELAB_MONITOR_MASTER_KEY=$(python3 -c "import os, base64; print(base64.b64encode(os.urandom(32)).decode())")
+HOMELAB_MONITOR_HTTPS_ONLY_COOKIES=false
+HOMELAB_MONITOR_AUTO_MIGRATE=1
+# Add HOMELAB_MONITOR_<SERVICE>_URL for any sidecars the stage needs.
+EOF
+
+# IMPORTANT: master key is in this file. Restrict permissions.
+chmod 600 /tmp/hm-refine/.env
+
+# 2. Start backend (port 9090 collides with other stuff on this host; use 19090)
+cd apps/monitor && set -a && source /tmp/hm-refine/.env && set +a && \
+HOMELAB_MONITOR_BCRYPT_COST=4 nohup uv run uvicorn homelab_monitor.kernel.api.app:create_app \
+  --factory --host 127.0.0.1 --port 19090 > /tmp/hm-refine/backend.log 2>&1 &
+disown
+
+# 3. Create a user. Password must be ≥12 chars. The `hm user create` command
+#    is INTERACTIVE (prompts twice for password); pipe stdin to skip prompts.
+HOMELAB_MONITOR_BCRYPT_COST=4 printf 'refinement-test-pw\nrefinement-test-pw\n' \
+  | uv run hm user create admin
+# → "created user: id=1 username=admin"
+# Login credentials: admin / refinement-test-pw
+
+# 4. Start UI dev server (NOTE: env var name is VITE_API_PROXY_TARGET — NOT
+#    API_PROXY_TARGET. The vite config reads only the VITE_-prefixed var.)
+cd ../.. && VITE_API_PROXY_TARGET=http://127.0.0.1:19090 \
+  pnpm --filter ui run dev > /tmp/hm-refine/ui-dev.log 2>&1 &
+# → http://localhost:5173 (or 5174/5175/5176 if 5173 is taken)
+```
+
+**Common gotchas (all encountered in STAGE-019 Refinement):**
+- Port 9090 is bound on this host; use 19090 for the backend.
+- Vite proxy env var is `VITE_API_PROXY_TARGET`, NOT `API_PROXY_TARGET`. Wrong var → API calls return HTML (vite SPA fallback) → React error #31 ("object with keys {code, message, details}").
+- `hm user create` requires interactive password input. Pipe via `printf 'pw\npw\n' | uv run hm user create <name>`. Min password length: 12 chars.
+- The prod docker-compose stack has pre-existing Dockerfile/dockerignore/volume-perms bugs (alembic dir excluded, `/data` not chowned for non-root user). Don't try to use it for Refinement until STAGE-021 fixes it. Use the local `uv run uvicorn` + `pnpm dev` + minimal docker sidecars pattern instead.
+- The `/tmp/hm-refine/.env` file contains the master key — `chmod 600` after creation. Better: use `~/.hm-refine/` (mode 700) for long-running dev sessions.
+
 ## Stage Tracking Documents
 
 ### Location

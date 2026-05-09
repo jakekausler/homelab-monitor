@@ -6,6 +6,7 @@
 !uv.lock
 !apps/monitor/pyproject.toml
 !apps/monitor/homelab_monitor/
+!apps/monitor/alembic/
 !apps/monitor/Dockerfile
 !apps/ui/dist/
 !packages/shared-types/

@@ -53,11 +53,18 @@ describe('SidebarNav', () => {
     expect(screen.getByRole('link', { name: /Overview/ })).toBeInTheDocument()
   })
 
+  it('renders the Alerts link as enabled (STAGE-001-019)', () => {
+    renderNav()
+    const alertsLink = screen.getByRole('link', { name: /Alerts/ })
+    expect(alertsLink).toBeInTheDocument()
+    expect(alertsLink.getAttribute('href')).toBe('/alerts')
+  })
+
   it('renders disabled nav items for coming-soon features', () => {
     renderNav()
-    // Alerts, Inventory etc are rendered as disabled buttons
-    const alertsBtn = screen.getByRole('button', { name: /Alerts/ })
-    expect(alertsBtn).toBeDisabled()
+    // Inventory etc remain disabled buttons until their respective stages.
+    const inventoryBtn = screen.getByRole('button', { name: /Inventory/ })
+    expect(inventoryBtn).toBeDisabled()
   })
 
   it('hides item labels when collapsed', () => {

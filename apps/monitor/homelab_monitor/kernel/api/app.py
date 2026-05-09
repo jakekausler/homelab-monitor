@@ -10,6 +10,7 @@ from homelab_monitor.kernel.api.lifespan import lifespan
 from homelab_monitor.kernel.api.middleware import (
     AccessLogMiddleware,
     AuthMiddleware,
+    CspHeadersMiddleware,
     RequestIdMiddleware,
 )
 from homelab_monitor.kernel.api.routers import (
@@ -18,6 +19,7 @@ from homelab_monitor.kernel.api.routers import (
     collectors,
     events,
     health,
+    karma,
     logs,
     metrics,
     observability,
@@ -51,11 +53,13 @@ def create_app(*, lifespan_enabled: bool = True) -> FastAPI:
     # Add middleware. Starlette wraps in REVERSE registration order — the LAST
     # add_middleware call is the OUTERMOST layer at runtime (fires last in request).
     # Desired request flow (IN → OUT):
-    #   RequestIdMiddleware → AuthMiddleware → AccessLogMiddleware → handler
+    #   RequestIdMiddleware → AuthMiddleware → AccessLogMiddleware → CspHeadersMiddleware → handler
     # So registration order (LAST added = outermost):
-    #   add_middleware(AccessLogMiddleware)  # outermost at runtime (fires last)
+    #   add_middleware(CspHeadersMiddleware) # innermost (closest to handler) — first added
+    #   add_middleware(AccessLogMiddleware)  # middle
     #   add_middleware(AuthMiddleware)       # middle (resolves auth)
-    #   add_middleware(RequestIdMiddleware)  # innermost (fires first)
+    #   add_middleware(RequestIdMiddleware)  # outermost (fires first on request, last on response)
+    app.add_middleware(CspHeadersMiddleware)
     app.add_middleware(AccessLogMiddleware)
     app.add_middleware(AuthMiddleware)
     app.add_middleware(RequestIdMiddleware)
@@ -69,6 +73,7 @@ def create_app(*, lifespan_enabled: bool = True) -> FastAPI:
     app.include_router(logs.router, prefix="/api")
     app.include_router(alerts.router, prefix="/api")
     app.include_router(admin.router, prefix="/api")
+    app.include_router(karma.router, prefix="/api")
     app.include_router(observability.router)  # mounted at root: /metrics
 
     return app

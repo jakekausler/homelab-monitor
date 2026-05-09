@@ -296,7 +296,9 @@ async def test_process_run_kind() -> None:
         SchedulerConfig(process_pool_size=1),
     )
     await scheduler.start()
-    await asyncio.sleep(0.6)
+    # TODO(test-cleanup): poll-with-timeout instead of sleep. forkserver
+    # startup is non-deterministic; 1.5s is generous but still timing-based.
+    await asyncio.sleep(1.5)
     await scheduler.stop()
 
     success_count = _count_metric(

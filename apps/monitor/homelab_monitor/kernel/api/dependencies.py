@@ -310,6 +310,31 @@ def require_session() -> Callable[..., User]:
     return _dep
 
 
+def require_session_no_csrf() -> Callable[..., User]:
+    """FastAPI dependency factory: require session auth WITHOUT CSRF enforcement.
+
+    Reserved for routes that proxy to a sandboxed iframe (Karma, STAGE-001-019)
+    where the embedded UI cannot read our session-bound CSRF token to attach as
+    a header. Callers MUST implement an alternative anti-CSRF check (e.g., an
+    Origin/Referer same-origin assertion) on state-changing methods.
+
+    Do NOT add new callers without explicit security review; this is a
+    deliberate exception, not a general convenience.
+
+    Currently the only permitted caller is `karma.py::karma_proxy`, which
+    substitutes Origin/Referer same-origin enforcement for CSRF protection.
+    Adding new callers requires explicit security review and a
+    code-comment update here listing the new callsite.
+    """
+
+    def _dep(request: Request) -> User:
+        if request.state.auth_kind != "session" or request.state.user is None:
+            raise UnauthenticatedProblem()
+        return request.state.user  # pyright: ignore[reportReturnType]
+
+    return _dep
+
+
 def require_token_scope(scope: Scope) -> Callable[..., ApiToken]:
     """FastAPI dependency factory: require an API token with the named scope."""
 

@@ -309,3 +309,45 @@ class AuthMiddleware:
         request.state.user_id = user.id
         request.state.session = session
         request.state.auth_kind = "session"
+
+
+class CspHeadersMiddleware:
+    """Inject ``Content-Security-Policy: frame-ancestors 'self'`` on all responses.
+
+    Pure-ASGI middleware (not ``BaseHTTPMiddleware``). The header is the
+    modern replacement for ``X-Frame-Options: SAMEORIGIN`` and is required so
+    the embedded Karma iframe at ``/alerts`` is permitted to nest under our
+    own origin while denying every other origin.
+
+    Why every response (not just HTML): keeping the policy uniform avoids a
+    classification step on response content-type and the header is harmless
+    on JSON / streaming responses. If a future caller embeds the monitor's
+    JSON endpoints from another origin, this header is silently ignored
+    (CSP is enforced only on document-loading contexts).
+
+    If a route handler sets its own Content-Security-Policy header,
+    this middleware preserves it. To add directives globally, modify
+    CSP_VALUE here.
+    """
+
+    CSP_VALUE = "frame-ancestors 'self'"
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        async def send_wrapper(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                headers = MutableHeaders(scope=message)
+                # Use append-only semantics: don't clobber a per-route CSP
+                # if a future endpoint tightens its own policy. Header name
+                # comparison is case-insensitive per RFC 7230.
+                if "content-security-policy" not in headers:
+                    headers["Content-Security-Policy"] = self.CSP_VALUE
+            await send(message)
+
+        await self.app(scope, receive, send_wrapper)

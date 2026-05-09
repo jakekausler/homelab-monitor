@@ -1,6 +1,7 @@
+import { cleanup, render, screen } from '@testing-library/react'
 import { QueryClient } from '@tanstack/react-query'
 import { isRedirect } from '@tanstack/react-router'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('@/api/client', () => ({
   apiClient: {
@@ -10,6 +11,7 @@ vi.mock('@/api/client', () => ({
 
 import { apiClient } from '@/api/client'
 import { ensureAuthenticated } from './router'
+import { ErrorDisplay } from '@/components/ErrorDisplay'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -106,5 +108,35 @@ describe('router', () => {
       // fetchQuery should not have been called — cache was used
       expect(apiClient.GET).not.toHaveBeenCalled()
     })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// ErrorDisplay (via router)
+// ---------------------------------------------------------------------------
+
+afterEach(() => {
+  cleanup()
+})
+
+describe('ErrorDisplay', () => {
+  it('renders error.message when given an Error instance', () => {
+    render(<ErrorDisplay error={new Error('boom')} />)
+    expect(screen.getByText('boom')).toBeInTheDocument()
+  })
+
+  it('renders String(error.message) when given a plain object with message', () => {
+    render(<ErrorDisplay error={{ code: 'x', message: 'plain object failed' }} />)
+    expect(screen.getByText('plain object failed')).toBeInTheDocument()
+  })
+
+  it('renders fallback when given an object without message', () => {
+    render(<ErrorDisplay error={{ code: 'x' }} />)
+    expect(screen.getByText('An unexpected error occurred')).toBeInTheDocument()
+  })
+
+  it('renders fallback when given null', () => {
+    render(<ErrorDisplay error={null} />)
+    expect(screen.getByText('An unexpected error occurred')).toBeInTheDocument()
   })
 })

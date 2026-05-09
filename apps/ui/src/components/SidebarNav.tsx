@@ -26,11 +26,7 @@ interface NavItem {
 
 const NAV_ITEMS: NavItem[] = [
   { label: 'Overview', to: '/overview', icon: Layout },
-  {
-    label: 'Alerts',
-    icon: AlertTriangle,
-    disabledNote: 'Coming soon — STAGE-001-019',
-  },
+  { label: 'Alerts', to: '/alerts', icon: AlertTriangle },
   { label: 'Inventory', icon: Boxes, disabledNote: 'Coming soon' },
   { label: 'Integrations', icon: Cable, disabledNote: 'Coming soon' },
   { label: 'Logs', icon: ScrollText, disabledNote: 'Coming soon' },

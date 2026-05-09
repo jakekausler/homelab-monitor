@@ -137,6 +137,46 @@ services:
       retries: 3
       start_period: 10s
 
+  karma:
+    image: ghcr.io/prymitive/karma:v0.129
+    container_name: homelab-karma
+    restart: unless-stopped
+    networks:
+      - homelab-monitor-net
+    volumes:
+      - ../karma/karma.yml:/karma.yml:ro
+    command: ["--config.file=/karma.yml"]
+    depends_on:
+      alertmanager:
+        condition: service_healthy
+    # No healthcheck — Karma's image is distroless (no wget/curl/sh available
+    # for CMD-SHELL). No other service `depends_on` Karma's health, so the
+    # absence of a healthcheck is acceptable. Karma's own readiness is observed
+    # via the monitor's reverse proxy returning 502 if Karma is briefly down.
+
+  kthxbye:
+    image: ghcr.io/prymitive/kthxbye:v0.16
+    container_name: homelab-kthxbye
+    restart: unless-stopped
+    networks:
+      - homelab-monitor-net
+    command:
+      - "-alertmanager.uri=http://alertmanager:9093"
+      # kthxbye flag-ordering invariant: extend-by MUST be > extend-if-expiring-in.
+      # Timing math: kthxbye polls every `interval=1m`. When a silence has
+      # `extend-if-expiring-in=6m` left, kthxbye fires an extension that adds
+      # `extend-by=10m` to the silence's endsAt. Net: kthxbye has a 4m margin
+      # (10m - 6m) before any silence can naturally expire while alert fires.
+      # `max-duration=24h` caps total silence lifetime regardless of extensions.
+      - "-extend-by=10m"
+      - "-max-duration=24h"
+      - "-extend-if-expiring-in=6m"
+      - "-interval=1m"
+      - "-extend-with-prefix=ACK!"
+    depends_on:
+      alertmanager:
+        condition: service_healthy
+
   vmalert-metrics:
     image: victoriametrics/vmalert:v1.107.0
     container_name: homelab-vmalert-metrics

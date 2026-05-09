@@ -1,0 +1,24 @@
+# Karma alert console config — STAGE-001-019.
+#
+# Hosted at /api/karma/ behind the monitor's same-origin proxy. The monitor
+# strips/sets headers in the proxy router; Karma itself is unauthenticated
+# at the network level (only reachable on homelab-monitor-net).
+
+listen:
+  address: 0.0.0.0
+  port: 8081
+  prefix: /api/karma/
+
+alertmanager:
+  servers:
+    - name: default
+      uri: http://alertmanager:9093
+      timeout: 10s
+      proxy: false
+      readonly: false
+
+ui:
+  refresh: 10s
+
+log:
+  level: info
