@@ -1,0 +1,21 @@
+# VictoriaLogs datasource provisioning.
+#
+# Type `victoriametrics-logs-datasource` is the native VL plugin (NOT Loki —
+# VictoriaLogs does NOT have full Loki API parity, see
+# https://github.com/VictoriaMetrics/VictoriaLogs/issues/250).
+#
+# The plugin is installed at first Grafana boot via the
+# GF_INSTALL_PLUGINS env var on the grafana service. If the host has no
+# outbound HTTPS on first boot, plugin install fails silently — Grafana
+# starts and reports healthy, but this datasource fails to register with
+# error: "type victoriametrics-logs-datasource not registered". The VL panel
+# in dashboards then shows "no data". Resolution: ensure first-boot internet,
+# OR pre-bake the plugin into a custom Grafana image (deferred to STAGE-021).
+apiVersion: 1
+datasources:
+  - name: VictoriaLogs
+    uid: victorialogs
+    type: victoriametrics-logs-datasource
+    access: proxy
+    url: http://victorialogs:9428
+    editable: false

@@ -60,6 +60,13 @@ describe('SidebarNav', () => {
     expect(alertsLink.getAttribute('href')).toBe('/alerts')
   })
 
+  it('renders the Metrics link as enabled (STAGE-001-020)', () => {
+    renderNav()
+    const metricsLink = screen.getByRole('link', { name: /Metrics/ })
+    expect(metricsLink).toBeInTheDocument()
+    expect(metricsLink.getAttribute('href')).toBe('/metrics')
+  })
+
   it('renders disabled nav items for coming-soon features', () => {
     renderNav()
     // Inventory etc remain disabled buttons until their respective stages.
@@ -72,5 +79,6 @@ describe('SidebarNav', () => {
     // Labels are inside <span> elements that are omitted when collapsed
     expect(screen.queryByText('Alerts')).not.toBeInTheDocument()
     expect(screen.queryByText('Overview')).not.toBeInTheDocument()
+    expect(screen.queryByText('Metrics')).not.toBeInTheDocument()
   })
 })

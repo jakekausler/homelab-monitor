@@ -1,0 +1,19 @@
+# STAGE-001-020 — VictoriaMetrics Prometheus-compatible datasource.
+#
+# Provisioned at Grafana boot from the bind-mounted
+# /etc/grafana/provisioning/datasources/ directory. editable=false makes
+# the datasource read-only in the UI (operators wanting to edit must change
+# this YAML and restart Grafana). httpMethod=POST avoids URL-length issues
+# with long PromQL queries.
+apiVersion: 1
+datasources:
+  - name: VictoriaMetrics
+    uid: victoriametrics
+    type: prometheus
+    access: proxy
+    url: http://victoriametrics:8428
+    isDefault: true
+    editable: false
+    jsonData:
+      httpMethod: POST
+      prometheusType: Prometheus

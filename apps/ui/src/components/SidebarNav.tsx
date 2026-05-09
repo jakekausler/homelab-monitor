@@ -30,7 +30,7 @@ const NAV_ITEMS: NavItem[] = [
   { label: 'Inventory', icon: Boxes, disabledNote: 'Coming soon' },
   { label: 'Integrations', icon: Cable, disabledNote: 'Coming soon' },
   { label: 'Logs', icon: ScrollText, disabledNote: 'Coming soon' },
-  { label: 'Metrics', icon: Gauge, disabledNote: 'Coming soon' },
+  { label: 'Metrics', to: '/metrics', icon: Gauge },
   { label: 'Runbooks', icon: FileText, disabledNote: 'Coming soon' },
   { label: 'Auto-fix history', icon: Wand2, disabledNote: 'Coming soon' },
   {

@@ -6,6 +6,7 @@ import { queryKeys } from '@/api/queries'
 import { Route as rootRoute } from '@/routes/__root'
 import { AlertsPage } from '@/routes/Alerts'
 import { LoginPage } from '@/routes/Login'
+import { MetricsPage } from '@/routes/Metrics'
 import { OverviewPage } from '@/routes/Overview'
 import { AppShell } from '@/components/AppShell'
 import { ErrorDisplay } from '@/components/ErrorDisplay'
@@ -76,9 +77,15 @@ const alertsRoute = createRoute({
   component: AlertsPage,
 })
 
+const metricsRoute = createRoute({
+  getParentRoute: () => protectedLayoutRoute,
+  path: '/metrics',
+  component: MetricsPage,
+})
+
 const routeTree: AnyRoute = rootRoute.addChildren([
   loginRoute,
-  protectedLayoutRoute.addChildren([indexRoute, overviewRoute, alertsRoute]),
+  protectedLayoutRoute.addChildren([indexRoute, overviewRoute, alertsRoute, metricsRoute]),
 ])
 
 export function createAppRouter(queryClient: QueryClient) {

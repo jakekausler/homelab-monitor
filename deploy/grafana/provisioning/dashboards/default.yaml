@@ -1,0 +1,17 @@
+# STAGE-001-020 — Dashboard provider that scans /var/lib/grafana/dashboards
+# every 30s for new/updated JSON files. allowUiUpdates=false locks edits to
+# the on-disk source (operators changing a dashboard must edit the JSON and
+# wait for the next scan). disableDeletion=true keeps deleted-from-disk
+# dashboards in Grafana until the YAML provider is removed.
+apiVersion: 1
+providers:
+  - name: homelab-monitor
+    orgId: 1
+    folder: Homelab
+    type: file
+    disableDeletion: true
+    updateIntervalSeconds: 30
+    allowUiUpdates: false
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

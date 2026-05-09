@@ -233,6 +233,47 @@ services:
       retries: 3
       start_period: 10s
 
+  grafana:
+    image: grafana/grafana-oss:12.3.3
+    container_name: homelab-grafana
+    restart: unless-stopped
+    networks:
+      - homelab-monitor-net
+    depends_on:
+      victoriametrics:
+        condition: service_healthy
+    volumes:
+      - data_grafana:/var/lib/grafana
+      - ../grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../grafana/dashboards:/var/lib/grafana/dashboards:ro
+    environment:
+      # TODO(STAGE-021): GF_SERVER_DOMAIN and GF_SERVER_ROOT_URL are hardcoded
+      # to 127.0.0.1 for the local-first homelab pattern. When the monitor is
+      # deployed behind a real reverse proxy (nginx/caddy on the LAN), these
+      # MUST be templated to the public hostname/scheme. The dev-prod rig from
+      # STAGE-021 will validate the public-URL deployment path.
+      GF_SERVER_DOMAIN: 127.0.0.1
+      GF_SERVER_ROOT_URL: http://127.0.0.1/api/grafana/
+      GF_SERVER_SERVE_FROM_SUB_PATH: "true"
+      GF_SECURITY_ALLOW_EMBEDDING: "true"
+      GF_SECURITY_COOKIE_SAMESITE: lax
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_NAME: "Main Org."
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_LIVE_DISABLE: "true"
+      GF_INSTALL_PLUGINS: "victoriametrics-logs-datasource 0.26.3"
+      # The VL plugin may be unsigned in 0.26.3; allow loading explicitly.
+      # Harmless if/when the plugin ships signed.
+      GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS: "victoriametrics-logs-datasource"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:3000/api/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+
 networks:
   homelab-monitor-net:
     name: homelab-monitor-net
@@ -244,3 +285,4 @@ volumes:
   data_vl:
   data_backup:
   data_alertmanager_config:
+  data_grafana:

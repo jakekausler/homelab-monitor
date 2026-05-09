@@ -175,6 +175,46 @@ services:
       retries: 10
       start_period: 5s
 
+  grafana:
+    image: grafana/grafana-oss:12.3.3
+    container_name: homelab-grafana-test
+    networks:
+      - homelab-monitor-test-net
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      victoriametrics:
+        condition: service_healthy
+    volumes:
+      - ../grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../grafana/dashboards:/var/lib/grafana/dashboards:ro
+    environment:
+      # NOTE: test compose intentionally diverges from prod compose's sub-path
+      # config. Prod uses GF_SERVER_SERVE_FROM_SUB_PATH=true + ROOT_URL with
+      # /api/grafana/ suffix because the monitor proxies the prefix through.
+      # Test rig hits Grafana directly on 127.0.0.1:3000, bypassing the
+      # monitor proxy, so sub-path mode would be wrong here. The end-to-end
+      # sub-path forwarding is exercised in STAGE-021's `make dev-prod` rig.
+      # See: STAGE-001-021 deliverables for prod-stack validation.
+      GF_SERVER_DOMAIN: 127.0.0.1
+      GF_SERVER_ROOT_URL: http://127.0.0.1:3000/
+      GF_SERVER_SERVE_FROM_SUB_PATH: "false"
+      GF_SECURITY_ALLOW_EMBEDDING: "true"
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_NAME: "Main Org."
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_LIVE_DISABLE: "true"
+      GF_INSTALL_PLUGINS: "victoriametrics-logs-datasource 0.26.3"
+      GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS: "victoriametrics-logs-datasource"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:3000/api/health || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 60s
+
 networks:
   homelab-monitor-test-net:
     name: homelab-monitor-test-net
