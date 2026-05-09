@@ -381,3 +381,15 @@ or related tests.
 - **Reverse-proxy aware origin check**: When the monitor is behind nginx (`X-Forwarded-Proto`, `Host` headers set), the karma proxy's same-origin check must use those headers rather than `request.url.netloc`.
 - **kthxbye flag ordering**: kthxbye crashes on startup if `-extend-by` is NOT greater than `-extend-if-expiring-in`. Both prod and test compose configs must maintain this invariant.
 - **Karma is distroless**: Karma container has NO `wget`/`curl`/`sh`, so any `CMD-SHELL` healthcheck will fail. Karma must not have a docker healthcheck.
+
+## STAGE-001-020 (Grafana + dashboards-as-code)
+
+- **Grafana proxy state-change auth**: With a logged-in session, POST `/api/grafana/api/ds/query` from a same-origin iframe must succeed. With Origin: `https://evil.example.com`, must return 403 `cross_origin_blocked`.
+- **Grafana proxy header allow-list**: Cookie / Authorization / X-CSRF-Token from the request MUST NOT reach upstream Grafana. Upstream's Set-Cookie / **X-Frame-Options: DENY** MUST NOT reach the client (X-Frame-Options stripping is critical for the iframe to render).
+- **CSP frame-ancestors**: All monitor responses MUST include `Content-Security-Policy: frame-ancestors 'self'` (regression check from STAGE-019; STAGE-020 reuses).
+- **Reverse-proxy aware origin check**: When the monitor is behind nginx (`HOMELAB_MONITOR_TRUST_FORWARDED_HEADERS=1`), the grafana proxy's same-origin check uses `Host` + `X-Forwarded-Proto` rather than `request.url.netloc`.
+- **Grafana image tag must exist on Docker Hub**: The compose tag (currently `grafana/grafana-oss:12.3.3`) must be a valid registry-published tag. Future bumps should `docker pull` first to verify.
+- **Grafana provisioning auto-loads on boot**: After `docker compose up`, GET `/api/grafana/api/datasources` should return both `victoriametrics` (Prometheus type) and `victorialogs` (`victoriametrics-logs-datasource` plugin type). GET `/api/grafana/api/dashboards/uid/host-overview` should return the dashboard with ≥4 panels.
+- **VictoriaLogs plugin signature**: The `victoriametrics-logs-datasource 0.26.3` plugin must report a valid signature ("commercial" type, "VictoriaMetrics" org). If signature becomes invalid (e.g., plugin updated, signature changed), grafana logs a warning and the datasource may fail to load.
+- **Grafana iframe live-streaming**: `GF_LIVE_DISABLE=true` must be set; otherwise Grafana attempts WebSocket on `/api/live/*` which the FastAPI proxy doesn't handle, causing console errors in the iframe.
+- **Sub-path routing**: `GF_SERVER_SERVE_FROM_SUB_PATH=true` and `GF_SERVER_ROOT_URL` matching the monitor's public URL + `/api/grafana/` are both required when the monitor preserves the sub-path in proxy forwarding (standard mode).
