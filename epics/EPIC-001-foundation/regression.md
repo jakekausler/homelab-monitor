@@ -371,3 +371,13 @@ or related tests.
 - [ ] `docker compose -f deploy/compose/docker-compose.test.yml up --abort-on-container-exit --exit-code-from integration-tests` exits 0
 - [ ] Canonical e2e test exercises: collector → VM → vmalert → AM → ingestor → channel
 - [ ] CI runs the integration suite on every PR
+
+## STAGE-001-019 (Karma + kthxbye)
+
+- **Karma proxy state-change auth**: With a logged-in session, POST `/api/karma/api/v2/silences` from a same-origin iframe must succeed (200/2xx). With Origin: `https://evil.example.com`, must return 403 `cross_origin_blocked`.
+- **Karma proxy header allow-list**: Cookie / Authorization / X-CSRF-Token headers from the request MUST NOT reach the upstream Karma container. Upstream's Set-Cookie / X-Frame-Options responses MUST NOT reach the client.
+- **kthxbye extension prefix**: Silences with comment starting with `ACK!` are extended while alert is firing; silences without the prefix are NOT extended.
+- **CSP header**: All monitor responses (HTML, JSON, error responses) MUST include `Content-Security-Policy: frame-ancestors 'self'`.
+- **Reverse-proxy aware origin check**: When the monitor is behind nginx (`X-Forwarded-Proto`, `Host` headers set), the karma proxy's same-origin check must use those headers rather than `request.url.netloc`.
+- **kthxbye flag ordering**: kthxbye crashes on startup if `-extend-by` is NOT greater than `-extend-if-expiring-in`. Both prod and test compose configs must maintain this invariant.
+- **Karma is distroless**: Karma container has NO `wget`/`curl`/`sh`, so any `CMD-SHELL` healthcheck will fail. Karma must not have a docker healthcheck.
