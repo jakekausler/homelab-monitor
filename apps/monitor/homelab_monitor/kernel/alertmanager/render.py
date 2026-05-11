@@ -216,28 +216,11 @@ async def render_on_boot(  # noqa: PLR0913 -- explicit DI for testability
     skip the reload step entirely (used in tests + first-boot when AM isn't
     yet up).
     """
-    import sys  # pragma: no cover  # noqa: PLC0415 -- diagnostic prints, removed after CI repro
-
-    print(
-        f"[RENDER_DIAG] render_on_boot ENTER template={template_path} output={output_path}",
-        flush=True,
-        file=sys.stderr,
-    )  # pragma: no cover
     try:
         token = await ensure_ingest_token(auth_repo, secrets_repo, log=log)
     except Exception as exc:
-        print(
-            f"[RENDER_DIAG] ensure_ingest_token RAISED: {type(exc).__name__}: {exc}",
-            flush=True,
-            file=sys.stderr,
-        )  # pragma: no cover
         log.error("alertmanager.bootstrap.failed", error=str(exc), exc_info=True)
         return
-    print(
-        f"[RENDER_DIAG] token obtained ({len(token)} chars), calling render_config",
-        flush=True,
-        file=sys.stderr,
-    )  # pragma: no cover
     try:
         render_config(
             template_path=template_path,
@@ -245,31 +228,8 @@ async def render_on_boot(  # noqa: PLR0913 -- explicit DI for testability
             token=token,
             log=log,
         )
-        print(
-            "[RENDER_DIAG] render_config SUCCEEDED", flush=True, file=sys.stderr
-        )  # pragma: no cover
-    except (FileNotFoundError, OSError) as exc:
-        print(
-            f"[RENDER_DIAG] render_config RAISED expected: {type(exc).__name__}: {exc}",
-            flush=True,
-            file=sys.stderr,
-        )  # pragma: no cover
+    except (FileNotFoundError, OSError):
         return  # already logged inside render_config
-    except BaseException as exc:
-        print(
-            f"[RENDER_DIAG] render_config RAISED UNEXPECTED: {type(exc).__name__}: {exc}",
-            flush=True,
-            file=sys.stderr,
-        )  # pragma: no cover
-        raise
     if am_url is not None:
-        print(
-            f"[RENDER_DIAG] calling reloader for {am_url}", flush=True, file=sys.stderr
-        )  # pragma: no cover
         reloader = AlertmanagerReloader(am_url=am_url, http_client=http_client, log=log)
         await reloader.reload()
-        print("[RENDER_DIAG] reloader done", flush=True, file=sys.stderr)  # pragma: no cover
-    else:
-        print(
-            "[RENDER_DIAG] am_url is None, skipping reload", flush=True, file=sys.stderr
-        )  # pragma: no cover

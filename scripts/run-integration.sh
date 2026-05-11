@@ -30,7 +30,7 @@ cd "${REPO_ROOT}"
 docker run --rm \
   -v "$(pwd)/deploy/compose/test-fixtures/am-config-seed:/seed" \
   alpine:latest \
-  sh -c "cp /seed/alertmanager.bootstrap.yml /seed/alertmanager.yml && chown 1000:2000 /seed/alertmanager.yml && chmod 640 /seed/alertmanager.yml"
+  sh -c "cp /seed/alertmanager.bootstrap.yml /seed/alertmanager.yml && chown 1000:2000 /seed/alertmanager.yml && chmod 640 /seed/alertmanager.yml && chown 1000:2000 /seed && chmod 2775 /seed"
 
 docker compose -f "${COMPOSE_FILE}" up \
   --build \
