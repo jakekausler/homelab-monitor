@@ -1,19 +1,21 @@
-import { createRoute, createRouter, redirect, type AnyRoute } from '@tanstack/react-router'
+import { createRoute, createRouter, redirect } from '@tanstack/react-router'
 import type { QueryClient } from '@tanstack/react-query'
 
 import { apiClient } from '@/api/client'
 import { queryKeys } from '@/api/queries'
+import type { Schema } from '@/api/types'
 import { Route as rootRoute } from '@/routes/__root'
 import { AlertsPage } from '@/routes/Alerts'
 import { LoginPage } from '@/routes/Login'
 import { MetricsPage } from '@/routes/Metrics'
 import { OverviewPage } from '@/routes/Overview'
+import { InventoryLayout } from '@/routes/inventory/Inventory'
+import { CronsListPage } from '@/routes/inventory/CronsList'
+import { CronDetailPage } from '@/routes/inventory/CronDetailPage'
 import { AppShell } from '@/components/AppShell'
 import { ErrorDisplay } from '@/components/ErrorDisplay'
 
-import type { components } from '@/api/schema'
-
-type MeResponse = components['schemas']['MeResponse']
+type MeResponse = Schema<'MeResponse'>
 
 /**
  * Auth guard: ensures the user is logged in by hitting GET /api/auth/me
@@ -83,9 +85,88 @@ const metricsRoute = createRoute({
   component: MetricsPage,
 })
 
-const routeTree: AnyRoute = rootRoute.addChildren([
+const inventoryLayoutRoute = createRoute({
+  getParentRoute: () => protectedLayoutRoute,
+  path: '/inventory',
+  component: InventoryLayout,
+})
+
+const inventoryIndexRoute = createRoute({
+  getParentRoute: () => inventoryLayoutRoute,
+  path: '/',
+  beforeLoad: () => {
+    // eslint-disable-next-line @typescript-eslint/only-throw-error -- TanStack Router redirect objects are thrown by design
+    throw redirect({
+      to: '/inventory/crons',
+      search: {
+        page: 1,
+        page_size: 100,
+        host: undefined,
+        integration_mode: undefined,
+        enabled: undefined,
+        state: undefined,
+        q: undefined,
+        include_archived: false,
+      },
+    })
+  },
+})
+
+const cronsListRoute = createRoute({
+  getParentRoute: () => inventoryLayoutRoute,
+  path: '/crons',
+  component: CronsListPage,
+  validateSearch: (
+    search: Record<string, unknown>,
+  ): {
+    page: number
+    page_size: number
+    host?: string | undefined
+    integration_mode?: 'observe' | 'heartbeat' | 'both' | undefined
+    enabled?: boolean | undefined
+    state?: 'unknown' | 'running' | 'ok' | 'failed' | 'late' | undefined
+    q?: string | undefined
+    include_archived: boolean
+  } => ({
+    page: typeof search.page === 'number' ? search.page : 1,
+    page_size: typeof search.page_size === 'number' ? search.page_size : 100,
+    host: typeof search.host === 'string' ? search.host : undefined,
+    integration_mode:
+      search.integration_mode === 'observe' ||
+      search.integration_mode === 'heartbeat' ||
+      search.integration_mode === 'both'
+        ? search.integration_mode
+        : undefined,
+    enabled: typeof search.enabled === 'boolean' ? search.enabled : undefined,
+    state:
+      search.state === 'unknown' ||
+      search.state === 'running' ||
+      search.state === 'ok' ||
+      search.state === 'failed' ||
+      search.state === 'late'
+        ? search.state
+        : undefined,
+    q: typeof search.q === 'string' ? search.q : undefined,
+    include_archived:
+      typeof search.include_archived === 'boolean' ? search.include_archived : false,
+  }),
+})
+
+const cronDetailRoute = createRoute({
+  getParentRoute: () => inventoryLayoutRoute,
+  path: '/crons/$cronId',
+  component: CronDetailPage,
+})
+
+const routeTree = rootRoute.addChildren([
   loginRoute,
-  protectedLayoutRoute.addChildren([indexRoute, overviewRoute, alertsRoute, metricsRoute]),
+  protectedLayoutRoute.addChildren([
+    indexRoute,
+    overviewRoute,
+    alertsRoute,
+    metricsRoute,
+    inventoryLayoutRoute.addChildren([inventoryIndexRoute, cronsListRoute, cronDetailRoute]),
+  ]),
 ])
 
 export function createAppRouter(queryClient: QueryClient) {

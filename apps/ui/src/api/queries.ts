@@ -7,16 +7,16 @@ import {
 } from '@tanstack/react-query'
 
 import { apiClient, ApiError, unwrap } from './client'
-import type { components } from './schema'
+import type { Schema } from './types'
 
-type MeResponse = components['schemas']['MeResponse']
-type LoginRequest = components['schemas']['LoginRequest']
-type LoginResponse = components['schemas']['LoginResponse']
-type VersionResponse = components['schemas']['VersionResponse']
-type CollectorStatus = components['schemas']['CollectorStatus']
-type MetricsSnapshotResponse = components['schemas']['MetricsSnapshotResponse']
-type MetricsRangeResponse = components['schemas']['MetricsRangeResponse']
-type AlertListResponse = components['schemas']['AlertListResponse']
+type MeResponse = Schema<'MeResponse'>
+type LoginRequest = Schema<'LoginRequest'>
+type LoginResponse = Schema<'LoginResponse'>
+type VersionResponse = Schema<'VersionResponse'>
+type CollectorStatus = Schema<'CollectorStatus'>
+type MetricsSnapshotResponse = Schema<'MetricsSnapshotResponse'>
+type MetricsRangeResponse = Schema<'MetricsRangeResponse'>
+type AlertListResponse = Schema<'AlertListResponse'>
 
 export const queryKeys = {
   currentUser: ['auth', 'me'] as const,

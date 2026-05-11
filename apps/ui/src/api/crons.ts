@@ -1,0 +1,152 @@
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+  type UseMutationResult,
+  type UseQueryResult,
+} from '@tanstack/react-query'
+
+import { apiClient, ApiError, unwrap } from './client'
+import type { Schema } from './types'
+
+type CronListResponse = Schema<'CronListResponse'>
+type CronWithStateOut = Schema<'CronWithStateOut'>
+type CronOut = Schema<'CronOut'>
+type CronCreate = Schema<'CronCreate'>
+type CronUpdate = Schema<'CronUpdate'>
+type PreviewRunsResponse = Schema<'PreviewRunsResponse'>
+
+export interface CronListQuery {
+  page?: number
+  page_size?: number
+  host?: string
+  integration_mode?: 'observe' | 'heartbeat' | 'both'
+  enabled?: boolean
+  state?: 'unknown' | 'running' | 'ok' | 'failed' | 'late'
+  q?: string
+  include_archived?: boolean
+}
+
+export const cronQueryKeys = {
+  all: ['crons'] as const,
+  list: (query: CronListQuery) => ['crons', 'list', query] as const,
+  detail: (id: string) => ['crons', 'detail', id] as const,
+  previewSaved: (id: string, count: number) => ['crons', 'preview', 'saved', id, count] as const,
+  previewExpr: (expr: string, count: number) => ['crons', 'preview', 'expr', expr, count] as const,
+}
+
+const REFETCH_INTERVAL_MS = 30_000
+
+export function useListCrons(query: CronListQuery): UseQueryResult<CronListResponse, ApiError> {
+  return useQuery({
+    queryKey: cronQueryKeys.list(query),
+    queryFn: async () => {
+      const result = await apiClient.GET('/api/crons', {
+        params: { query },
+      })
+      return unwrap(result)
+    },
+    refetchInterval: REFETCH_INTERVAL_MS,
+  })
+}
+
+export function useGetCron(
+  id: string,
+  options: { includeArchived?: boolean } = {},
+): UseQueryResult<CronWithStateOut, ApiError> {
+  return useQuery({
+    queryKey: cronQueryKeys.detail(id),
+    queryFn: async () => {
+      const result = await apiClient.GET('/api/crons/{cron_id}', {
+        params: {
+          path: { cron_id: id },
+          query: { include_archived: options.includeArchived ?? false },
+        },
+      })
+      return unwrap(result)
+    },
+    refetchInterval: REFETCH_INTERVAL_MS,
+    enabled: id.length > 0,
+  })
+}
+
+export function useCreateCron(): UseMutationResult<CronOut, ApiError, CronCreate> {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (body: CronCreate) => {
+      const result = await apiClient.POST('/api/crons', { body })
+      return unwrap(result)
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: cronQueryKeys.all })
+    },
+  })
+}
+
+export function useUpdateCron(id: string): UseMutationResult<CronOut, ApiError, CronUpdate> {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (body: CronUpdate) => {
+      const result = await apiClient.PATCH('/api/crons/{cron_id}', {
+        params: { path: { cron_id: id } },
+        body,
+      })
+      return unwrap(result)
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: cronQueryKeys.all })
+      void qc.invalidateQueries({ queryKey: cronQueryKeys.detail(id) })
+    },
+  })
+}
+
+export function useSoftDeleteCron(id: string): UseMutationResult<void, ApiError, void> {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async () => {
+      const result = await apiClient.DELETE('/api/crons/{cron_id}', {
+        params: { path: { cron_id: id } },
+      })
+      if (result.response.status === 204) return
+      unwrap(result)
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: cronQueryKeys.all })
+    },
+  })
+}
+
+export function usePreviewSavedCron(
+  id: string,
+  count: number = 3,
+  enabled: boolean = true,
+): UseQueryResult<PreviewRunsResponse, ApiError> {
+  return useQuery({
+    queryKey: cronQueryKeys.previewSaved(id, count),
+    queryFn: async () => {
+      const result = await apiClient.GET('/api/crons/{cron_id}/preview-runs', {
+        params: { path: { cron_id: id }, query: { count } },
+      })
+      return unwrap(result)
+    },
+    enabled: enabled && id.length > 0,
+  })
+}
+
+export function usePreviewExpr(
+  expr: string,
+  count: number = 3,
+  enabled: boolean = true,
+): UseQueryResult<PreviewRunsResponse, ApiError> {
+  return useQuery({
+    queryKey: cronQueryKeys.previewExpr(expr, count),
+    queryFn: async () => {
+      const result = await apiClient.GET('/api/crons/preview-runs', {
+        params: { query: { expr, count } },
+      })
+      return unwrap(result)
+    },
+    enabled: enabled && expr.trim().length > 0,
+    retry: false,
+  })
+}

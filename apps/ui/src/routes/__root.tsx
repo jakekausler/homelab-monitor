@@ -3,7 +3,7 @@ import { Outlet, createRootRouteWithContext } from '@tanstack/react-router'
 import { ErrorDisplay } from '@/components/ErrorDisplay'
 import { TooltipProvider } from '@/components/ui/tooltip'
 
-interface RouterContext {
+export interface RouterContext {
   queryClient: QueryClient
 }
 

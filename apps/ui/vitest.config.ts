@@ -32,6 +32,8 @@ export default mergeConfig(
           'src/api/schema.ts',
           'src/components/ui/**',
           'src/routes/__root.tsx',
+          'src/router.tsx',
+          'src/api/crons.ts',
           'playwright/**',
           '**/*.test.{ts,tsx}',
         ],

@@ -532,6 +532,374 @@
         "title": "CommentBody",
         "type": "object"
       },
+      "CronCreate": {
+        "additionalProperties": false,
+        "description": "Body for ``POST /api/crons``.\n\nExactly one of ``schedule`` (non-empty cron expression) OR\n``cadence_seconds`` (>0) must be set. Both-set or neither-set yields 422.",
+        "properties": {
+          "cadence_seconds": {
+            "default": 0,
+            "maximum": 86400.0,
+            "minimum": 0.0,
+            "title": "Cadence Seconds",
+            "type": "integer"
+          },
+          "command": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Command",
+            "type": "string"
+          },
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "expected_grace_seconds": {
+            "default": 300,
+            "maximum": 86400.0,
+            "minimum": 0.0,
+            "title": "Expected Grace Seconds",
+            "type": "integer"
+          },
+          "host": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Host",
+            "type": "string"
+          },
+          "integration_mode": {
+            "default": "observe",
+            "enum": [
+              "observe",
+              "heartbeat",
+              "both"
+            ],
+            "title": "Integration Mode",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "schedule": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Schedule"
+          }
+        },
+        "required": [
+          "name",
+          "host",
+          "command"
+        ],
+        "title": "CronCreate",
+        "type": "object"
+      },
+      "CronListResponse": {
+        "additionalProperties": false,
+        "description": "Paginated list payload for ``GET /api/crons``.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/CronOut"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "page": {
+            "title": "Page",
+            "type": "integer"
+          },
+          "page_size": {
+            "title": "Page Size",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total",
+          "page",
+          "page_size"
+        ],
+        "title": "CronListResponse",
+        "type": "object"
+      },
+      "CronOut": {
+        "additionalProperties": false,
+        "description": "Public projection of a ``crons`` row.",
+        "properties": {
+          "archived_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Archived At"
+          },
+          "cadence_seconds": {
+            "title": "Cadence Seconds",
+            "type": "integer"
+          },
+          "command": {
+            "title": "Command",
+            "type": "string"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "expected_grace_seconds": {
+            "title": "Expected Grace Seconds",
+            "type": "integer"
+          },
+          "host": {
+            "title": "Host",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "integration_mode": {
+            "enum": [
+              "observe",
+              "heartbeat",
+              "both"
+            ],
+            "title": "Integration Mode",
+            "type": "string"
+          },
+          "last_seen_state": {
+            "enum": [
+              "unknown",
+              "running",
+              "ok",
+              "failed",
+              "late"
+            ],
+            "title": "Last Seen State",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "schedule": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Schedule"
+          },
+          "schedule_canonical": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Schedule Canonical"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "host",
+          "command",
+          "schedule",
+          "schedule_canonical",
+          "cadence_seconds",
+          "expected_grace_seconds",
+          "integration_mode",
+          "enabled",
+          "last_seen_state",
+          "created_at",
+          "updated_at",
+          "archived_at"
+        ],
+        "title": "CronOut",
+        "type": "object"
+      },
+      "CronUpdate": {
+        "additionalProperties": false,
+        "description": "Body for ``PATCH /api/crons/{id}``.\n\nAll fields optional. The xor invariant is rechecked at the repo layer\nagainst the merged (current + provided) row state \u2014 Pydantic only\nenforces local consistency when BOTH fields are supplied in the same\nrequest.\n\n``archived_at``: pass an ISO-8601 string to soft-delete (audit verb\nbecomes ``crons.delete``); pass ``null`` to restore (audit verb becomes\n``crons.restore``).",
+        "properties": {
+          "archived_at": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Archived At"
+          },
+          "cadence_seconds": {
+            "anyOf": [
+              {
+                "maximum": 86400.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cadence Seconds"
+          },
+          "command": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Command"
+          },
+          "enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enabled"
+          },
+          "expected_grace_seconds": {
+            "anyOf": [
+              {
+                "maximum": 86400.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Grace Seconds"
+          },
+          "host": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Host"
+          },
+          "integration_mode": {
+            "anyOf": [
+              {
+                "enum": [
+                  "observe",
+                  "heartbeat",
+                  "both"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Integration Mode"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "schedule": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Schedule"
+          }
+        },
+        "title": "CronUpdate",
+        "type": "object"
+      },
+      "CronWithStateOut": {
+        "additionalProperties": false,
+        "description": "Combined cron + heartbeat state for ``GET /api/crons/{id}``.",
+        "properties": {
+          "cron": {
+            "$ref": "#/components/schemas/CronOut"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/HeartbeatStateOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "cron",
+          "state"
+        ],
+        "title": "CronWithStateOut",
+        "type": "object"
+      },
       "DismissResponse": {
         "additionalProperties": false,
         "description": "Response for POST /api/alerts/{id}/dismiss.",
@@ -634,6 +1002,115 @@
           "degraded_collectors"
         ],
         "title": "HealthzResponse",
+        "type": "object"
+      },
+      "HeartbeatStateOut": {
+        "additionalProperties": false,
+        "description": "Public projection of a ``heartbeats_state`` row.\n\nMirrors ``HeartbeatStateRecord`` from heartbeat/repository.py but with\nPydantic for serialization. Used inside ``CronWithStateOut``.",
+        "properties": {
+          "cron_id": {
+            "title": "Cron Id",
+            "type": "string"
+          },
+          "current_state": {
+            "enum": [
+              "unknown",
+              "running",
+              "ok",
+              "failed",
+              "late"
+            ],
+            "title": "Current State",
+            "type": "string"
+          },
+          "current_streak": {
+            "title": "Current Streak",
+            "type": "integer"
+          },
+          "expected_next_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Next At"
+          },
+          "last_duration_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Duration Seconds"
+          },
+          "last_exit_code": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Exit Code"
+          },
+          "last_fail_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Fail At"
+          },
+          "last_ok_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Ok At"
+          },
+          "last_start_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Start At"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "cron_id",
+          "current_state",
+          "last_start_at",
+          "last_ok_at",
+          "last_fail_at",
+          "current_streak",
+          "expected_next_at",
+          "last_duration_seconds",
+          "last_exit_code",
+          "updated_at"
+        ],
+        "title": "HeartbeatStateOut",
         "type": "object"
       },
       "IngestResponse": {
@@ -937,6 +1414,24 @@
           "decided_at"
         ],
         "title": "OutcomeView",
+        "type": "object"
+      },
+      "PreviewRunsResponse": {
+        "additionalProperties": false,
+        "description": "Response for both preview-runs endpoints.",
+        "properties": {
+          "runs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Runs",
+            "type": "array"
+          }
+        },
+        "required": [
+          "runs"
+        ],
+        "title": "PreviewRunsResponse",
         "type": "object"
       },
       "RetryResponse": {
@@ -1653,6 +2148,469 @@
         "summary": "Retry Collector"
       }
     },
+    "/api/crons": {
+      "get": {
+        "description": "Paginated list of crons with optional filters.",
+        "operationId": "list_crons_api_crons_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "title": "Page",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page_size",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "title": "Page Size",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "host",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Host"
+            }
+          },
+          {
+            "in": "query",
+            "name": "integration_mode",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "observe",
+                    "heartbeat",
+                    "both"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Integration Mode"
+            }
+          },
+          {
+            "in": "query",
+            "name": "enabled",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Enabled"
+            }
+          },
+          {
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "unknown",
+                    "running",
+                    "ok",
+                    "failed",
+                    "late"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "State"
+            }
+          },
+          {
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Q"
+            }
+          },
+          {
+            "in": "query",
+            "name": "include_archived",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Include Archived",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CronListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Crons",
+        "tags": [
+          "crons"
+        ]
+      },
+      "post": {
+        "description": "Create a new cron registry row. CSRF enforced by require_session().",
+        "operationId": "create_cron_api_crons_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CronCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CronOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Cron",
+        "tags": [
+          "crons"
+        ]
+      }
+    },
+    "/api/crons/preview-runs": {
+      "get": {
+        "description": "Preview the next N fire times for an unsaved cron expression.\n\nUsed by the add-cron modal to preview the schedule before save. ``expr``\nis REQUIRED for this endpoint (the saved-cron variant omits it).",
+        "operationId": "preview_runs_unsaved_api_crons_preview_runs_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "expr",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Expr"
+            }
+          },
+          {
+            "in": "query",
+            "name": "count",
+            "required": false,
+            "schema": {
+              "default": 3,
+              "title": "Count",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreviewRunsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Preview Runs Unsaved",
+        "tags": [
+          "crons"
+        ]
+      }
+    },
+    "/api/crons/{cron_id}": {
+      "delete": {
+        "description": "Soft-delete (archive) a cron. 404 if missing OR already archived.",
+        "operationId": "delete_cron_api_crons__cron_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "cron_id",
+            "required": true,
+            "schema": {
+              "title": "Cron Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Cron",
+        "tags": [
+          "crons"
+        ]
+      },
+      "get": {
+        "description": "Return a single cron + its joined heartbeat state.\n\nBy default archived crons return 404; pass ``?include_archived=true``\nfor admin recovery flows.",
+        "operationId": "get_cron_api_crons__cron_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "cron_id",
+            "required": true,
+            "schema": {
+              "title": "Cron Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "include_archived",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Include Archived",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CronWithStateOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Cron",
+        "tags": [
+          "crons"
+        ]
+      },
+      "patch": {
+        "description": "Partial update of a cron. Empty diff returns 200 with no audit row.",
+        "operationId": "update_cron_api_crons__cron_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "cron_id",
+            "required": true,
+            "schema": {
+              "title": "Cron Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CronUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CronOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Cron",
+        "tags": [
+          "crons"
+        ]
+      }
+    },
+    "/api/crons/{cron_id}/preview-runs": {
+      "get": {
+        "description": "Preview the next N fire times for a saved cron's schedule.\n\n404 if the cron is missing OR has no schedule (cadence-only cron has no\nschedule to preview).",
+        "operationId": "preview_runs_saved_api_crons__cron_id__preview_runs_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "cron_id",
+            "required": true,
+            "schema": {
+              "title": "Cron Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expr",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Expr"
+            }
+          },
+          {
+            "in": "query",
+            "name": "count",
+            "required": false,
+            "schema": {
+              "default": 3,
+              "title": "Count",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreviewRunsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Preview Runs Saved",
+        "tags": [
+          "crons"
+        ]
+      }
+    },
     "/api/events": {
       "get": {
         "description": "Stream collector tick events via Server-Sent Events.\n\nConnects to the SSE broker and yields events in the format:\n  event: collector.tick\n  data: {JSON payload}\n  id: {sequence number}\n\nReplays the last 50 events on connect. If the consumer's queue fills\n(slow subscriber), the broker disconnects them with an error event.",
@@ -1682,6 +2640,38 @@
             "schema": {
               "title": "Cron Id",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "duration",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Duration"
+            }
+          },
+          {
+            "in": "query",
+            "name": "exit_code",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Exit Code"
             }
           }
         ],
@@ -1718,6 +2708,22 @@
             "schema": {
               "title": "Cron Id",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "duration",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Duration"
             }
           }
         ],

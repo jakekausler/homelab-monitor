@@ -124,7 +124,7 @@ export function HostCpuTile() {
       // eslint-disable-next-line react-hooks/set-state-in-effect,@eslint-react/set-state-in-effect -- intentional: seeding/updating state from non-React source (snapshot, SSE event)
       setLatest(entry.value)
       setSeries(Array<number>(SERIES_CAPACITY).fill(entry.value))
-      // eslint-disable-next-line react-hooks/set-state-in-effect,@eslint-react/set-state-in-effect -- intentional: seeding/updating state from non-React source (snapshot, SSE event)
+      // eslint-disable-next-line @eslint-react/set-state-in-effect -- intentional: seeding/updating state from non-React source (snapshot, SSE event)
       setLastUpdatedAt(entry.ts)
     }
     seededRef.current = true
@@ -143,7 +143,7 @@ export function HostCpuTile() {
     if (built === null) return
     // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: seeding state from one-shot historical query
     setSeries(built)
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: seeding state from one-shot historical query
+
     setLatest(built[built.length - 1]!)
     historyBackfilledRef.current = true
   }, [range.data])
@@ -175,7 +175,7 @@ export function HostCpuTile() {
     if (entry === undefined) return
     // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: seeding/updating state from non-React source (snapshot, SSE event)
     setLatest(entry.value)
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: seeding/updating state from non-React source (snapshot, SSE event)
+
     setSeries((prev) => {
       const next = [...prev, entry.value]
       return next.length > SERIES_CAPACITY ? next.slice(next.length - SERIES_CAPACITY) : next

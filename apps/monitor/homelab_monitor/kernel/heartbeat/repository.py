@@ -28,28 +28,10 @@ from sqlalchemy import text
 from sqlalchemy.engine import Row
 from sqlalchemy.ext.asyncio import AsyncConnection
 
+from homelab_monitor.kernel.cron.repository import CronRecord  # re-exported below
 from homelab_monitor.kernel.db.audit import insert_audit
 from homelab_monitor.kernel.db.repository import SqliteRepository
 from homelab_monitor.kernel.db.time import utc_now_iso
-
-
-@dataclass(slots=True, frozen=True)
-class CronRecord:
-    """Hydrated row from ``crons``."""
-
-    id: str
-    name: str
-    host: str
-    command: str
-    schedule: str
-    cadence_seconds: int
-    expected_grace_seconds: int
-    integration_mode: str  # observe | heartbeat | both
-    enabled: bool
-    last_seen_state: str  # unknown | running | ok | failed | late
-    created_at: str
-    updated_at: str
-    archived_at: str | None
 
 
 @dataclass(slots=True, frozen=True)
@@ -75,6 +57,9 @@ def _row_to_cron(row: Row[Any]) -> CronRecord:
         host=str(row.host),
         command=str(row.command),
         schedule=str(row.schedule),
+        schedule_canonical=(
+            None if row.schedule_canonical is None else str(row.schedule_canonical)
+        ),
         cadence_seconds=int(row.cadence_seconds),
         expected_grace_seconds=int(row.expected_grace_seconds),
         integration_mode=str(row.integration_mode),
@@ -104,10 +89,10 @@ def _row_to_state(row: Row[Any]) -> HeartbeatStateRecord:
 
 
 _SELECT_CRON_SQL = text(
-    "SELECT id, name, host, command, schedule, cadence_seconds, "
+    "SELECT id, name, host, command, schedule, schedule_canonical, cadence_seconds, "
     "expected_grace_seconds, integration_mode, enabled, last_seen_state, "
     "created_at, updated_at, archived_at "
-    "FROM crons WHERE id = :id"
+    "FROM crons WHERE id = :id AND archived_at IS NULL"
 )
 
 _SELECT_STATE_SQL = text(
@@ -192,12 +177,17 @@ class HeartbeatRepo:
         return _row_to_state(row)
 
     async def list_crons(self) -> list[CronRecord]:
-        """Return all crons ordered by ``name`` (helper for tests / future Inventory)."""
+        """Return all crons ordered by ``name`` (helper for tests / future Inventory).
+
+        Includes archived crons by design — this is the legacy debugging helper
+        that pre-dates the soft-delete model. Production list queries go
+        through ``CronRepo.list_crons``.
+        """
         rows = await self._db.fetch_all(
             text(
-                "SELECT id, name, host, command, schedule, cadence_seconds, "
-                "expected_grace_seconds, integration_mode, enabled, last_seen_state, "
-                "created_at, updated_at, archived_at "
+                "SELECT id, name, host, command, schedule, schedule_canonical, "
+                "cadence_seconds, expected_grace_seconds, integration_mode, enabled, "
+                "last_seen_state, created_at, updated_at, archived_at "
                 "FROM crons ORDER BY name, id"
             )
         )
@@ -425,3 +415,11 @@ class HeartbeatRepo:
         result = await conn.execute(_SELECT_STATE_SQL, {"cron_id": cron_id})
         row = result.first()
         return None if row is None else _row_to_state(row)
+
+
+__all__ = [
+    "CronRecord",
+    "HeartbeatRepo",
+    "HeartbeatStateRecord",
+    "compute_expected_next_at",
+]

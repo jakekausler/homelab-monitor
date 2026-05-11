@@ -13,10 +13,13 @@ Cap rationale:
 
 from __future__ import annotations
 
+import inspect
 from collections.abc import Awaitable, Callable
+from typing import Any
 
-from fastapi import HTTPException, Request
+from fastapi import HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic_core import PydanticUndefined
 
 
 class HeartbeatStartQuery(BaseModel):
@@ -45,23 +48,68 @@ class HeartbeatFailQuery(BaseModel):
     exit_code: int | None = Field(default=None, ge=0, le=255)
 
 
-def query_model[T: BaseModel](model_cls: type[T]) -> Callable[[Request], Awaitable[T]]:
-    """Return a FastAPI dependency that validates ALL query params via Pydantic.
+def query_model[T: BaseModel](model_cls: type[T]) -> Callable[..., Awaitable[T]]:
+    """Return a FastAPI dependency that validates ALL query params via Pydantic AND
+    exposes individual ``Query()`` parameters so OpenAPI introspection emits them.
 
-    FastAPI's ``Depends()`` on a BaseModel injects individual ``Query()``
-    parameters, which bypasses ``model_validate()`` and silently ignores extras
-    even when ``extra='forbid'`` is set. This factory fixes that by calling
-    ``model_validate(dict(request.query_params))`` so Pydantic sees the full
-    query dict and rejects unknown keys with 422.
+    Strategy:
+    1. Dynamically build an ``async def _dep(request, **fields)`` whose signature
+       has one ``inspect.Parameter`` per model field, each annotated with the
+       field's type and defaulting to a ``Query()`` marker.  FastAPI reads this
+       signature to populate the OpenAPI schema.
+    2. Include ``request: Request`` as the first parameter so the body can inspect
+       the FULL ``request.query_params`` dict and reject rogue keys before calling
+       ``model_validate``.  This preserves the ``extra='forbid'`` contract even
+       though FastAPI only passes *known* query params via ``**fields``.
+    3. Call ``model_cls.model_validate(dict(request.query_params))`` (not kwargs)
+       so Pydantic sees every key and fires ``extra='forbid'`` for unknown ones.
     """
+    # Build the dynamic parameter list.
+    params: list[inspect.Parameter] = [
+        inspect.Parameter(
+            "request",
+            kind=inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            annotation=Request,
+        )
+    ]
+    for field_name, field_info in model_cls.model_fields.items():
+        default = field_info.default
+        if default is PydanticUndefined:
+            # Required field — no default
+            query_default: Any = ...  # pragma: no cover
+        else:
+            query_default = default
 
-    async def _dep(request: Request) -> T:
+        annotation = field_info.annotation
+        if annotation is None:  # pragma: no cover
+            annotation = Any  # type: ignore[assignment]
+
+        params.append(
+            inspect.Parameter(
+                field_name,
+                kind=inspect.Parameter.KEYWORD_ONLY,
+                default=Query(query_default, description=field_info.description),
+                annotation=annotation,
+            )
+        )
+
+    async def _dep(request: Request, **_kwargs: Any) -> T:  # type: ignore[misc]  # noqa: ANN401
+        # _kwargs holds FastAPI-injected known params (for OpenAPI wiring only).
+        # We validate from the raw query string so extra='forbid' fires correctly.
         try:
             return model_cls.model_validate(dict(request.query_params))
         except ValidationError as exc:
+            errors = exc.errors(include_url=False)
+            for e in errors:
+                ctx = e.get("ctx")
+                if isinstance(ctx, dict) and isinstance(ctx.get("error"), Exception):
+                    e["ctx"] = {"error": str(ctx["error"])}
             raise HTTPException(
                 status_code=422,
-                detail={"errors": exc.errors()},
+                detail={"errors": errors},
             ) from exc
 
-    return _dep
+    # Replace the function's signature so FastAPI sees the per-field Query() params.
+    _dep.__signature__ = inspect.Signature(params)  # type: ignore[attr-defined]
+
+    return _dep  # type: ignore[return-value]

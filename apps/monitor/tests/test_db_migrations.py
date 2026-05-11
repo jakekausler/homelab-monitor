@@ -343,7 +343,9 @@ async def test_migration_0006_round_trip(db_url: str) -> None:
     cfg.set_main_option("script_location", str(ALEMBIC_DIR))
     cfg.set_main_option("sqlalchemy.url", db_url)
     command.upgrade(cfg, "head")
-    command.downgrade(cfg, "-1")
+    # Downgrade past 0007 (head) AND 0006 to land at 0005 — the assertion
+    # below verifies 0006's downgrade restored the stub heartbeats_state shape.
+    command.downgrade(cfg, "0005")
 
     # Verify downgrade actually restored the stub shape (not just succeeded silently).
     engine = get_engine(url=db_url)
@@ -371,5 +373,109 @@ async def test_migration_0006_round_trip(db_url: str) -> None:
 
         async with engine.connect() as conn:
             assert await conn.run_sync(_has_cron_id) is True
+    finally:
+        await engine.dispose()
+
+
+async def test_migration_0007_schedule_canonical_column_present(db_engine: AsyncEngine) -> None:
+    """After head-migration, ``crons.schedule_canonical`` exists."""
+
+    def _list_cols(sync_conn: object) -> set[str]:
+        ins = inspect(sync_conn)
+        return {c["name"] for c in ins.get_columns("crons")} if ins is not None else set()
+
+    async with db_engine.connect() as conn:
+        cols = await conn.run_sync(_list_cols)
+    assert "schedule_canonical" in cols
+
+
+async def test_migration_0007_at_least_one_check_constraint_enforced(
+    db_engine: AsyncEngine,
+) -> None:
+    """The CHECK constraint rejects rows with neither schedule nor cadence_seconds set."""
+    from sqlalchemy.exc import IntegrityError  # noqa: PLC0415
+
+    with pytest.raises(IntegrityError):
+        async with db_engine.connect() as conn:
+            await conn.execute(
+                text(
+                    "INSERT INTO crons ("
+                    "  id, name, host, command, schedule, schedule_canonical, "
+                    "  cadence_seconds, expected_grace_seconds, integration_mode, "
+                    "  enabled, last_seen_state, created_at, updated_at, archived_at"
+                    ") VALUES ("
+                    "  'bad', 'bad', 'h', '/x', '', NULL, "
+                    "  0, 300, 'observe', 1, 'unknown', "
+                    "  '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00', NULL"
+                    ")"
+                )
+            )
+            await conn.commit()
+
+
+async def test_migration_0007_xor_rejects_neither(db_engine: AsyncEngine) -> None:
+    """The xor CHECK rejects rows with neither schedule nor cadence_seconds."""
+    from sqlalchemy.exc import IntegrityError  # noqa: PLC0415
+
+    with pytest.raises(IntegrityError):
+        async with db_engine.connect() as conn:
+            await conn.execute(
+                text(
+                    "INSERT INTO crons ("
+                    "  id, name, host, command, schedule, schedule_canonical, "
+                    "  cadence_seconds, expected_grace_seconds, integration_mode, "
+                    "  enabled, last_seen_state, created_at, updated_at, archived_at"
+                    ") VALUES ("
+                    "  'bad2', 'bad2', 'h', '/x', '', NULL, 0, 300, 'observe', 1, 'unknown', "
+                    "  '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00', NULL"
+                    ")"
+                )
+            )
+            await conn.commit()
+
+
+async def test_migration_0007_partial_index_idx_crons_active_present(
+    db_engine: AsyncEngine,
+) -> None:
+    """The partial index ``idx_crons_active`` is present and partial."""
+    async with db_engine.connect() as conn:
+        result = await conn.execute(text("PRAGMA index_list('crons')"))
+        rows = result.fetchall()
+        found = any(row[1] == "idx_crons_active" and row[4] == 1 for row in rows)
+    assert found, "idx_crons_active partial index missing"
+
+
+async def test_migration_0007_round_trip(db_url: str) -> None:
+    """upgrade -> downgrade -1 -> upgrade leaves the schema at head."""
+    cfg = Config()
+    cfg.set_main_option("script_location", str(ALEMBIC_DIR))
+    cfg.set_main_option("sqlalchemy.url", db_url)
+    command.upgrade(cfg, "head")
+    command.downgrade(cfg, "-1")
+
+    engine = get_engine(url=db_url)
+    try:
+
+        def _has_canonical(sync_conn: object) -> bool:
+            ins = inspect(sync_conn)
+            cols = {c["name"] for c in ins.get_columns("crons")}  # pyright: ignore[reportOptionalMemberAccess]
+            return "schedule_canonical" in cols
+
+        async with engine.connect() as conn:
+            assert await conn.run_sync(_has_canonical) is False
+    finally:
+        await engine.dispose()
+
+    command.upgrade(cfg, "head")
+    engine = get_engine(url=db_url)
+    try:
+
+        def _has_canonical_after(sync_conn: object) -> bool:
+            ins = inspect(sync_conn)
+            cols = {c["name"] for c in ins.get_columns("crons")}  # pyright: ignore[reportOptionalMemberAccess]
+            return "schedule_canonical" in cols
+
+        async with engine.connect() as conn:
+            assert await conn.run_sync(_has_canonical_after) is True
     finally:
         await engine.dispose()

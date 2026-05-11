@@ -17,6 +17,7 @@ from homelab_monitor.kernel.api.routers import (
     admin,
     alerts,
     collectors,
+    crons,
     events,
     grafana,
     health,
@@ -78,6 +79,7 @@ def create_app(*, lifespan_enabled: bool = True) -> FastAPI:
     app.include_router(karma.router, prefix="/api")
     app.include_router(grafana.router, prefix="/api")
     app.include_router(heartbeat.router, prefix="/api")
+    app.include_router(crons.router, prefix="/api")
     app.include_router(observability.router)  # mounted at root: /metrics
 
     return app

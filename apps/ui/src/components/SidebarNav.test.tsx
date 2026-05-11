@@ -67,11 +67,11 @@ describe('SidebarNav', () => {
     expect(metricsLink.getAttribute('href')).toBe('/metrics')
   })
 
-  it('renders disabled nav items for coming-soon features', () => {
+  it('renders Inventory as enabled link (STAGE-001-021)', () => {
     renderNav()
-    // Inventory etc remain disabled buttons until their respective stages.
-    const inventoryBtn = screen.getByRole('button', { name: /Inventory/ })
-    expect(inventoryBtn).toBeDisabled()
+    // Inventory is now enabled as a link
+    const inventoryLink = screen.getByRole('link', { name: /Inventory/ })
+    expect(inventoryLink).toBeInTheDocument()
   })
 
   it('hides item labels when collapsed', () => {

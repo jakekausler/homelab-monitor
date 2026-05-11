@@ -564,3 +564,47 @@ async def test_expected_next_at_null_when_cadence_zero(
     )
     assert row is not None
     assert row[0] is None
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_returns_404_for_archived_cron(
+    api_token_client: AsyncClient,
+    repo: SqliteRepository,
+) -> None:
+    """D2a: receiver MUST 404 on archived crons (no audit, no state row)."""
+    # Seed an archived cron.
+    await _insert_cron(
+        repo,
+        id_="archived-cron",
+        name="dead",
+        host="h",
+        integration_mode="heartbeat",
+    )
+    # Set archived_at directly (the _insert_cron helper has no archived param).
+    async with repo.engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE crons SET archived_at = :ts WHERE id = :id"),
+            {"ts": utc_now_iso(), "id": "archived-cron"},
+        )
+
+    # Pre-state: no audit rows for this cron, no heartbeats_state row.
+    audit_before = await repo.fetch_one(
+        text("SELECT COUNT(*) FROM audit_log WHERE what LIKE 'heartbeat.%'")
+    )
+    audit_count_before = int(audit_before[0]) if audit_before is not None else 0
+
+    resp = await api_token_client.post("/api/hb/archived-cron/start")
+    assert resp.status_code == 404  # noqa: PLR2004
+
+    # Post-state: no new audit rows, no heartbeats_state row created.
+    audit_after = await repo.fetch_one(
+        text("SELECT COUNT(*) FROM audit_log WHERE what LIKE 'heartbeat.%'")
+    )
+    audit_count_after = int(audit_after[0]) if audit_after is not None else 0
+    assert audit_count_after == audit_count_before
+
+    state_row = await repo.fetch_one(
+        text("SELECT cron_id FROM heartbeats_state WHERE cron_id = :id"),
+        {"id": "archived-cron"},
+    )
+    assert state_row is None

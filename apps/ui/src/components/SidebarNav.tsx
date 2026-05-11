@@ -27,7 +27,7 @@ interface NavItem {
 const NAV_ITEMS: NavItem[] = [
   { label: 'Overview', to: '/overview', icon: Layout },
   { label: 'Alerts', to: '/alerts', icon: AlertTriangle },
-  { label: 'Inventory', icon: Boxes, disabledNote: 'Coming soon' },
+  { label: 'Inventory', to: '/inventory/crons', icon: Boxes },
   { label: 'Integrations', icon: Cable, disabledNote: 'Coming soon' },
   { label: 'Logs', icon: ScrollText, disabledNote: 'Coming soon' },
   { label: 'Metrics', to: '/metrics', icon: Gauge },
