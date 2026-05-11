@@ -300,7 +300,10 @@ services:
       - "127.0.0.1:19090:9090"
     environment:
       HOMELAB_MONITOR_DB_URL: "sqlite+aiosqlite:////data/homelab.db"
-      HOMELAB_MONITOR_MASTER_KEY: "${HOMELAB_MONITOR_MASTER_KEY:-dGVzdC10ZXN0LXRlc3QtdGVzdC10ZXN0LXRlc3QtdGVzdA==}"
+      # Test rig default master key — decodes to exactly 32 bytes (kernel
+      # validates length). Override via HOMELAB_MONITOR_MASTER_KEY env for
+      # local rig runs that exercise real secret rotation.
+      HOMELAB_MONITOR_MASTER_KEY: "${HOMELAB_MONITOR_MASTER_KEY:-NI2oLgSMCsMwrIcwTkKuqUs3oJ2KmigqzgVRc5CV5dM=}"
       HOMELAB_MONITOR_HTTPS_ONLY_COOKIES: "false"
       HOMELAB_MONITOR_AUTO_MIGRATE: "1"
       HOMELAB_MONITOR_VM_URL: "http://victoriametrics:8428"
