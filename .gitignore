@@ -49,6 +49,8 @@ data/
 *.sqlite
 *.sqlite-journal
 *.db
+*.db-shm
+*.db-wal
 
 # OMC tool state
 .omc/
