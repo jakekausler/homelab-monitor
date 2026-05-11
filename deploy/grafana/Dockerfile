@@ -10,7 +10,7 @@
 # Tag note: STAGE-001-020 pinned grafana-oss to 12.3.3. Bump together with
 #           deploy/compose/docker-compose*.yml when upgrading.
 
-FROM grafana/grafana-oss:12.3.3
+FROM grafana/grafana-oss:13.0.1
 
 # Plugin version must match the upstream release tag exactly.
 # When bumping: also update VL_PLUGIN_VERSION in this comment, the README, and
