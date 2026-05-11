@@ -513,6 +513,37 @@ def test_render_config_amconfig_group_present_chowns_file(tmp_path: Path) -> Non
     assert "test-token" in output_file.read_text()
 
 
+def test_render_config_chown_oserror_logged(tmp_path: Path) -> None:
+    """os.chown raises OSError → warning logged, file still written, no exception raised."""
+    template_file = tmp_path / "alertmanager.yml.template"
+    output_file = tmp_path / "alertmanager.yml"
+    template_file.write_text(f"token: {TEMPLATE_PLACEHOLDER}\n")
+    log = structlog.get_logger()
+
+    fake_group = mock.MagicMock()
+    fake_group.gr_gid = 2000
+
+    with (
+        mock.patch(
+            "homelab_monitor.kernel.alertmanager.render.grp.getgrnam",
+            return_value=fake_group,
+        ),
+        mock.patch(
+            "homelab_monitor.kernel.alertmanager.render.os.chown",
+            side_effect=PermissionError("test no chown cap"),
+        ),
+    ):
+        render_config(
+            template_path=template_file,
+            output_path=output_file,
+            token="test-token-chown-fail",
+            log=log,  # type: ignore[arg-type]
+        )
+
+    assert output_file.exists()
+    assert "test-token-chown-fail" in output_file.read_text()
+
+
 def test_render_config_cleans_up_tmp_file_on_replace_failure(tmp_path: Path) -> None:
     """OSError during os.replace → temp file is unlinked, then re-raised."""
     template_file = tmp_path / "alertmanager.yml.template"

@@ -133,9 +133,18 @@ def render_config(
         # for tests since they don't bind-mount the file to AM.
         try:
             gid = grp.getgrnam("amconfig").gr_gid
-            os.chown(output_path, -1, gid)
         except KeyError:
             pass
+        else:
+            try:
+                os.chown(output_path, -1, gid)
+            except OSError as exc:
+                log.warning(
+                    "alertmanager.render.chown_failed",
+                    output_path=str(output_path),
+                    target_gid=gid,
+                    reason=str(exc),
+                )
         os.chmod(output_path, 0o640)
     except OSError:
         log.warning(

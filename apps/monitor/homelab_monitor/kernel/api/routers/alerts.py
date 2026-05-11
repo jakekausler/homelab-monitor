@@ -179,6 +179,13 @@ async def ingest_alerts(
         group_key=payload.groupKey,
     )
 
+    if payload.truncatedAlerts > 0:
+        log.warning(
+            "alert.ingest.truncated",
+            truncated_count=payload.truncatedAlerts,
+            received_count=len(payload.alerts),
+        )
+
     for item in payload.alerts:
         fingerprint = compute_fingerprint(item)
         source_tool = item.labels.get("source_tool", "alertmanager")

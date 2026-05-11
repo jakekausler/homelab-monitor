@@ -371,3 +371,14 @@ async def test_ingest_token_with_only_ingest_scope_returns_202(
             resp = await client.post("/api/alerts/ingest", json=payload)
             assert resp.status_code == 202  # noqa: PLR2004
             assert resp.json()["ingested"] == 1
+
+
+@pytest.mark.asyncio
+async def test_ingest_truncated_alerts_returns_202(
+    api_token_client: AsyncClient,
+) -> None:
+    """truncatedAlerts > 0 → warning logged, response still 202."""
+    payload = _alertmanager_payload(alertname="TruncatedAlert", severity="warning")
+    payload["truncatedAlerts"] = 5
+    resp = await api_token_client.post("/api/alerts/ingest", json=payload)
+    assert resp.status_code == 202  # noqa: PLR2004

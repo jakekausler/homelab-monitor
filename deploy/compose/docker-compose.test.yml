@@ -270,15 +270,18 @@ services:
     # container (running as uid 1000) can write into it. Named volumes default
     # to root:root 755 ownership; without this fix monitor's bootstrap fails
     # with "Permission denied" writing /shared/rig-token.
-    # 1777 = sticky world-writable (like /tmp), safe because the volume is
-    # ephemeral per `docker compose down -v` and no real secrets persist.
+    # 1777 = sticky world-writable so monitor (uid 1000) can write the rig
+    # token. The token IS a real credential (alerts:ingest:write +
+    # heartbeat:write scopes) so the file itself is chmod 600. Volume is
+    # ephemeral per `docker compose down -v`. The rig must never be exposed
+    # beyond the docker bridge network.
     # Stays alive (sleep infinity) because compose --exit-code-from triggers
     # rig teardown on ANY container exit, not just the target service.
     image: busybox:1.36
     container_name: homelab-shared-init
     volumes:
       - shared_rig_secrets:/shared
-    command: ["sh", "-c", "chmod 1777 /shared && sleep infinity"]
+    command: ["sh", "-c", "chown 1000:1000 /shared && chmod 0770 /shared && sleep infinity"]
     healthcheck:
       test: ["CMD", "test", "-d", "/shared"]
       interval: 5s
@@ -357,7 +360,7 @@ services:
         TOKEN_OUTPUT="$$(hm api-token create --name rig --scope heartbeat:write --scope alerts:ingest:write 2>&1 || true)" && \
         echo "$$TOKEN_OUTPUT" | grep -E '^homelab_(prod|test|dev)_' > /shared/rig-token \
           || (echo "[bootstrap] FAILED to extract token from CLI output:" && echo "$$TOKEN_OUTPUT" && exit 1) && \
-        chmod 644 /shared/rig-token && \
+        chmod 600 /shared/rig-token && \
         echo "[bootstrap] starting uvicorn..." && \
         exec uvicorn homelab_monitor.kernel.api.app:create_app \
           --factory --host 0.0.0.0 --port 9090

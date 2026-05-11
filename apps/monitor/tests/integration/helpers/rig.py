@@ -41,6 +41,8 @@ DEFAULT_AM_URL = "http://alertmanager:9093"
 DEFAULT_VL_URL = "http://victorialogs:9428"
 DEFAULT_RIG_TOKEN_FILE = "/shared/rig-token"
 
+_HTTP_OK = 200
+
 
 @dataclass(frozen=True, slots=True)
 class RigUrls:
@@ -124,7 +126,7 @@ class Rig:
             f"{self.urls.monitor}/api/auth/login",
             json={"username": username, "password": password},
         )
-        if resp.status_code != 200:  # noqa: PLR2004
+        if resp.status_code != _HTTP_OK:
             msg = (
                 f"rig login failed: status={resp.status_code} body={resp.text[:200]} "
                 f"(check RIG_ADMIN_USERNAME / RIG_ADMIN_PASSWORD env match monitor bootstrap)"
@@ -190,7 +192,7 @@ class Rig:
         last_seen: list[dict[str, Any]] = []
         while time.time() < deadline:
             resp = self._client.get(f"{self.urls.monitor}/api/alerts?status=firing&limit=200")
-            if resp.status_code == 200:  # noqa: PLR2004
+            if resp.status_code == _HTTP_OK:
                 data = resp.json()
                 items = data.get("items", [])
                 last_seen = items
@@ -227,7 +229,7 @@ class Rig:
         deadline = time.time() + timeout_s
         while time.time() < deadline:
             resp = self._client.get(f"{self.urls.monitor}/api/alerts/{alert_id}")
-            if resp.status_code == 200:  # noqa: PLR2004
+            if resp.status_code == _HTTP_OK:
                 data = resp.json()
                 alert = data.get("alert", {})
                 if alert.get("resolved_at"):
@@ -264,7 +266,7 @@ class Rig:
                 f"{self.urls.monitor}/api/events",
                 timeout=httpx.Timeout(timeout_s, read=timeout_s),
             ) as resp:
-                if resp.status_code != 200:  # noqa: PLR2004
+                if resp.status_code != _HTTP_OK:
                     msg = f"SSE connect failed: status={resp.status_code}"
                     raise RuntimeError(msg)
                 current_event: str | None = None

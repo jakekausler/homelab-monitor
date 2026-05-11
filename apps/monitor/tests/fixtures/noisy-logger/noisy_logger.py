@@ -17,7 +17,6 @@ Env:
 from __future__ import annotations
 
 import os
-import sys
 
 import uvicorn
 from fastapi import FastAPI
@@ -37,7 +36,6 @@ class LogBody(BaseModel):
 async def log_line(body: LogBody) -> Response:
     """Print the line to stdout (flushed) so the docker_logs vector source picks it up."""
     print(body.line, flush=True)
-    sys.stdout.flush()
     return Response(status_code=204)
 
 

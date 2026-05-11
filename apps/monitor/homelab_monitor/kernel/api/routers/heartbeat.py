@@ -23,9 +23,9 @@ from homelab_monitor.kernel.auth.scopes import Scope
 router = APIRouter(prefix="/hb", tags=["heartbeat"])
 
 
-@router.post("/{path:path}", status_code=204)
+@router.post("/{_path:path}", status_code=204)
 async def receive_heartbeat(
-    path: str,
+    _path: str,
     request: Request,
     _token: Annotated[ApiToken, Depends(require_token_scope(Scope.HEARTBEAT_WRITE))],
 ) -> Response:
@@ -35,8 +35,7 @@ async def receive_heartbeat(
     the path will be looked up in a registered-keys table.
     """
     # Drain the request body so clients with chunked transfer don't block on
-    # the next request. The body is intentionally not used yet.
-    _body = await request.body()
-    del _body
-    del path  # consumed by routing only; EPIC-002 will use it
+    # the next request. The body is intentionally not used yet. EPIC-002 will
+    # persist both the path and body.
+    _ = await request.body()
     return Response(status_code=204)

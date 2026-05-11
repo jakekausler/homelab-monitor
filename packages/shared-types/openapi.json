@@ -1670,17 +1670,17 @@
         "summary": "Stream Events"
       }
     },
-    "/api/hb/{path}": {
+    "/api/hb/{_path}": {
       "post": {
         "description": "Accept a heartbeat POST. Body is consumed but discarded (EPIC-002 will persist).\n\nReturns 204 No Content. Any path segment after /hb/ is accepted; in EPIC-002\nthe path will be looked up in a registered-keys table.",
-        "operationId": "receive_heartbeat_api_hb__path__post",
+        "operationId": "receive_heartbeat_api_hb___path__post",
         "parameters": [
           {
             "in": "path",
-            "name": "path",
+            "name": "_path",
             "required": true,
             "schema": {
-              "title": "Path",
+              "title": " Path",
               "type": "string"
             }
           }
