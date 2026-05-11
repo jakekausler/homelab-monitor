@@ -19,6 +19,19 @@ COMPOSE_FILE="${REPO_ROOT}/deploy/compose/docker-compose.test.yml"
 
 cd "${REPO_ROOT}"
 
+# Pre-seed alertmanager.yml so AM can start before monitor's bootstrap CMD runs.
+# Without this, AM and monitor deadlock: monitor depends_on AM healthy, AM
+# needs the file (rendered by monitor) to load. The pre-seed file is a
+# valid-but-empty AM config; monitor's render_config atomically overwrites it
+# with the real config (containing the bearer token) during lifespan startup.
+#
+# Use docker for the cp so it runs as root and can overwrite any leftover
+# file from a previous run (which would be root-owned from container writes).
+docker run --rm \
+  -v "$(pwd)/deploy/compose/test-fixtures/am-config-seed:/seed" \
+  alpine:latest \
+  sh -c "cp /seed/alertmanager.bootstrap.yml /seed/alertmanager.yml && chown 1000:2000 /seed/alertmanager.yml && chmod 640 /seed/alertmanager.yml"
+
 docker compose -f "${COMPOSE_FILE}" up \
   --build \
   --abort-on-container-exit \

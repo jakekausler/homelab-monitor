@@ -1,0 +1,26 @@
+# vmalert rules for STAGE-001-021 integration test fixtures.
+#
+# This file is mounted by BOTH the prod vmalert (deploy/compose/docker-compose.yml)
+# and the test vmalert (deploy/compose/docker-compose.test.yml). Production has
+# no `fixture-host` scrape target so `fixture_cpu_percent` is never present and
+# the rule never fires. Keeping the rule in the prod-rules dir avoids a
+# divergent test-only rules path.
+#
+# `for: 0s` is intentional: the integration test budget is 60s end-to-end
+# (set CPU=95 -> wait for alert), so we cannot afford the prod-style
+# `for: 10m` settling window.
+
+groups:
+  - name: fixture
+    interval: 5s
+    rules:
+      - alert: FixtureHostHighCPU
+        expr: fixture_cpu_percent{host="fixture-host"} > 90
+        for: 0s
+        labels:
+          severity: warning
+          source_tool: vmalert-metrics
+          target_kind: host
+        annotations:
+          summary: "Fixture host CPU above 90% (integration test fixture)"
+          description: 'fixture_cpu_percent={{ $value }} on {{ $labels.host }}'

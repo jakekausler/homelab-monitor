@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  packages: read
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -102,3 +103,83 @@ jobs:
           name: crg-graph
           path: .code-review-graph/
           retention-days: 7
+
+  integration:
+    name: integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      # Log in to GHCR to avoid rate-limits on public GHCR images
+      # (karma, kthxbye) and to pull the custom Grafana image once
+      # grafana-image.yml has published it. On the very first CI run
+      # the Grafana image won't exist in GHCR yet; docker compose build
+      # builds it locally from deploy/grafana/Dockerfile instead.
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Pre-warm BuildKit GHA layer cache for each locally-built image.
+      # docker compose --build re-uses the warmed layers automatically
+      # when DOCKER_BUILDKIT=1 and Buildx is active.
+      - name: Restore/export BuildKit cache — monitor (prod image)
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: apps/monitor/Dockerfile
+          push: false
+          load: false
+          cache-from: type=gha,scope=integration-monitor
+          cache-to: type=gha,scope=integration-monitor,mode=max
+
+      - name: Restore/export BuildKit cache — integration-tests
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: apps/monitor/Dockerfile.test
+          push: false
+          load: false
+          cache-from: type=gha,scope=integration-tests
+          cache-to: type=gha,scope=integration-tests,mode=max
+
+      - name: Restore/export BuildKit cache — fixture-host
+        uses: docker/build-push-action@v7
+        with:
+          context: apps/monitor/tests/fixtures/fixture-host
+          file: apps/monitor/tests/fixtures/fixture-host/Dockerfile
+          push: false
+          load: false
+          cache-from: type=gha,scope=integration-fixture-host
+          cache-to: type=gha,scope=integration-fixture-host,mode=max
+
+      - name: Restore/export BuildKit cache — noisy-logger
+        uses: docker/build-push-action@v7
+        with:
+          context: apps/monitor/tests/fixtures/noisy-logger
+          file: apps/monitor/tests/fixtures/noisy-logger/Dockerfile
+          push: false
+          load: false
+          cache-from: type=gha,scope=integration-noisy-logger
+          cache-to: type=gha,scope=integration-noisy-logger,mode=max
+
+      - name: Restore/export BuildKit cache — grafana custom image
+        uses: docker/build-push-action@v7
+        with:
+          context: deploy/grafana
+          file: deploy/grafana/Dockerfile
+          push: false
+          load: false
+          cache-from: type=gha,scope=integration-grafana
+          cache-to: type=gha,scope=integration-grafana,mode=max
+
+      - name: Run integration tests
+        run: bash scripts/run-integration.sh
+        env:
+          DOCKER_BUILDKIT: "1"

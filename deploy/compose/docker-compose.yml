@@ -119,6 +119,8 @@ services:
     restart: unless-stopped
     networks:
       - homelab-monitor-net
+    group_add:
+      - "2000"
     command:
       - "--config.file=/etc/alertmanager/alertmanager.yml"
       # TODO(security): /-/reload is unauthenticated on homelab-monitor-net.
@@ -234,7 +236,15 @@ services:
       start_period: 10s
 
   grafana:
-    image: grafana/grafana-oss:12.3.3
+    # Custom image with VL datasource plugin baked in.
+    # Local builds: deploy/grafana/ (Dockerfile + README).
+    # GHCR push: STAGE-001-021 Spec C grafana-image.yml workflow.
+    # Until Spec C lands, `docker compose build grafana` produces the image
+    # locally with the GHCR tag.
+    image: ghcr.io/jakekausler/homelab-monitor-grafana:latest
+    build:
+      context: ../grafana
+      dockerfile: Dockerfile
     container_name: homelab-grafana
     restart: unless-stopped
     networks:
@@ -247,13 +257,13 @@ services:
       - ../grafana/provisioning:/etc/grafana/provisioning:ro
       - ../grafana/dashboards:/var/lib/grafana/dashboards:ro
     environment:
-      # TODO(STAGE-021): GF_SERVER_DOMAIN and GF_SERVER_ROOT_URL are hardcoded
-      # to 127.0.0.1 for the local-first homelab pattern. When the monitor is
-      # deployed behind a real reverse proxy (nginx/caddy on the LAN), these
-      # MUST be templated to the public hostname/scheme. The dev-prod rig from
-      # STAGE-021 will validate the public-URL deployment path.
-      GF_SERVER_DOMAIN: 127.0.0.1
-      GF_SERVER_ROOT_URL: http://127.0.0.1/api/grafana/
+      # GF_SERVER_DOMAIN + GF_SERVER_ROOT_URL are templated so the same
+      # docker-compose.yml works for:
+      #   - local dev: GRAFANA_PUBLIC_URL=http://127.0.0.1:9090/api/grafana/
+      #   - nginx/TLS: GRAFANA_PUBLIC_URL=https://homelab.example.com/api/grafana/
+      # GF_SERVER_DOMAIN must match the host portion of GRAFANA_PUBLIC_URL.
+      GF_SERVER_DOMAIN: ${GRAFANA_PUBLIC_DOMAIN:-127.0.0.1}
+      GF_SERVER_ROOT_URL: ${GRAFANA_PUBLIC_URL:-http://127.0.0.1:9090/api/grafana/}
       GF_SERVER_SERVE_FROM_SUB_PATH: "true"
       GF_SECURITY_ALLOW_EMBEDDING: "true"
       GF_SECURITY_COOKIE_SAMESITE: lax
@@ -263,10 +273,9 @@ services:
       GF_AUTH_DISABLE_LOGIN_FORM: "true"
       GF_USERS_ALLOW_SIGN_UP: "false"
       GF_LIVE_DISABLE: "true"
-      GF_INSTALL_PLUGINS: "victoriametrics-logs-datasource 0.26.3"
-      # The VL plugin may be unsigned in 0.26.3; allow loading explicitly.
-      # Harmless if/when the plugin ships signed.
-      GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS: "victoriametrics-logs-datasource"
+      # Plugin install (victoriametrics-logs-datasource) is baked into the
+      # custom image (deploy/grafana/Dockerfile). GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS
+      # is also baked in as ENV. Do NOT set either here.
     healthcheck:
       test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:3000/api/health || exit 1"]
       interval: 15s

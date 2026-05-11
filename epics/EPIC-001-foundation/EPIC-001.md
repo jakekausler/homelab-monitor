@@ -43,10 +43,10 @@ After EPIC-001 is complete, the system has: a working CI pipeline, a verified de
 | STAGE-001-018 | vmalert (logs) + first log-derived rule               | Complete    |
 | STAGE-001-019 | Karma + kthxbye                                       | Complete    |
 | STAGE-001-020 | Grafana + dashboards-as-code provisioning             | Complete    |
-| STAGE-001-021 | Full integration test rig + canonical e2e test        | Not Started |
+| STAGE-001-021 | Full integration test rig + canonical e2e test        | Build       |
 
 ## Current Stage: STAGE-001-021
-## Current Phase: Design
+## Current Phase: Build
 
 ## Cross-stage acceptance criteria
 

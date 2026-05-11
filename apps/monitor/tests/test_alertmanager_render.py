@@ -459,6 +459,60 @@ async def test_render_on_boot_swallows_ensure_token_failure(tmp_path: Path) -> N
     assert result is None
 
 
+def test_render_config_amconfig_group_missing(tmp_path: Path) -> None:
+    """grp.getgrnam raises KeyError (amconfig group absent) → file still written."""
+    template_file = tmp_path / "alertmanager.yml.template"
+    output_file = tmp_path / "alertmanager.yml"
+    template_file.write_text(f"token: {TEMPLATE_PLACEHOLDER}\n")
+    log = structlog.get_logger()
+
+    with (
+        mock.patch(
+            "homelab_monitor.kernel.alertmanager.render.grp.getgrnam",
+            side_effect=KeyError("amconfig"),
+        ),
+        mock.patch("homelab_monitor.kernel.alertmanager.render.os.chown"),
+    ):
+        render_config(
+            template_path=template_file,
+            output_path=output_file,
+            token="test-token",
+            log=log,  # type: ignore[arg-type]
+        )
+
+    assert output_file.exists()
+    assert "test-token" in output_file.read_text()
+
+
+def test_render_config_amconfig_group_present_chowns_file(tmp_path: Path) -> None:
+    """grp.getgrnam returns a group → file is chowned to that group's gid (line 136)."""
+    template_file = tmp_path / "alertmanager.yml.template"
+    output_file = tmp_path / "alertmanager.yml"
+    template_file.write_text(f"token: {TEMPLATE_PLACEHOLDER}\n")
+    log = structlog.get_logger()
+
+    fake_group = mock.MagicMock()
+    fake_group.gr_gid = 2000
+
+    with (
+        mock.patch(
+            "homelab_monitor.kernel.alertmanager.render.grp.getgrnam",
+            return_value=fake_group,
+        ),
+        mock.patch("homelab_monitor.kernel.alertmanager.render.os.chown") as mock_chown,
+    ):
+        render_config(
+            template_path=template_file,
+            output_path=output_file,
+            token="test-token",
+            log=log,  # type: ignore[arg-type]
+        )
+
+    mock_chown.assert_called_once_with(output_file, -1, 2000)
+    assert output_file.exists()
+    assert "test-token" in output_file.read_text()
+
+
 def test_render_config_cleans_up_tmp_file_on_replace_failure(tmp_path: Path) -> None:
     """OSError during os.replace → temp file is unlinked, then re-raised."""
     template_file = tmp_path / "alertmanager.yml.template"

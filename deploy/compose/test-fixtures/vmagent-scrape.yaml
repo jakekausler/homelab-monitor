@@ -1,0 +1,28 @@
+# vmagent scrape configuration for the integration TEST rig only.
+# Mounted into the test rig's vmagent at /etc/vmagent/scrape.yaml.
+# Prod vmagent uses deploy/compose/vmagent/scrape.yaml (which does NOT
+# scrape fixture-host).
+#
+# Intervals are compressed (5s) so the canonical e2e test fits in a 60s budget.
+
+global:
+  scrape_interval: 5s
+  scrape_timeout: 4s
+
+scrape_configs:
+  - job_name: monitor
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - monitor:9090
+        labels:
+          service: homelab-monitor
+
+  - job_name: fixture-host
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - fixture-host:8000
+        labels:
+          service: fixture-host
+          host: fixture-host

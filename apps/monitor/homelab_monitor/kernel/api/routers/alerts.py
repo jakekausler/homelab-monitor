@@ -170,6 +170,15 @@ async def ingest_alerts(
     received = len(payload.alerts)
     ingested = 0
 
+    log.info(
+        "alert.ingest.received",
+        alerts_count=received,
+        version=payload.version,
+        receiver=payload.receiver,
+        status=payload.status,
+        group_key=payload.groupKey,
+    )
+
     for item in payload.alerts:
         fingerprint = compute_fingerprint(item)
         source_tool = item.labels.get("source_tool", "alertmanager")
@@ -241,6 +250,13 @@ async def ingest_alerts(
                 fingerprint=fingerprint,
                 alert_id=event.alert_id,
             )
+            log.info(
+                "alert.ingest.dispatched",
+                alertname=item.labels.get("alertname"),
+                severity=item.labels.get("severity"),
+                source_tool=item.labels.get("source_tool"),
+                status=item.status,
+            )
         else:  # resolved
             existing = await alert_repo.find_active_by_fingerprint(fingerprint)
             if existing is None:
@@ -266,6 +282,13 @@ async def ingest_alerts(
                 "alerts.ingest.resolved",
                 fingerprint=fingerprint,
                 alert_id=existing.id,
+            )
+            log.info(
+                "alert.ingest.dispatched",
+                alertname=item.labels.get("alertname"),
+                severity=item.labels.get("severity"),
+                source_tool=item.labels.get("source_tool"),
+                status=item.status,
             )
 
     return JSONResponse(

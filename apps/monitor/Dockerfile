@@ -52,7 +52,9 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates \
  && rm -rf /var/lib/apt/lists/* \
  && groupadd --system --gid 1000 homelab \
- && useradd --system --uid 1000 --gid homelab --create-home --home-dir /home/homelab homelab
+ && groupadd --system --gid 2000 amconfig \
+ && useradd --system --uid 1000 --gid homelab --create-home --home-dir /home/homelab homelab \
+ && usermod -aG amconfig homelab
 
 WORKDIR /app
 
@@ -60,6 +62,12 @@ COPY --from=builder /opt/venv /opt/venv
 COPY --from=builder /app/apps/monitor /app/apps/monitor
 # UI bundle (built in CI before docker build runs).
 COPY apps/ui/dist /app/ui
+
+# Pre-create /data as the homelab user. When docker mounts a named volume here,
+# the volume inherits the directory's ownership (uid 1000) so SQLite writes
+# succeed. Without this, fresh-volume mounts land as root:root and the app
+# crashes on first write.
+RUN mkdir -p /data && chown -R homelab:homelab /data
 
 USER homelab
 

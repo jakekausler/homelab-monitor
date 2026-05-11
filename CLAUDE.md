@@ -43,7 +43,40 @@ Each stage goes through 4 phases, each typically in a separate session:
 
 ## Local Refinement / dev environment
 
-Frontend stage Refinement requires a logged-in browser session against a running backend. The standard setup:
+Frontend stage Refinement requires a logged-in browser session against a running backend with all sidecars (Karma, Grafana, vmalert) up. As of STAGE-001-021 Spec B, this is one command:
+
+```bash
+# First time only — script will copy deploy/dev/dev.env.example to dev.env
+# and abort with a "generate master key" message.
+make dev
+
+# Generate the master key and paste it into deploy/dev/dev.env:
+python3 -c "import os, base64; print(base64.b64encode(os.urandom(32)).decode())"
+
+# Re-run — brings up sidecars + host backend (port 19090) + host UI (port 5180).
+make dev
+```
+
+Login defaults: `admin` / `admin-dev-password` (override via `HM_DEV_ADMIN_*` in `deploy/dev/dev.env`).
+
+| Command | What it does |
+| --- | --- |
+| `make dev` | Hybrid: docker sidecars + host backend + host UI dev server. Use this for daily coding. |
+| `make dev-clean` | Tear down everything (incl. volumes), then `make dev`. Use for fresh-DB scenarios. |
+| `make dev-prod` | Full prod compose stack (monitor built from local Dockerfile). Use to validate Dockerfile / alembic / compose changes. |
+| `make dev-down` | Stop everything, preserve volumes. Use when done for the day. |
+
+Full operator guide: `docs/dev/local-environment.md` (port map, troubleshooting, sidecar visibility, master-key rotation).
+
+**Common gotchas (still relevant when debugging):**
+- Port 9090 is bound on this host; the dev rig uses 19090 for the host backend (configurable via `HM_DEV_BACKEND_PORT` in `dev.env`).
+- Vite proxy env var is `VITE_API_PROXY_TARGET`, NOT `API_PROXY_TARGET`. Wrong var → API calls return HTML (vite SPA fallback) → React error #31 ("object with keys {code, message, details}"). The dev-up script sets this correctly.
+- `hm user create` requires interactive password input. Pipe via `printf 'pw\npw\n' | uv run hm user create <name>`. Min password length: 12 chars. `dev-up.sh` handles this automatically.
+- `deploy/dev/dev.env` contains the master key. The script enforces `chmod 600` on every run; the file is gitignored.
+
+### Manual fallback (when `make dev` fails)
+
+If the script breaks in a new way, fall back to the pre-Spec-B manual pattern. This is the same recipe that powered STAGE-019 Refinement:
 
 ```bash
 # 1. Generate a master key + write env file
@@ -53,38 +86,23 @@ HOMELAB_MONITOR_DB_URL=sqlite+aiosqlite:////tmp/hm-refine/homelab.db
 HOMELAB_MONITOR_MASTER_KEY=$(python3 -c "import os, base64; print(base64.b64encode(os.urandom(32)).decode())")
 HOMELAB_MONITOR_HTTPS_ONLY_COOKIES=false
 HOMELAB_MONITOR_AUTO_MIGRATE=1
-# Add HOMELAB_MONITOR_<SERVICE>_URL for any sidecars the stage needs.
 EOF
-
-# IMPORTANT: master key is in this file. Restrict permissions.
 chmod 600 /tmp/hm-refine/.env
 
-# 2. Start backend (port 9090 collides with other stuff on this host; use 19090)
+# 2. Start backend on port 19090 (port 9090 is bound on this host).
 cd apps/monitor && set -a && source /tmp/hm-refine/.env && set +a && \
 HOMELAB_MONITOR_BCRYPT_COST=4 nohup uv run uvicorn homelab_monitor.kernel.api.app:create_app \
   --factory --host 127.0.0.1 --port 19090 > /tmp/hm-refine/backend.log 2>&1 &
 disown
 
-# 3. Create a user. Password must be ≥12 chars. The `hm user create` command
-#    is INTERACTIVE (prompts twice for password); pipe stdin to skip prompts.
+# 3. Create user (interactive — pipe stdin to skip prompts; ≥12 chars).
 HOMELAB_MONITOR_BCRYPT_COST=4 printf 'refinement-test-pw\nrefinement-test-pw\n' \
   | uv run hm user create admin
-# → "created user: id=1 username=admin"
-# Login credentials: admin / refinement-test-pw
 
-# 4. Start UI dev server (NOTE: env var name is VITE_API_PROXY_TARGET — NOT
-#    API_PROXY_TARGET. The vite config reads only the VITE_-prefixed var.)
+# 4. Start UI dev server.
 cd ../.. && VITE_API_PROXY_TARGET=http://127.0.0.1:19090 \
   pnpm --filter ui run dev > /tmp/hm-refine/ui-dev.log 2>&1 &
-# → http://localhost:5173 (or 5174/5175/5176 if 5173 is taken)
 ```
-
-**Common gotchas (all encountered in STAGE-019 Refinement):**
-- Port 9090 is bound on this host; use 19090 for the backend.
-- Vite proxy env var is `VITE_API_PROXY_TARGET`, NOT `API_PROXY_TARGET`. Wrong var → API calls return HTML (vite SPA fallback) → React error #31 ("object with keys {code, message, details}").
-- `hm user create` requires interactive password input. Pipe via `printf 'pw\npw\n' | uv run hm user create <name>`. Min password length: 12 chars.
-- The prod docker-compose stack has pre-existing Dockerfile/dockerignore/volume-perms bugs (alembic dir excluded, `/data` not chowned for non-root user). Don't try to use it for Refinement until STAGE-021 fixes it. Use the local `uv run uvicorn` + `pnpm dev` + minimal docker sidecars pattern instead.
-- The `/tmp/hm-refine/.env` file contains the master key — `chmod 600` after creation. Better: use `~/.hm-refine/` (mode 700) for long-running dev sessions.
 
 ## Stage Tracking Documents
 
@@ -121,6 +139,7 @@ epics/EPIC-XXX-name/STAGE-XXX-YYY.md
   - RIGHT (recovery): `cd /storage/programs/homelab-monitor` (call 1, alone), then `make verify` (call 2, alone).
   - For commands that NEED to run from a subdir (e.g., `cd apps/ui && pnpm exec prettier --write .`), chaining `cd subdir && <cmd>` IS allowed because the chain executes in a single shell that can return to the parent dir naturally. The forbidden pattern is specifically chaining `cd /storage/programs/homelab-monitor` (recovering to root) with anything else.
   - Never `cd` deeper than the repo root for a duration spanning multiple bash calls. The cwd you leave behind persists, and the next call may find itself in the wrong place.
+- **Long-running or large-output commands MUST tee output to a log file.** Any command whose output you might need to inspect later — `make verify`, `make integration`, `pytest`, `pnpm test`, `pnpm build`, `bash scripts/run-integration.sh`, `docker compose up`, build commands, log tails, etc. — MUST be run as `<command> 2>&1 | tee /tmp/<descriptive-name>-$(date +%s).log`. Then any subsequent `grep`/`tail`/inspection works against the log file instead of forcing a re-run. Subagents (verifier, tester, e2e-tester, etc.) MUST follow this convention. Rationale: re-running `make verify` to grep for one detail wastes 1-2 minutes per re-run; integration runs waste 5-10 minutes. Naming convention: `/tmp/<command>-<context>-<timestamp>.log` (e.g. `/tmp/make-verify-stage021-1715432100.log`, `/tmp/run-integration-stage021-1715432100.log`).
 
 ## Code Review Graph (CRG)
 

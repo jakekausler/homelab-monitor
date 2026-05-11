@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import grp
 import os
 import tempfile
 from contextlib import suppress
@@ -123,6 +124,19 @@ def render_config(
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(rendered)
         os.replace(tmp_name, output_path)
+        # Group-own the file by GID 2000 (amconfig) so AM (running as nobody
+        # with supplementary GID 2000 via compose group_add) can read it.
+        # Mode 0o640 keeps the bearer token unreadable by other users.
+        # If the amconfig group doesn't exist (unit-test environment without
+        # the docker-built image), keep the process default GID and 0o640 —
+        # the file will only be readable by uid + primary gid, which is fine
+        # for tests since they don't bind-mount the file to AM.
+        try:
+            gid = grp.getgrnam("amconfig").gr_gid
+            os.chown(output_path, -1, gid)
+        except KeyError:
+            pass
+        os.chmod(output_path, 0o640)
     except OSError:
         log.warning(
             "alertmanager.render.failed",

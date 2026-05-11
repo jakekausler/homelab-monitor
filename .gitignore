@@ -38,6 +38,10 @@ apps/ui/test-results/
 .env.*.local
 secrets-master/
 
+# Dev-rig env (contains master key — see deploy/dev/dev.env.example)
+deploy/dev/dev.env
+deploy/dev/data/
+
 # Data
 data/
 
@@ -51,6 +55,10 @@ data/
 
 # Code Review Graph
 .code-review-graph/
+
+# Rendered Alertmanager config in test-rig seed dir contains the rig's
+# bootstrap bearer token. Generated at boot, never committed.
+deploy/compose/test-fixtures/am-config-seed/alertmanager.yml
 
 # OS
 .DS_Store

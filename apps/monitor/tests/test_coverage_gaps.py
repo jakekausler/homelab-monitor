@@ -1092,3 +1092,18 @@ async def test_resolve_session_user_not_found_skips(
             cookies={"homelab_monitor_session": cookie_val},
         )
     assert resp.status_code == 401  # noqa: PLR2004
+
+
+def test_read_password_line_falls_back_to_stdin_on_os_error() -> None:
+    """_read_password_line reads from sys.stdin when getpass raises OSError (lines 73-75)."""
+    import io
+    from unittest.mock import patch
+
+    from homelab_monitor.cli.user import _read_password_line  # pyright: ignore[reportPrivateUsage]
+
+    with (
+        patch("homelab_monitor.cli.user.getpass.getpass", side_effect=OSError("no tty")),
+        patch("homelab_monitor.cli.user.sys.stdin", io.StringIO("mypassword\n")),
+    ):
+        result = _read_password_line("Password: ")  # pyright: ignore[reportPrivateUsage]
+    assert result == "mypassword"

@@ -1,0 +1,28 @@
+# Alertmanager config template for the STAGE-001-021 integration test rig.
+# ${ALERTMANAGER_INGEST_TOKEN} is substituted at monitor startup by the
+# alertmanager render-on-boot mechanism (kernel/alertmanager/render.py).
+# The monitor writes the rendered file to the shared am-config volume, then
+# POSTs /-/reload to AM so it picks up the real token.
+global:
+  resolve_timeout: 60s
+route:
+  group_by: ['alertname', 'target_kind']
+  group_wait: 5s
+  group_interval: 5s
+  repeat_interval: 4h
+  receiver: 'monitor-webhook'
+receivers:
+  - name: 'monitor-webhook'
+    webhook_configs:
+      - url: 'http://monitor:9090/api/alerts/ingest'
+        send_resolved: true
+        http_config:
+          authorization:
+            type: Bearer
+            credentials: '${ALERTMANAGER_INGEST_TOKEN}'
+      # Also fan-out to the integration-tests webhook receiver (port 9090 on
+      # the integration-tests container). The vmalert_logs_pipeline tests poll
+      # this file to assert log-based alerts fired and resolved.
+      - url: 'http://integration-tests:9090/webhook'
+        send_resolved: true
+        max_alerts: 0

@@ -44,3 +44,14 @@ updates:
           - minor
           - patch
     open-pull-requests-limit: 10
+
+  - package-ecosystem: docker
+    directory: /deploy/grafana
+    schedule:
+      interval: weekly
+    groups:
+      minor-patch:
+        update-types:
+          - minor
+          - patch
+    open-pull-requests-limit: 5

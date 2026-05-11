@@ -57,4 +57,4 @@ WORKDIR /app/apps/monitor
 
 # Default entrypoint runs the integration suite. Override at run-time
 # (e.g. `docker run ... pytest tests/integration/test_smoke.py::specific_test`).
-CMD ["python", "-m", "pytest", "-m", "integration", "tests/integration/", "-v"]
+CMD ["python", "-m", "pytest", "-o", "addopts=", "-m", "integration", "tests/integration/", "-v"]

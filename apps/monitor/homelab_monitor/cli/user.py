@@ -60,10 +60,25 @@ async def _build_repo() -> AuthRepository:
     return AuthRepository(SqliteRepository(engine))
 
 
+def _read_password_line(prompt: str) -> str:
+    """Read one password line: try getpass first; fall back to stdin readline.
+
+    getpass opens /dev/tty directly, which fails in docker bootstrap when there
+    is no controlling terminal. Catching GetPassWarning + the underlying
+    GetPassError/IOError lets piped ``printf 'pw\\npw\\n' | hm user create``
+    work while keeping the normal interactive path (and test mocks) intact.
+    """
+    try:
+        return getpass.getpass(prompt)
+    except (getpass.GetPassWarning, EOFError, OSError):
+        # No tty available (non-interactive docker bootstrap); read from stdin.
+        return sys.stdin.readline().rstrip("\n")
+
+
 def _prompt_password_twice() -> str | None:
     """Prompt for password TWICE; return plaintext or None on mismatch / validation error."""
-    pw1 = getpass.getpass("Password: ")
-    pw2 = getpass.getpass("Confirm password: ")
+    pw1 = _read_password_line("Password: ")
+    pw2 = _read_password_line("Confirm password: ")
     if pw1 != pw2:
         print("error: passwords do not match", file=sys.stderr)
         return None

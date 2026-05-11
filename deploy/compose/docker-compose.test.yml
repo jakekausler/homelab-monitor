@@ -1,16 +1,15 @@
-# Integration test stack for homelab-monitor.
+# Integration test stack for homelab-monitor (STAGE-001-021 Spec A expanded).
 #
 # Two usage modes:
-#   1. CI:    `docker compose -f docker-compose.test.yml up --abort-on-container-exit`
-#             — runs `integration-tests` against `victoriametrics`, exits when done.
-#   2. Local: `docker compose -f docker-compose.test.yml up -d victoriametrics`
-#             — brings up only VM; run host pytest with VM_URL=http://localhost:8428.
+#   1. CI / make integration:
+#        bash scripts/run-integration.sh
+#        => brings up the WHOLE rig + integration-tests; --abort-on-container-exit
+#           tears the stack when integration-tests exits.
+#   2. Local sidecar-only (legacy from earlier stages):
+#        docker compose -f docker-compose.test.yml up -d victoriametrics
+#        => one service, run host pytest with VM_URL=http://localhost:8428.
 #
-# Volumes are NOT persisted (no top-level volumes block); each `up` is fresh.
-
-# NOTE: VM data volume is anonymous — each `up` creates a new ephemeral
-# volume. Local devs running `up` repeatedly should `docker compose down -v`
-# periodically to clean up.
+# All volumes are anonymous / tmpfs; each `up` is fresh.
 
 name: homelab-monitor-test
 
@@ -51,39 +50,57 @@ services:
       retries: 10
       start_period: 5s
 
-  integration-tests:
-    build:
-      context: ../..
-      dockerfile: apps/monitor/Dockerfile.test
-    container_name: homelab-integration-tests
+  vmagent:
+    image: victoriametrics/vmagent:v1.107.0
+    container_name: homelab-vmagent-test
     networks:
       - homelab-monitor-test-net
-    environment:
-      VM_URL: http://victoriametrics:8428
-      VL_URL: http://victorialogs:9428
-      AM_URL: http://alertmanager:9093
-      VMALERT_URL: http://vmalert-metrics:8880
-      VMALERT_LOGS_URL: http://vmalert-logs-test:8880
-      HOMELAB_MONITOR_DB_URL: "sqlite+aiosqlite:///:memory:"
+    command:
+      - "-promscrape.config=/etc/vmagent/scrape.yaml"
+      - "-remoteWrite.url=http://victoriametrics:8428/api/v1/write"
+      - "-remoteWrite.tmpDataPath=/vmagentdata"
+    volumes:
+      - ./test-fixtures/vmagent-scrape.yaml:/etc/vmagent/scrape.yaml:ro
     depends_on:
       victoriametrics:
         condition: service_healthy
-      victorialogs:
+      monitor:
+        condition: service_healthy
+      fixture-host:
         condition: service_healthy
 
-  # Sidecars for the slow vmalert pipeline test. Default `make test` skips this
-  # via the integration-tests --abort-on-container-exit path (these services
-  # have no abort-on-container-exit since they are long-running).
+  vector:
+    image: timberio/vector:0.41.1-debian
+    container_name: homelab-vector-test
+    command: ["--config", "/etc/vector/vector.toml"]
+    networks:
+      - homelab-monitor-test-net
+    environment:
+      VECTOR_LOG: debug
+    volumes:
+      - ./test-fixtures/vector.toml:/etc/vector/vector.toml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      victorialogs:
+        condition: service_healthy
+      noisy-logger:
+        condition: service_healthy
+
   alertmanager:
     image: prom/alertmanager:v0.27.0
     container_name: homelab-alertmanager-test
     networks:
       - homelab-monitor-test-net
+    group_add:
+      - "2000"
     command:
       - "--config.file=/etc/alertmanager/alertmanager.yml"
       - "--storage.path=/alertmanager"
+      - "--log.level=debug"
     volumes:
-      - ./test-fixtures/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      # Bind-mount the seed directory so the monitor can overwrite alertmanager.yml
+      # with the real ingest token on boot (render-on-boot mechanism).
+      - ./test-fixtures/am-config-seed:/etc/alertmanager
     healthcheck:
       test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1:9093/-/healthy"]
       interval: 5s
@@ -102,8 +119,7 @@ services:
     depends_on:
       alertmanager:
         condition: service_healthy
-    # No healthcheck — Karma's image is distroless (no wget/curl/sh), and no
-    # service `depends_on` Karma's health. Karma starts <2s after AM is healthy.
+    # No healthcheck -- distroless image, no shell or wget.
 
   kthxbye:
     image: ghcr.io/prymitive/kthxbye:v0.16
@@ -112,8 +128,6 @@ services:
       - homelab-monitor-test-net
     command:
       - "-alertmanager.uri=http://alertmanager:9093"
-      # kthxbye enforces extend-by > extend-if-expiring-in; values below
-      # are compressed for fast tests but maintain the required ordering.
       - "-extend-by=30s"
       - "-extend-if-expiring-in=15s"
       - "-interval=5s"
@@ -143,7 +157,7 @@ services:
       victoriametrics:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1:8880/-/health"]
+      test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1:8880/health"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -169,14 +183,20 @@ services:
       victorialogs:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1:8880/-/health"]
+      test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1:8880/health"]
       interval: 5s
       timeout: 3s
       retries: 10
       start_period: 5s
 
   grafana:
-    image: grafana/grafana-oss:12.3.3
+    # Custom image with VL datasource plugin baked in.
+    # Spec C will publish this to GHCR; for now `docker compose build grafana`
+    # builds the image locally with the GHCR tag.
+    image: ghcr.io/jakekausler/homelab-monitor-grafana:latest
+    build:
+      context: ../grafana
+      dockerfile: Dockerfile
     container_name: homelab-grafana-test
     networks:
       - homelab-monitor-test-net
@@ -189,13 +209,9 @@ services:
       - ../grafana/provisioning:/etc/grafana/provisioning:ro
       - ../grafana/dashboards:/var/lib/grafana/dashboards:ro
     environment:
-      # NOTE: test compose intentionally diverges from prod compose's sub-path
-      # config. Prod uses GF_SERVER_SERVE_FROM_SUB_PATH=true + ROOT_URL with
-      # /api/grafana/ suffix because the monitor proxies the prefix through.
-      # Test rig hits Grafana directly on 127.0.0.1:3000, bypassing the
-      # monitor proxy, so sub-path mode would be wrong here. The end-to-end
-      # sub-path forwarding is exercised in STAGE-021's `make dev-prod` rig.
-      # See: STAGE-001-021 deliverables for prod-stack validation.
+      # Test rig hits Grafana directly on 127.0.0.1:3000, NOT through the
+      # monitor's sub-path proxy. See STAGE-001-020 docs for sub-path
+      # rationale; the test rig deliberately diverges to keep the rig minimal.
       GF_SERVER_DOMAIN: 127.0.0.1
       GF_SERVER_ROOT_URL: http://127.0.0.1:3000/
       GF_SERVER_SERVE_FROM_SUB_PATH: "false"
@@ -206,8 +222,8 @@ services:
       GF_AUTH_DISABLE_LOGIN_FORM: "true"
       GF_USERS_ALLOW_SIGN_UP: "false"
       GF_LIVE_DISABLE: "true"
-      GF_INSTALL_PLUGINS: "victoriametrics-logs-datasource 0.26.3"
-      GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS: "victoriametrics-logs-datasource"
+      # Plugin install + GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS are baked
+      # into the custom image. Do NOT set them here.
     healthcheck:
       test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:3000/api/health || exit 1"]
       interval: 5s
@@ -215,6 +231,188 @@ services:
       retries: 20
       start_period: 60s
 
+  fixture-host:
+    build:
+      context: ../../apps/monitor/tests/fixtures/fixture-host
+      dockerfile: Dockerfile
+    container_name: homelab-fixture-host-test
+    networks:
+      - homelab-monitor-test-net
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      FIXTURE_CPU_PERCENT: "5"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz').read()"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  noisy-logger:
+    build:
+      context: ../../apps/monitor/tests/fixtures/noisy-logger
+      dockerfile: Dockerfile
+    container_name: homelab-noisy-logger-test
+    networks:
+      - homelab-monitor-test-net
+    ports:
+      - "127.0.0.1:8001:8001"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/healthz').read()"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  shared-init:
+    # Init container that chmods the shared_rig_secrets volume so the monitor
+    # container (running as uid 1000) can write into it. Named volumes default
+    # to root:root 755 ownership; without this fix monitor's bootstrap fails
+    # with "Permission denied" writing /shared/rig-token.
+    # 1777 = sticky world-writable (like /tmp), safe because the volume is
+    # ephemeral per `docker compose down -v` and no real secrets persist.
+    # Stays alive (sleep infinity) because compose --exit-code-from triggers
+    # rig teardown on ANY container exit, not just the target service.
+    image: busybox:1.36
+    container_name: homelab-shared-init
+    volumes:
+      - shared_rig_secrets:/shared
+    command: ["sh", "-c", "chmod 1777 /shared && sleep infinity"]
+    healthcheck:
+      test: ["CMD", "test", "-d", "/shared"]
+      interval: 5s
+      timeout: 2s
+      retries: 3
+      start_period: 1s
+
+  monitor:
+    # The FastAPI backend itself, running in the test rig so the integration
+    # tests can hit /api/* endpoints. Built from the prod Dockerfile to keep
+    # the test rig honest.
+    build:
+      context: ../..
+      dockerfile: apps/monitor/Dockerfile
+    container_name: homelab-monitor-test
+    networks:
+      - homelab-monitor-test-net
+    ports:
+      - "127.0.0.1:19090:9090"
+    environment:
+      HOMELAB_MONITOR_DB_URL: "sqlite+aiosqlite:////data/homelab.db"
+      HOMELAB_MONITOR_MASTER_KEY: "${HOMELAB_MONITOR_MASTER_KEY:-dGVzdC10ZXN0LXRlc3QtdGVzdC10ZXN0LXRlc3QtdGVzdA==}"
+      HOMELAB_MONITOR_HTTPS_ONLY_COOKIES: "false"
+      HOMELAB_MONITOR_AUTO_MIGRATE: "1"
+      HOMELAB_MONITOR_VM_URL: "http://victoriametrics:8428"
+      HOMELAB_MONITOR_VL_URL: "http://victorialogs:9428"
+      HOMELAB_MONITOR_ALERTMANAGER_URL: "http://alertmanager:9093"
+      HOMELAB_MONITOR_BCRYPT_COST: "4"
+      HOMELAB_MONITOR_ALERTMANAGER_TEMPLATE: "/etc/alertmanager-template/alertmanager.yml.template"
+      HOMELAB_MONITOR_ALERTMANAGER_OUTPUT: "/etc/alertmanager/alertmanager.yml"
+      RIG_ADMIN_USERNAME: "admin"
+      RIG_ADMIN_PASSWORD: "rig-admin-pw-12chars"
+    volumes:
+      - data_monitor_test:/data
+      - shared_rig_secrets:/shared
+      - ./test-fixtures/alertmanager.yml.template:/etc/alertmanager-template/alertmanager.yml.template:ro
+      - ./test-fixtures/am-config-seed/alertmanager.bootstrap.yml:/etc/alertmanager-template/alertmanager.bootstrap.yml:ro
+      - ./test-fixtures/am-config-seed:/etc/alertmanager
+    user: "1000:1000"
+    group_add:
+      - "2000"
+    depends_on:
+      shared-init:
+        condition: service_healthy
+      victoriametrics:
+        condition: service_healthy
+      victorialogs:
+        condition: service_healthy
+      alertmanager:
+        condition: service_healthy
+    # Bootstrap: migrate -> create admin user -> create rig api token (write
+    # plaintext to /shared/rig-token) -> start uvicorn. The integration-tests
+    # container reads /shared/rig-token at fixture setup.
+    #
+    # Why all in one CMD: keeps everything in the monitor container's process
+    # tree, no separate init container, no shared-volume race conditions
+    # because the file write is sequenced before uvicorn starts.
+    command:
+      - sh
+      - -c
+      - |
+        set -e
+        echo "[bootstrap] seeding alertmanager config so AM can start..." && \
+        cp /etc/alertmanager-template/alertmanager.bootstrap.yml /etc/alertmanager/alertmanager.yml && \
+        chmod 640 /etc/alertmanager/alertmanager.yml && \
+        echo "[bootstrap] running migrations..." && \
+        hm migrate && \
+        echo "[bootstrap] creating admin user..." && \
+        printf '%s\n%s\n' "$${RIG_ADMIN_PASSWORD}" "$${RIG_ADMIN_PASSWORD}" \
+          | hm user create "$${RIG_ADMIN_USERNAME}" 2>/dev/null \
+          || echo "[bootstrap] admin user already exists" && \
+        echo "[bootstrap] creating rig API token..." && \
+        TOKEN_OUTPUT="$$(hm api-token create --name rig --scope heartbeat:write --scope alerts:ingest:write 2>&1 || true)" && \
+        echo "$$TOKEN_OUTPUT" | grep -E '^homelab_(prod|test|dev)_' > /shared/rig-token \
+          || (echo "[bootstrap] FAILED to extract token from CLI output:" && echo "$$TOKEN_OUTPUT" && exit 1) && \
+        chmod 644 /shared/rig-token && \
+        echo "[bootstrap] starting uvicorn..." && \
+        exec uvicorn homelab_monitor.kernel.api.app:create_app \
+          --factory --host 0.0.0.0 --port 9090
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9090/api/healthz').read()"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 30s
+
+  integration-tests:
+    build:
+      context: ../..
+      dockerfile: apps/monitor/Dockerfile.test
+    container_name: homelab-integration-tests
+    networks:
+      - homelab-monitor-test-net
+    environment:
+      VM_URL: "http://victoriametrics:8428"
+      VL_URL: "http://victorialogs:9428"
+      AM_URL: "http://alertmanager:9093"
+      VMALERT_URL: "http://vmalert-metrics:8880"
+      VMALERT_LOGS_URL: "http://vmalert-logs-test:8880"
+      MONITOR_URL: "http://monitor:9090"
+      FIXTURE_HOST_URL: "http://fixture-host:8000"
+      NOISY_LOGGER_URL: "http://noisy-logger:8001"
+      RIG_API_TOKEN_FILE: "/shared/rig-token"
+      RIG_ADMIN_USERNAME: "admin"
+      RIG_ADMIN_PASSWORD: "rig-admin-pw-12chars"
+      HOMELAB_MONITOR_DB_URL: "sqlite+aiosqlite:///:memory:"
+    volumes:
+      - shared_rig_secrets:/shared:ro
+    depends_on:
+      victoriametrics:
+        condition: service_healthy
+      victorialogs:
+        condition: service_healthy
+      alertmanager:
+        condition: service_healthy
+      vmalert-metrics:
+        condition: service_healthy
+      vmalert-logs-test:
+        condition: service_healthy
+      grafana:
+        condition: service_healthy
+      monitor:
+        condition: service_healthy
+      fixture-host:
+        condition: service_healthy
+      noisy-logger:
+        condition: service_healthy
+
 networks:
   homelab-monitor-test-net:
     name: homelab-monitor-test-net
+
+volumes:
+  data_monitor_test:
+  # tmpfs-backed shared volume for the rig token. Anonymous => recreated
+  # every `up`. Permissions: container default (root rw, others read).
+  shared_rig_secrets:

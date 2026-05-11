@@ -1,0 +1,76 @@
+# Builds and publishes the custom Grafana image (with VictoriaLogs plugin baked
+# in) to GHCR. Triggered only when the Grafana Dockerfile or related files
+# change on main, or manually.
+#
+# Tags produced:
+#   ghcr.io/jakekausler/homelab-monitor-grafana:latest
+#   ghcr.io/jakekausler/homelab-monitor-grafana:<grafana-version>-vlplugin<plugin-version>
+#     e.g. ghcr.io/jakekausler/homelab-monitor-grafana:12.3.3-vlplugin0.26.3
+#
+# The integration CI job builds this image locally on first run (before this
+# workflow has published it). Once published, future integration runs pull from
+# GHCR instead of rebuilding from scratch.
+
+name: Grafana Image
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'deploy/grafana/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: grafana-image-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-publish:
+    name: build-and-publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Extract version strings from deploy/grafana/Dockerfile ARG lines.
+      # Produces:
+      #   grafana_version=12.3.3
+      #   vl_plugin_version=0.26.3   (strips leading 'v')
+      - name: Extract image version tags
+        id: versions
+        run: |
+          GRAFANA_VERSION=$(grep '^FROM grafana/grafana-oss:' deploy/grafana/Dockerfile \
+            | sed 's/FROM grafana\/grafana-oss://')
+          VL_RAW=$(grep 'ARG VL_PLUGIN_VERSION=' deploy/grafana/Dockerfile \
+            | head -1 | sed 's/ARG VL_PLUGIN_VERSION=//')
+          VL_VERSION="${VL_RAW#v}"   # strip leading 'v'
+          echo "grafana_version=${GRAFANA_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "vl_version=${VL_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "immutable_tag=${GRAFANA_VERSION}-vlplugin${VL_VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push (multi-arch)
+        uses: docker/build-push-action@v7
+        with:
+          context: deploy/grafana
+          file: deploy/grafana/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/jakekausler/homelab-monitor-grafana:latest
+            ghcr.io/jakekausler/homelab-monitor-grafana:${{ steps.versions.outputs.immutable_tag }}
+          cache-from: type=gha,scope=grafana-image
+          cache-to: type=gha,scope=grafana-image,mode=max

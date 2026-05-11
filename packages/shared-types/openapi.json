@@ -202,7 +202,6 @@
         "type": "object"
       },
       "AlertmanagerV2AlertItem": {
-        "additionalProperties": false,
         "description": "One alert entry inside an Alertmanager v2 webhook payload.",
         "properties": {
           "annotations": {
@@ -309,6 +308,11 @@
             ],
             "title": "Status",
             "type": "string"
+          },
+          "truncatedAlerts": {
+            "default": 0,
+            "title": "Truncatedalerts",
+            "type": "integer"
           },
           "version": {
             "default": "4",
@@ -1664,6 +1668,42 @@
           }
         },
         "summary": "Stream Events"
+      }
+    },
+    "/api/hb/{path}": {
+      "post": {
+        "description": "Accept a heartbeat POST. Body is consumed but discarded (EPIC-002 will persist).\n\nReturns 204 No Content. Any path segment after /hb/ is accepted; in EPIC-002\nthe path will be looked up in a registered-keys table.",
+        "operationId": "receive_heartbeat_api_hb__path__post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "title": "Path",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Receive Heartbeat",
+        "tags": [
+          "heartbeat"
+        ]
       }
     },
     "/api/healthz": {

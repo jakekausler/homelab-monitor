@@ -61,7 +61,10 @@ class Alert(BaseModel):
 class AlertmanagerV2AlertItem(BaseModel):
     """One alert entry inside an Alertmanager v2 webhook payload."""
 
-    model_config = ConfigDict(extra="forbid")
+    # Per-alert items in real AM v0.27+ payloads carry undeclared fields like
+    # `valueString`. Use extra="ignore" here so the ingestor accepts real AM
+    # webhooks. Top-level AlertmanagerV2Payload remains strict (forbid).
+    model_config = ConfigDict(extra="ignore")
 
     status: Literal["firing", "resolved"]
     labels: dict[str, str]
@@ -90,4 +93,5 @@ class AlertmanagerV2Payload(BaseModel):
     commonLabels: dict[str, str] = Field(default_factory=dict)
     commonAnnotations: dict[str, str] = Field(default_factory=dict)
     externalURL: str = ""
+    truncatedAlerts: int = 0
     alerts: list[AlertmanagerV2AlertItem]

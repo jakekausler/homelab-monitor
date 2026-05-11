@@ -24,8 +24,7 @@ OUT = Path(os.environ.get("WEBHOOK_RECEIVED_FILE", "/tmp/received-alerts.jsonl")
 app = FastAPI()
 
 
-@app.post("/api/alerts/ingest")
-async def ingest(req: Request) -> dict[str, int]:
+async def _handle_payload(req: Request) -> dict[str, int]:
     """Accept Alertmanager webhook payload; persist to NDJSON file."""
     body: dict[str, Any] = await req.json()
     with OUT.open("a") as f:
@@ -35,6 +34,18 @@ async def ingest(req: Request) -> dict[str, int]:
         "received": len(body.get("alerts", [])),
         "ingested": len(body.get("alerts", [])),
     }
+
+
+@app.post("/api/alerts/ingest")
+async def ingest(req: Request) -> dict[str, int]:
+    """Accept Alertmanager webhook payload at monitor-compatible path."""
+    return await _handle_payload(req)
+
+
+@app.post("/webhook")
+async def webhook(req: Request) -> dict[str, int]:
+    """Accept Alertmanager webhook payload at /webhook (AM fanout target)."""
+    return await _handle_payload(req)
 
 
 if __name__ == "__main__":

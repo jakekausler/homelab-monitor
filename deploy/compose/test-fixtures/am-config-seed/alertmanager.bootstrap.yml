@@ -1,0 +1,9 @@
+# Seed config — copied to alertmanager.yml at monitor bootstrap so AM has
+# something to load on startup. Monitor's render_config atomically overwrites
+# alertmanager.yml during lifespan startup with the real config (containing
+# the bearer token). This file is committed to git; the rendered output is
+# gitignored (see .gitignore).
+route:
+  receiver: "null"
+receivers:
+  - name: "null"

@@ -1,4 +1,4 @@
-.PHONY: setup verify verify-ci lint format format-check typecheck test test-fast test-nocov dev backend-dev openapi-export clean crg-init ui-verify ui-dev ui-build ui-test _verify-parallel compose-up compose-down compose-build compose-logs integration
+.PHONY: setup verify verify-ci lint format format-check typecheck test test-fast test-nocov dev dev-clean dev-prod dev-down backend-dev openapi-export clean crg-init ui-verify ui-dev ui-build ui-test _verify-parallel compose-up compose-down compose-build compose-logs integration
 
 .DEFAULT_GOAL := verify
 
@@ -79,7 +79,28 @@ compose-logs:
 integration:
 	bash scripts/run-integration.sh
 
-dev: backend-dev
+# ---------------------------------------------------------------------------
+# Dev rig (STAGE-001-021 Spec B).
+# `make dev` brings up the hybrid rig (docker sidecars + host backend + host UI).
+# `make dev-prod` brings up the full prod compose stack (validates Dockerfile).
+# `make dev-clean` tears everything down first, then runs hybrid.
+# `make dev-down` is the graceful tear-down for whichever mode is up.
+#
+# Pre-Spec-B `dev` was an alias for `backend-dev` (host uvicorn only).
+# That recipe is still available as `make backend-dev`.
+# ---------------------------------------------------------------------------
+
+dev:
+	bash scripts/dev-up.sh
+
+dev-clean:
+	bash scripts/dev-up.sh --clean
+
+dev-prod:
+	bash scripts/dev-up.sh --prod
+
+dev-down:
+	bash scripts/dev-down.sh
 
 ui-verify:
 	pnpm --filter ui run verify

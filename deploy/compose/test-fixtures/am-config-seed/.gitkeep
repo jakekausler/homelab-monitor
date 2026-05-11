@@ -1,0 +1,4 @@
+# This directory is bind-mounted into the alertmanager container and
+# populated at runtime by the monitor's render-on-boot mechanism
+# (kernel/alertmanager/render.py). Tracked-but-empty so the bind-mount
+# target exists at clone time. The rendered alertmanager.yml is gitignored.
