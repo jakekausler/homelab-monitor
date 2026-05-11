@@ -25,6 +25,7 @@ from homelab_monitor.kernel.db.repository import SqliteRepository
 from homelab_monitor.kernel.db.time import utc_now_iso
 from homelab_monitor.kernel.dispatch.channels.inproc_dashboard import InprocDashboardChannel
 from homelab_monitor.kernel.dispatch.dispatcher import AlertDispatcher
+from homelab_monitor.kernel.heartbeat.repository import HeartbeatRepo
 from homelab_monitor.kernel.logging import configure_logging
 from homelab_monitor.kernel.logs.multiplex import MultiplexLogsWriter
 from homelab_monitor.kernel.logs.vl_writer import VictoriaLogsWriter
@@ -244,6 +245,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
     ssh_factory = _StubSshFactory()
     broker = SseBroker(log)
     alert_repo = AlertRepository(repo)
+    heartbeat_repo = HeartbeatRepo(repo)
     alert_dispatcher = AlertDispatcher(
         channels=[InprocDashboardChannel(broker)],
         log=log,
@@ -300,6 +302,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
     app.state.repo = repo
     app.state.broker = broker
     app.state.alert_repo = alert_repo
+    app.state.heartbeat_repo = heartbeat_repo
     app.state.alert_dispatcher = alert_dispatcher
     app.state.ttl_resolver = ttl_resolver
     app.state.http_client = http_client

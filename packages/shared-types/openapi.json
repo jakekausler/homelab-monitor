@@ -1670,17 +1670,143 @@
         "summary": "Stream Events"
       }
     },
-    "/api/hb/{_path}": {
+    "/api/hb/{cron_id}/fail": {
       "post": {
-        "description": "Accept a heartbeat POST. Body is consumed but discarded (EPIC-002 will persist).\n\nReturns 204 No Content. Any path segment after /hb/ is accepted; in EPIC-002\nthe path will be looked up in a registered-keys table.",
-        "operationId": "receive_heartbeat_api_hb___path__post",
+        "description": "Record a ``/fail`` ping for ``cron_id``. Optional ``?duration``, ``?exit_code``.",
+        "operationId": "receive_fail_api_hb__cron_id__fail_post",
         "parameters": [
           {
             "in": "path",
-            "name": "_path",
+            "name": "cron_id",
             "required": true,
             "schema": {
-              "title": " Path",
+              "title": "Cron Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "duration",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 86400,
+                  "minimum": 0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Duration"
+            }
+          },
+          {
+            "in": "query",
+            "name": "exit_code",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 255,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Exit Code"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Receive Fail",
+        "tags": [
+          "heartbeat"
+        ]
+      }
+    },
+    "/api/hb/{cron_id}/ok": {
+      "post": {
+        "description": "Record an ``/ok`` ping for ``cron_id``. Optional ``?duration=<seconds>``.\n\nNOTE: Prometheus metric emission is deferred to STAGE-002-006 \u2014 this\nhandler does not touch the prometheus registry. The state write to\n``heartbeats_state`` is sufficient; the future metric collector reads\nfrom that table on each scrape.",
+        "operationId": "receive_ok_api_hb__cron_id__ok_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "cron_id",
+            "required": true,
+            "schema": {
+              "title": "Cron Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "duration",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 86400,
+                  "minimum": 0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Duration"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Receive Ok",
+        "tags": [
+          "heartbeat"
+        ]
+      }
+    },
+    "/api/hb/{cron_id}/start": {
+      "post": {
+        "description": "Record a ``/start`` ping for ``cron_id``.",
+        "operationId": "receive_start_api_hb__cron_id__start_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "cron_id",
+            "required": true,
+            "schema": {
+              "title": "Cron Id",
               "type": "string"
             }
           }
@@ -1700,7 +1826,7 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Receive Heartbeat",
+        "summary": "Receive Start",
         "tags": [
           "heartbeat"
         ]

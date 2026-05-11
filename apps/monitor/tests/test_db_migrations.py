@@ -279,3 +279,82 @@ async def test_api_tokens_hash_unique_constraint_enforced(db_engine: AsyncEngine
                 },
             )
             await conn.commit()
+
+
+async def test_migration_0006_crons_columns_present(db_engine: AsyncEngine) -> None:
+    """After head-migration, ``crons`` has all behavioural columns added by 0006."""
+    expected = {
+        "id",
+        "command",
+        "created_at",
+        "name",
+        "host",
+        "schedule",
+        "cadence_seconds",
+        "expected_grace_seconds",
+        "integration_mode",
+        "enabled",
+        "last_seen_state",
+        "updated_at",
+        "archived_at",
+    }
+
+    def _list_cols(sync_conn: object) -> set[str]:
+        ins = inspect(sync_conn)
+        return {c["name"] for c in ins.get_columns("crons")} if ins is not None else set()
+
+    async with db_engine.connect() as conn:
+        cols = await conn.run_sync(_list_cols)
+    assert expected.issubset(cols)
+
+
+async def test_migration_0006_heartbeats_state_replaced(db_engine: AsyncEngine) -> None:
+    """After head-migration, ``heartbeats_state`` is keyed by cron_id (not id)."""
+    expected = {
+        "cron_id",
+        "current_state",
+        "last_start_at",
+        "last_ok_at",
+        "last_fail_at",
+        "current_streak",
+        "expected_next_at",
+        "last_duration_seconds",
+        "last_exit_code",
+        "updated_at",
+    }
+
+    def _inspect(sync_conn: object) -> tuple[set[str], set[str]]:
+        ins = inspect(sync_conn)
+        if ins is None:
+            return set(), set()
+        cols = {c["name"] for c in ins.get_columns("heartbeats_state")}
+        pk = set(ins.get_pk_constraint("heartbeats_state")["constrained_columns"])
+        return cols, pk
+
+    async with db_engine.connect() as conn:
+        cols, pk = await conn.run_sync(_inspect)
+    assert cols == expected
+    assert pk == {"cron_id"}
+
+
+async def test_migration_0006_round_trip(db_url: str) -> None:
+    """upgrade -> downgrade -1 -> upgrade leaves the schema at head."""
+    cfg = Config()
+    cfg.set_main_option("script_location", str(ALEMBIC_DIR))
+    cfg.set_main_option("sqlalchemy.url", db_url)
+    command.upgrade(cfg, "head")
+    command.downgrade(cfg, "-1")
+    command.upgrade(cfg, "head")
+
+    engine = get_engine(url=db_url)
+    try:
+
+        def _has_cron_id(sync_conn: object) -> bool:
+            ins = inspect(sync_conn)
+            cols = {c["name"] for c in ins.get_columns("heartbeats_state")}  # pyright: ignore[reportOptionalMemberAccess]
+            return "cron_id" in cols
+
+        async with engine.connect() as conn:
+            assert await conn.run_sync(_has_cron_id) is True
+    finally:
+        await engine.dispose()

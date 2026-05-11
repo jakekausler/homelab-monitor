@@ -29,6 +29,7 @@ if TYPE_CHECKING:
     from homelab_monitor.kernel.backup.service import BackupService
     from homelab_monitor.kernel.db.repository import SqliteRepository
     from homelab_monitor.kernel.dispatch.dispatcher import AlertDispatcher
+    from homelab_monitor.kernel.heartbeat.repository import HeartbeatRepo
     from homelab_monitor.kernel.plugins.io import (
         InMemoryLogsWriter,
         LogsWriter,
@@ -222,6 +223,16 @@ def get_alert_dispatcher(request: Request) -> AlertDispatcher:
         attr="alert_dispatcher",
         code="alert_dispatcher_unavailable",
         message="alert dispatcher is not initialized",
+    )
+
+
+def get_heartbeat_repo(request: Request) -> HeartbeatRepo:
+    """Get the heartbeat repository from app state."""
+    return _require_state(
+        request,
+        attr="heartbeat_repo",
+        code="heartbeat_repo_unavailable",
+        message="heartbeat repository is not initialized",
     )
 
 
