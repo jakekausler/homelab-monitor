@@ -126,6 +126,9 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Generate UI types (required before build)
+        run: pnpm --filter ui run generate-types
+
       - name: Build UI bundle (required by prod Dockerfile)
         run: pnpm --filter ui run build
 
