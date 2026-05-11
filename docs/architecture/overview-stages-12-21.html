@@ -1,0 +1,1778 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>homelab-monitor: Architectural Overview (Stages 12-21 — EPIC-001 closure)</title>
+<style>
+  :root {
+    --bg: #0e1117;
+    --panel: #161b22;
+    --panel-2: #1c232c;
+    --border: #2b323d;
+    --text: #d6dde7;
+    --muted: #8b95a4;
+    --accent: #58a6ff;
+    --auth: #4ade80;
+    --sched: #60a5fa;
+    --plug: #fb923c;
+    --db: #c084fc;
+    --api: #2dd4bf;
+    --warn: #facc15;
+    --danger: #f87171;
+    --code-bg: #0a0d12;
+    /* Stage 12-21 added categories */
+    --ui: #f472b6;
+    --metrics: #38bdf8;
+    --logs: #a3e635;
+    --alerts: #fb7185;
+    --grafana: #fbbf24;
+    --ci: #94a3b8;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+    line-height: 1.55;
+  }
+  .wrap { max-width: 1200px; margin: 0 auto; padding: 32px 28px 96px; }
+  h1, h2, h3, h4 { font-weight: 600; line-height: 1.2; margin-top: 0; }
+  h1 { font-size: 2.1rem; margin-bottom: 0.25rem; }
+  h2 { font-size: 1.5rem; margin: 56px 0 14px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+  h3 { font-size: 1.15rem; margin: 28px 0 10px; }
+  h4 { font-size: 1rem; margin: 20px 0 8px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  p { margin: 0 0 1em; }
+  code, kbd, pre, .mono { font-family: "JetBrains Mono", "Fira Code", Menlo, Consolas, monospace; }
+  code { background: var(--code-bg); padding: 2px 5px; border-radius: 4px; font-size: 0.9em; color: #e3e8ef; }
+  pre { background: var(--code-bg); padding: 12px 16px; border-radius: 6px; overflow-x: auto; font-size: 0.86em; border: 1px solid var(--border); }
+  a { color: var(--accent); }
+  .lead { color: var(--muted); font-size: 1.1rem; }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 18px 22px;
+    margin: 14px 0;
+  }
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; }
+  table { border-collapse: collapse; width: 100%; margin: 14px 0; font-size: 0.92rem; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { background: var(--panel-2); color: #e3e8ef; font-weight: 600; }
+  tr:hover td { background: var(--panel-2); }
+  .tag {
+    display: inline-block;
+    padding: 1px 8px;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    border: 1px solid currentColor;
+    line-height: 1.5;
+  }
+  .tag-auth { color: var(--auth); }
+  .tag-sched { color: var(--sched); }
+  .tag-plug { color: var(--plug); }
+  .tag-db { color: var(--db); }
+  .tag-api { color: var(--api); }
+  .tag-warn { color: var(--warn); }
+  .tag-none { color: var(--muted); }
+  .tag-ui { color: var(--ui); }
+  .tag-metrics { color: var(--metrics); }
+  .tag-logs { color: var(--logs); }
+  .tag-alerts { color: var(--alerts); }
+  .tag-grafana { color: var(--grafana); }
+  .tag-ci { color: var(--ci); }
+  ul, ol { padding-left: 22px; }
+  li { margin-bottom: 6px; }
+  .meta {
+    color: var(--muted);
+    font-size: 0.9rem;
+    margin-top: 12px;
+  }
+  .legend {
+    display: flex;
+    gap: 18px;
+    flex-wrap: wrap;
+    margin: 8px 0 18px;
+    font-size: 0.88rem;
+    color: var(--muted);
+  }
+  .legend .sw {
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    border-radius: 3px;
+    margin-right: 6px;
+    vertical-align: middle;
+  }
+  .toc {
+    background: var(--panel-2);
+    border-radius: 8px;
+    padding: 14px 22px 14px 38px;
+    border: 1px solid var(--border);
+  }
+  .toc ol { margin: 0; }
+  .toc li { margin-bottom: 4px; }
+  .callout {
+    border-left: 3px solid var(--accent);
+    padding: 8px 14px;
+    background: var(--panel-2);
+    border-radius: 0 6px 6px 0;
+    margin: 14px 0;
+  }
+  .callout.warn { border-left-color: var(--warn); }
+  .callout.danger { border-left-color: var(--danger); }
+  svg { display: block; max-width: 100%; }
+  .svg-wrap { overflow-x: auto; padding: 14px 0; background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; margin: 12px 0; }
+  .small { font-size: 0.85rem; color: var(--muted); }
+  hr { border: none; border-top: 1px solid var(--border); margin: 36px 0; }
+  .kicker { color: var(--accent); font-weight: 600; text-transform: uppercase; letter-spacing: .08em; font-size: 0.78rem; }
+
+  /* ============================================================
+     Mobile overrides (≤768px). Desktop styles above are unchanged.
+     ============================================================ */
+  @media (max-width: 768px) {
+    .wrap {
+      max-width: 100%;
+      width: 100%;
+      margin: 0;
+      padding: 16px 14px 64px;
+    }
+    h1 { font-size: 1.5rem; line-height: 1.25; }
+    h2 { font-size: 1.25rem; margin: 32px 0 12px; padding-bottom: 6px; }
+    h3 { font-size: 1.05rem; margin: 20px 0 8px; }
+    h4 { font-size: 0.92rem; margin: 16px 0 6px; }
+    .lead { font-size: 1rem; }
+    hr { margin: 24px 0; }
+    .panel { padding: 12px 14px; margin: 10px 0; }
+    .toc { padding: 12px 14px 12px 30px; }
+    .callout { padding: 8px 12px; margin: 12px 0; }
+    .svg-wrap { padding: 10px 0; margin: 10px 0; }
+    .grid-2, .grid-3 { grid-template-columns: 1fr; gap: 10px; }
+    pre {
+      padding: 10px 12px;
+      font-size: 0.78rem;
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+    }
+    code { font-size: 0.85em; word-break: break-word; }
+    table {
+      display: block;
+      width: 100%;
+      max-width: 100%;
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+      white-space: normal;
+      font-size: 0.85rem;
+    }
+    table thead, table tbody { display: table; width: 100%; min-width: 560px; }
+    th, td { padding: 6px 8px; }
+    td code, th code { word-break: break-word; }
+    .svg-wrap svg { min-width: 0; }
+    .svg-wrap svg text { font-size: 14px; }
+    .toc li a,
+    nav.toc li a,
+    ol li > a,
+    ul li > a {
+      display: inline-block;
+      padding: 8px 0;
+      min-height: 44px;
+      line-height: 1.5;
+    }
+    .legend { gap: 10px; font-size: 0.82rem; }
+  }
+
+  @media (max-width: 480px) {
+    .wrap { padding: 12px 12px 56px; }
+    h1 { font-size: 1.35rem; }
+    h2 { font-size: 1.15rem; }
+    pre { font-size: 0.75rem; }
+    table { font-size: 0.8rem; }
+    table thead, table tbody { min-width: 480px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="kicker">homelab-monitor</div>
+  <h1>Architectural Overview <span class="small mono">(Stages 12-21 — EPIC-001 closure)</span></h1>
+  <p class="lead">
+    This picks up where <a href="overview-stages-1-11.html">overview-stages-1-11.html</a> left off
+    (kernel + auth + scheduler + DB foundation) and walks the next ten stages that build the
+    user-facing surface: the first real collector, an alert ingestor, the React UI shell,
+    the metrics + logs + alerting sidecars, Karma + Grafana embeds, and the integration test rig
+    that proves the whole pipeline end-to-end.
+    By the end of stage 21, EPIC-001 is closed: a synthetic CPU spike produced by a
+    fixture container becomes a firing alert in the UI within ~60 seconds, with full
+    audit trail, deduplication, and SSE delivery.
+  </p>
+  <div class="legend">
+    <span><span class="sw" style="background:var(--plug)"></span>plugins / collectors</span>
+    <span><span class="sw" style="background:var(--alerts)"></span>alerts</span>
+    <span><span class="sw" style="background:var(--ui)"></span>ui</span>
+    <span><span class="sw" style="background:var(--metrics)"></span>metrics</span>
+    <span><span class="sw" style="background:var(--logs)"></span>logs</span>
+    <span><span class="sw" style="background:var(--grafana)"></span>grafana</span>
+    <span><span class="sw" style="background:var(--api)"></span>api</span>
+    <span><span class="sw" style="background:var(--ci)"></span>ci / tooling</span>
+  </div>
+</header>
+
+<nav class="toc">
+  <ol>
+    <li><a href="#stage-012">STAGE-001-012 — First built-in <code>host</code> collector</a></li>
+    <li><a href="#stage-013">STAGE-001-013 — Alert ingestor + inproc-dashboard channel</a></li>
+    <li><a href="#stage-014">STAGE-001-014 — UI shell + login + Overview live-tile</a></li>
+    <li><a href="#stage-015">STAGE-001-015 / 015A — VictoriaMetrics + vmagent + Backup + disk budget</a></li>
+    <li><a href="#stage-016">STAGE-001-016 — VictoriaLogs + vector</a></li>
+    <li><a href="#stage-017">STAGE-001-017 — Alertmanager + vmalert (metrics) + first rule</a></li>
+    <li><a href="#stage-018">STAGE-001-018 — vmalert (logs) + first log-derived rule</a></li>
+    <li><a href="#stage-019">STAGE-001-019 — Karma + kthxbye</a></li>
+    <li><a href="#stage-020">STAGE-001-020 — Grafana + dashboards-as-code</a></li>
+    <li><a href="#stage-021">STAGE-001-021 — Full integration rig + canonical e2e + dev/prod tooling + CI</a></li>
+    <li><a href="#closure">EPIC-001 closure</a></li>
+    <li><a href="#whats-next">What's next</a></li>
+    <li><a href="#invariants">Cross-cutting invariants reinforced in stages 12-21</a></li>
+  </ol>
+</nav>
+
+<!-- ====================================================== -->
+<h2 id="stage-012">1. STAGE-001-012 — First built-in <code>host</code> collector <span class="tag tag-plug">plugins</span> <span class="tag tag-metrics">metrics</span></h2>
+
+<p>
+  STAGE-001-012 is the <em>proof</em> that the plugin framework laid down in
+  STAGE-001-006 through 011 can host a real, useful collector. A single
+  in-process <code>BaseCollector</code> emits ~145 host metrics per tick using
+  <code>psutil</code>, fed through a memory-retaining writer that keeps the latest
+  value per (name, label-set) so a dashboard tile can read current state without
+  hitting an external time-series store.
+</p>
+
+<h3>The collector</h3>
+
+<table>
+  <thead><tr><th>Field</th><th>Value</th></tr></thead>
+  <tbody>
+    <tr><td><code>name</code></td><td><code>"host"</code></td></tr>
+    <tr><td><code>interval</code></td><td><code>timedelta(seconds=10)</code></td></tr>
+    <tr><td><code>timeout</code></td><td><code>timedelta(seconds=5)</code></td></tr>
+    <tr><td><code>concurrency_group</code></td><td><code>"host"</code></td></tr>
+    <tr><td><code>run_kind</code></td><td><code>RunKind.ASYNC</code></td></tr>
+    <tr><td><code>trust_level</code></td><td><code>TrustLevel.BUILTIN</code></td></tr>
+    <tr><td>Source</td><td><code>apps/monitor/homelab_monitor/plugins/collectors/builtin/host.py</code></td></tr>
+  </tbody>
+</table>
+
+<p>
+  <code>HostCollector.run()</code> dispatches to ten private helpers
+  (<code>_collect_cpu</code>, <code>_collect_load_average</code>,
+  <code>_collect_memory</code>, <code>_collect_swap</code>,
+  <code>_collect_disk_usage</code>, <code>_collect_disk_io</code>,
+  <code>_collect_net_io</code>, <code>_collect_uptime</code>,
+  <code>_collect_process_states</code>, <code>_collect_top_processes</code>).
+  Each helper catches its own <code>psutil</code> errors and returns a
+  <code>(metrics_emitted, errors)</code> tuple; one bad section never kills the
+  whole tick. <code>KeyboardInterrupt</code> and <code>SystemExit</code> are
+  deliberately not caught so cooperative shutdown is respected.
+</p>
+
+<h3>Metric families emitted</h3>
+
+<table>
+  <thead><tr><th>Metric</th><th>Kind</th><th>Labels</th><th>Notes</th></tr></thead>
+  <tbody>
+    <tr><td><code>homelab_host_cpu_percent</code></td><td>gauge</td><td><code>cpu="all"|"0"|"1"|...</code></td><td>First tick after boot returns 0.0 (psutil <code>interval=None</code> needs a prior delta)</td></tr>
+    <tr><td><code>homelab_host_load_average</code></td><td>gauge</td><td><code>period="1m"|"5m"|"15m"</code></td><td><code>psutil.getloadavg()</code></td></tr>
+    <tr><td><code>homelab_host_memory_bytes</code></td><td>gauge</td><td><code>type="used"|"available"|"total"</code></td><td>3 series per tick</td></tr>
+    <tr><td><code>homelab_host_swap_bytes</code></td><td>gauge</td><td><code>type="used"|"total"</code></td><td>2 series per tick</td></tr>
+    <tr><td><code>homelab_host_disk_bytes</code></td><td>gauge</td><td><code>mountpoint, type="used"|"total"</code></td><td>Iterates <code>psutil.disk_partitions(all=False)</code>; merges <code>extra_mountpoints</code> (default <code>["/rackstation"]</code>); skips <code>usage.total == 0</code> and devices matching <code>^(loop|ram)</code></td></tr>
+    <tr><td><code>homelab_host_disk_io_bytes_total</code></td><td>counter</td><td><code>disk, direction="read"|"write"</code></td><td><code>perdisk=True</code>; same <code>exclude_disk_devs</code> regex applies</td></tr>
+    <tr><td><code>homelab_host_net_bytes_total</code></td><td>counter</td><td><code>iface, direction="rx"|"tx"</code></td><td><code>pernic=True</code></td></tr>
+    <tr><td><code>homelab_host_uptime_seconds</code></td><td>gauge</td><td><em>none</em></td><td><code>time.time() - psutil.boot_time()</code></td></tr>
+    <tr><td><code>homelab_host_processes_total</code></td><td>gauge</td><td><code>state="running"|"sleeping"|"zombie"</code></td><td>Single iteration of <code>process_iter</code> feeds both this and the top-N families</td></tr>
+    <tr><td><code>homelab_host_top_processes_cpu_percent</code></td><td>gauge</td><td><code>name, pid</code></td><td>Top-N (default 10) by CPU; uses <code>replace_family()</code> for epoch semantics</td></tr>
+    <tr><td><code>homelab_host_top_processes_memory_bytes</code></td><td>gauge</td><td><code>name, pid</code></td><td>Top-N (default 10) by RSS</td></tr>
+  </tbody>
+</table>
+
+<h3>The retaining writer (D1, D4)</h3>
+
+<p>
+  <code>MemoryRetainingMetricsWriter(InMemoryMetricsWriter)</code> in
+  <code>kernel/plugins/io.py</code> extends the append-only writer from
+  STAGE-001-006 with a latest-value-by-(name, frozen-labels) dict and a
+  <code>replace_family(name, entries)</code> method. <code>write_*</code> calls
+  auto-stamp <code>ts = utc_now_iso()</code> at write time (D3 — the collector
+  does not pass <code>ts</code>). For top-N process families,
+  <code>replace_family()</code> atomically wipes prior entries for that family
+  from the latest-value map and writes the new top-N — mirrors how
+  <code>topk()</code> would behave on real VM (which arrives in STAGE-001-015)
+  and bounds snapshot size to ≤ 2 × <code>top_n_processes</code>.
+</p>
+
+<h3>The snapshot endpoint (D2)</h3>
+
+<pre><code>GET /api/metrics/snapshot   →   { "ts": "...", "entries": [
+    {"name": "homelab_host_cpu_percent", "value": 12.5,
+     "labels": {"cpu": "all"}, "kind": "gauge", "ts": "..."},
+    ...
+] }</code></pre>
+
+<p>
+  Auth: <code>Depends(require_session())</code> — cookie-only; no token; CSRF
+  not enforced for GET. Top-level <code>ts</code> is the snapshot capture time;
+  each entry carries its own <code>ts</code> (most recent write for that
+  (name, labels) tuple). The Overview tile in STAGE-001-014 filters with
+  <code>entries.find(e =&gt; e.name === 'homelab_host_cpu_percent' &amp;&amp; e.labels.cpu === 'all')</code>.
+  Pydantic models are <code>MetricsSnapshotEntry</code> + <code>MetricsSnapshotResponse</code>
+  in <code>kernel/api/schemas.py</code> with <code>extra="forbid"</code>.
+</p>
+
+<div class="callout warn">
+  <strong>First-tick caveat:</strong> <code>psutil.cpu_percent(interval=None)</code>
+  returns <code>0.0</code> on the first call after module import (no prior delta
+  to compare). For ~10 seconds after process boot every CPU metric reports 0.
+  Documented in <code>_collect_cpu</code>; consumers must tolerate it.
+</div>
+
+<!-- ====================================================== -->
+<h2 id="stage-013">2. STAGE-001-013 — Alert ingestor + first inproc-dashboard channel <span class="tag tag-alerts">alerts</span> <span class="tag tag-api">api</span></h2>
+
+<p>
+  STAGE-001-013 builds the alert pipeline that every later stage feeds into:
+  an Alertmanager v2 webhook receiver with fingerprint-based dedup, an alert
+  repository with cursor-paginated listing, an outcome tracking surface
+  (ack / dismiss), and the first dispatcher channel that fans alerts out to
+  the SSE broker. It also closes the STAGE-001-008 quarantine TODO by emitting
+  a synthetic alert when a collector enters quarantine.
+</p>
+
+<div class="svg-wrap">
+<svg viewBox="0 0 1120 460" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system, sans-serif" font-size="13">
+  <defs>
+    <marker id="arr-13" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#fb7185"/>
+    </marker>
+  </defs>
+
+  <!-- Source -->
+  <rect x="20" y="20" width="180" height="48" rx="6" fill="#161b22" stroke="#fb7185"/>
+  <text x="110" y="42" fill="#fb7185" text-anchor="middle">Alertmanager / dashboard</text>
+  <text x="110" y="60" fill="#8b95a4" text-anchor="middle" font-size="11">POST /api/alerts/ingest</text>
+
+  <line x1="200" y1="44" x2="240" y2="44" stroke="#fb7185" stroke-width="1.5" marker-end="url(#arr-13)"/>
+
+  <!-- Auth -->
+  <rect x="240" y="20" width="200" height="48" rx="6" fill="#0a0d12" stroke="#4ade80"/>
+  <text x="340" y="42" fill="#4ade80" text-anchor="middle">require_user_or_token</text>
+  <text x="340" y="60" fill="#8b95a4" text-anchor="middle" font-size="11">Scope.ALERTS_INGEST_WRITE</text>
+
+  <line x1="440" y1="44" x2="480" y2="44" stroke="#fb7185" stroke-width="1.5" marker-end="url(#arr-13)"/>
+
+  <!-- Fingerprint -->
+  <rect x="480" y="20" width="200" height="48" rx="6" fill="#161b22" stroke="#fb7185"/>
+  <text x="580" y="42" fill="#fb7185" text-anchor="middle">compute_fingerprint(item)</text>
+  <text x="580" y="60" fill="#8b95a4" text-anchor="middle" font-size="11">AM fp OR sha256(sorted labels)</text>
+
+  <line x1="680" y1="44" x2="720" y2="44" stroke="#fb7185" stroke-width="1.5" marker-end="url(#arr-13)"/>
+
+  <!-- Status switch -->
+  <rect x="720" y="20" width="180" height="48" rx="6" fill="#0a0d12" stroke="#facc15"/>
+  <text x="810" y="42" fill="#facc15" text-anchor="middle">switch on item.status</text>
+  <text x="810" y="60" fill="#8b95a4" text-anchor="middle" font-size="11">firing | resolved</text>
+
+  <!-- Firing path -->
+  <line x1="810" y1="68" x2="660" y2="120" stroke="#fb7185" stroke-width="1.5" marker-end="url(#arr-13)"/>
+  <rect x="500" y="120" width="320" height="60" rx="6" fill="#161b22" stroke="#fb7185"/>
+  <text x="660" y="142" fill="#fb7185" text-anchor="middle">find_active_by_fingerprint</text>
+  <text x="660" y="160" fill="#8b95a4" text-anchor="middle" font-size="11">found → update_last_seen</text>
+  <text x="660" y="174" fill="#8b95a4" text-anchor="middle" font-size="11">missing → insert_firing (uuid7 PK)</text>
+
+  <!-- Resolved path -->
+  <line x1="810" y1="68" x2="990" y2="120" stroke="#fb7185" stroke-width="1.5" marker-end="url(#arr-13)"/>
+  <rect x="850" y="120" width="240" height="60" rx="6" fill="#161b22" stroke="#fb7185"/>
+  <text x="970" y="142" fill="#fb7185" text-anchor="middle">find_active → mark_resolved</text>
+  <text x="970" y="160" fill="#8b95a4" text-anchor="middle" font-size="11">no prior → log + skip</text>
+
+  <line x1="660" y1="180" x2="660" y2="220" stroke="#fb7185" stroke-width="1.5" marker-end="url(#arr-13)"/>
+  <line x1="970" y1="180" x2="800" y2="220" stroke="#fb7185" stroke-width="1.5" marker-end="url(#arr-13)"/>
+
+  <!-- Dispatcher -->
+  <rect x="540" y="220" width="320" height="60" rx="6" fill="#161b22" stroke="#fb7185"/>
+  <text x="700" y="244" fill="#fb7185" text-anchor="middle">AlertDispatcher.dispatch(event)</text>
+  <text x="700" y="262" fill="#8b95a4" text-anchor="middle" font-size="11">per-channel exception isolation</text>
+
+  <line x1="700" y1="280" x2="700" y2="320" stroke="#fb7185" stroke-width="1.5" marker-end="url(#arr-13)"/>
+
+  <!-- Channel -->
+  <rect x="540" y="320" width="320" height="56" rx="6" fill="#0a0d12" stroke="#fb7185"/>
+  <text x="700" y="344" fill="#fb7185" text-anchor="middle">InprocDashboardChannel.deliver</text>
+  <text x="700" y="362" fill="#8b95a4" text-anchor="middle" font-size="11">SseBroker.publish(AlertFiringEvent | AlertResolvedEvent)</text>
+
+  <!-- Scheduler quarantine source -->
+  <rect x="20" y="120" width="200" height="60" rx="6" fill="#161b22" stroke="#60a5fa"/>
+  <text x="120" y="144" fill="#60a5fa" text-anchor="middle">Scheduler quarantine</text>
+  <text x="120" y="162" fill="#8b95a4" text-anchor="middle" font-size="11">FailureBudget.record_failure</text>
+  <text x="120" y="176" fill="#8b95a4" text-anchor="middle" font-size="11">→ self.dispatcher.dispatch</text>
+
+  <line x1="220" y1="160" x2="540" y2="244" stroke="#60a5fa" stroke-width="1.5" stroke-dasharray="3 2" marker-end="url(#arr-13)"/>
+
+  <!-- Scheduler clear -->
+  <rect x="20" y="220" width="200" height="60" rx="6" fill="#161b22" stroke="#60a5fa"/>
+  <text x="120" y="244" fill="#60a5fa" text-anchor="middle">Scheduler.clear_quarantine</text>
+  <text x="120" y="262" fill="#8b95a4" text-anchor="middle" font-size="11">find_active_quarantine_alert</text>
+  <text x="120" y="276" fill="#8b95a4" text-anchor="middle" font-size="11">→ mark_resolved + dispatch</text>
+
+  <line x1="220" y1="250" x2="540" y2="248" stroke="#60a5fa" stroke-width="1.5" stroke-dasharray="3 2" marker-end="url(#arr-13)"/>
+
+  <text x="560" y="430" fill="#8b95a4" text-anchor="middle" font-size="11">Solid: ingest webhook path. Dashed: scheduler-internal alert sources (no self-HTTP).</text>
+</svg>
+</div>
+
+<h3>The five endpoints</h3>
+
+<table>
+  <thead><tr><th>Method</th><th>Path</th><th>Auth</th><th>Status</th><th>Notes</th></tr></thead>
+  <tbody>
+    <tr><td><code>POST</code></td><td><code>/api/alerts/ingest</code></td><td>cookie+CSRF OR token w/<code>alerts:ingest:write</code></td><td>202</td><td>Returns <code>{received, ingested}</code></td></tr>
+    <tr><td><code>GET</code></td><td><code>/api/alerts</code></td><td>session</td><td>200</td><td>Cursor pagination; filters: status, severity, source_tool, fingerprint; <code>total</code> omitted by design</td></tr>
+    <tr><td><code>GET</code></td><td><code>/api/alerts/{id}</code></td><td>session</td><td>200 / 404</td><td>Includes outcome history + raw payload</td></tr>
+    <tr><td><code>POST</code></td><td><code>/api/alerts/{id}/ack</code></td><td>session+CSRF</td><td>200</td><td>Inserts ACKED outcome row + sets <code>ack_at</code>/<code>ack_by</code></td></tr>
+    <tr><td><code>POST</code></td><td><code>/api/alerts/{id}/dismiss</code></td><td>session+CSRF</td><td>200</td><td>Outcome row only — does NOT modify status; dismissal is operator intent</td></tr>
+  </tbody>
+</table>
+
+<h3>Dedup semantics (D4)</h3>
+
+<p>
+  While <code>alerts.resolved_at IS NULL</code>, a matching fingerprint
+  UPDATEs <code>last_seen_at</code> only — <code>opened_at</code> is unchanged
+  and severity / labels / annotations are pinned at first fire (severity
+  escalations on the same fingerprint do NOT propagate; upstream rules should
+  encode severity in the fingerprint hash if escalation matters).
+  On the resolution payload, <code>resolved_at</code> is set. On the NEXT
+  firing of the same fingerprint with the prior row already resolved, a fresh
+  row is INSERTed. Each fire→resolve→fire cycle is operationally a new incident;
+  outcome history attaches to its row, not aggregated across cycles.
+</p>
+
+<h3>Migration 0005 (additive)</h3>
+
+<p>
+  Adds 10 columns to <code>alerts</code>
+  (<code>source_tool</code>, <code>severity</code>, <code>status</code>,
+  <code>opened_at</code>, <code>last_seen_at</code>, <code>resolved_at</code>,
+  <code>ack_at</code>, <code>ack_by</code>, <code>runbook_id</code>,
+  <code>payload_json</code>) and 3 to <code>alert_outcomes</code>
+  (<code>outcome</code>, <code>decided_at</code>, <code>decided_by</code>),
+  plus indexes on <code>(source_tool, opened_at)</code>,
+  <code>(status, opened_at)</code>, and <code>alert_outcomes.alert_id</code>.
+  Tables were empty stubs from migration 0001; no backfill needed.
+</p>
+
+<h3>Dispatcher contract (D3)</h3>
+
+<p>
+  <code>AlertDispatcher</code> at
+  <code>apps/monitor/homelab_monitor/kernel/dispatch/dispatcher.py</code>
+  iterates a static channel list constructed in lifespan startup. Per-channel
+  delivery failures are caught, logged at WARNING with channel kind, and
+  surfaced as <code>DeliveryResult(ok=False, error=str(exc))</code>. A
+  per-kind failure counter (<code>delivery_failures</code> property) tracks
+  hits for future metrics surfacing. The dispatcher NEVER raises — one bad
+  channel cannot break others. Static channel list at boot keeps STAGE-014
+  consumers wired through a single <code>/api/events</code> connection that
+  filters by topic.
+</p>
+
+<div class="callout">
+  <strong>Logging discipline:</strong> the ingestor MUST NOT log full alert
+  payloads at INFO level (label dicts may carry hostnames, internal IPs,
+  secrets). Only fingerprints + counts at INFO; full payloads land in
+  <code>alerts.payload_json</code> for operator inspection via GET. A test
+  asserts no INFO log record contains a full label dict.
+</div>
+
+<!-- ====================================================== -->
+<h2 id="stage-014">3. STAGE-001-014 — UI shell + login + Overview live-tile <span class="tag tag-ui">ui</span> <span class="tag tag-auth">auth</span></h2>
+
+<p>
+  STAGE-001-014 brings the dashboard online: TanStack Router, TanStack Query,
+  shadcn/ui primitives over Radix + Tailwind, an SSE-driven live tile, and the
+  ASGI middleware migration that unblocks streaming responses. The end-to-end
+  demo is: open <code>http://localhost:5173</code>, log in, see the host CPU tile
+  update every 10s.
+</p>
+
+<h3>Two phases inside Build</h3>
+
+<div class="grid-2">
+  <div class="panel">
+    <h4>Spec A — backend ASGI migration</h4>
+    <p>
+      <code>RequestIdMiddleware</code>, <code>AccessLogMiddleware</code>,
+      <code>AuthMiddleware</code> all rewritten from
+      <code>BaseHTTPMiddleware</code> (which buffers responses) into pure ASGI
+      callables (<code>__init__(app)</code> + <code>async __call__(scope, receive, send)</code>).
+      The two SSE tests had been <code>xfail</code>-marked since STAGE-008;
+      this stage removes the markers. Critical mid-build discovery: <code>httpx.ASGITransport</code>
+      ALSO buffers streaming responses — a real <code>uvicorn</code> loopback
+      fixture (<code>tests/_uvicorn_fixture.py</code>) was added so pytest can
+      verify HTTP-level streaming end-to-end.
+    </p>
+  </div>
+  <div class="panel">
+    <h4>Spec B — frontend</h4>
+    <p>
+      React 19 + Vite + TS strict + TanStack Router (code-based) + TanStack Query +
+      <code>openapi-typescript</code> + <code>openapi-fetch</code>. shadcn/ui CLI installs
+      Radix-based components into <code>apps/ui/src/components/ui/</code>. Theme tokens in
+      <code>apps/ui/src/index.css</code>; dark mode default, light toggleable from the user menu.
+      <code>@hookform/resolvers</code> upgraded to <code>^5.0.1</code> for Zod v4 compatibility.
+    </p>
+  </div>
+</div>
+
+<h3>Routes</h3>
+
+<table>
+  <thead><tr><th>Route</th><th>Auth</th><th>Component</th><th>Notes</th></tr></thead>
+  <tbody>
+    <tr><td><code>/login</code></td><td>public</td><td><code>routes/Login.tsx</code></td><td>RHF + Zod; "Welcome — please run hm user create" variant when <code>users_configured: false</code>; password reveal toggle (Eye/EyeOff)</td></tr>
+    <tr><td><code>/</code></td><td>protected → redirect</td><td>—</td><td>redirects to <code>/overview</code></td></tr>
+    <tr><td><code>/overview</code></td><td>protected</td><td><code>routes/Overview.tsx</code></td><td><code>HostCpuTile</code> (big number + sparkline below)</td></tr>
+  </tbody>
+</table>
+
+<p>
+  Protected routes use <code>beforeLoad</code> in TanStack Router calling the
+  same queryFn as <code>useCurrentUser</code> (<code>GET /api/auth/me</code>);
+  on 401 the guard redirects to <code>/login</code>.
+</p>
+
+<h3>The HostCpuTile + useSSE hook</h3>
+
+<p>
+  <code>useSSE&lt;T&gt;(topic, parser)</code> at <code>apps/ui/src/lib/sse.ts</code>
+  returns <code>{value, status, reconnect}</code>. Architecture revisions during
+  Build:
+</p>
+<ul>
+  <li><strong>Latest-ref pattern</strong> for unstable callbacks: <code>parserRef</code> and
+    <code>factoryRef</code> are synced in render body; the effect that opens the
+    EventSource depends only on URL + topic, not on identity-unstable callbacks.</li>
+  <li><strong>Decoupled reconnect-scheduling effect</strong> keyed on
+    <code>[status, failureCount, open]</code> — eliminates test thrashing under
+    React 19 + fake timers; reconnect path is deterministic.</li>
+  <li><strong>Exponential backoff capped at 30s.</strong></li>
+</ul>
+
+<p>
+  <code>HostCpuTile</code> backfills via <code>GET /api/metrics/snapshot</code> on
+  mount (initial value), then subscribes to <code>collector.tick</code> events
+  filtering on <code>name === "host"</code>. Sparkline pre-fills 60 points with the
+  initial value to avoid Y-domain collapse on the first tick. Refinement Round 1
+  caught a <code>/api/metrics/snapshot</code> request storm — fixed with the
+  latest-ref pattern (<code>refetchRef</code>) so the SSE-driven effect depends only
+  on <code>[sse.value]</code>, plus <code>staleTime: Infinity</code> +
+  <code>refetchOnWindowFocus: false</code> on <code>useMetricsSnapshot</code>.
+</p>
+
+<h3>The 13-item sidebar</h3>
+
+<p>
+  <code>SidebarNav</code> ships all 13 destinations from spec §9.1 with
+  <code>Tooltip</code>-rendered "Coming soon" placeholders for the disabled ones.
+  As later stages light items up they flip from disabled to <code>{ to }</code>
+  routes — see STAGE-001-019 (Alerts) and STAGE-001-020 (Metrics). The
+  responsive layout is two halves: a desktop sidebar (<code>hidden md:flex</code>)
+  and a mobile overlay sheet (<code>fixed inset-0 z-50</code>) with backdrop;
+  <code>SidebarNav</code> accepts an <code>onNavigate</code> callback to auto-close
+  the mobile sheet after a tap.
+</p>
+
+<h3>Refinement-round bug fixes</h3>
+
+<p>Round 2 surfaced two design-level bugs in the auth flow:</p>
+<ul>
+  <li><strong>Login on mobile invalidated desktop session.</strong>
+    <code>apps/monitor/homelab_monitor/kernel/api/routers/auth.py::login</code> called <code>delete_all_user_sessions(user.id)</code>
+    as a session-fixation defense. Changed to allow concurrent sessions;
+    <code>change-password</code> still revokes all sessions (post-incident posture
+    only). Test renamed <code>test_login_invalidates_prior_sessions</code> →
+    <code>test_login_preserves_prior_sessions</code> with assertion inverted.</li>
+  <li><strong>SSE keepalive subscriber-loss bug</strong> (Finalize pass 2):
+    the 1st-pass-approved fix used <code>wait_for(__anext__())</code> which
+    cancels the iterator on timeout, terminating the subscription after every
+    15s keepalive. Fixed by moving keepalive ownership into the broker's
+    <code>subscribe()</code> method via an <code>SseKeepalive</code> sentinel.</li>
+</ul>
+
+<div class="callout">
+  <strong>CSRF cookie name:</strong> <code>homelab_monitor_csrf</code>
+  (<code>httponly: false</code> so JS can read it). <strong>Session cookie
+  name:</strong> <code>homelab_monitor_session</code>. <strong>Header
+  name:</strong> <code>X-CSRF-Token</code>. Send on POST/PUT/PATCH/DELETE.
+</div>
+
+<!-- ====================================================== -->
+<h2 id="stage-015">4. STAGE-001-015 / 015A — VictoriaMetrics + vmagent + Backup + disk budget <span class="tag tag-metrics">metrics</span> <span class="tag tag-db">db</span></h2>
+
+<p>
+  Two stages, one story. STAGE-001-015 swaps the in-memory metrics writer for a
+  real VM-backed pipeline; STAGE-001-015A layers backup, disk-budget enforcement,
+  and the first real expansion of <code>docker-compose.test.yml</code>.
+</p>
+
+<h3>STAGE-001-015 deliverables</h3>
+
+<ul>
+  <li><strong>Compose:</strong> <code>monitor</code>, <code>victoriametrics</code>,
+    <code>vmagent</code> on network <code>homelab-monitor-net</code>. VM and
+    vmagent images pinned. Volumes <code>data_vm</code>, <code>data_vmagent</code>.</li>
+  <li><strong>Multiplex writer (D1 — Option A):</strong>
+    <code>MultiplexMetricsWriter</code> at
+    <code>apps/monitor/homelab_monitor/kernel/metrics/multiplex.py</code> fans every
+    <code>write_*</code> call to BOTH the existing
+    <code>MemoryRetainingMetricsWriter</code> AND the new
+    <code>PrometheusRegistryWriter</code> in
+    <code>kernel/metrics/prometheus_writer.py</code> (uses the
+    <code>prometheus_client</code> library). The latter is what
+    <code>/metrics</code> serializes for vmagent to scrape. The in-memory map
+    keeps powering <code>/api/metrics/snapshot</code> with no VM dependency.</li>
+  <li><strong>Static scrape config (D2 — Option C):</strong> hand-authored
+    <code>deploy/compose/vmagent/scrape.yaml</code> checked into the repo. One job
+    <code>monitor</code>, target <code>monitor:9090</code>, path <code>/metrics</code>,
+    interval 15s. No code-generated configs; no <code>/-/reload</code> choreography.</li>
+  <li><strong><code>GET /api/metrics/range</code></strong> — accepts a PromQL/MetricsQL
+    expression + start + end + step; backs the Overview tile sparkline backfill.</li>
+  <li><strong>Frontend backfill (D4 — Option C):</strong> <code>useMetricsRange</code>
+    TanStack Query hook; <code>HostCpuTile</code> renders synthetic baseline immediately,
+    fires range query in background, swaps series on success, silently retains
+    synthetic baseline on failure. No skeleton, no microcopy.</li>
+</ul>
+
+<div class="callout">
+  <strong>Refinement bug:</strong> SSE tick was poisoning <code>seededFromHistoryRef</code>,
+  preventing the range backfill from ever applying. Fixed by removing the SSE
+  side effect on the ref. Verified with full <code>make verify</code> (901
+  backend + 16 UI tests, 100% kernel coverage).
+</div>
+
+<h3>STAGE-001-015A deliverables (the operational layer)</h3>
+
+<table>
+  <thead><tr><th>Component</th><th>Path</th><th>Notes</th></tr></thead>
+  <tbody>
+    <tr>
+      <td>Backup endpoint</td>
+      <td><code>apps/monitor/homelab_monitor/kernel/api/admin.py</code></td>
+      <td><code>POST /api/admin/backup</code> — cookie OR token w/<code>admin:backup:write</code>. Steps: <code>sqlite3 .backup</code> snapshot → <code>POST /snapshot/create</code> on VM → <code>cp -al</code> hardlink the snapshot files into <code>/storage/backup/homelab-monitor/vm/&lt;id&gt;/</code> (D2 Option A: shared RO bind mount). Falls back to <code>cp -r</code> if backup dir is on a different filesystem.</td>
+    </tr>
+    <tr>
+      <td>Backup CLI</td>
+      <td><code>hm backup {run,list,retention}</code></td>
+      <td>Same logic as the endpoint via shared service module.</td>
+    </tr>
+    <tr>
+      <td>Disk-budget collector</td>
+      <td><code>apps/monitor/homelab_monitor/plugins/collectors/builtin/self_disk.py</code></td>
+      <td><code>interval=60s</code>; reads <code>data/{vm,vl,sqlite,runbook-transcripts}</code> via <code>pathlib.Path.stat</code>. Emits <code>homelab_self_disk_used_bytes{slot}</code>, <code>homelab_self_disk_budget_bytes{slot}</code>, <code>homelab_self_disk_used_pct</code>. Default budget <code>50 GB</code> via <code>HOMELAB_MONITOR_DISK_BUDGET_GB</code>; default ratios 60/30/10 (vm/vl/sqlite) per spec §6.4.</td>
+    </tr>
+    <tr>
+      <td>vmalert rules</td>
+      <td><code>deploy/vmalert/metrics/self_disk.yaml</code></td>
+      <td><code>SelfDiskWarn</code> at &gt;70% for 5m (warning); <code>SelfDiskError</code> at &gt;85% for 5m (error); <code>SelfDiskCritical</code> at &gt;95% (critical, immediate). Forward-compat — vmalert sidecar arrives in STAGE-001-018.</td>
+    </tr>
+    <tr>
+      <td>Auto-shrink (D3 — Option C)</td>
+      <td><code>apps/monitor/homelab_monitor/plugins/collectors/builtin/self_disk.py</code></td>
+      <td><strong>Decision-only in v1:</strong> at &gt;95% the shrinker emits <code>homelab_self_disk_shrink_total{tier}</code> + writes a critical-severity audit row. NO <code>delete_series</code> call (creates tombstones), NO container restart (cascades during incidents). Real action layer deferred to a future EPIC-008 stage.</td>
+    </tr>
+    <tr>
+      <td>Test rig promotion</td>
+      <td><code>apps/monitor/Dockerfile.test</code> + <code>scripts/run-integration.sh</code></td>
+      <td>D4 — Option D (hybrid): production image stays lean; a separate test image runs <code>uv sync --extra dev</code>. The <code>integration-tests</code> compose service uses this image; canonical run mode is <code>--abort-on-container-exit --exit-code-from integration-tests</code>.</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="callout warn">
+  <strong>Backup never includes the master key.</strong>
+  <code>/run/secrets/master-key</code> is not in any backup; the user holds it in
+  a password manager. Backups restored to a fresh host without the master key
+  cannot decrypt the secrets table.
+</div>
+
+<!-- ====================================================== -->
+<h2 id="stage-016">5. STAGE-001-016 — VictoriaLogs + vector <span class="tag tag-logs">logs</span></h2>
+
+<p>
+  STAGE-001-016 stands up the log pipeline. VL replaces the in-memory logs
+  writer; vector tails Docker container stdout/stderr (and optionally journald)
+  and ships to VL with per-stream throttle. After this stage every container's
+  logs are queryable via LogsQL, and a planted message in any container is
+  findable.
+</p>
+
+<h3>The MultiplexLogsWriter (D1)</h3>
+
+<p>
+  Mirrors STAGE-001-015's metrics multiplex pattern verbatim. Keep
+  <code>InMemoryLogsWriter</code> AND add new <code>VictoriaLogsWriter</code> at
+  <code>apps/monitor/homelab_monitor/kernel/logs/vl_writer.py</code>;
+  <code>MultiplexLogsWriter</code> in <code>kernel/logs/multiplex.py</code> fans every
+  <code>ingest()</code> call to BOTH writers (in-memory first, then VL HTTP).
+  In-memory writer remains the source for any future snapshot/recent-events
+  endpoints with zero VL round-trip; VL writer is best-effort (HTTP failures
+  logged but never fail the collector).
+</p>
+
+<h3>VictoriaLogsWriter internals</h3>
+
+<p>
+  Bridges the sync <code>LogsWriter</code> Protocol to async HTTP via a bounded
+  <code>asyncio.Queue(maxsize=10000)</code> + a single background worker started by
+  lifespan. <code>ingest(stream, line, ts=None)</code> is non-blocking
+  <code>put_nowait</code>; on <code>QueueFull</code> the line is dropped,
+  <code>dropped_count</code> is incremented, a warning is logged.
+  The worker waits up to <code>batch_timeout_s=1.0</code> for the first event,
+  then drains up to <code>batch_size=100</code> without waiting, then POSTs the
+  batch as NDJSON to <code>/insert/jsonline</code>.
+</p>
+
+<table>
+  <thead><tr><th>VL event field</th><th>Source</th></tr></thead>
+  <tbody>
+    <tr><td><code>_msg</code></td><td>The log line text</td></tr>
+    <tr><td><code>_stream_id</code></td><td>The <code>stream</code> argument</td></tr>
+    <tr><td><code>_time</code></td><td>RFC3339 UTC; auto-stamped via <code>utc_now_iso()</code> if not supplied</td></tr>
+  </tbody>
+</table>
+
+<div class="callout warn">
+  <strong>VL only accepts RFC3339 timestamps.</strong> Refinement of STAGE-001-018
+  caught a bug in <code>vl_planter.py</code> that used epoch milliseconds for
+  <code>_time</code>; VL v0.30.0 returned <code>cannot unmarshal rfc3339 timestamp</code>.
+  Fixed to <code>ts.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"</code>. The kernel
+  writer correctly uses <code>utc_now_iso()</code> by default.
+</div>
+
+<h3>Per-stream caps (D2 — defense in depth)</h3>
+
+<ul>
+  <li><strong>Layer 1 — vector throttle</strong> at ingest time: 50 lines/sec/stream
+    default; configurable via env.</li>
+  <li><strong>Layer 2 — in-process collector</strong>: <code>log_stream_budget</code>
+    (60s interval) queries VL <code>/select/logsql/stats</code> for bytes/day per
+    stream and emits <code>homelab_log_stream_bytes_today{host, service}</code> +
+    <code>homelab_log_stream_lines_per_sec{host, service}</code>.</li>
+  <li><strong>vmalert rule</strong> (lands in STAGE-001-018) fires on per-stream
+    overrun.</li>
+</ul>
+
+<h3>Vector pipeline</h3>
+
+<p>
+  <code>deploy/vector/vector.toml</code> (D4 — Option A: static hand-authored
+  TOML; no SIGHUP reload; reload = container restart). Sources, transforms,
+  sinks:
+</p>
+
+<table>
+  <thead><tr><th>Stage</th><th>Component</th><th>Purpose</th></tr></thead>
+  <tbody>
+    <tr><td>source</td><td><code>docker_logs</code></td><td>Tails containers in <code>homelab-monitor-net</code> by default; override via <code>VECTOR_DOCKER_INCLUDE</code></td></tr>
+    <tr><td>source</td><td><code>journald</code></td><td>Opt-in via <code>VECTOR_JOURNALD_ENABLED</code></td></tr>
+    <tr><td>transform</td><td><code>add_labels</code></td><td>Enriches every event with <code>host</code>, <code>service</code>, <code>severity</code></td></tr>
+    <tr><td>transform</td><td><code>parse_json</code></td><td>Best-effort; non-JSON passes through unchanged</td></tr>
+    <tr><td>transform</td><td><code>drop_noise</code></td><td>Baseline filter (kubelet healthz, docker daemon ping, monitor's own debug logs)</td></tr>
+    <tr><td>transform</td><td><code>throttle</code></td><td>Per-service rate cap (50 lines/sec default)</td></tr>
+    <tr><td>sink</td><td><code>vl</code></td><td>POSTs NDJSON to <code>http://victorialogs:9428/insert/jsonline</code></td></tr>
+  </tbody>
+</table>
+
+<h3>Logs API contract (D3 — thin proxy)</h3>
+
+<table>
+  <thead><tr><th>Method</th><th>Path</th><th>Behavior</th></tr></thead>
+  <tbody>
+    <tr><td><code>GET</code></td><td><code>/api/logs/query</code></td><td>Proxies to VL <code>/select/logsql/query</code> with <code>expr</code>, <code>start</code>, <code>end</code>, <code>limit</code>; returns VL-native shape</td></tr>
+    <tr><td><code>GET</code></td><td><code>/api/logs/streams</code></td><td>Returns <code>[{host, service, last_seen, lines_per_sec, bytes_today}]</code> from the budget collector's in-process state (no per-request VL stats query)</td></tr>
+  </tbody>
+</table>
+
+<p>
+  Both endpoints require cookie session OR API token auth. VL <code>/insert/jsonline</code>
+  is unauthenticated within the compose network (vector is in-network); VL
+  itself is not exposed externally.
+</p>
+
+<!-- ====================================================== -->
+<h2 id="stage-017">6. STAGE-001-017 — Alertmanager + vmalert (metrics) + first rule <span class="tag tag-alerts">alerts</span> <span class="tag tag-metrics">metrics</span></h2>
+
+<p>
+  STAGE-001-017 wires real alerting end to end. Alertmanager + vmalert (metrics)
+  are added as sidecars; vmalert evaluates rules against VictoriaMetrics and
+  routes to AM; AM webhooks back to <code>/api/alerts/ingest</code> (the path
+  built in STAGE-001-013) using a render-on-boot Bearer token.
+</p>
+
+<h3>The render-on-boot mechanism</h3>
+
+<p>
+  The challenge: AM needs a Bearer token to authenticate to the monitor's
+  ingestor, but a real token can never be baked into a docker image or live
+  in plaintext on disk indefinitely. Solution: render the AM config at lifespan
+  startup with a token minted on first boot and reused thereafter.
+</p>
+
+<div class="svg-wrap">
+<svg viewBox="0 0 1080 360" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system, sans-serif" font-size="13">
+  <defs>
+    <marker id="arr-17" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#fb7185"/>
+    </marker>
+  </defs>
+
+  <rect x="20" y="40" width="240" height="60" rx="6" fill="#161b22" stroke="#fb7185"/>
+  <text x="140" y="64" fill="#fb7185" text-anchor="middle">render_on_boot()</text>
+  <text x="140" y="82" fill="#8b95a4" text-anchor="middle" font-size="11">in lifespan, after secrets init</text>
+
+  <line x1="260" y1="70" x2="300" y2="70" stroke="#fb7185" marker-end="url(#arr-17)"/>
+
+  <rect x="300" y="40" width="240" height="60" rx="6" fill="#0a0d12" stroke="#facc15"/>
+  <text x="420" y="64" fill="#facc15" text-anchor="middle">ensure_ingest_token()</text>
+  <text x="420" y="82" fill="#8b95a4" text-anchor="middle" font-size="11">existing pair → reuse</text>
+
+  <line x1="540" y1="70" x2="580" y2="70" stroke="#fb7185" marker-end="url(#arr-17)"/>
+
+  <rect x="580" y="40" width="240" height="60" rx="6" fill="#0a0d12" stroke="#4ade80"/>
+  <text x="700" y="64" fill="#4ade80" text-anchor="middle">missing pair → mint</text>
+  <text x="700" y="82" fill="#8b95a4" text-anchor="middle" font-size="11">make_api_token + secrets.set</text>
+
+  <line x1="700" y1="100" x2="700" y2="140" stroke="#fb7185" marker-end="url(#arr-17)"/>
+
+  <rect x="540" y="140" width="320" height="60" rx="6" fill="#161b22" stroke="#fb7185"/>
+  <text x="700" y="164" fill="#fb7185" text-anchor="middle">render_config(template, output, token)</text>
+  <text x="700" y="182" fill="#8b95a4" text-anchor="middle" font-size="11">tempfile + os.replace + chown amconfig (gid 2000) + 0o640</text>
+
+  <line x1="700" y1="200" x2="700" y2="240" stroke="#fb7185" marker-end="url(#arr-17)"/>
+
+  <rect x="540" y="240" width="320" height="60" rx="6" fill="#161b22" stroke="#fb7185"/>
+  <text x="700" y="264" fill="#fb7185" text-anchor="middle">AlertmanagerReloader.reload()</text>
+  <text x="700" y="282" fill="#8b95a4" text-anchor="middle" font-size="11">POST /-/reload — warn-on-failure (file is source of truth)</text>
+
+  <text x="540" y="340" fill="#8b95a4" text-anchor="middle" font-size="11">Per the locked design (Q1): NEVER raises on any failure path. Lifespan continues.</text>
+</svg>
+</div>
+
+<h3>Token bootstrap (Q2)</h3>
+
+<p>
+  On first boot, <code>ensure_ingest_token()</code> in
+  <code>apps/monitor/homelab_monitor/kernel/alertmanager/render.py</code> looks up
+  an existing API token row named <code>alertmanager-ingest</code> AND its
+  plaintext under secret name <code>alertmanager-ingest-token</code>:
+</p>
+<ul>
+  <li><strong>Both present</strong> → emit <code>alertmanager.bootstrap.token_reused</code>,
+    return the plaintext.</li>
+  <li><strong>Both absent</strong> → mint via <code>make_api_token()</code> with
+    <code>Scope.ALERTS_INGEST_WRITE</code> + <code>who="system:alertmanager-bootstrap"</code>
+    (distinguishable in audit log); call <code>secrets_repo.set(...)</code>; emit
+    <code>alertmanager.bootstrap.token_minted</code>. Plaintext NEVER logged.</li>
+  <li><strong>Inconsistent pair</strong> (one present, one absent) → delete the
+    orphan, then mint fresh. Required because <code>api_tokens.name</code> and
+    <code>secrets.name</code> both have UNIQUE indexes; a half-existing pair would
+    collide on re-insert.</li>
+</ul>
+
+<h3>Atomic config render</h3>
+
+<p>
+  <code>render_config()</code> reads the template, substitutes
+  <code>${ALERTMANAGER_INGEST_TOKEN}</code>, and atomic-replaces the output:
+  writes to a sibling <code>.tmp</code> file via <code>tempfile.mkstemp</code>,
+  <code>os.replace</code>s into place. AM picking up a SIGHUP never sees a partial
+  file. The rendered file is group-owned by GID 2000 (group <code>amconfig</code>,
+  baked into the AM image's group_add) with mode <code>0o640</code> so AM (running
+  as nobody with supplementary GID 2000) can read it but no other host user can
+  read the bearer token. Unit-test environments without the <code>amconfig</code>
+  group keep the process default GID and 0o640.
+</p>
+
+<h3>vmalert + the first rules</h3>
+
+<p>
+  vmalert (metrics) sidecar args:
+  <code>-datasource.url=http://victoriametrics:8428</code>
+  <code>-notifier.url=http://alertmanager:9093</code>
+  <code>-rule=/etc/vmalert/metrics/*.yaml</code>
+  <code>-evaluationInterval=30s</code>
+  <code>-configCheckInterval=30s</code> (Q3 — file-watching reload; static rules
+  shipped from <code>deploy/vmalert/metrics/host.yaml</code>).
+</p>
+
+<table>
+  <thead><tr><th>Rule</th><th>Expression</th><th><code>for:</code></th><th>Severity</th></tr></thead>
+  <tbody>
+    <tr><td><code>HostHighCPU</code></td><td><code>avg_over_time(homelab_host_cpu_percent{cpu="all"}[5m]) &gt; 90</code></td><td>10m</td><td>warning</td></tr>
+    <tr><td><code>HostHighMemory</code></td><td><code>homelab_host_memory_bytes{type="used"} / homelab_host_memory_bytes{type="total"} &gt; 0.9</code></td><td>10m</td><td>warning</td></tr>
+    <tr><td><code>CollectorQuarantined</code></td><td><em>commented out</em>; awaits <code>homelab_collector_quarantine_count</code> gauge emission</td><td>—</td><td>warning</td></tr>
+  </tbody>
+</table>
+
+<p>
+  Severity vocabulary locked: <code>info</code>, <code>warning</code>, <code>error</code>,
+  <code>critical</code> (per spec §8.2). The scheduler's synthetic
+  <code>AlertFiringEvent</code> path from STAGE-001-013 covers the quarantine
+  alerting case until the gauge is wired (deferred to a future stage).
+</p>
+
+<!-- ====================================================== -->
+<h2 id="stage-018">7. STAGE-001-018 — vmalert (logs) + first log-derived rule <span class="tag tag-alerts">alerts</span> <span class="tag tag-logs">logs</span></h2>
+
+<p>
+  Two-vmalert pattern (the canonical upstream approach for VL + Prom-shaped
+  rules side by side). A second vmalert instance — named <code>vmalert-logs</code> —
+  targets VictoriaLogs with LogsQL rules, reusing the same Alertmanager
+  instance from STAGE-001-017.
+</p>
+
+<h3>vmalert-logs sidecar</h3>
+
+<p>
+  Same image as <code>vmalert-metrics</code>. Args:
+  <code>-datasource.url=http://victorialogs:9428</code>
+  <code>-notifier.url=http://alertmanager:9093</code>
+  <code>-rule=/etc/vmalert/logs/*.yaml</code>. The bare URL form is correct;
+  vmalert auto-suffixes the LogsQL endpoint. Existing AM flat routing accepts
+  <code>source_tool=vmalert-logs</code> alerts without changes.
+</p>
+
+<h3>LogsQL rules at <code>deploy/vmalert/logs/system.yaml</code></h3>
+
+<p>
+  Group <code>system_logs</code> with <strong><code>type: vlogs</code></strong>
+  discriminator (REQUIRED so vmalert dispatches to its LogsQL parser rather
+  than PromQL — otherwise the rule fails to load). LogsQL alerting expressions
+  must end in a <code>stats</code> pipe so vmalert can extract a numeric series,
+  optionally followed by a <code>filter</code> pipe for the threshold.
+</p>
+
+<table>
+  <thead><tr><th>Rule</th><th>LogsQL</th><th>Severity</th></tr></thead>
+  <tbody>
+    <tr><td><code>KernelOOM</code></td><td><code>_time:5m service:="kernel" "Out of memory" "kill_process" | stats by (host) count() as oom_count | filter oom_count:&gt;0</code></td><td>error</td></tr>
+    <tr><td><code>SshFailedLoginBurst</code></td><td><code>_time:5m service:="sshd" "Failed password" | stats by (host) count() as fail_count | filter fail_count:&gt;10</code></td><td>warning</td></tr>
+  </tbody>
+</table>
+
+<h3>Test counterpart with shorter windows</h3>
+
+<p>
+  <code>deploy/vmalert/logs-test/system.yaml</code> mirrors the production rules
+  with shorter windows: <code>count &gt; 0 over 30s</code> for OOM,
+  <code>count &gt; 2 over 30s</code> for SshFailedLoginBurst. Slow integration
+  tests load this rule file via the test rig's vmalert-logs-test service so
+  alerts can fire in &lt; 60s rather than &lt; 5 minutes. Production keeps
+  canonical 5m windows.
+</p>
+
+<h3>kthxbye coexistence</h3>
+
+<p>
+  The vmalert-logs notifier is wired identically to vmalert-metrics — a single
+  AM webhook flat-routes both metric- and log-derived alerts to
+  <code>/api/alerts/ingest</code>. <code>source_tool</code> is the discriminator
+  (<code>vmalert-metrics</code> vs <code>vmalert-logs</code>); kthxbye (added in
+  STAGE-001-019) extends silences regardless of source.
+</p>
+
+<h3>Cross-listed metric rule</h3>
+
+<p>
+  <code>deploy/vmalert/metrics/log_stream_budget.yaml</code> hosts
+  <code>LogStreamBudgetOverrun</code>: <code>homelab_log_stream_lines_per_sec &gt; 45</code>
+  for 5m, severity warning, source_tool <code>vmalert-metrics</code>. 45 = 90% of
+  vector's 50/sec hardcoded throttle. The <code>LogStreamBudgetCollector</code>
+  emits exactly two gauges (lines/sec and bytes-today) per <code>{host, service}</code>;
+  no daily-byte threshold is defined yet so we don't alert on bytes.
+</p>
+
+<div class="callout warn">
+  <strong>Refinement bug (HIGH, found in this stage but introduced earlier):</strong>
+  Docker healthchecks across STAGE-016/017 used
+  <code>wget http://localhost:&lt;port&gt;/...</code> but busybox-based images
+  (VM, VL, AM, vmalert) don't resolve <code>localhost</code> — no
+  <code>/etc/hosts</code> entry. Container dependency chains stalled in
+  "Created" state. Fixed by replacing all <code>http://localhost:</code> with
+  <code>http://127.0.0.1:</code> in BOTH compose files (10 services total).
+</div>
+
+<!-- ====================================================== -->
+<h2 id="stage-019">8. STAGE-001-019 — Karma + kthxbye <span class="tag tag-alerts">alerts</span> <span class="tag tag-ui">ui</span></h2>
+
+<p>
+  Karma (alert lifecycle UI) and kthxbye (auto-extends silences while alerts
+  fire) join the stack. Karma is hosted on the docker network only; the monitor
+  reverse-proxies <code>/api/karma/*</code> behind cookie-session auth so the
+  iframe at <code>/alerts</code> is gated by our login.
+</p>
+
+<h3>Karma at port 8081 (not 8080)</h3>
+
+<p>
+  Karma's default 8080 conflicts with pihole-unbound (network_mode: host) on
+  this homelab. Override:
+</p>
+
+<pre><code># deploy/karma/karma.yml
+listen:
+  address: 0.0.0.0
+  port: 8081
+  prefix: /api/karma/
+
+alertmanager:
+  servers:
+    - name: default
+      uri: http://alertmanager:9093
+      timeout: 10s
+      proxy: false
+      readonly: false
+
+ui:
+  refresh: 10s</code></pre>
+
+<p>
+  <code>listen.prefix: /api/karma/</code> means Karma expects requests under
+  that path; the proxy forwards the FULL incoming path verbatim, not just the
+  captured suffix.
+</p>
+
+<h3>The reverse-proxy router</h3>
+
+<p>
+  <code>apps/monitor/homelab_monitor/kernel/api/routers/karma.py</code> mounts a
+  catch-all <code>/api/karma/{path:path}</code> handler for every method
+  (GET / POST / PUT / PATCH / DELETE / HEAD / OPTIONS). Five layers of
+  defense:
+</p>
+
+<ol>
+  <li><strong>Auth</strong> — <code>require_session_no_csrf()</code> dependency
+    (cookie session required; CSRF EXEMPT — see Origin check below). Token auth
+    not exposed; Karma is interactive-UI-only.</li>
+  <li><strong>Path validation</strong> — regex
+    <code>^[A-Za-z0-9._/~+\-%]*$</code>; reject literal <code>..</code> segment
+    anywhere; reject null byte. Anything outside the safe set returns
+    <code>400 invalid_path</code>.</li>
+  <li><strong>Origin / Referer same-origin assertion</strong> on POST/PUT/PATCH/DELETE.
+    Reverse-proxy aware: when <code>HOMELAB_MONITOR_TRUST_FORWARDED_HEADERS=1</code>
+    is set, honors <code>X-Forwarded-Proto</code>; always reads <code>Host</code>.
+    Defense against the standard browser-attack model — does NOT defend against
+    a misconfigured upstream proxy that forwards client-supplied
+    <code>X-Forwarded-Proto</code> verbatim.</li>
+  <li><strong>Header allow-list both directions:</strong> request headers
+    forwarded upstream are limited to <code>accept</code>, <code>accept-encoding</code>,
+    <code>accept-language</code>, <code>cache-control</code>, <code>content-type</code>,
+    <code>content-length</code>, <code>if-modified-since</code>, <code>if-none-match</code>,
+    <code>user-agent</code>. <code>Cookie</code> and <code>Authorization</code> are
+    DELIBERATELY absent (those are ours, not Karma's). Response headers relayed
+    back: <code>content-type</code>, <code>content-length</code>, <code>content-encoding</code>,
+    <code>cache-control</code>, <code>etag</code>, <code>last-modified</code>,
+    <code>vary</code>. <code>Set-Cookie</code> and <code>X-Frame-Options</code> are
+    NEVER relayed.</li>
+  <li><strong>Streaming response</strong> with deferred <code>aclose</code> via an
+    <code>_aiter_with_close</code> generator so the upstream connection is
+    properly released after iteration.</li>
+</ol>
+
+<h3>Why CSRF-exempt is safe here</h3>
+
+<p>
+  The iframe at <code>/alerts</code> cannot attach the <code>X-CSRF-Token</code>
+  header — it lives on a same-origin sandboxed document with
+  <code>allow-same-origin</code> but no access to our top-frame JS context that
+  mints CSRF requests. The Origin / Referer same-origin check substitutes:
+  browsers cannot let scripted JS forge the <code>Origin</code> header on
+  cross-origin requests.
+</p>
+
+<h3>The CspHeadersMiddleware</h3>
+
+<p>
+  New pure-ASGI middleware (NOT <code>BaseHTTPMiddleware</code>) at
+  <code>kernel/api/middleware.py</code> injects
+  <code>Content-Security-Policy: frame-ancestors 'self'</code> on all responses
+  unless upstream already set one. This is the modern <code>X-Frame-Options</code>
+  replacement; ensures only same-origin pages can frame the monitor.
+  Comprehensive CSP deferred to a future hardening epic.
+</p>
+
+<h3>Iframe sandbox policy</h3>
+
+<p>
+  <code>&lt;iframe sandbox="allow-scripts allow-same-origin allow-forms"&gt;</code>
+  — minimum needed for Karma's same-origin React SPA + XHR-with-cookies +
+  ack/silence form submissions. <code>allow-popups</code>, <code>allow-modals</code>,
+  <code>allow-top-navigation</code> intentionally omitted.
+</p>
+
+<h3>kthxbye flag-ordering invariant</h3>
+
+<div class="callout danger">
+  <strong>kthxbye CRASHES if <code>extend-by</code> is not strictly greater than
+  <code>extend-if-expiring-in</code>.</strong> Refinement caught this in BOTH
+  compose files: prod 5m/6m and test 10s/15s were both invalid. Final values:
+  prod <code>-extend-by=10m -extend-if-expiring-in=6m -interval=1m -max-duration=24h</code>;
+  test <code>-extend-by=30s -extend-if-expiring-in=15s -interval=5s -max-duration=2m</code>.
+  e2e-tester caught the crash immediately on bringing up the test rig.
+</div>
+
+<h3>Origin check made reverse-proxy aware (Refinement)</h3>
+
+<p>
+  The original <code>_verify_origin</code> compared <code>Origin</code> to
+  <code>f"{request.url.scheme}://{request.url.netloc}"</code> — wrong when
+  behind nginx, traefik, or vite-dev's proxy. Karma iframe POST to
+  <code>/api/karma/api/v2/silences</code> got <code>403 cross_origin_blocked</code>.
+  Fix: use <code>Host</code> header (forwarded verbatim by HTTP/1.1 proxies) +
+  optional <code>X-Forwarded-Proto</code> (gated by
+  <code>HOMELAB_MONITOR_TRUST_FORWARDED_HEADERS=1</code>); fall back to
+  <code>request.url.{scheme,netloc}</code> only when those headers are absent.
+  Vite dev proxy correspondingly switched to <code>changeOrigin: false</code>.
+</p>
+
+<h3>Karma healthcheck removed (Refinement)</h3>
+
+<p>
+  Karma's image is distroless — no <code>wget</code>, <code>curl</code>, or
+  <code>sh</code>. The original <code>CMD-SHELL wget ...</code> healthcheck stuck
+  the container at "starting" forever. No service <code>depends_on</code> Karma's
+  health, so removing the healthcheck is safe; readiness is observed via the
+  monitor's reverse-proxy returning 502 if Karma is briefly down.
+</p>
+
+<!-- ====================================================== -->
+<h2 id="stage-020">9. STAGE-001-020 — Grafana + dashboards-as-code <span class="tag tag-grafana">grafana</span> <span class="tag tag-metrics">metrics</span></h2>
+
+<p>
+  STAGE-001-020 reuses STAGE-001-019's reverse-proxy + iframe-sandbox pattern
+  for Grafana. The Metrics screen renders a Grafana dashboard in kiosk mode
+  behind the monitor's auth, with a custom Grafana image that bakes in the
+  VictoriaLogs datasource plugin.
+</p>
+
+<h3>Custom Grafana image at <code>deploy/grafana/Dockerfile</code></h3>
+
+<pre><code>FROM grafana/grafana-oss:12.3.3
+
+ARG VL_PLUGIN_VERSION=v0.26.3
+ARG VL_PLUGIN_URL=https://github.com/VictoriaMetrics/victorialogs-datasource/\
+    releases/download/${VL_PLUGIN_VERSION}/\
+    victoriametrics-logs-datasource-${VL_PLUGIN_VERSION}.zip
+
+USER root
+RUN apk add --no-cache curl unzip \
+ && mkdir -p /var/lib/grafana/plugins \
+ && curl -fsSL "${VL_PLUGIN_URL}" -o /tmp/vl-plugin.zip \
+ && unzip -q /tmp/vl-plugin.zip -d /var/lib/grafana/plugins/ \
+ && rm /tmp/vl-plugin.zip \
+ && test -f /var/lib/grafana/plugins/\
+    victoriametrics-logs-datasource/plugin.json \
+ && chown -R grafana:root /var/lib/grafana/plugins \
+ && apk del curl unzip
+
+ENV GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS=victoriametrics-logs-datasource
+USER grafana</code></pre>
+
+<p>
+  Published to GHCR via <code>.github/workflows/grafana-image.yml</code> as
+  <code>ghcr.io/jakekausler/homelab-monitor-grafana:latest</code> +
+  <code>:12.3.3-vlplugin0.26.3</code> (immutable). On the very first CI run the
+  image won't exist in GHCR yet; <code>docker compose build</code> falls back to
+  building it locally from this Dockerfile.
+</p>
+
+<div class="callout warn">
+  <strong>Spec correction baked into Design (Decision B):</strong> the original
+  stage spec called for a "Loki-compatible datasource" pointing at VL. Upstream
+  research confirmed VL does NOT implement enough of the Loki HTTP API for
+  Grafana integration (<code>/loki/api/v1/index/volume</code> missing —
+  VictoriaMetrics/VictoriaLogs#250). The native
+  <code>victoriametrics-logs-datasource</code> plugin is the supported path,
+  hence the custom image.
+</div>
+
+<h3>Provisioning paradigm</h3>
+
+<p>
+  Two YAML provisioning configs + JSON dashboards, all checked into git:
+</p>
+
+<table>
+  <thead><tr><th>File</th><th>Provider</th><th>Notes</th></tr></thead>
+  <tbody>
+    <tr><td><code>deploy/grafana/provisioning/datasources/victoriametrics.yaml</code></td><td>Prometheus type</td><td>URL <code>http://victoriametrics:8428</code></td></tr>
+    <tr><td><code>deploy/grafana/provisioning/datasources/victorialogs.yaml</code></td><td><code>victoriametrics-logs-datasource</code></td><td>URL <code>http://victorialogs:9428</code> (native plugin)</td></tr>
+    <tr><td><code>deploy/grafana/provisioning/dashboards/default.yaml</code></td><td>file provider</td><td><code>allowUiUpdates=false</code>, <code>disableDeletion=true</code>, 30s sync from <code>/var/lib/grafana/dashboards</code></td></tr>
+    <tr><td><code>deploy/grafana/dashboards/host-overview.json</code></td><td>Grafana v12 schema 40</td><td>6 panels: CPU%, load avg, memory used % (gauge), disk used % per mountpoint (bargauge), network throughput, uptime</td></tr>
+  </tbody>
+</table>
+
+<h3>Sub-path proxy mode</h3>
+
+<p>
+  <code>/api/grafana/{path:path}</code> reverse proxy at
+  <code>apps/monitor/homelab_monitor/kernel/api/routers/grafana.py</code> mirrors
+  the Karma router structure verbatim (rename + Grafana-specific URL):
+  <code>http://grafana:3000/api/grafana/{path}</code>. Grafana itself runs with:
+</p>
+
+<table>
+  <thead><tr><th>Env var</th><th>Value</th><th>Purpose</th></tr></thead>
+  <tbody>
+    <tr><td><code>GF_SERVER_SERVE_FROM_SUB_PATH</code></td><td><code>true</code></td><td>Tells Grafana its assets live under <code>/api/grafana/</code></td></tr>
+    <tr><td><code>GF_SERVER_ROOT_URL</code></td><td><code>http://127.0.0.1/api/grafana/</code></td><td>Templated via <code>${GRAFANA_PUBLIC_URL}</code> in prod (Spec B fix)</td></tr>
+    <tr><td><code>GF_SECURITY_ALLOW_EMBEDDING</code></td><td><code>true</code></td><td>Allows iframe embedding (X-Frame-Options stripped from upstream by the proxy)</td></tr>
+    <tr><td><code>GF_AUTH_ANONYMOUS_ENABLED</code></td><td><code>true</code></td><td>Anonymous viewer; auth boundary is the monitor's reverse proxy</td></tr>
+    <tr><td><code>GF_AUTH_ANONYMOUS_ORG_ROLE</code></td><td><code>Viewer</code></td><td>Read-only inside Grafana</td></tr>
+    <tr><td><code>GF_AUTH_DISABLE_LOGIN_FORM</code></td><td><code>true</code></td><td>No Grafana login UI to confuse users</td></tr>
+    <tr><td><code>GF_LIVE_DISABLE</code></td><td><code>true</code></td><td>Grafana proxy is HTTP-only; no WebSocket upgrade path</td></tr>
+    <tr><td><code>GF_SECURITY_COOKIE_SAMESITE</code></td><td><code>lax</code></td><td>Iframe needs lax for same-site cookies</td></tr>
+  </tbody>
+</table>
+
+<h3>Anonymous-Viewer-behind-monitor-auth security model</h3>
+
+<div class="callout">
+  <strong>The auth boundary is the monitor's reverse proxy, not Grafana itself.</strong>
+  Single-user homelab; <code>GF_AUTH_ANONYMOUS_ENABLED=true</code> is safe because
+  Grafana is only reachable through <code>/api/grafana/*</code> behind cookie
+  session auth. Direct network access to the Grafana container is blocked
+  (internal-only on <code>homelab-monitor-net</code>; no host port binding in prod).
+  The admin user (rendered from secrets at boot, similar to the AM token) is
+  for emergency direct access.
+</div>
+
+<h3>Kiosk mode + escape hatch</h3>
+
+<p>
+  The Metrics screen iframe loads
+  <code>/api/grafana/d/host-overview/host-overview?kiosk</code> — full kiosk, no
+  Grafana nav. An "Open in Grafana ↗" link opens the same dashboard without
+  <code>?kiosk</code> in a new tab for users who need Grafana's full UI (alerts
+  admin, plugin management, Explore view for ad-hoc PromQL).
+</p>
+
+<h3>Refinement-phase tag correction</h3>
+
+<p>
+  Brainstormer's recommended tag <code>grafana/grafana-oss:12.1.10</code> does NOT
+  exist on Docker Hub — document-specialist's research had given a tag that
+  wasn't actually published. Available v12 tags: 12.4.3 (latest), 12.3.3, 12.2.0.
+  Updated both compose files + the Dockerfile <code>FROM</code> to
+  <code>grafana/grafana-oss:12.3.3</code> (stable, baked, not bleeding edge).
+  Verified via <code>docker pull</code> + <code>/api/health</code>.
+</p>
+
+<!-- ====================================================== -->
+<h2 id="stage-021">10. STAGE-001-021 — Full integration rig + canonical e2e + dev/prod tooling + CI <span class="tag tag-ci">ci</span> <span class="tag tag-alerts">alerts</span></h2>
+
+<p>
+  The capstone. Three sequential Build specs (A: rig core; B: dev/prod tooling;
+  C: CI integration) deliver a 14-service docker-compose test rig, the canonical
+  end-to-end test that proves the alert pipeline, the developer workflow
+  scripts (<code>make dev</code>, <code>make dev-prod</code>), and the GitHub
+  Actions integration job that runs the rig on every PR.
+</p>
+
+<h3>Test rig topology (<code>deploy/compose/docker-compose.test.yml</code>)</h3>
+
+<div class="svg-wrap">
+<svg viewBox="0 0 1120 540" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system, sans-serif" font-size="13">
+  <defs>
+    <marker id="arr-21" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#94a3b8"/>
+    </marker>
+  </defs>
+
+  <!-- Fixture targets -->
+  <rect x="20" y="40" width="180" height="60" rx="6" fill="#161b22" stroke="#fb923c"/>
+  <text x="110" y="64" fill="#fb923c" text-anchor="middle">fixture-host</text>
+  <text x="110" y="82" fill="#8b95a4" text-anchor="middle" font-size="11">FastAPI; /control + /metrics</text>
+
+  <rect x="20" y="120" width="180" height="60" rx="6" fill="#161b22" stroke="#a3e635"/>
+  <text x="110" y="144" fill="#a3e635" text-anchor="middle">noisy-logger</text>
+  <text x="110" y="162" fill="#8b95a4" text-anchor="middle" font-size="11">FastAPI; POST /log</text>
+
+  <!-- vmagent / vector -->
+  <rect x="240" y="40" width="180" height="60" rx="6" fill="#161b22" stroke="#38bdf8"/>
+  <text x="330" y="64" fill="#38bdf8" text-anchor="middle">vmagent</text>
+  <text x="330" y="82" fill="#8b95a4" text-anchor="middle" font-size="11">scrapes monitor + fixture-host</text>
+
+  <rect x="240" y="120" width="180" height="60" rx="6" fill="#161b22" stroke="#a3e635"/>
+  <text x="330" y="144" fill="#a3e635" text-anchor="middle">vector</text>
+  <text x="330" y="162" fill="#8b95a4" text-anchor="middle" font-size="11">tails docker logs</text>
+
+  <line x1="200" y1="70" x2="240" y2="70" stroke="#94a3b8" marker-end="url(#arr-21)"/>
+  <line x1="200" y1="150" x2="240" y2="150" stroke="#94a3b8" marker-end="url(#arr-21)"/>
+
+  <!-- VM / VL -->
+  <rect x="460" y="40" width="180" height="60" rx="6" fill="#161b22" stroke="#38bdf8"/>
+  <text x="550" y="64" fill="#38bdf8" text-anchor="middle">victoriametrics</text>
+  <text x="550" y="82" fill="#8b95a4" text-anchor="middle" font-size="11">remote-write + query</text>
+
+  <rect x="460" y="120" width="180" height="60" rx="6" fill="#161b22" stroke="#a3e635"/>
+  <text x="550" y="144" fill="#a3e635" text-anchor="middle">victorialogs</text>
+  <text x="550" y="162" fill="#8b95a4" text-anchor="middle" font-size="11">jsonline ingest + LogsQL</text>
+
+  <line x1="420" y1="70" x2="460" y2="70" stroke="#94a3b8" marker-end="url(#arr-21)"/>
+  <line x1="420" y1="150" x2="460" y2="150" stroke="#94a3b8" marker-end="url(#arr-21)"/>
+
+  <!-- vmalert pair -->
+  <rect x="680" y="40" width="180" height="60" rx="6" fill="#161b22" stroke="#fb7185"/>
+  <text x="770" y="64" fill="#fb7185" text-anchor="middle">vmalert-metrics</text>
+  <text x="770" y="82" fill="#8b95a4" text-anchor="middle" font-size="11">PromQL rules</text>
+
+  <rect x="680" y="120" width="180" height="60" rx="6" fill="#161b22" stroke="#fb7185"/>
+  <text x="770" y="144" fill="#fb7185" text-anchor="middle">vmalert-logs-test</text>
+  <text x="770" y="162" fill="#8b95a4" text-anchor="middle" font-size="11">LogsQL rules (30s windows)</text>
+
+  <line x1="640" y1="70" x2="680" y2="70" stroke="#94a3b8" marker-end="url(#arr-21)"/>
+  <line x1="640" y1="150" x2="680" y2="150" stroke="#94a3b8" marker-end="url(#arr-21)"/>
+
+  <!-- AM -->
+  <rect x="900" y="80" width="180" height="60" rx="6" fill="#161b22" stroke="#fb7185"/>
+  <text x="990" y="104" fill="#fb7185" text-anchor="middle">alertmanager</text>
+  <text x="990" y="122" fill="#8b95a4" text-anchor="middle" font-size="11">webhook → /api/alerts/ingest</text>
+
+  <line x1="860" y1="70" x2="900" y2="105" stroke="#94a3b8" marker-end="url(#arr-21)"/>
+  <line x1="860" y1="150" x2="900" y2="115" stroke="#94a3b8" marker-end="url(#arr-21)"/>
+
+  <!-- Karma + kthxbye -->
+  <rect x="900" y="180" width="180" height="60" rx="6" fill="#161b22" stroke="#fb7185"/>
+  <text x="990" y="204" fill="#fb7185" text-anchor="middle">karma</text>
+  <text x="990" y="222" fill="#8b95a4" text-anchor="middle" font-size="11">port 8081, /api/karma/</text>
+
+  <rect x="900" y="260" width="180" height="60" rx="6" fill="#161b22" stroke="#fb7185"/>
+  <text x="990" y="284" fill="#fb7185" text-anchor="middle">kthxbye</text>
+  <text x="990" y="302" fill="#8b95a4" text-anchor="middle" font-size="11">extends silences</text>
+
+  <line x1="990" y1="140" x2="990" y2="180" stroke="#94a3b8" marker-end="url(#arr-21)"/>
+  <line x1="990" y1="240" x2="990" y2="260" stroke="#94a3b8" marker-end="url(#arr-21)"/>
+
+  <!-- Monitor + Grafana + integration-tests -->
+  <rect x="460" y="260" width="180" height="60" rx="6" fill="#161b22" stroke="#58a6ff"/>
+  <text x="550" y="284" fill="#58a6ff" text-anchor="middle">monitor</text>
+  <text x="550" y="302" fill="#8b95a4" text-anchor="middle" font-size="11">prod image; lifespan render</text>
+
+  <rect x="460" y="340" width="180" height="60" rx="6" fill="#161b22" stroke="#fbbf24"/>
+  <text x="550" y="364" fill="#fbbf24" text-anchor="middle">grafana</text>
+  <text x="550" y="382" fill="#8b95a4" text-anchor="middle" font-size="11">custom image, baked plugin</text>
+
+  <rect x="240" y="340" width="180" height="60" rx="6" fill="#0a0d12" stroke="#94a3b8"/>
+  <text x="330" y="364" fill="#94a3b8" text-anchor="middle">integration-tests</text>
+  <text x="330" y="382" fill="#8b95a4" text-anchor="middle" font-size="11">pytest -m integration</text>
+
+  <line x1="900" y1="105" x2="640" y2="285" stroke="#fb7185" stroke-dasharray="3 2" marker-end="url(#arr-21)"/>
+
+  <text x="540" y="490" fill="#8b95a4" text-anchor="middle" font-size="11">14 services on `homelab-monitor-test-net`. /shared tmpfs carries the rig API token from monitor → integration-tests.</text>
+</svg>
+</div>
+
+<h3>The Rig helper</h3>
+
+<p>
+  <code>apps/monitor/tests/integration/helpers/rig.py</code> wraps the common
+  operations integration tests perform against the live stack:
+</p>
+
+<table>
+  <thead><tr><th>Method</th><th>Purpose</th></tr></thead>
+  <tbody>
+    <tr><td><code>Rig.boot()</code></td><td>Context manager; reads URLs from env (<code>MONITOR_URL</code>, <code>FIXTURE_HOST_URL</code>, etc.) with compose-internal-DNS defaults; opens an httpx.Client; logs in to capture session cookie + CSRF; reads bootstrap token from <code>/shared/rig-token</code></td></tr>
+    <tr><td><code>set_fixture_cpu(value)</code></td><td>POST to fixture-host's <code>/control</code> to set the controllable CPU% gauge</td></tr>
+    <tr><td><code>plant_log_line(line)</code></td><td>POST to noisy-logger's <code>/log</code> (drives vector → VL)</td></tr>
+    <tr><td><code>wait_for_alert(name, source_tool, severity, timeout_s)</code></td><td>Polls <code>/api/alerts</code> with deadline; returns the matching alert dict</td></tr>
+    <tr><td><code>wait_for_resolution(alert_id, timeout_s)</code></td><td>Polls until <code>resolved_at</code> is populated</td></tr>
+    <tr><td><code>wait_for_sse_event(kind, match_alert_id, timeout_s)</code></td><td>Opens fresh SSE connection (replays last 50 events) so tests don't have to maintain long-lived streams</td></tr>
+  </tbody>
+</table>
+
+<h3>The canonical e2e test</h3>
+
+<p>
+  <code>apps/monitor/tests/integration/test_canonical_e2e.py</code> exercises the
+  ENTIRE alert pipeline:
+</p>
+
+<pre><code>fixture-host /control → Prometheus metric series →
+  vmagent scrape → VictoriaMetrics →
+    vmalert-metrics evaluation (FixtureHostHighCPU rule) →
+      Alertmanager fire → webhook →
+        monitor /api/alerts/ingest → alerts table + SSE broker
+
+[wait ≤ 60s; assert firing alert with source_tool=vmalert-metrics]
+
+fixture-host /control (cpu=5) → rule no longer satisfied →
+  vmalert → AM resolved notification → monitor ingest →
+    mark_resolved + AlertResolvedEvent on broker
+
+[wait ≤ 60s; assert resolved + SSE event]</code></pre>
+
+<p>
+  Total wall clock ~ 30-90s on a warm rig. Marked
+  <code>@pytest.mark.integration @pytest.mark.slow</code>; gated by
+  <code>make integration</code> rather than the default suite.
+</p>
+
+<h3>All 18 integration tests</h3>
+
+<table>
+  <thead><tr><th>Test</th><th>Path it exercises</th></tr></thead>
+  <tbody>
+    <tr><td><code>test_smoke</code></td><td>Fixture host reachable on boot</td></tr>
+    <tr><td><code>test_canonical_e2e</code></td><td>Full metrics → alert pipeline (above)</td></tr>
+    <tr><td><code>test_heartbeat_path</code></td><td><code>POST /api/hb/{path}</code> — token auth, 204 (stub for EPIC-002)</td></tr>
+    <tr><td><code>test_vector_to_vl_path</code></td><td>noisy-logger → vector → VL → <code>/api/logs/query</code> returns it</td></tr>
+    <tr><td><code>test_vmalert_logs_pipeline</code></td><td>4 sub-tests: rules-load, OOM fires, SSH burst fires, OOM resolves on aging-out</td></tr>
+    <tr><td><code>test_quarantine_path</code></td><td>Induce 3 collector failures → quarantine alert appears in <code>/api/alerts</code> via the scheduler's internal API path (NOT vmalert)</td></tr>
+    <tr><td><code>test_karma_ack_canonical</code></td><td>Programmatic ack via Karma's API → AM silence created → alert moves to silenced; kthxbye extends silence</td></tr>
+    <tr><td><code>test_grafana_provisioning</code></td><td>3 sub-tests: dashboard provisions on first boot; VM datasource works; VL plugin loaded with valid signature config</td></tr>
+    <tr><td><code>test_vmalert_pipeline</code></td><td>STAGE-017 metrics-side smoke (rules load + AM accepts rendered config)</td></tr>
+    <tr><td><code>test_karma_kthxbye_pipeline</code></td><td>2 sub-tests: ack→extend, non-ack→no-extend</td></tr>
+  </tbody>
+</table>
+
+<h3>Dev / prod tooling (Spec B)</h3>
+
+<table>
+  <thead><tr><th>Make target</th><th>Command</th><th>Purpose</th></tr></thead>
+  <tbody>
+    <tr><td><code>make dev</code></td><td><code>scripts/dev-up.sh</code></td><td>Hybrid: docker sidecars + host uvicorn + host pnpm dev (hot-reload)</td></tr>
+    <tr><td><code>make dev-clean</code></td><td><code>scripts/dev-up.sh --clean</code></td><td>Kill existing dev processes + tear down docker + volumes; restart fresh</td></tr>
+    <tr><td><code>make dev-prod</code></td><td><code>scripts/dev-up.sh --prod</code></td><td>No host processes; full prod compose stack with locally-built monitor image</td></tr>
+    <tr><td><code>make dev-down</code></td><td><code>scripts/dev-down.sh</code></td><td>Detect mode + graceful tear-down</td></tr>
+  </tbody>
+</table>
+
+<p>
+  Single source of truth for ports + env vars: <code>deploy/dev/dev.env.example</code>
+  (32 env vars + 13 ports) checked in; <code>deploy/dev/dev.env</code> gitignored,
+  user-generated from example, <code>chmod 600</code>. Sourced by both
+  <code>dev-up.sh</code> and the test rig — port choices never drift.
+</p>
+
+<h3>Prod Dockerfile correctness fixes (Spec B)</h3>
+
+<ul>
+  <li><strong><code>.dockerignore</code> re-includes <code>!apps/monitor/alembic/</code></strong>
+    (originally fixed in STAGE-001-019 Refinement when the prod monitor image
+    was missing alembic and aborting on lifespan migrations).</li>
+  <li><strong><code>RUN mkdir -p /data &amp;&amp; chown -R homelab:homelab /data</code></strong>
+    BEFORE the USER switch — the container user (uid 1000) must own the
+    <code>/data</code> volume mount or SQLite write fails.</li>
+  <li><strong><code>GF_SERVER_ROOT_URL</code></strong> templated via
+    <code>${GRAFANA_PUBLIC_URL}</code> rather than hardcoded so prod can route
+    through nginx.</li>
+</ul>
+
+<h3>CI integration job (Spec C)</h3>
+
+<p>
+  <code>.github/workflows/ci.yml</code> adds an <code>integration</code> job
+  (timeout 10 min). Architecture:
+</p>
+
+<ol>
+  <li>pnpm install + <code>generate-types</code> + <code>pnpm --filter ui build</code>
+    — the prod Dockerfile expects <code>apps/ui/dist</code> to exist.</li>
+  <li>Set up Docker Buildx; log in to GHCR (avoid public-image rate limits on
+    karma + kthxbye; pull custom Grafana image).</li>
+  <li>Pre-warm BuildKit GHA layer cache (<code>type=gha,scope=integration-*</code>)
+    for 5 images: monitor, integration-tests, fixture-host, noisy-logger,
+    grafana custom image. <code>docker compose --build</code> reuses the warmed
+    layers automatically.</li>
+  <li><code>bash scripts/run-integration.sh</code> with
+    <code>DOCKER_BUILDKIT=1</code>. Final CI runtime: 7 minutes 24 seconds for
+    18/18 tests.</li>
+</ol>
+
+<p>
+  The companion <code>.github/workflows/grafana-image.yml</code> publishes the
+  custom Grafana image to GHCR on changes to <code>deploy/grafana/**</code>.
+  <code>.github/dependabot.yml</code> entry for the docker ecosystem at
+  <code>/deploy/grafana</code> tracks plugin version bumps.
+</p>
+
+<div class="callout warn">
+  <strong>Refinement-phase CI surprises:</strong> 4 issues didn't reproduce
+  locally. (a) frontend lint failed because <code>apps/ui/src/api/schema.ts</code>
+  is gitignored and CI lint job didn't run generate-types first. (b) Integration
+  job docker build failed because <code>apps/ui/dist</code> didn't exist — added
+  pnpm + UI build steps. (c) <code>HOMELAB_MONITOR_MASTER_KEY</code> default in
+  test compose was 34 bytes (kernel requires exactly 32). (d) Canonical e2e + 3
+  vmalert-logs tests failed because monitor's <code>render_on_boot</code> raised
+  <code>PermissionError</code> writing tempfile in
+  <code>/etc/alertmanager/</code> — bind-mounted <code>am-config-seed/</code>
+  directory had host-filesystem ownership but monitor runs as uid 1000:1000.
+  Fixed by extending <code>run-integration.sh</code> pre-seed step to
+  <code>chown</code> the dir to 1000:2000 with mode 2775 (setgid).
+</div>
+
+<h3>Heartbeat router (stub for EPIC-002)</h3>
+
+<p>
+  <code>POST /api/hb/{path}</code> at
+  <code>apps/monitor/homelab_monitor/kernel/api/routers/heartbeat.py</code> —
+  token-only auth via <code>Scope.HEARTBEAT_WRITE</code>; returns 204 No Content
+  with body discarded. Real heartbeat receiver behavior (state-machine,
+  lateness alerts) lands in EPIC-002. The endpoint exists in this stage solely
+  so the integration test rig can prove auth on the path works.
+</p>
+
+<h3>Removing the integration-test ignore</h3>
+
+<p>
+  <code>pyproject.toml</code> <code>addopts</code> previously included
+  <code>--ignore=tests/integration</code> so the default test run skipped them.
+  Spec A removed the ignore in favor of <code>-m 'not integration'</code> with
+  an AST-based guardrail test at <code>test_integration_markers_guardrail.py</code>
+  that asserts every test function under <code>tests/integration/</code> carries
+  the <code>@pytest.mark.integration</code> marker. The guardrail had to learn
+  to skip pytest fixtures (initial impl flagged a fixture named
+  <code>test_webhook</code> just because its name started with <code>test_</code>);
+  the fix inspects decorator AST for <code>@pytest.fixture</code>.
+</p>
+
+<!-- ====================================================== -->
+<h2 id="closure">11. EPIC-001 closure</h2>
+
+<p>
+  21/21 stages complete. EPIC-001 — "Foundation" — is closed. What's now
+  possible end-to-end:
+</p>
+
+<ul>
+  <li><strong>A real homelab metric (host CPU) flows from <code>psutil</code> →
+    Prometheus registry → vmagent scrape → VictoriaMetrics → MetricsQL → vmalert
+    → Alertmanager → monitor ingest → SSE broker → React UI.</strong>
+    Latency budget &lt; 60s confirmed by the canonical e2e test.</li>
+  <li><strong>Logs flow from any docker container → vector → VictoriaLogs →
+    LogsQL → vmalert-logs → Alertmanager → monitor ingest.</strong> Same
+    fan-out infrastructure as metrics, distinguished only by
+    <code>source_tool=vmalert-logs</code> on the alert row.</li>
+  <li><strong>Operators can ack / silence alerts in Karma (embedded iframe at
+    <code>/alerts</code>) or browse Grafana dashboards (embedded iframe at
+    <code>/metrics</code>) without ever leaving the monitor's auth context.</strong>
+    Both iframes are gated by cookie-session reverse proxies with strict
+    same-origin checks.</li>
+  <li><strong>kthxbye keeps silences alive while alerts continue firing</strong>
+    — solving the "silence expired but alert still active → re-page noise"
+    failure mode that vanilla AM has.</li>
+  <li><strong>The full stack runs in CI on every PR via a 14-service test rig
+    in &lt; 8 minutes</strong> with BuildKit GHA layer cache. Required for
+    merge to main.</li>
+  <li><strong>Backups are operator-driven via <code>POST /api/admin/backup</code>
+    or <code>hm backup run</code></strong> — SQLite + VM snapshot files,
+    7-daily retention by default, never includes the master key.</li>
+  <li><strong>Disk-budget self-monitoring</strong> emits per-slot bytes,
+    derived budget, and used%; vmalert fires at 70/85/95 thresholds; the
+    auto-shrink decision-only path is in place but no destructive action is
+    taken in v1.</li>
+  <li><strong>Developers can spin up the full hybrid stack with <code>make dev</code></strong>
+    (docker sidecars + host uvicorn + host pnpm dev) or the full prod-image
+    variant with <code>make dev-prod</code>.</li>
+</ul>
+
+<h3>What got built — by the numbers</h3>
+
+<div class="grid-3">
+  <div class="panel">
+    <h4>Backend</h4>
+    <p>
+      <strong>~1129</strong> backend tests at <strong>100% kernel coverage</strong>
+      (4741 stmts, 0 missed). 21 stages of additive Alembic migrations. New routers across stages 12-21:
+      alerts, metrics (snapshot/range), logs (query/streams), admin (backup),
+      karma proxy, grafana proxy, heartbeat. New kernel packages:
+      <code>kernel/alerts/</code>, <code>kernel/dispatch/</code>,
+      <code>kernel/metrics/</code>, <code>kernel/logs/</code>,
+      <code>kernel/alertmanager/</code>, <code>kernel/backup/</code>.
+    </p>
+  </div>
+  <div class="panel">
+    <h4>Frontend</h4>
+    <p>
+      <strong>~110</strong> vitest tests at &gt;75% branch coverage. React 19
+      + Vite + TS strict + TanStack Router + TanStack Query + shadcn/ui +
+      Recharts. 4 routes (<code>/login</code>, <code>/overview</code>,
+      <code>/alerts</code>, <code>/metrics</code>); 13-item sidebar with
+      coming-soon placeholders. Dark mode default; mobile-responsive layout
+      with overlay sheet sidebar.
+    </p>
+  </div>
+  <div class="panel">
+    <h4>Infrastructure</h4>
+    <p>
+      <strong>14 services</strong> in the test rig
+      (<code>monitor</code>, <code>victoriametrics</code>, <code>victorialogs</code>,
+      <code>vmagent</code>, <code>vector</code>, <code>vmalert-metrics</code>,
+      <code>vmalert-logs-test</code>, <code>alertmanager</code>, <code>karma</code>,
+      <code>kthxbye</code>, <code>grafana</code>, <code>fixture-host</code>,
+      <code>noisy-logger</code>, <code>integration-tests</code>). Custom Grafana
+      image published to GHCR. CI integration job runs all 18 integration tests
+      in &lt; 8 minutes via BuildKit GHA cache.
+    </p>
+  </div>
+</div>
+
+<!-- ====================================================== -->
+<h2 id="whats-next">12. What's next</h2>
+
+<p>
+  EPIC-001 closes the foundation. Future epics layer real-world integrations,
+  the auto-fix subsystem, and per-domain collectors on top:
+</p>
+
+<ul>
+  <li><strong>EPIC-002 — Heartbeats:</strong> the heartbeat router stub in
+    STAGE-001-021 becomes a real receiver. State machine (ok / late / silent),
+    lateness alerts, Healthchecks.io-style ping URLs. The
+    <code>heartbeats_state</code> table from migration 0001 finally gets columns.</li>
+  <li><strong>EPIC-003 — Docker integration:</strong> cAdvisor + node_exporter
+    scrape targets land in vmagent's config. Container restart loop detection,
+    OOM-kill correlation, image-tag drift suggestions.</li>
+  <li><strong>EPIC-004 — Drain log clustering:</strong> log-pattern alerting
+    moves from hand-written LogsQL rules to discovered signatures. Redaction
+    policy lands here.</li>
+  <li><strong>EPIC-005 — Home Assistant integration:</strong> the
+    <code>HomeAssistantClient | None</code> field on <code>CollectorContext</code>
+    finally gets a real implementation. HA-driven push channels for alerts.</li>
+  <li><strong>EPIC-006 — Pi-hole, EPIC-007 — Synology, EPIC-008 — Unifi:</strong>
+    per-domain collectors + per-integration Grafana dashboards.</li>
+  <li><strong>EPIC-009 — Auto-fix subsystem:</strong> the
+    <code>runbooks</code> + <code>runbook_runs</code> tables come alive. Allow-list
+    per alert type, dedicated <code>homelab-fixer</code> low-priv user, per-runbook
+    rate-limit + cooldown, risky runbooks require dry-run + ack first, full
+    audit, global kill switch (per <code>project_autofix_safety_model.md</code>).</li>
+  <li><strong>EPIC-010 — Tool-effectiveness scorecards:</strong> the
+    <code>tool_scorecards</code> + <code>alert_outcomes</code> rollups become a UI
+    surface. action_rate, dedup_overlap, alerts-by-source-tool over time.</li>
+  <li><strong>EPIC-012 — Routing rules + maintenance windows:</strong> the
+    static-channel-list dispatcher gains DB-driven routing. rrule-based
+    suppression windows.</li>
+  <li><strong>EPIC-013 — External channels:</strong> HA push, Discord, SMTP,
+    ntfy. The <code>channels</code> table from migration 0001 finally gets
+    config columns.</li>
+  <li><strong>EPIC-015 — Netdata streaming + EPIC-017 — SSH client factory:</strong>
+    the <code>_StubSshFactory.open</code> placeholder gets a real paramiko-based
+    implementation; remote host metric streaming.</li>
+</ul>
+
+<!-- ====================================================== -->
+<h2 id="invariants">13. Cross-cutting invariants reinforced in stages 12-21</h2>
+
+<ul>
+  <li><strong>Async-only kernel.</strong> Every IO path goes through
+    <code>asyncio</code> + <code>aiosqlite</code>; no blocking calls inside
+    <code>ASYNC</code> collectors. STAGE-001-016's
+    <code>VictoriaLogsWriter</code> is the canonical example of bridging a sync
+    Protocol (<code>LogsWriter.ingest</code>) to an async HTTP client via a
+    bounded queue + background worker.</li>
+  <li><strong>audit_log singular.</strong> The table name is
+    <code>audit_log</code>, NOT <code>audit_logs</code> (singular by convention,
+    not by accident). STAGE-001-013 Finalize fixed a typo that referenced
+    <code>audit_logs</code> in a mark_resolved code path.</li>
+  <li><strong>Render-on-boot pattern</strong> (STAGE-001-017) is the canonical
+    way to inject runtime-minted secrets into sidecar config files: lifespan
+    looks up an existing token-secret pair OR mints a fresh pair atomically
+    with audit log; renders the template with <code>tempfile.mkstemp</code> +
+    <code>os.replace</code> for atomicity; calls the sidecar's
+    <code>/-/reload</code> endpoint with warn-on-failure (file is source of
+    truth). NEVER raises — degrades gracefully so lifespan continues.</li>
+  <li><strong>Reverse-proxy router pattern</strong> (STAGE-001-019, reused
+    verbatim in STAGE-001-020): catch-all <code>/{path:path}</code> + path
+    validation regex + Origin/Referer same-origin assertion +
+    explicit request/response header allow-lists +
+    <code>require_session_no_csrf()</code> for iframe-driven flows + streaming
+    response with deferred <code>aclose</code>.</li>
+  <li><strong>Multiplex writer pattern</strong> (STAGE-001-015 metrics,
+    STAGE-001-016 logs): keep the existing in-memory writer; add a real
+    backend writer; fan every <code>write_*</code> / <code>ingest()</code> call to
+    BOTH. Preserves test ergonomics and provides an in-memory buffer that
+    rides out backend outages.</li>
+  <li><strong>Static config files over code-generated.</strong> Both
+    STAGE-001-015 (vmagent scrape) and STAGE-001-016 (vector.toml) explicitly
+    rejected dynamic config generation. Hand-authored YAML/TOML is reviewable
+    in git; reload = container restart; no monitor↔sidecar lifecycle coupling.</li>
+  <li><strong>GHCR-published custom images.</strong> The custom Grafana image
+    (STAGE-001-020 deliverable) is published via a separate GitHub Actions
+    workflow on changes to <code>deploy/grafana/**</code>; CI integration job
+    pulls from GHCR with a local-build fallback for the very first run before
+    the workflow has run. Pattern is reusable for any future image we need to
+    bake plugins or config into.</li>
+  <li><strong>Fixture-driven integration tests.</strong> STAGE-001-021's
+    <code>fixture-host</code> (FastAPI / Prometheus exporter with a
+    <code>/control</code> endpoint to set arbitrary metric values) and
+    <code>noisy-logger</code> (POST /log emits to stdout for vector) are the
+    canonical pattern for deterministically tripping vmalert rules in tests.
+    Direct VL POSTs via <code>vl_planter.py</code> are the helper for
+    log-derived alerts where the vector→VL path isn't under test.</li>
+  <li><strong>Origin/Referer same-origin defense for CSRF-exempt iframe routes.</strong>
+    The Karma + Grafana proxies cannot use the standard CSRF cookie pattern
+    because the iframe document can't read our top-frame CSRF cookie via JS.
+    Origin/Referer same-origin enforcement (browsers cannot let scripted JS
+    forge those headers cross-origin) substitutes — gated by
+    <code>HOMELAB_MONITOR_TRUST_FORWARDED_HEADERS=1</code> when behind a
+    trusted reverse proxy.</li>
+  <li><strong>Dedup by fingerprint while firing; new row on re-fire after resolve</strong>
+    (STAGE-001-013 D4). Each fire→resolve→fire cycle is operationally a new
+    incident; outcome history attaches to its row, not aggregated across
+    cycles. Severity / labels / annotations are PINNED at first fire — upstream
+    rules must encode severity in the fingerprint hash if escalation matters.</li>
+  <li><strong>Severity vocabulary locked:</strong> <code>info</code>,
+    <code>warning</code>, <code>error</code>, <code>critical</code> (per spec §8.2).
+    Rules must use one of these four; missing severity defaults to
+    <code>warning</code> with a structured WARNING log noting the misconfigured
+    rule.</li>
+  <li><strong>RFC3339 timestamps for VictoriaLogs</strong> (refinement-phase
+    bug from STAGE-001-018). Epoch milliseconds and other formats are silently
+    rejected by VL with an opaque error. <code>utc_now_iso()</code> in the
+    kernel writer correctly produces the right format; helpers must use
+    <code>ts.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"</code> when
+    constructing timestamps manually.</li>
+  <li><strong>Health-check 127.0.0.1, not localhost</strong> for busybox-based
+    images. Found in STAGE-001-018 Refinement: VM, VL, AM, vmalert images
+    don't have <code>localhost</code> in <code>/etc/hosts</code>; healthchecks
+    using it stall containers in "Created". Use <code>http://127.0.0.1:&lt;port&gt;/...</code>
+    everywhere.</li>
+  <li><strong>kthxbye flag invariant</strong> (STAGE-001-019 Refinement):
+    <code>extend-by</code> MUST be strictly greater than
+    <code>extend-if-expiring-in</code> or kthxbye crashes at startup. Both
+    compose files must satisfy this (prod 10m/6m, test 30s/15s).</li>
+  <li><strong>Subagent-driven implementation discipline</strong> (CLAUDE.md):
+    main agent never reads/edits/writes source files directly; all execution
+    work delegated to subagents. STAGE-001-013 was split into Spec A + Spec B
+    sub-builds to stay within the per-spec tool-use budget; STAGE-001-021
+    further split into Specs A + B + C executed sequentially.</li>
+</ul>
+
+<hr/>
+<p class="meta">
+  Generated 2026-05-11 by Claude. Branch <code>main</code> at commit
+  <code>9c8f52e</code>. Section anchors are stable; if a path or symbol drifts,
+  the source files (<code>apps/monitor/homelab_monitor/</code>,
+  <code>apps/ui/src/</code>, <code>deploy/</code>,
+  <code>epics/EPIC-001-foundation/</code>) are authoritative.
+  Companion document: <a href="overview-stages-1-11.html">overview-stages-1-11.html</a>
+  (kernel + auth + scheduler + DB foundation).
+</p>
+
+</div>
+</body>
+</html>
