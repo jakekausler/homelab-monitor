@@ -13,7 +13,10 @@ Cap rationale:
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field
+from collections.abc import Awaitable, Callable
+
+from fastapi import HTTPException, Request
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 
 class HeartbeatStartQuery(BaseModel):
@@ -40,3 +43,22 @@ class HeartbeatFailQuery(BaseModel):
     model_config = ConfigDict(extra="forbid")
     duration: float | None = Field(default=None, ge=0, le=86400)
     exit_code: int | None = Field(default=None, ge=0, le=255)
+
+
+def query_model[T: BaseModel](model_cls: type[T]) -> Callable[[Request], Awaitable[T]]:
+    """Return a FastAPI dependency that validates ALL query params via Pydantic.
+
+    FastAPI's ``Depends()`` on a BaseModel injects individual ``Query()``
+    parameters, which bypasses ``model_validate()`` and silently ignores extras
+    even when ``extra='forbid'`` is set. This factory fixes that by calling
+    ``model_validate(dict(request.query_params))`` so Pydantic sees the full
+    query dict and rejects unknown keys with 422.
+    """
+
+    async def _dep(request: Request) -> T:
+        try:
+            return model_cls.model_validate(dict(request.query_params))
+        except ValidationError as exc:
+            raise HTTPException(status_code=422, detail=exc.errors()) from exc
+
+    return _dep

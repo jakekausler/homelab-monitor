@@ -43,6 +43,8 @@ from homelab_monitor.kernel.heartbeat.repository import HeartbeatRepo
 from homelab_monitor.kernel.heartbeat.schemas import (
     HeartbeatFailQuery,
     HeartbeatOkQuery,
+    HeartbeatStartQuery,
+    query_model,
 )
 
 router = APIRouter(prefix="/hb", tags=["heartbeat"])
@@ -111,8 +113,10 @@ async def receive_start(
     request: Request,
     token: Annotated[ApiToken, Depends(require_token_scope(Scope.HEARTBEAT_WRITE))],
     repo: Annotated[HeartbeatRepo, Depends(get_heartbeat_repo)],
+    query: Annotated[HeartbeatStartQuery, Depends(query_model(HeartbeatStartQuery))],
 ) -> Response:
     """Record a ``/start`` ping for ``cron_id``."""
+    del query
     cron = await _resolve_cron_or_404(repo, cron_id)
     try:
         _enforce_rate_limit(cron_id)
@@ -138,7 +142,7 @@ async def receive_ok(
     request: Request,
     token: Annotated[ApiToken, Depends(require_token_scope(Scope.HEARTBEAT_WRITE))],
     repo: Annotated[HeartbeatRepo, Depends(get_heartbeat_repo)],
-    query: Annotated[HeartbeatOkQuery, Depends()],
+    query: Annotated[HeartbeatOkQuery, Depends(query_model(HeartbeatOkQuery))],
 ) -> Response:
     """Record an ``/ok`` ping for ``cron_id``. Optional ``?duration=<seconds>``.
 
@@ -174,7 +178,7 @@ async def receive_fail(
     request: Request,
     token: Annotated[ApiToken, Depends(require_token_scope(Scope.HEARTBEAT_WRITE))],
     repo: Annotated[HeartbeatRepo, Depends(get_heartbeat_repo)],
-    query: Annotated[HeartbeatFailQuery, Depends()],
+    query: Annotated[HeartbeatFailQuery, Depends(query_model(HeartbeatFailQuery))],
 ) -> Response:
     """Record a ``/fail`` ping for ``cron_id``. Optional ``?duration``, ``?exit_code``."""
     cron = await _resolve_cron_or_404(repo, cron_id)

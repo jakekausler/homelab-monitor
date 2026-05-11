@@ -301,6 +301,39 @@ async def test_fail_with_invalid_exit_code_returns_422(
 
 
 @pytest.mark.asyncio
+async def test_start_with_unknown_query_param_returns_422(
+    api_token_client: AsyncClient,
+    seeded_crons: SeededCrons,
+) -> None:
+    resp = await api_token_client.post(
+        f"/api/hb/{seeded_crons.heartbeat.id}/start?foo=bar",
+    )
+    assert resp.status_code == 422  # noqa: PLR2004
+
+
+@pytest.mark.asyncio
+async def test_ok_with_unknown_query_param_returns_422(
+    api_token_client: AsyncClient,
+    seeded_crons: SeededCrons,
+) -> None:
+    resp = await api_token_client.post(
+        f"/api/hb/{seeded_crons.heartbeat.id}/ok?foo=bar",
+    )
+    assert resp.status_code == 422  # noqa: PLR2004
+
+
+@pytest.mark.asyncio
+async def test_fail_with_unknown_query_param_returns_422(
+    api_token_client: AsyncClient,
+    seeded_crons: SeededCrons,
+) -> None:
+    resp = await api_token_client.post(
+        f"/api/hb/{seeded_crons.heartbeat.id}/fail?foo=bar",
+    )
+    assert resp.status_code == 422  # noqa: PLR2004
+
+
+@pytest.mark.asyncio
 async def test_ok_increments_streak_on_consecutive_oks(
     api_token_client: AsyncClient,
     repo: SqliteRepository,

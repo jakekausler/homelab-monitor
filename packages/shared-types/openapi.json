@@ -1683,42 +1683,6 @@
               "title": "Cron Id",
               "type": "string"
             }
-          },
-          {
-            "in": "query",
-            "name": "duration",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "maximum": 86400,
-                  "minimum": 0,
-                  "type": "number"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Duration"
-            }
-          },
-          {
-            "in": "query",
-            "name": "exit_code",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "maximum": 255,
-                  "minimum": 0,
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Exit Code"
-            }
           }
         ],
         "responses": {
@@ -1754,24 +1718,6 @@
             "schema": {
               "title": "Cron Id",
               "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "duration",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "maximum": 86400,
-                  "minimum": 0,
-                  "type": "number"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Duration"
             }
           }
         ],
