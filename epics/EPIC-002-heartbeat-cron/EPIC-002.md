@@ -35,15 +35,15 @@ After EPIC-002 is complete, EPIC-003+ can rely on: an authoritative cron registr
 
 | Stage         | Name                                                                  | Status      |
 | ------------- | --------------------------------------------------------------------- | ----------- |
-| STAGE-002-001 | Heartbeat receiver + `crons`/`heartbeats_state` schema + audit         | Refinement (Complete) |
+| STAGE-002-001 | Heartbeat receiver + `crons`/`heartbeats_state` schema + audit         | Complete |
 | STAGE-002-002 | Cron registry CRUD API + Inventory "Crons" tab UI                     | Not Started |
 | STAGE-002-003 | Cron auto-discovery + suggestion queue integration                    | Not Started |
 | STAGE-002-004 | B-mode log-scrape (vector + journald + collector parsing)             | Not Started |
 | STAGE-002-005 | C-mode wrapper helpers + dashboard "Install heartbeat" action         | Not Started |
 | STAGE-002-006 | vmalert rules for stale heartbeats + lateness ladder + flap detector  | Not Started |
 
-## Current Stage: STAGE-002-001
-## Current Phase: Refinement (Complete)
+## Current Stage: STAGE-002-002
+## Current Phase: Not Started
 
 ## Cross-stage acceptance criteria
 
