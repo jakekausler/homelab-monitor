@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import base64
-import logging
 from dataclasses import dataclass
 
 import pytest
@@ -334,6 +333,22 @@ async def test_fail_with_unknown_query_param_returns_422(
 
 
 @pytest.mark.asyncio
+async def test_unknown_query_param_returns_structured_validation_error(
+    api_token_client: AsyncClient,
+    seeded_crons: SeededCrons,
+) -> None:
+    """The 422 body uses ErrorEnvelope with structured details.errors."""
+    resp = await api_token_client.post(
+        f"/api/hb/{seeded_crons.heartbeat.id}/start?foo=bar",
+    )
+    assert resp.status_code == 422  # noqa: PLR2004
+    body = resp.json()
+    assert body["error"]["code"] == "validation_error"
+    assert "errors" in body["error"]["details"]
+    assert any(e["type"] == "extra_forbidden" for e in body["error"]["details"]["errors"])
+
+
+@pytest.mark.asyncio
 async def test_ok_increments_streak_on_consecutive_oks(
     api_token_client: AsyncClient,
     repo: SqliteRepository,
@@ -376,15 +391,22 @@ async def test_observe_mode_cron_logs_warning_but_records(
     api_token_client: AsyncClient,
     repo: SqliteRepository,
     seeded_crons: SeededCrons,
-    caplog: pytest.LogCaptureFixture,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
-    with caplog.at_level(logging.WARNING, logger="homelab_monitor"):
-        resp = await api_token_client.post(f"/api/hb/{seeded_crons.observe.id}/ok")
+    resp = await api_token_client.post(f"/api/hb/{seeded_crons.observe.id}/ok")
     assert resp.status_code == 204  # noqa: PLR2004
-    warns = [r for r in caplog.records if r.levelno == logging.WARNING]
-    assert any("heartbeat.received_in_observe_mode" in r.getMessage() for r in warns)
 
-    # And the row was written despite the warning:
+    # Verify the warning was emitted (captured via capsys stdout):
+    # TODO: Replace capsys substring match with structlog.testing.capture_logs() once a
+    # shared log_capture pytest fixture exists. Current pattern depends on the configured
+    # structlog renderer routing to stdout — brittle to log-format changes (e.g., piping
+    # logs to a file or stderr would silently break this test). Tracked in EPIC-002 regression.md.
+    captured_out = capsys.readouterr().out
+    assert "heartbeat.received_in_observe_mode" in captured_out, (
+        f"expected observe-mode warning in logs; got: {captured_out}"
+    )
+
+    # Verify the row was written despite the warning:
     row = await repo.fetch_one(
         text("SELECT current_state FROM heartbeats_state WHERE cron_id = :id"),
         {"id": seeded_crons.observe.id},

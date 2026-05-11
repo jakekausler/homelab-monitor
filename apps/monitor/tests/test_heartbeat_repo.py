@@ -7,9 +7,10 @@ from sqlalchemy import text
 
 from homelab_monitor.kernel.db.repository import SqliteRepository
 from homelab_monitor.kernel.db.time import utc_now_iso
+from homelab_monitor.kernel.heartbeat import repository as repo_mod
 from homelab_monitor.kernel.heartbeat.repository import (
     HeartbeatRepo,
-    _compute_expected_next_at,  # pyright: ignore[reportPrivateUsage]
+    compute_expected_next_at,
 )
 
 
@@ -146,6 +147,21 @@ async def test_record_ok_leaves_expected_next_at_null_when_cadence_zero(
 
 
 @pytest.mark.asyncio
+async def test_fail_after_ok_clears_expected_next_at(repo: SqliteRepository) -> None:
+    """A /fail transition must NULL expected_next_at to prevent phantom alerts."""
+    await _seed_cron(repo, cadence_seconds=60)
+    hbr = HeartbeatRepo(repo)
+    # First /ok sets expected_next_at.
+    ok_state = await hbr.record_ok("c1", duration_seconds=None, who="t", ip=None)
+    assert ok_state.expected_next_at is not None
+    # Then /fail should clear it.
+    fail_state = await hbr.record_fail(
+        "c1", duration_seconds=None, exit_code=None, who="t", ip=None
+    )
+    assert fail_state.expected_next_at is None
+
+
+@pytest.mark.asyncio
 async def test_state_transition_updates_crons_last_seen_state_mirror(
     repo: SqliteRepository,
 ) -> None:
@@ -179,6 +195,48 @@ async def test_state_transition_writes_audit_log_in_same_transaction(
 
 
 @pytest.mark.asyncio
+async def test_writes_are_atomic_under_simulated_failure(
+    repo: SqliteRepository, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If insert_audit raises, both heartbeats_state and crons mirror roll back."""
+    await _seed_cron(repo)
+    hbr = HeartbeatRepo(repo)
+
+    async def boom(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("simulated audit failure")
+
+    monkeypatch.setattr(repo_mod, "insert_audit", boom)
+
+    with pytest.raises(RuntimeError, match="simulated"):
+        await hbr.record_ok("c1", duration_seconds=None, who="t", ip=None)
+
+    # heartbeats_state row must NOT exist (transaction rolled back)
+    hb_row = await repo.fetch_one(text("SELECT 1 FROM heartbeats_state WHERE cron_id = 'c1'"))
+    assert hb_row is None
+
+    # crons.last_seen_state must still be 'unknown' (mirror not updated)
+    crons_row = await repo.fetch_one(text("SELECT last_seen_state FROM crons WHERE id = 'c1'"))
+    assert crons_row is not None
+    assert crons_row[0] == "unknown"
+
+
+@pytest.mark.asyncio
+async def test_three_consecutive_oks_write_three_audit_rows(
+    repo: SqliteRepository,
+) -> None:
+    """Verify no accidental de-duplication of audit rows on repeated same-state pings."""
+    await _seed_cron(repo)
+    hbr = HeartbeatRepo(repo)
+
+    for _ in range(3):
+        await hbr.record_ok("c1", duration_seconds=None, who="t", ip=None)
+
+    row = await repo.fetch_one(text("SELECT COUNT(*) FROM audit_log WHERE what LIKE '%heartbeat%'"))
+    assert row is not None
+    assert int(row[0]) == 3  # noqa: PLR2004
+
+
+@pytest.mark.asyncio
 async def test_list_crons_orders_by_name(repo: SqliteRepository) -> None:
     await _seed_cron(repo, id_="c-x", name="zeta")
     await _seed_cron(repo, id_="c-y", name="alpha")
@@ -190,7 +248,7 @@ async def test_list_crons_orders_by_name(repo: SqliteRepository) -> None:
 
 def test_compute_expected_next_at_with_cadence_zero_returns_none() -> None:
     assert (
-        _compute_expected_next_at(
+        compute_expected_next_at(
             last_ok_at_iso="2026-05-11T00:00:00+00:00",
             cadence_seconds=0,
             grace_seconds=300,
@@ -200,12 +258,22 @@ def test_compute_expected_next_at_with_cadence_zero_returns_none() -> None:
 
 
 def test_compute_expected_next_at_adds_cadence_plus_grace() -> None:
-    out = _compute_expected_next_at(
+    out = compute_expected_next_at(
         last_ok_at_iso="2026-05-11T00:00:00+00:00",
         cadence_seconds=60,
         grace_seconds=30,
     )
     assert out == "2026-05-11T00:01:30+00:00"
+
+
+def test_compute_expected_next_at_rejects_naive_iso() -> None:
+    """Guard against silently producing tz-naive timestamps from naive ISO input."""
+    with pytest.raises(ValueError, match="must be tz-aware"):
+        compute_expected_next_at(
+            last_ok_at_iso="2026-05-11T00:00:00",  # no +00:00 suffix → naive
+            cadence_seconds=60,
+            grace_seconds=30,
+        )
 
 
 @pytest.mark.asyncio

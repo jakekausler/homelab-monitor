@@ -143,7 +143,7 @@ _UPDATE_CRONS_LAST_SEEN_SQL = text(
 )
 
 
-def _compute_expected_next_at(
+def compute_expected_next_at(
     *,
     last_ok_at_iso: str,
     cadence_seconds: int,
@@ -156,6 +156,9 @@ def _compute_expected_next_at(
     if cadence_seconds <= 0:
         return None
     base = datetime.fromisoformat(last_ok_at_iso)
+    if base.tzinfo is None:
+        msg = f"last_ok_at must be tz-aware ISO; got: {last_ok_at_iso!r}"
+        raise ValueError(msg)
     delta = timedelta(seconds=cadence_seconds + grace_seconds)
     return (base + delta).isoformat()
 
@@ -329,13 +332,16 @@ class HeartbeatRepo:
 
             new_expected_next: str | None
             if new_state == "ok" and last_ok_at is not None:
-                new_expected_next = _compute_expected_next_at(
+                new_expected_next = compute_expected_next_at(
                     last_ok_at_iso=last_ok_at,
                     cadence_seconds=cron.cadence_seconds,
                     grace_seconds=cron.expected_grace_seconds,
                 )
             else:
-                new_expected_next = None if previous is None else previous.expected_next_at
+                # Non-OK transitions (start/fail) clear the deadline so vmalert
+                # rules in STAGE-002-006 don't fire phantom "late" alerts on
+                # a job that's known-failed.
+                new_expected_next = None
 
             await conn.execute(
                 _UPSERT_STATE_SQL,
@@ -375,6 +381,7 @@ class HeartbeatRepo:
                     "current_streak": new_streak,
                     "duration_seconds": new_duration,
                     "exit_code": new_exit_code,
+                    "host": cron.host,
                 },
                 ip=ip,
                 when=now,

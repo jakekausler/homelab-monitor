@@ -24,6 +24,7 @@ collector that reads ``heartbeats_state`` on each scrape and emits
 
 from __future__ import annotations
 
+import math
 from typing import Annotated, cast
 
 import structlog
@@ -35,11 +36,11 @@ from homelab_monitor.kernel.api.dependencies import (
     get_heartbeat_repo,
     require_token_scope,
 )
-from homelab_monitor.kernel.api.errors import NotFoundProblem
+from homelab_monitor.kernel.api.errors import NotFoundProblem, envelope_response
 from homelab_monitor.kernel.auth.models import ApiToken
 from homelab_monitor.kernel.auth.scopes import Scope
 from homelab_monitor.kernel.heartbeat.rate_limiter import cron_rate_limiter
-from homelab_monitor.kernel.heartbeat.repository import HeartbeatRepo
+from homelab_monitor.kernel.heartbeat.repository import CronRecord, HeartbeatRepo
 from homelab_monitor.kernel.heartbeat.schemas import (
     HeartbeatFailQuery,
     HeartbeatOkQuery,
@@ -60,7 +61,7 @@ def _client_ip(request: Request) -> str | None:
 async def _resolve_cron_or_404(
     repo: HeartbeatRepo,
     cron_id: str,
-) -> CronRecordLike:
+) -> CronRecord:
     cron = await repo.get_cron(cron_id)
     if cron is None:
         raise NotFoundProblem(message=f"cron not found: {cron_id}")
@@ -79,7 +80,7 @@ def _enforce_rate_limit(cron_id: str) -> None:
         return
     # Round retry_after up to the nearest integer second per RFC 7231 §7.1.3
     # (Retry-After is delta-seconds as an integer).
-    retry_after_seconds = max(1, int(retry_after) + (1 if retry_after % 1 else 0))
+    retry_after_seconds = max(1, math.ceil(retry_after))
     raise _RateLimitedError(retry_after_seconds=retry_after_seconds)
 
 
@@ -91,13 +92,12 @@ class _RateLimitedError(Exception):
         super().__init__("rate limited")
 
 
-def _log() -> BoundLogger:
-    return cast(BoundLogger, structlog.get_logger().bind(component="heartbeat.receiver"))
+_log: BoundLogger = cast(BoundLogger, structlog.get_logger().bind(component="heartbeat.receiver"))
 
 
-def _maybe_log_observe_warning(cron: CronRecordLike, endpoint: str) -> None:
+def _maybe_log_observe_warning(cron: CronRecord, endpoint: str) -> None:
     if cron.integration_mode == "observe":
-        _log().warning(
+        _log.warning(
             "heartbeat.received_in_observe_mode",
             cron_id=cron.id,
             endpoint=endpoint,
@@ -113,10 +113,9 @@ async def receive_start(
     request: Request,
     token: Annotated[ApiToken, Depends(require_token_scope(Scope.HEARTBEAT_WRITE))],
     repo: Annotated[HeartbeatRepo, Depends(get_heartbeat_repo)],
-    query: Annotated[HeartbeatStartQuery, Depends(query_model(HeartbeatStartQuery))],
+    _query: Annotated[HeartbeatStartQuery, Depends(query_model(HeartbeatStartQuery))],
 ) -> Response:
     """Record a ``/start`` ping for ``cron_id``."""
-    del query
     cron = await _resolve_cron_or_404(repo, cron_id)
     try:
         _enforce_rate_limit(cron_id)
@@ -128,7 +127,7 @@ async def receive_start(
         who=token.name,
         ip=_client_ip(request),
     )
-    _log().info(
+    _log.info(
         "heartbeat.start.received",
         cron_id=cron_id,
         streak=state.current_streak,
@@ -163,7 +162,7 @@ async def receive_ok(
         who=token.name,
         ip=_client_ip(request),
     )
-    _log().info(
+    _log.info(
         "heartbeat.ok.received",
         cron_id=cron_id,
         duration_seconds=query.duration,
@@ -194,7 +193,7 @@ async def receive_fail(
         who=token.name,
         ip=_client_ip(request),
     )
-    _log().info(
+    _log.info(
         "heartbeat.fail.received",
         cron_id=cron_id,
         exit_code=query.exit_code,
@@ -204,14 +203,12 @@ async def receive_fail(
 
 
 def _rate_limited_response(exc: _RateLimitedError) -> Response:
-    """Return a 429 with ``Retry-After`` header."""
-    return Response(
-        status_code=429,
-        headers={"Retry-After": str(exc.retry_after_seconds)},
+    """Return a 429 with ``Retry-After`` header and an ErrorEnvelope body."""
+    resp = envelope_response(
+        status=429,
+        code="rate_limited",
+        message="too many heartbeat pings for this cron; back off",
+        details={"retry_after_seconds": exc.retry_after_seconds},
     )
-
-
-# Forward-reference shim. ``CronRecordLike`` is just ``CronRecord`` from the
-# repository module; declared here so the helper signatures above stay
-# compact without yet another import-order import.
-from homelab_monitor.kernel.heartbeat.repository import CronRecord as CronRecordLike  # noqa: E402
+    resp.headers["Retry-After"] = str(exc.retry_after_seconds)
+    return resp

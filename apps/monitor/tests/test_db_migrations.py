@@ -344,6 +344,21 @@ async def test_migration_0006_round_trip(db_url: str) -> None:
     cfg.set_main_option("sqlalchemy.url", db_url)
     command.upgrade(cfg, "head")
     command.downgrade(cfg, "-1")
+
+    # Verify downgrade actually restored the stub shape (not just succeeded silently).
+    engine = get_engine(url=db_url)
+    try:
+
+        def _stub_shape(sync_conn: object) -> set[str]:
+            ins = inspect(sync_conn)
+            return {c["name"] for c in ins.get_columns("heartbeats_state")}  # pyright: ignore[reportOptionalMemberAccess]
+
+        async with engine.connect() as conn:
+            stub_cols = await conn.run_sync(_stub_shape)
+        assert stub_cols == {"id", "key", "created_at"}, f"downgrade leaked columns: {stub_cols}"
+    finally:
+        await engine.dispose()
+
     command.upgrade(cfg, "head")
 
     engine = get_engine(url=db_url)

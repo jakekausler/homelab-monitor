@@ -59,6 +59,9 @@ def query_model[T: BaseModel](model_cls: type[T]) -> Callable[[Request], Awaitab
         try:
             return model_cls.model_validate(dict(request.query_params))
         except ValidationError as exc:
-            raise HTTPException(status_code=422, detail=exc.errors()) from exc
+            raise HTTPException(
+                status_code=422,
+                detail={"errors": exc.errors()},
+            ) from exc
 
     return _dep
