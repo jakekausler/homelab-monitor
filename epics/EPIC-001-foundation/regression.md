@@ -371,6 +371,18 @@ or related tests.
 - [ ] `docker compose -f deploy/compose/docker-compose.test.yml up --abort-on-container-exit --exit-code-from integration-tests` exits 0
 - [ ] Canonical e2e test exercises: collector → VM → vmalert → AM → ingestor → channel
 - [ ] CI runs the integration suite on every PR
+- [ ] **Test runtime optimization** (deferred from STAGE-001-021): the 4 alert-pipeline tests (test_canonical_e2e, test_kernel_oom_log_alert_fires, test_ssh_failed_login_burst_fires, test_kernel_oom_alert_resolves_when_lines_age_out) poll for ~70-90s each, totaling ~5 min. Options: (a) reduce WAIT_FOR_ALERT_S to ~45s with tighter vmalert + AM intervals, (b) parallelize via pytest-xdist with per-test alertname-suffix isolation, (c) split slow tests out of PR CI (move to nightly cron).
+- [ ] **Verify `make dev-prod` end-to-end** with login + /alerts iframe + /metrics iframe on a clean clone (deferred verification of Spec B's prod compose path; not exercised by CI integration job which uses test compose).
+- [ ] **Verify Grafana custom image works in prod** (`grafana-image.yml` publishes to GHCR on first push to main with deploy/grafana/** changes; re-test after first publish that prod compose pulls correctly).
+- [ ] **Re-run integration suite** (`bash scripts/run-integration.sh`) on each PR via the CI integration job (already automated; this regression line documents the human-readable expectation: 18/18 tests, exit 0, ≤8 min).
+- [ ] **Code review I2 (deferred):** `dev-up.sh up_prod` mode bootstraps the production image with the default `admin-dev-password`. Treat as test/dev affordance for now; harden by requiring explicit `HM_DEV_ADMIN_PASSWORD` env var (or refusing to run with default) before any prod deployment. Also applies to rig static admin password in docker-compose.test.yml.
+- [ ] **Code review I4 (deferred):** Bootstrap `2>/dev/null` masks ALL stderr from `hm user create` in docker-compose.test.yml + scripts/dev-up.sh. Refactor to capture stderr to a variable and only suppress on the specific "user already exists" message. Real failures (DB connection, password validation regression, alembic schema drift) currently surface as cryptic later errors.
+- [ ] **Code review I5 (deferred):** Each integration test calls `Rig.boot()` twice (skip-guard + actual work), creating two server-side session rows per test. Refactor to single `Rig.boot()` with reachability check inside the `with` block.
+- [ ] **Code review I7 (deferred):** Stale rig-token between runs if developer uses `dev-down.sh` (without `-v`). Make monitor's bootstrap idempotent: if rig token row exists, fetch its plaintext from secrets store instead of failing.
+- [ ] **Code review I8 (deferred):** CI integration job's 5 BuildKit cache pre-warm steps run sequentially (~3-5 min). Parallelize via docker-bake.hcl OR eliminate pre-warm by letting `docker compose build` use `--cache-from` directly.
+- [ ] **Code review M3 (deferred):** `dev-up.sh` ports `HM_DEV_VL_PORT=9428` and `HM_DEV_AM_PORT=9093` collide with the test rig (which publishes 127.0.0.1:9428). Document that `dev` and integration tests cannot run concurrently OR pick non-overlapping ports for dev (e.g., 19428, 19093).
+- [ ] **Code review M4 (deferred):** `test_canonical_e2e.py:75-77` SSE assertion accepts both `vmalert-metrics` AND `None` for `source_tool`. Tighten to one expected value once schema is stable.
+- [ ] **Code review M6 (deferred):** `dev-up.sh:284-288` heredoc uses single quotes around `$HM_DEV_ADMIN_PASSWORD` inside double-quoted outer string. Works correctly via host-side expansion but is misleading. Either move expansion into the container or document explicitly.
 
 ## STAGE-001-019 (Karma + kthxbye)
 

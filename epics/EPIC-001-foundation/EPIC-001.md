@@ -1,6 +1,6 @@
 # EPIC-001: Foundation
 
-## Status: Not Started
+## Status: Complete (21/21 stages, foundation closed 2026-05-11)
 
 ## Overview
 
@@ -43,10 +43,10 @@ After EPIC-001 is complete, the system has: a working CI pipeline, a verified de
 | STAGE-001-018 | vmalert (logs) + first log-derived rule               | Complete    |
 | STAGE-001-019 | Karma + kthxbye                                       | Complete    |
 | STAGE-001-020 | Grafana + dashboards-as-code provisioning             | Complete    |
-| STAGE-001-021 | Full integration test rig + canonical e2e test        | Build       |
+| STAGE-001-021 | Full integration test rig + canonical e2e test        | Complete    |
 
-## Current Stage: STAGE-001-021
-## Current Phase: Build
+## Current Stage: Complete (EPIC-001 21/21 stages done)
+## Current Phase: N/A (epic complete)
 
 ## Cross-stage acceptance criteria
 
