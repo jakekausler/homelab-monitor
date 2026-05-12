@@ -49,3 +49,18 @@ Same as EPIC-001 plus:
 - The "open-source product" framing means the public release prefers safe defaults over "this is how I personally configure it" defaults. This is captured in spec §16 (open-source-safe defaults).
 - The host-overrides repo (the user's private "this is my actual deployment" config) must be genuinely independent. STAGE-019-005's "first-run UX" test is the verification: does the public repo, with no overrides, give a new user a complete usable experience?
 - Documentation is the most under-estimated work in this epic. Plan for it to take the bulk of the effort.
+
+## Cross-epic absorbed scope (from EPIC-002 cron derived-state redesign, 2026-05-11)
+
+Per `docs/superpowers/specs/2026-05-11-cron-derived-state-redesign.md`, this epic absorbs the **standalone `hm cron install-wrapper` binary distribution** for unreachable hosts (Synology, NAS, foreign-network containers):
+
+- STAGE-002-009 ships the `install_wrapper_remote.py` source as a single-file Python script.
+- This epic's release pipeline (STAGE-019-011) builds it via PyInstaller (or equivalent) into a standalone binary per supported platform (linux-amd64, linux-arm64, linux-arm, possibly macos for completeness).
+- The binary is published as a downloadable release asset alongside the main container images.
+- The release page / quickstart documentation (STAGE-019-006 / STAGE-019-009) documents the one-line install command:
+  ```
+  curl -fsSL https://github.com/jakekausler/homelab-monitor/releases/latest/download/hm-cron-install-wrapper-linux-amd64 -o /usr/local/bin/hm-cron-install-wrapper && chmod +x /usr/local/bin/hm-cron-install-wrapper
+  # then:
+  HM_MONITOR_URL=https://homelab.example.com HM_HEARTBEAT_TOKEN=hb_tok_... hm-cron-install-wrapper
+  ```
+- Suggested decomposition: extend STAGE-019-011's release.yml to include the binary build matrix; update STAGE-019-009 (operator docs) with the remote-install walkthrough.

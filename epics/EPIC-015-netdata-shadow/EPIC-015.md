@@ -41,3 +41,18 @@ Same as EPIC-001 plus:
 - The user-facing reframe of Netdata: "this is the second opinion on whether your hosts are misbehaving." It complements thresholds rather than replacing them.
 - Netdata Cloud is optional and not part of this epic — fully self-hosted operation.
 - Netdata's k-means model trains over the first ~6 hours after install. The user should expect noisy alerts during that window; the dashboard surfaces a "Netdata is still calibrating" banner.
+
+## Cross-epic absorbed scope (from EPIC-002 cron derived-state redesign, 2026-05-11)
+
+Per `docs/superpowers/specs/2026-05-11-cron-derived-state-redesign.md`, this epic absorbs the **agent-push cross-host work** for the cron monitoring subsystem:
+
+- **`hm-agent` binary** — a small program that runs on a remote host (e.g., Synology, NAS, foreign-network containers) as a recurring cron (or systemd timer) and POSTs:
+  1. Netdata stream (existing scope of EPIC-015).
+  2. **Cron discovery manifest** — `POST /api/discovery/report` with `{host, source_path, schedule, command}` entries from local crontab scans. The monitor ingests these and writes fingerprint-keyed rows into the `crons` table (audit verb `crons.discover`), populating `source_path` from the agent's claim.
+  3. Other future resource discoveries (containers, services).
+- **Host registration / enrollment flow** — per-host enrollment tokens, `hm agent enroll <token>` on the target host, agent receives a long-lived per-host API token on first contact, subsequent reports authenticate with that token. EPIC-015 owns this flow because it's the natural home for "I want this remote host to report into my monitor."
+- **`/api/discovery/report` endpoint** — accepts manifests from enrolled hosts; verifies the enrollment token; writes/upserts rows. Separate from the local `cron-discoverer` plugin (which only scans the monitor's own host).
+
+These pieces are NOT in EPIC-002. EPIC-002 ships only local-host cron discovery + local-host wrapper install. Anything cross-host is the agent's job.
+
+Suggested decomposition: add a new stage (e.g., STAGE-015-007: agent binary + enrollment + cron discovery report) to this epic, after the Netdata-streaming stages.

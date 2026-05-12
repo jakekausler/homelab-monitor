@@ -33,14 +33,20 @@ After EPIC-002 is complete, EPIC-003+ can rely on: an authoritative cron registr
 
 ## Stages
 
+**Note:** EPIC-002 was reshaped on 2026-05-11 by the cron-derived-state-redesign brainstorm (`docs/superpowers/specs/2026-05-11-cron-derived-state-redesign.md`). After STAGE-002-002 ships as-is, four new stages (003–006) introduce the fingerprint identity model + remove manual-create + add the `/register` endpoint + redesign the UI. The original 003–006 are renumbered 007–010 and reworked to the derived-state model.
+
 | Stage         | Name                                                                  | Status      |
 | ------------- | --------------------------------------------------------------------- | ----------- |
 | STAGE-002-001 | Heartbeat receiver + `crons`/`heartbeats_state` schema + audit         | Complete |
 | STAGE-002-002 | Cron registry CRUD API + Inventory "Crons" tab UI                     | Build (Complete) |
-| STAGE-002-003 | Cron auto-discovery + suggestion queue integration                    | Not Started |
-| STAGE-002-004 | B-mode log-scrape (vector + journald + collector parsing)             | Not Started |
-| STAGE-002-005 | C-mode wrapper helpers + dashboard "Install heartbeat" action         | Not Started |
-| STAGE-002-006 | vmalert rules for stale heartbeats + lateness ladder + flap detector  | Not Started |
+| STAGE-002-003 | Schema redesign — fingerprint identity, drop integration_mode, rename archived_at→hidden_at, add source_path + wrapper_installed_at | Not Started |
+| STAGE-002-004 | API removal — drop POST /api/crons + AddCronModal + CronCreate + create-mode of CronForm | Not Started |
+| STAGE-002-005 | `/api/hb/{fingerprint}/register` endpoint + heartbeat receiver behavior change | Not Started |
+| STAGE-002-006 | UI redesign — 4-panel detail page, hidden replaces archive, remote-banner, wrapper-installed display | Not Started |
+| STAGE-002-007 | Cron auto-discovery — REWORKED to emit fingerprints, populate registry directly, populate disk-source fields (was 003) | Not Started |
+| STAGE-002-008 | B-mode log-scrape — REWORKED to match logs by fingerprint heuristic, runs always (was 004) | Not Started |
+| STAGE-002-009 | Wrapper helpers — REWORKED to embed fingerprint at install time, call /register first, "Install heartbeat" UI button local-host only (was 005) | Not Started |
+| STAGE-002-010 | vmalert rules — REWORKED to include wrapper-health alert via separate monitoring-health channel (was 006) | Not Started |
 
 ## Current Stage: STAGE-002-002
 ## Current Phase: Build (Complete)
@@ -60,20 +66,28 @@ Plus EPIC-002-specific criteria:
 6. **No existing cron is modified** without explicit user confirmation through the dashboard (per spec Q30 default). The wrapper installer in STAGE-002-005 must produce copy-paste output by default; "push to host" is opt-in per cron.
 7. **Heartbeat endpoints accept API tokens only** — no anonymous heartbeat posts. Tokens carry `heartbeat:write` scope; rate-limited per-token.
 8. **B-mode parsing is idempotent** — re-processing the same syslog/journald line never double-counts. Achieved via a high-water mark per cron + per-line content hash.
-9. **All `crons` rows must originate from either auto-discovery (suggested) or explicit user creation** — the heartbeat receiver does NOT create cron rows on first ping (404 forces explicit registration; prevents typos in cron commands from polluting the registry).
+9. **All `crons` rows must originate from auto-discovery or the heartbeat `/register` endpoint** (derived-state model after STAGE-002-005). The `POST /api/crons` manual-create endpoint is removed in STAGE-002-004; the heartbeat receiver continues to 404 on unknown fingerprints for `/start//ok//fail` (creation happens only via `/register` with metadata, or via discovery). **Until STAGE-002-005 ships, the original "404 on unknown" rule from STAGE-002-001 remains in effect.** _(Updated 2026-05-11 to reflect derived-state redesign; superseded original criterion that allowed manual user creation.)_
 10. **`heartbeats_state` is derived state** — every value can be recomputed from the events log (heartbeat receiver writes + B-mode collector writes). Treat it as a materialized view; never the source of truth.
 11. **All cron schedules parsed in the host's local timezone**, not UTC (per spec §16 — cron schedules are user-facing and must match what the user sees in `crontab -e`). Display layer also shows local time. Internal `expected_next_at` and `last_ok_at` columns remain UTC.
 
 ## Sequential dependency notes
 
-- **STAGE-002-001 depends on**: STAGE-001-021's heartbeat router stub (`apps/monitor/homelab_monitor/kernel/api/routers/heartbeat.py` — replaces with persistent receiver), STAGE-001-013's alert ingestor (freshness-alert path), STAGE-001-017's AM render-on-boot (heartbeat-freshness vmalert rules need rendering on container boot), STAGE-001-004's `crons`/`heartbeats_state` minimal-schema stubs (this stage's migration adds behavioral columns). It is the foundation for everything else in this epic.
-- **STAGE-002-002 depends on STAGE-002-001**: the CRUD API mutates the rows that STAGE-002-001's migration created.
-- **STAGE-002-003 depends on STAGE-002-002**: discovery creates suggestions; accepting a suggestion calls the CRUD API. STAGE-002-002 must ship the API first.
-- **STAGE-002-004 depends on STAGE-002-001 + STAGE-001-016**: B-mode collector reads vector-shipped logs from VictoriaLogs and updates `heartbeats_state`. Requires STAGE-001-016's vector + VL infrastructure.
-- **STAGE-002-005 depends on STAGE-002-001 + STAGE-002-002**: the wrapper script POSTs to the receiver (001); the dashboard action surfaces in the cron-row detail page (002).
-- **STAGE-002-006 depends on STAGE-002-001**: rules query metrics derived from `heartbeats_state`. Also depends on STAGE-001-017 for vmalert metrics rules location convention.
+- **STAGE-002-001 depends on**: STAGE-001-021's heartbeat router stub (replaces with persistent receiver), STAGE-001-013's alert ingestor, STAGE-001-017's AM render-on-boot, STAGE-001-004's stubbed minimal-schema migrations. Foundation for everything else in this epic.
+- **STAGE-002-002 depends on STAGE-002-001**: the CRUD API mutates the rows that STAGE-002-001's migration created. (Ships with manual-create + UUID PK + integration_mode — these are removed/replaced in STAGE-002-003 + 002-004.)
 
-Stages 001 → 002 → 003 are strictly sequential. Stages 004, 005, 006 can be developed in parallel after 003 ships, but the recommended order is 004 → 005 → 006 so that the demo at the end of 005 has B-mode in place too.
+**Redesign block (new stages, must ship in strict order):**
+- **STAGE-002-003 depends on STAGE-002-002**: schema redesign drops the rows STAGE-002-002 was just shipped against. Destructive migration acceptable (dev seed data only).
+- **STAGE-002-004 depends on STAGE-002-003**: API removal happens after the fingerprint PK is in place (so removing `POST /api/crons` doesn't break anything else mid-flight).
+- **STAGE-002-005 depends on STAGE-002-003 + STAGE-002-004**: the `/register` endpoint uses fingerprint identity (003) and is the replacement creation path for the now-removed manual create (004).
+- **STAGE-002-006 depends on STAGE-002-003 + STAGE-002-004 + STAGE-002-005**: UI redesign reflects the final shape — fingerprint identity, no add modal, `/register` is the heartbeat-side creation path.
+
+**Reworked downstream stages:**
+- **STAGE-002-007 depends on STAGE-002-006**: discovery writes fingerprint-keyed rows directly; UI must already match the new schema before users see auto-populated rows.
+- **STAGE-002-008 depends on STAGE-002-001 + STAGE-001-016 + STAGE-002-007**: B-mode collector matches logs to fingerprints; requires fingerprint identity + at-least-one cron in registry from discovery.
+- **STAGE-002-009 depends on STAGE-002-005 + STAGE-002-006 + STAGE-002-007**: wrapper helpers POST `/register` (005), the install UI lives in the 4-panel detail page (006), and they target crons discovered locally (007).
+- **STAGE-002-010 depends on STAGE-002-001 + STAGE-002-008 + STAGE-002-009**: rules query metrics from heartbeats_state (001) + the `logscrape_count_since_last_heartbeat` counter from log-scrape (008) + the `wrapper_installed_at` column from wrapper installs (009).
+
+**Strict serial order: 001 → 002 → 003 → 004 → 005 → 006 → 007 → 008 → 009 → 010.** The redesign block (003–006) cannot interleave with anything else because each stage depends on the previous one's schema/API/UI state.
 
 ## Notes
 

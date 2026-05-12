@@ -44,3 +44,22 @@ Same as EPIC-001 plus:
 - Key generation: `hm ssh-probe keygen` produces a fresh ed25519 key per target host; private key stored in secrets store, public key printed for user to add.
 - `paramiko` vs `asyncssh`: `asyncssh` is the better fit for our async architecture; lock at Design.
 - Future targets beyond Synology and a sidecar host: not specified during the brainstorm. The framework supports any Linux host.
+
+## Cross-epic absorbed scope (from EPIC-002 cron derived-state redesign, 2026-05-11)
+
+Per `docs/superpowers/specs/2026-05-11-cron-derived-state-redesign.md`, this epic absorbs the **SSH-based cross-host work** for the cron monitoring subsystem:
+
+1. **SSH-pull cron discovery** — for hosts where the monitor has SSH credentials configured, a probe runs the same crontab-scanning logic that EPIC-002's local `cron-discoverer` plugin runs (read `/etc/crontab`, `/etc/cron.d/*`, per-user crontabs), parses each line, computes the fingerprint, and writes fingerprint-keyed rows into the registry with audit verb `crons.discover`. Equivalent to the local discoverer but the file reads happen over SSH instead of from a bind-mount.
+
+2. **"Install heartbeat" SSH-push variant** — STAGE-002-009 ships a local-host-only "Install heartbeat" UI button. This epic extends the button to work for any host where the user has configured SSH credentials. The push variant:
+   - Computes the wrapper script + fingerprint locally.
+   - SSHes into the target host as the configured probe user.
+   - `scp`s the wrapper script to `/usr/local/bin/cron-with-heartbeat.sh` (chmod 0755).
+   - Writes the token file (chmod 0600).
+   - Rewrites the target's crontab via `crontab -u <user> -` (or by editing `/etc/cron.d/...` via sudo if a system-level crontab).
+   - POSTs `/register` against itself (the monitor) with `wrapper: true` to finalize.
+   - Same dry-run-preview + explicit-confirm flow as STAGE-002-009.
+
+3. **EPIC-002 UI integration** — STAGE-002-006's CronDetail page Panel 4 already has a disabled "Install heartbeat" button with tooltip pointing at this epic. When this epic's SSH-push stage ships, the button becomes ENABLED for any cron with `host` matching an SSH-configured target.
+
+Suggested decomposition: add two new stages (e.g., STAGE-017-007: SSH-pull cron discovery; STAGE-017-008: SSH-push wrapper install) after the Synology probe stages.
