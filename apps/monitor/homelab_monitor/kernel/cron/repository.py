@@ -6,7 +6,6 @@ row dataclass) — ``HeartbeatRepo`` imports from here.
 Audit-log discipline: every mutation writes a row in the SAME transaction
 as the data change (atomicity). Verb taxonomy:
 
-- ``crons.create`` — POST /api/crons (deprecated; removed in STAGE-002-004)
 - ``crons.update`` — PATCH that changed at least one non-hidden_at field
 - ``crons.hide`` — PATCH that set ``hidden_at`` to a non-null value, or DELETE
 - ``crons.unhide`` — PATCH that set ``hidden_at`` back to null
@@ -17,7 +16,6 @@ the existing record is returned unchanged.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -25,12 +23,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Row
 from sqlalchemy.ext.asyncio import AsyncConnection
 
-from homelab_monitor.kernel.cron.fingerprint import compute_fingerprint
-from homelab_monitor.kernel.cron.schedule import (
-    canonicalize_schedule,
-    compute_average_interval_seconds,
-)
-from homelab_monitor.kernel.cron.schemas import CronCreate, CronUpdate
+from homelab_monitor.kernel.cron.schemas import CronUpdate
 from homelab_monitor.kernel.db.audit import insert_audit
 from homelab_monitor.kernel.db.repository import SqliteRepository
 from homelab_monitor.kernel.db.time import utc_now_iso
@@ -163,14 +156,6 @@ _SELECT_STATE_SQL = text(
     "WHERE cron_fingerprint = :cron_fingerprint"
 )
 
-_INSERT_CRON_SQL = text(
-    f"INSERT INTO crons ({_CRON_COLS}) VALUES ("
-    "  :fingerprint, :name, :host, :command, :schedule, :schedule_canonical, "
-    "  :cadence_seconds, :expected_grace_seconds, :enabled, :last_seen_state, "
-    "  :created_at, :updated_at, :hidden_at, :source_path, :wrapper_installed_at"
-    ")"
-)
-
 # ---------------------------------------------------------------------------
 # CronRepo
 # ---------------------------------------------------------------------------
@@ -273,66 +258,6 @@ class CronRepo:
         return cron
 
     # ----- writes -----
-
-    async def create_cron(self, payload: CronCreate, *, who: str, ip: str | None) -> CronRecord:
-        """INSERT a new cron + audit ``crons.create`` in one transaction.
-
-        DEPRECATED: STAGE-002-004 removes ``POST /api/crons`` entirely. This method
-        survives through STAGE-002-003 so existing test fixtures continue to work
-        during the transition. Discovery (STAGE-002-007) and ``/register``
-        (STAGE-002-005) are the going-forward creation paths.
-        """
-        now = utc_now_iso()
-        schedule = payload.schedule or ""
-        schedule_canonical = canonicalize_schedule(schedule) if schedule else None
-        cadence_seconds = (
-            compute_average_interval_seconds(schedule) if schedule else payload.cadence_seconds
-        )
-        fingerprint = compute_fingerprint(
-            host=payload.host,
-            source_path=payload.source_path,
-            schedule=schedule,
-            command=payload.command,
-        )
-        row_params: dict[str, Any] = {
-            "fingerprint": fingerprint,
-            "name": payload.name,
-            "host": payload.host,
-            "command": payload.command,
-            "schedule": schedule if schedule else None,
-            "schedule_canonical": schedule_canonical,
-            "cadence_seconds": cadence_seconds,
-            "expected_grace_seconds": payload.expected_grace_seconds,
-            "enabled": 1 if payload.enabled else 0,
-            "last_seen_state": "unknown",
-            "created_at": now,
-            "updated_at": now,
-            "hidden_at": None,
-            "source_path": payload.source_path,
-            "wrapper_installed_at": None,
-        }
-        async with self._db.transaction() as conn:
-            existing = (
-                await conn.execute(_SELECT_BY_FINGERPRINT_SQL, {"fingerprint": fingerprint})
-            ).first()
-            if existing is not None:
-                msg = f"cron already exists: {fingerprint}"
-                raise ValueError(msg)
-            await conn.execute(_INSERT_CRON_SQL, row_params)
-            await insert_audit(
-                conn,
-                who=who,
-                what="crons.create",
-                before=None,
-                after=_audit_after_for_create(row_params),
-                ip=ip,
-                when=now,
-            )
-            row = (
-                await conn.execute(_SELECT_BY_FINGERPRINT_SQL, {"fingerprint": fingerprint})
-            ).first()
-            assert row is not None
-            return _row_to_cron(row)
 
     async def update_cron(  # noqa: PLR0915
         self,
@@ -451,25 +376,6 @@ class CronRepo:
             raise LookupError(msg)
         payload = CronUpdate.model_validate({"hidden_at": utc_now_iso()})
         return await self.update_cron(fingerprint, payload, who=who, ip=ip)
-
-
-def _audit_after_for_create(row_params: Mapping[str, Any]) -> dict[str, Any]:
-    """Project the INSERT params into an audit-friendly ``after`` dict."""
-    return {
-        "fingerprint": row_params["fingerprint"],
-        "name": row_params["name"],
-        "host": row_params["host"],
-        "command": row_params["command"],
-        "schedule": row_params["schedule"],
-        "schedule_canonical": row_params["schedule_canonical"],
-        "cadence_seconds": row_params["cadence_seconds"],
-        "expected_grace_seconds": row_params["expected_grace_seconds"],
-        "enabled": bool(row_params["enabled"]),
-        "last_seen_state": row_params["last_seen_state"],
-        "created_at": row_params["created_at"],
-        "source_path": row_params["source_path"],
-        "wrapper_installed_at": row_params["wrapper_installed_at"],
-    }
 
 
 # Re-export AsyncConnection so static-analyzer-driven imports stay tidy.

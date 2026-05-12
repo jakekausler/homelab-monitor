@@ -1,21 +1,20 @@
-"""GET/POST/PATCH/DELETE /api/crons — cron registry CRUD (session-auth).
+"""GET/PATCH/DELETE /api/crons — cron registry CRUD (session-auth).
 
 Authentication: session-only (operator dashboard surface). State-changing
-methods (POST/PATCH/DELETE) inherit CSRF enforcement from
+methods (PATCH/DELETE) inherit CSRF enforcement from
 ``require_session()`` automatically — there is no separate
 ``require_session_with_csrf`` factory in this codebase.
 
 Audit verbs (recorded by ``CronRepo``):
-- ``crons.create`` (POST /api/crons, deprecated; removed in STAGE-002-004)
 - ``crons.update`` (PATCH that changes a non-hidden_at field)
 - ``crons.hide`` (PATCH hidden_at non-null OR DELETE)
 - ``crons.unhide`` (PATCH hidden_at -> null)
 
 Preview endpoints (read-only, GET):
 - ``GET /api/crons/{fingerprint}/preview-runs?count=N`` — saved cron
-- ``GET /api/crons/preview-runs?expr=<cron>&count=N`` — unsaved input from
-  add-modal. Both go through the SAME croniter helper so the UI's preview
-  cannot drift from server-side validation.
+- ``GET /api/crons/preview-runs?expr=<cron>&count=N`` — unsaved expression.
+  Both go through the SAME croniter helper so UI preview cannot drift from
+  server-side validation.
 """
 
 from __future__ import annotations
@@ -23,10 +22,10 @@ from __future__ import annotations
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Request
-from starlette.responses import JSONResponse, Response
+from starlette.responses import Response
 
 from homelab_monitor.kernel.api.dependencies import get_cron_repo, require_session
-from homelab_monitor.kernel.api.errors import NotFoundProblem, envelope_response
+from homelab_monitor.kernel.api.errors import NotFoundProblem
 from homelab_monitor.kernel.auth.models import User
 from homelab_monitor.kernel.cron.repository import CronRecord, CronRepo, CronWithState
 from homelab_monitor.kernel.cron.schedule import (
@@ -34,7 +33,6 @@ from homelab_monitor.kernel.cron.schedule import (
     compute_next_runs,
 )
 from homelab_monitor.kernel.cron.schemas import (
-    CronCreate,
     CronListQuery,
     CronListResponse,
     CronOut,
@@ -135,7 +133,7 @@ async def preview_runs_unsaved(
 ) -> PreviewRunsResponse:
     """Preview the next N fire times for an unsaved cron expression.
 
-    Used by the add-cron modal to preview the schedule before save. ``expr``
+    Used by UI clients to validate or preview an unsaved cron expression. ``expr``
     is REQUIRED for this endpoint (the saved-cron variant omits it).
     """
     if query.expr is None:
@@ -193,29 +191,6 @@ async def get_cron(
     if joined is None:
         raise NotFoundProblem(message=f"cron not found: {fingerprint}")
     return _with_state_to_out(joined)
-
-
-@router.post("", response_model=CronOut, status_code=201)
-async def create_cron(
-    payload: CronCreate,
-    request: Request,
-    user: Annotated[User, Depends(require_session())],
-    repo: Annotated[CronRepo, Depends(get_cron_repo)],
-) -> JSONResponse:
-    """Create a new cron registry row. CSRF enforced by require_session()."""
-    try:
-        rec = await repo.create_cron(payload, who=user.username, ip=_client_ip(request))
-    except ValueError as exc:
-        return envelope_response(
-            status=409,
-            code="cron_conflict",
-            message=str(exc),
-            details={},
-        )
-    return JSONResponse(
-        status_code=201,
-        content=_record_to_out(rec).model_dump(mode="json"),
-    )
 
 
 @router.patch("/{fingerprint}", response_model=CronOut)

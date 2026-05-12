@@ -3,7 +3,7 @@
 No I/O, no DB. Used by:
 - the migration 0007 backfill (re-implemented locally to avoid kernel-import
   ordering issues during alembic upgrade)
-- ``CronRepo.create_cron`` / ``CronRepo.update_cron`` to canonicalize the
+- ``CronRepo.update_cron`` to canonicalize the
   ``schedule`` field on every write
 - ``GET /api/crons/{id}/preview-runs`` and ``GET /api/crons/preview-runs``
   to materialize the next N expected fire times for the UI's schedule
@@ -97,7 +97,7 @@ def compute_average_interval_seconds(expr: str, *, base: datetime | None = None)
     """Return an integer-seconds estimate of the average interval between
     consecutive fires of ``expr``.
 
-    Used by ``CronRepo.create_cron`` / ``update_cron`` to mirror a cron
+    Used by ``CronRepo.update_cron`` to mirror a cron
     schedule into the ``cadence_seconds`` column so callers reading
     cadence directly get a sensible fast-lookup value without re-parsing.
 

@@ -181,7 +181,6 @@ Operator action after intentional crontab edits: hide the stale row.
 
 ## Audit verb taxonomy
 
-- `crons.create` — UI manual create. **REMOVED in STAGE-002-004.**
 - `crons.discover` — Auto-discovery scan creates a row (STAGE-002-007).
 - `crons.register` — Wrapper `/register` handshake creates or updates a row (STAGE-002-005).
 - `crons.update` — PATCH to any whitelisted field other than `hidden_at` transitions.
@@ -192,6 +191,10 @@ Operator action after intentional crontab edits: hide the stale row.
 
 Migration seeds bypass `audit_log` entirely (per D5 — migrations are
 infrastructure, not user actions; no meaningful actor or prior state).
+
+### Removed verbs (history)
+
+- `crons.create` — Existed in STAGE-002-002 + STAGE-002-003 for UI manual cron creation via `POST /api/crons`. REMOVED in STAGE-002-004 when the manual-create endpoint was deleted. Audit_log rows from before that stage's commit may still reference this verb; queries should treat it as a historical event type.
 
 ## Cross-references
 

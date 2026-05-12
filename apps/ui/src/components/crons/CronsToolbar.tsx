@@ -1,7 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Plus, Search } from 'lucide-react'
-
-import { Button } from '@/components/ui/button'
+import { Search } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
 import { titleCase } from './badges'
@@ -18,17 +16,11 @@ export interface CronsToolbarProps {
   filters: ToolbarFilters
   knownHosts: string[]
   onFiltersChange: (next: ToolbarFilters) => void
-  onAddClick: () => void
 }
 
 const SEARCH_DEBOUNCE_MS = 250
 
-export function CronsToolbar({
-  filters,
-  knownHosts,
-  onFiltersChange,
-  onAddClick,
-}: CronsToolbarProps) {
+export function CronsToolbar({ filters, knownHosts, onFiltersChange }: CronsToolbarProps) {
   const [searchInput, setSearchInput] = useState(filters.q ?? '')
 
   useEffect(() => {
@@ -115,13 +107,6 @@ export function CronsToolbar({
         />
         Show hidden
       </label>
-
-      <div className="ml-auto flex gap-2">
-        <Button onClick={onAddClick}>
-          <Plus className="mr-1 size-4" />
-          Add cron
-        </Button>
-      </div>
     </div>
   )
 }

@@ -2,6 +2,8 @@
 
 > Last updated: 2026-05-12 (STAGE-002-002). Reflects shipped state at commit [TBD].
 
+> **⚠️ REWRITE PENDING (STAGE-002-006).** This document describes the pre-STAGE-002-004 UI surface that included an "+ Add cron" button, an `AddCronModal`, the create-mode of `CronForm` (with schedule/cadence inputs), and a `ConfirmDeleteModal` requiring typed-name confirmation. **All of those are removed.** As of STAGE-002-004 the actual UI is: no "+ Add cron" button; `CronForm` is edit-only (fields: name, expected_grace_seconds, enabled); Archive button immediately archives without confirmation. Audit verb taxonomy: `crons.create`/`crons.delete`/`crons.restore` REMOVED; current verbs are `crons.update`/`crons.hide`/`crons.unhide` (plus future `crons.discover` from STAGE-002-007 and `crons.register` from STAGE-002-005). STAGE-002-006 will redesign this doc against the 4-panel detail layout.
+
 ## What this tab does
 
 The Crons tab is the operator's view of the cron registry — the set of scheduled jobs the monitor knows about. Each row is a manually registered cron; auto-discovery is not yet implemented. From this tab you can browse, filter, add, edit, or archive cron entries. Archiving is a soft-delete: the row is retained in the database with `archived_at` set, heartbeat pings from that fingerprint start returning 404, but the entry can be restored. Only authenticated operator sessions can read or mutate cron data; all state-changing requests require a CSRF token.

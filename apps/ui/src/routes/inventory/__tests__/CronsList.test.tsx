@@ -8,7 +8,6 @@ import {
   createRouter,
 } from '@tanstack/react-router'
 import { cleanup, render, screen } from '@testing-library/react'
-import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { CronsListPage } from '@/routes/inventory/CronsList'
@@ -17,7 +16,6 @@ afterEach(cleanup)
 
 vi.mock('@/api/crons', () => ({
   useListCrons: vi.fn(),
-  useCreateCron: vi.fn(() => ({ mutateAsync: vi.fn(), isPending: false })),
   usePreviewExpr: vi.fn(() => ({ isLoading: false, error: null, data: null })),
   cronQueryKeys: { all: ['crons'] },
 }))
@@ -124,18 +122,6 @@ describe('CronsListPage', () => {
     } as unknown as ReturnType<typeof useListCrons>)
     renderPage()
     expect(await screen.findByRole('alert')).toHaveTextContent('fetch error')
-  })
-
-  it('shows Add cron button and opens modal on click', async () => {
-    vi.mocked(useListCrons).mockReturnValue({
-      isLoading: false,
-      error: null,
-      data: { items: [], total: 0 },
-    } as unknown as ReturnType<typeof useListCrons>)
-    renderPage()
-    const addBtn = await screen.findByRole('button', { name: /Add cron/i })
-    await userEvent.setup().click(addBtn)
-    expect(screen.getByRole('dialog')).toBeInTheDocument()
   })
 
   it('renders pagination when total exceeds items length', async () => {

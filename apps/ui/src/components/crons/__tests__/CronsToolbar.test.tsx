@@ -9,33 +9,12 @@ afterEach(cleanup)
 const defaultFilters: ToolbarFilters = { include_hidden: false }
 
 describe('CronsToolbar', () => {
-  it('renders search input, selects, and Add cron button', () => {
-    render(
-      <CronsToolbar
-        filters={defaultFilters}
-        knownHosts={[]}
-        onFiltersChange={vi.fn()}
-        onAddClick={vi.fn()}
-      />,
-    )
+  it('renders search input, selects, and filter controls', () => {
+    render(<CronsToolbar filters={defaultFilters} knownHosts={[]} onFiltersChange={vi.fn()} />)
     expect(screen.getByRole('textbox', { name: /Search by name/i })).toBeInTheDocument()
     expect(screen.getByRole('combobox', { name: /Filter by host/i })).toBeInTheDocument()
     expect(screen.getByRole('combobox', { name: /Filter by state/i })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /Add cron/i })).toBeInTheDocument()
-  })
-
-  it('calls onAddClick when Add cron is clicked', async () => {
-    const onAddClick = vi.fn()
-    render(
-      <CronsToolbar
-        filters={defaultFilters}
-        knownHosts={[]}
-        onFiltersChange={vi.fn()}
-        onAddClick={onAddClick}
-      />,
-    )
-    await userEvent.setup().click(screen.getByRole('button', { name: /Add cron/i }))
-    expect(onAddClick).toHaveBeenCalledTimes(1)
+    expect(screen.queryByRole('button', { name: /Add cron/i })).toBeNull()
   })
 
   it('renders known hosts as select options', () => {
@@ -44,7 +23,6 @@ describe('CronsToolbar', () => {
         filters={defaultFilters}
         knownHosts={['host-a', 'host-b']}
         onFiltersChange={vi.fn()}
-        onAddClick={vi.fn()}
       />,
     )
     expect(screen.getByRole('option', { name: 'host-a' })).toBeInTheDocument()
@@ -58,7 +36,6 @@ describe('CronsToolbar', () => {
         filters={defaultFilters}
         knownHosts={['host-a']}
         onFiltersChange={onFiltersChange}
-        onAddClick={vi.fn()}
       />,
     )
     await userEvent
@@ -70,12 +47,7 @@ describe('CronsToolbar', () => {
   it('calls onFiltersChange with include_hidden when checkbox toggled', async () => {
     const onFiltersChange = vi.fn()
     render(
-      <CronsToolbar
-        filters={defaultFilters}
-        knownHosts={[]}
-        onFiltersChange={onFiltersChange}
-        onAddClick={vi.fn()}
-      />,
+      <CronsToolbar filters={defaultFilters} knownHosts={[]} onFiltersChange={onFiltersChange} />,
     )
     await userEvent.setup().click(screen.getByRole('checkbox'))
     expect(onFiltersChange).toHaveBeenCalledWith(expect.objectContaining({ include_hidden: true }))
@@ -84,12 +56,7 @@ describe('CronsToolbar', () => {
   it('calls onFiltersChange when state select changes', async () => {
     const onFiltersChange = vi.fn()
     render(
-      <CronsToolbar
-        filters={defaultFilters}
-        knownHosts={[]}
-        onFiltersChange={onFiltersChange}
-        onAddClick={vi.fn()}
-      />,
+      <CronsToolbar filters={defaultFilters} knownHosts={[]} onFiltersChange={onFiltersChange} />,
     )
     await userEvent
       .setup()
@@ -104,7 +71,6 @@ describe('CronsToolbar', () => {
         filters={{ ...defaultFilters, host: 'host-a' }}
         knownHosts={['host-a']}
         onFiltersChange={onFiltersChange}
-        onAddClick={vi.fn()}
       />,
     )
     await userEvent

@@ -12,7 +12,6 @@ import type { Schema } from './types'
 type CronListResponse = Schema<'CronListResponse'>
 type CronWithStateOut = Schema<'CronWithStateOut'>
 type CronOut = Schema<'CronOut'>
-type CronCreate = Schema<'CronCreate'>
 type CronUpdate = Schema<'CronUpdate'>
 type PreviewRunsResponse = Schema<'PreviewRunsResponse'>
 
@@ -66,19 +65,6 @@ export function useGetCron(
     },
     refetchInterval: REFETCH_INTERVAL_MS,
     enabled: id.length > 0,
-  })
-}
-
-export function useCreateCron(): UseMutationResult<CronOut, ApiError, CronCreate> {
-  const qc = useQueryClient()
-  return useMutation({
-    mutationFn: async (body: CronCreate) => {
-      const result = await apiClient.POST('/api/crons', { body })
-      return unwrap(result)
-    },
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: cronQueryKeys.all })
-    },
   })
 }
 

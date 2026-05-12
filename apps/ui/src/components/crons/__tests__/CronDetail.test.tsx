@@ -161,16 +161,22 @@ describe('CronDetail', () => {
     expect(screen.getByText('5')).toBeInTheDocument()
   })
 
-  it('opens delete modal when Archive button is clicked', async () => {
+  it('calls softDeleteCron mutateAsync when Archive button is clicked', async () => {
+    const mutateAsync = vi.fn().mockResolvedValue(undefined)
+    const { useSoftDeleteCron } = await import('@/api/crons')
+    vi.mocked(useSoftDeleteCron).mockReturnValue({
+      mutateAsync,
+      isPending: false,
+    } as unknown as ReturnType<typeof useSoftDeleteCron>)
     vi.mocked(useGetCron).mockReturnValue({
       isLoading: false,
       error: null,
       data: { cron: sampleCron, state: null },
     } as unknown as ReturnType<typeof useGetCron>)
     renderInRouter(<CronDetail fingerprint={'a'.repeat(64)} />)
-    const deleteBtn = await screen.findByRole('button', { name: /Archive/i })
-    await userEvent.setup().click(deleteBtn)
-    expect(await screen.findByText(/Archive cron\?/i)).toBeInTheDocument()
+    const archiveBtn = await screen.findByRole('button', { name: /Archive/i })
+    await userEvent.setup().click(archiveBtn)
+    expect(mutateAsync).toHaveBeenCalledTimes(1)
   })
 
   it('shows cadence-based schedule preview message when schedule is null', async () => {

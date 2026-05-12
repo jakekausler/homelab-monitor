@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import text
@@ -196,6 +194,22 @@ async def test_list_requires_session(api_token_client: AsyncClient) -> None:
     assert resp.status_code == 401  # noqa: PLR2004
 
 
+@pytest.mark.asyncio
+async def test_post_crons_returns_405_method_not_allowed(
+    authenticated_client: AsyncClient,
+) -> None:
+    """POST /api/crons returns 405 with `Allow: GET` (STAGE-002-004: manual create removed)."""
+    csrf = _csrf(authenticated_client)
+    response = await authenticated_client.post(
+        "/api/crons",
+        json={},
+        headers=csrf,
+    )
+    assert response.status_code == 405  # noqa: PLR2004
+    allow_header = response.headers.get("allow", "").upper()
+    assert "GET" in allow_header
+
+
 # ---------------------------------------------------------------------------
 # GET BY ID
 # ---------------------------------------------------------------------------
@@ -237,174 +251,6 @@ async def test_get_hidden_returns_with_include_hidden(
     assert resp.status_code == 200  # noqa: PLR2004
     body = resp.json()
     assert body["cron"]["hidden_at"] is not None
-
-
-# ---------------------------------------------------------------------------
-# CREATE
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_create_returns_201_and_persists(
-    authenticated_client: AsyncClient, repo: SqliteRepository
-) -> None:
-    payload = {
-        "name": "myCron",
-        "host": "host-x",
-        "command": "/usr/bin/echo hello",
-        "schedule": "*/10 * * * *",
-        "source_path": "/etc/crontab",
-    }
-    resp = await authenticated_client.post(
-        "/api/crons", json=payload, headers=_csrf(authenticated_client)
-    )
-    assert resp.status_code == 201  # noqa: PLR2004
-    body = resp.json()
-    assert body["name"] == "myCron"
-    assert body["schedule"] == "*/10 * * * *"
-    assert body["schedule_canonical"] == "*/10 * * * *"
-    # Verify row in DB
-    fp = body["fingerprint"]
-    row = await repo.fetch_one(text("SELECT name FROM crons WHERE fingerprint = :fp"), {"fp": fp})
-    assert row is not None
-    assert row[0] == "myCron"
-
-
-@pytest.mark.asyncio
-async def test_create_canonicalizes_schedule(authenticated_client: AsyncClient) -> None:
-    payload: dict[str, Any] = {
-        "name": "hourly-job",
-        "host": "host-x",
-        "command": "/opt/job",
-        "schedule": "@hourly",
-    }
-    resp = await authenticated_client.post(
-        "/api/crons", json=payload, headers=_csrf(authenticated_client)
-    )
-    assert resp.status_code == 201  # noqa: PLR2004
-    body = resp.json()
-    # @hourly canonicalizes to "0 * * * *"
-    assert body["schedule_canonical"] == "0 * * * *"
-    # fingerprint is 64-char hex
-    assert len(body["fingerprint"]) == 64  # noqa: PLR2004
-    assert all(c in "0123456789abcdef" for c in body["fingerprint"])
-
-
-@pytest.mark.asyncio
-async def test_create_writes_audit_log_with_after_fields(
-    authenticated_client: AsyncClient, repo: SqliteRepository
-) -> None:
-    payload: dict[str, Any] = {
-        "name": "audit-test",
-        "host": "host-x",
-        "command": "/opt/job",
-        "schedule": "* * * * *",
-    }
-    resp = await authenticated_client.post(
-        "/api/crons", json=payload, headers=_csrf(authenticated_client)
-    )
-    assert resp.status_code == 201  # noqa: PLR2004
-    row = await repo.fetch_one(
-        text('SELECT what, after_json FROM audit_log WHERE what = :w ORDER BY "when" DESC LIMIT 1'),
-        {"w": "crons.create"},
-    )
-    assert row is not None
-    assert row[0] == "crons.create"
-    import json  # noqa: PLC0415
-
-    after = json.loads(row[1])
-    assert after["name"] == "audit-test"
-    assert after["host"] == "host-x"
-    assert "fingerprint" in after
-
-
-@pytest.mark.asyncio
-async def test_create_invalid_schedule_returns_422(authenticated_client: AsyncClient) -> None:
-    payload: dict[str, Any] = {
-        "name": "bad",
-        "host": "h",
-        "command": "/x",
-        "schedule": "not a cron expression",
-    }
-    resp = await authenticated_client.post(
-        "/api/crons", json=payload, headers=_csrf(authenticated_client)
-    )
-    assert resp.status_code == 422  # noqa: PLR2004
-
-
-@pytest.mark.asyncio
-async def test_create_xor_violation_both_returns_422(authenticated_client: AsyncClient) -> None:
-    payload: dict[str, Any] = {
-        "name": "bad",
-        "host": "h",
-        "command": "/x",
-        "schedule": "* * * * *",
-        "cadence_seconds": 60,
-    }
-    resp = await authenticated_client.post(
-        "/api/crons", json=payload, headers=_csrf(authenticated_client)
-    )
-    assert resp.status_code == 422  # noqa: PLR2004
-
-
-@pytest.mark.asyncio
-async def test_create_xor_violation_neither_returns_422(authenticated_client: AsyncClient) -> None:
-    payload: dict[str, Any] = {
-        "name": "bad",
-        "host": "h",
-        "command": "/x",
-    }
-    resp = await authenticated_client.post(
-        "/api/crons", json=payload, headers=_csrf(authenticated_client)
-    )
-    assert resp.status_code == 422  # noqa: PLR2004
-
-
-@pytest.mark.asyncio
-async def test_create_unauthorized_returns_401() -> None:
-    """No session, no token: 401."""
-    from httpx import ASGITransport  # noqa: PLC0415
-    from httpx import AsyncClient as HCli  # noqa: PLC0415
-
-    from homelab_monitor.kernel.api.app import create_app  # noqa: PLC0415
-
-    app = create_app(lifespan_enabled=False)
-    async with HCli(transport=ASGITransport(app=app), base_url="http://test") as client:
-        resp = await client.post("/api/crons", json={"name": "x", "host": "h", "command": "c"})
-        assert resp.status_code == 401  # noqa: PLR2004
-
-
-@pytest.mark.asyncio
-async def test_create_no_csrf_returns_403(authenticated_client: AsyncClient) -> None:
-    """Session cookie present but X-CSRF-Token header omitted -> 403."""
-    payload = {"name": "x", "host": "h", "command": "/x", "schedule": "* * * * *"}
-    resp = await authenticated_client.post("/api/crons", json=payload)  # no CSRF header
-    assert resp.status_code == 403  # noqa: PLR2004
-
-
-@pytest.mark.asyncio
-async def test_create_duplicate_fingerprint_returns_409(
-    authenticated_client: AsyncClient,
-) -> None:
-    payload = {
-        "name": "dup",
-        "host": "h",
-        "command": "/x",
-        "schedule": "* * * * *",
-        "source_path": "/etc/crontab",
-    }
-    first = await authenticated_client.post(
-        "/api/crons",
-        json=payload,
-        headers=_csrf(authenticated_client),
-    )
-    assert first.status_code == 201  # noqa: PLR2004
-    second = await authenticated_client.post(
-        "/api/crons",
-        json=payload,
-        headers=_csrf(authenticated_client),
-    )
-    assert second.status_code == 409  # noqa: PLR2004
 
 
 # ---------------------------------------------------------------------------
@@ -647,70 +493,6 @@ async def test_get_preview_runs_unsaved_count_above_limit_returns_422(
 ) -> None:
     resp = await authenticated_client.get("/api/crons/preview-runs?expr=*+*+*+*+*&count=11")
     assert resp.status_code == 422  # noqa: PLR2004
-
-
-@pytest.mark.asyncio
-async def test_create_with_invalid_cron_expr_in_payload_returns_422(
-    authenticated_client: AsyncClient,
-) -> None:
-    """POST /api/crons with invalid cron expression in schedule field returns 422."""
-    csrf = _csrf(authenticated_client)
-    resp = await authenticated_client.post(
-        "/api/crons",
-        json={
-            "name": "bad-cron",
-            "host": "h1",
-            "command": "/bin/true",
-            "schedule": "not a real cron expression",
-        },
-        headers=csrf,
-    )
-    assert resp.status_code == 422  # noqa: PLR2004
-
-
-@pytest.mark.asyncio
-async def test_create_with_neither_schedule_nor_cadence_returns_422(
-    authenticated_client: AsyncClient,
-) -> None:
-    """POST /api/crons with neither schedule nor cadence returns 422 (xor)."""
-    csrf = _csrf(authenticated_client)
-    resp = await authenticated_client.post(
-        "/api/crons",
-        json={
-            "name": "no-schedule-cron",
-            "host": "h1",
-            "command": "/bin/true",
-            "schedule": None,
-            "cadence_seconds": 0,
-        },
-        headers=csrf,
-    )
-    assert resp.status_code == 422  # noqa: PLR2004
-
-
-@pytest.mark.asyncio
-async def test_create_rejects_empty_source_path_with_422(
-    authenticated_client: AsyncClient,
-) -> None:
-    """POST /api/crons with source_path='' returns 422 (CronCreate min_length=1)."""
-    csrf = _csrf(authenticated_client)
-    resp = await authenticated_client.post(
-        "/api/crons",
-        json={
-            "host": "host-a",
-            "name": "test",
-            "command": "/bin/true",
-            "schedule": "*/5 * * * *",
-            "cadence_seconds": 0,
-            "expected_grace_seconds": 300,
-            "enabled": True,
-            "source_path": "",
-        },
-        headers=csrf,
-    )
-    assert resp.status_code == 422  # noqa: PLR2004
-    body = resp.json()
-    assert "source_path" in str(body)
 
 
 @pytest.mark.asyncio

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect } from 'react'
 import { useForm, Controller } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -6,71 +6,29 @@ import { z } from 'zod'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { SchedulePreviewForExpr } from '@/components/crons/SchedulePreview'
 import type { components } from '@/api/schema'
 
-type CronCreate = components['schemas']['CronCreate']
 type CronUpdate = components['schemas']['CronUpdate']
 type CronOut = components['schemas']['CronOut']
 
-/**
- * Zod schema with the SAME xor validation the backend enforces. Field-level
- * cron-expression validation is debounced server-side via the SchedulePreview
- * component (which surfaces 422 messages inline); the client schema only
- * verifies length + emptiness so we do not duplicate croniter logic in JS.
- */
-const cronFormSchema = z
-  .object({
-    name: z.string().min(1, 'Name is required').max(200),
-    host: z.string().min(1, 'Host is required').max(200),
-    command: z.string().min(1, 'Command is required').max(2000),
-    scheduleMode: z.enum(['schedule', 'cadence']),
-    schedule: z.string().max(200).optional(),
-    cadence_seconds: z.number().int().min(0).max(86400),
-    expected_grace_seconds: z.number().int().min(0).max(86400),
-    enabled: z.boolean(),
-  })
-  .superRefine((val, ctx) => {
-    if (val.scheduleMode === 'schedule') {
-      if (!val.schedule || val.schedule.trim().length === 0) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['schedule'],
-          message: 'Schedule is required when schedule-driven',
-        })
-      }
-      if (val.cadence_seconds > 0) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['cadence_seconds'],
-          message: 'Cadence must be 0 when using a schedule',
-        })
-      }
-    } else {
-      if (val.cadence_seconds <= 0) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['cadence_seconds'],
-          message: 'Cadence must be > 0 when cadence-driven',
-        })
-      }
-    }
-  })
+const cronFormSchema = z.object({
+  name: z.string().min(1, 'Name is required').max(200),
+  expected_grace_seconds: z.number().int().min(0).max(86400),
+  enabled: z.boolean(),
+})
 
 export type CronFormValues = z.infer<typeof cronFormSchema>
 
 export interface CronFormProps {
-  mode: 'create' | 'edit'
   defaultValues?: Partial<CronOut>
   submitLabel?: string
-  onSubmit: (body: CronCreate | CronUpdate) => Promise<void> | void
+  onSubmit: (body: CronUpdate) => Promise<void> | void
   onCancel?: () => void
   errorMessage?: string | null
   isSubmitting?: boolean
 }
 
 export function CronForm({
-  mode,
   defaultValues,
   submitLabel,
   onSubmit,
@@ -80,19 +38,6 @@ export function CronForm({
 }: CronFormProps) {
   const initial: CronFormValues = {
     name: defaultValues?.name ?? '',
-    host: defaultValues?.host ?? '',
-    command: defaultValues?.command ?? '',
-    scheduleMode:
-      defaultValues?.schedule !== null && defaultValues?.schedule !== undefined
-        ? 'schedule'
-        : defaultValues?.cadence_seconds !== undefined && defaultValues.cadence_seconds > 0
-          ? 'cadence'
-          : 'schedule',
-    schedule: defaultValues?.schedule ?? '',
-    cadence_seconds:
-      defaultValues?.schedule !== null && defaultValues?.schedule !== undefined
-        ? 0
-        : (defaultValues?.cadence_seconds ?? 0),
     expected_grace_seconds: defaultValues?.expected_grace_seconds ?? 300,
     enabled: defaultValues?.enabled ?? true,
   }
@@ -102,65 +47,17 @@ export function CronForm({
     defaultValues: initial,
   })
 
-  // Seed from raw defaultValues so flipping a cadence-driven cron to schedule
-  // mode preserves any schedule the backend mirrors (or falls back to a
-  // hint default if the cron is truly cadence-only).
-  const lastScheduleRef = useRef(defaultValues?.schedule || '0 * * * *')
-  // Seed from raw defaultValues. For schedule-driven crons the backend mirrors
-  // a croniter average-interval here; we want that as the "last cadence" so
-  // a schedule→cadence flip shows the meaningful value instead of 3600.
-  const lastCadenceRef = useRef(
-    defaultValues?.cadence_seconds !== undefined && defaultValues.cadence_seconds > 0
-      ? defaultValues.cadence_seconds
-      : 3600,
-  )
-
   useEffect(() => {
     form.reset(initial)
-    lastScheduleRef.current = defaultValues?.schedule || '0 * * * *'
-    lastCadenceRef.current =
-      defaultValues?.cadence_seconds !== undefined && defaultValues.cadence_seconds > 0
-        ? defaultValues.cadence_seconds
-        : 3600
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [defaultValues?.fingerprint])
 
-  const scheduleMode = form.watch('scheduleMode')
-  const scheduleValue = form.watch('schedule') ?? ''
-
-  // Track schedule changes to preserve when switching modes
-  useEffect(() => {
-    if (scheduleMode === 'schedule' && scheduleValue) {
-      lastScheduleRef.current = scheduleValue
-    }
-  }, [scheduleValue, scheduleMode])
-
-  const cadenceValue = form.watch('cadence_seconds')
-  useEffect(() => {
-    if (scheduleMode === 'cadence' && cadenceValue > 0) {
-      lastCadenceRef.current = cadenceValue
-    }
-  }, [cadenceValue, scheduleMode])
-
   const submit = form.handleSubmit((values) => {
-    const payload: CronCreate | CronUpdate =
-      mode === 'create'
-        ? {
-            name: values.name,
-            host: values.host,
-            command: values.command,
-            schedule: values.scheduleMode === 'schedule' ? (values.schedule ?? null) : null,
-            cadence_seconds: values.scheduleMode === 'cadence' ? values.cadence_seconds : 0,
-            expected_grace_seconds: values.expected_grace_seconds,
-            enabled: values.enabled,
-          }
-        : {
-            // Edit mode: server-side CronUpdate whitelist is { name, expected_grace_seconds, enabled, hidden_at }.
-            // host, command, schedule, cadence_seconds, source_path are read-only post-creation per STAGE-002-003 D-spec.
-            name: values.name,
-            expected_grace_seconds: values.expected_grace_seconds,
-            enabled: values.enabled,
-          }
+    const payload: CronUpdate = {
+      name: values.name,
+      expected_grace_seconds: values.expected_grace_seconds,
+      enabled: values.enabled,
+    }
     void onSubmit(payload)
   })
 
@@ -185,141 +82,6 @@ export function CronForm({
           </p>
         )}
       </div>
-
-      <div className="space-y-2">
-        <Label htmlFor="cron-host">Host</Label>
-        <Input id="cron-host" {...form.register('host')} />
-        {form.formState.errors.host && (
-          <p role="alert" className="text-sm text-red-600">
-            {form.formState.errors.host.message}
-          </p>
-        )}
-      </div>
-
-      <div className="space-y-2">
-        <Label htmlFor="cron-command">Command</Label>
-        <Input id="cron-command" {...form.register('command')} />
-        {form.formState.errors.command && (
-          <p role="alert" className="text-sm text-red-600">
-            {form.formState.errors.command.message}
-          </p>
-        )}
-      </div>
-
-      <fieldset className="space-y-2 rounded-md border border-border p-3">
-        <legend className="px-1 text-sm font-medium">Schedule</legend>
-        <div className="flex gap-4 text-sm">
-          <label className="flex items-center gap-2">
-            <input
-              type="radio"
-              value="schedule"
-              {...form.register('scheduleMode')}
-              onChange={(e) => {
-                if (e.target.checked) {
-                  const currentCadence = form.getValues('cadence_seconds')
-                  if (currentCadence > 0) {
-                    lastCadenceRef.current = currentCadence
-                  }
-                  const restoreSchedule = lastScheduleRef.current || '0 * * * *'
-                  form.setValue('scheduleMode', 'schedule', {
-                    shouldDirty: true,
-                    shouldTouch: true,
-                    shouldValidate: true,
-                  })
-                  form.setValue('schedule', restoreSchedule, {
-                    shouldDirty: true,
-                    shouldTouch: true,
-                    shouldValidate: true,
-                  })
-                  form.setValue('cadence_seconds', 0, {
-                    shouldDirty: true,
-                    shouldTouch: true,
-                    shouldValidate: true,
-                  })
-                }
-              }}
-            />
-            Cron expression
-          </label>
-          <label className="flex items-center gap-2">
-            <input
-              type="radio"
-              value="cadence"
-              {...form.register('scheduleMode')}
-              onChange={(e) => {
-                if (e.target.checked) {
-                  const currentSchedule = form.getValues('schedule')
-                  if (currentSchedule) {
-                    lastScheduleRef.current = currentSchedule
-                  }
-                  form.setValue('scheduleMode', 'cadence', {
-                    shouldDirty: true,
-                    shouldTouch: true,
-                    shouldValidate: true,
-                  })
-                  form.setValue('schedule', '', {
-                    shouldDirty: true,
-                    shouldTouch: true,
-                    shouldValidate: true,
-                  })
-                  form.setValue(
-                    'cadence_seconds',
-                    lastCadenceRef.current > 0 ? lastCadenceRef.current : 3600,
-                    { shouldDirty: true, shouldTouch: true, shouldValidate: true },
-                  )
-                }
-              }}
-            />
-            Cadence (seconds)
-          </label>
-        </div>
-
-        {scheduleMode === 'schedule' ? (
-          <div className="space-y-2">
-            {/*
-              Explicit key forces React to remount the input on mode swap.
-              Without it, React reuses the DOM node and the prior branch's
-              type="number" persists on the text input, causing the browser
-              to coerce cron-expression values (e.g. five-field "every 5 min"
-              expressions) to "0".
-            */}
-            <Input
-              key="schedule-input"
-              placeholder="*/5 * * * *"
-              aria-label="Cron expression"
-              {...form.register('schedule')}
-            />
-            {form.formState.errors.schedule && (
-              <p role="alert" className="text-sm text-red-600">
-                {form.formState.errors.schedule.message}
-              </p>
-            )}
-            <div className="rounded-md bg-muted/50 p-3">
-              <p className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                Next runs
-              </p>
-              <SchedulePreviewForExpr expr={scheduleValue} count={3} />
-            </div>
-          </div>
-        ) : (
-          <div className="space-y-2">
-            {/* See `key="schedule-input"` above — pairs with this remount key. */}
-            <Input
-              key="cadence-input"
-              type="number"
-              min={1}
-              max={86400}
-              aria-label="Cadence seconds"
-              {...form.register('cadence_seconds', { valueAsNumber: true })}
-            />
-            {form.formState.errors.cadence_seconds && (
-              <p role="alert" className="text-sm text-red-600">
-                {form.formState.errors.cadence_seconds.message}
-              </p>
-            )}
-          </div>
-        )}
-      </fieldset>
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
         <div className="space-y-2">
@@ -364,7 +126,7 @@ export function CronForm({
           </Button>
         )}
         <Button type="submit" disabled={isSubmitting}>
-          {isSubmitting ? 'Saving…' : (submitLabel ?? (mode === 'create' ? 'Create' : 'Save'))}
+          {isSubmitting ? 'Saving…' : (submitLabel ?? 'Save')}
         </Button>
       </div>
     </form>

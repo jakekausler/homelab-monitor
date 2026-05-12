@@ -7,12 +7,10 @@ import type { Schema } from '@/api/types'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { StateBadge } from '@/components/crons/badges'
-import { ConfirmDeleteModal } from '@/components/crons/ConfirmDeleteModal'
 import { CronForm } from '@/components/crons/CronForm'
 import { SchedulePreviewForSaved } from '@/components/crons/SchedulePreview'
 import { formatAbsolute, formatRelative } from '@/lib/relativeTime'
 
-type CronCreate = Schema<'CronCreate'>
 type CronUpdate = Schema<'CronUpdate'>
 
 export interface CronDetailProps {
@@ -25,8 +23,6 @@ export function CronDetail({ fingerprint }: CronDetailProps) {
   const update = useUpdateCron(fingerprint)
   const softDelete = useSoftDeleteCron(fingerprint)
   const [editError, setEditError] = useState<string | null>(null)
-  const [deleteOpen, setDeleteOpen] = useState(false)
-  const [deleteError, setDeleteError] = useState<string | null>(null)
 
   if (detail.isLoading) {
     return <p className="text-muted-foreground">Loading cron…</p>
@@ -46,7 +42,7 @@ export function CronDetail({ fingerprint }: CronDetailProps) {
   const state = detail.data.state
   const isHidden = cron.hidden_at !== null
 
-  const handleSave = async (body: CronCreate | CronUpdate) => {
+  const handleSave = async (body: CronUpdate) => {
     setEditError(null)
     try {
       await update.mutateAsync(body)
@@ -77,11 +73,9 @@ export function CronDetail({ fingerprint }: CronDetailProps) {
   }
 
   const handleDelete = async () => {
-    setDeleteError(null)
     try {
       await softDelete.mutateAsync()
-      setDeleteOpen(false)
-      // include_hidden:true keeps the just-hidden row visible on the list
+      // include_hidden:true keeps the just-archived row visible on the list
       // (with its `archived` badge); otherwise the row vanishes and the user
       // can't tell whether the action took effect.
       void navigate({
@@ -97,7 +91,9 @@ export function CronDetail({ fingerprint }: CronDetailProps) {
         },
       })
     } catch (err) {
-      setDeleteError(err instanceof ApiError ? err.message : 'Delete failed')
+      // TODO(STAGE-002-006): surface Archive failures via toast/snackbar.
+      // Currently silent (errors only logged); user retried via Restore from the list.
+      console.error('soft-delete failed', err)
     }
   }
 
@@ -124,8 +120,12 @@ export function CronDetail({ fingerprint }: CronDetailProps) {
               Restore
             </Button>
           ) : (
-            <Button variant="destructive" onClick={() => setDeleteOpen(true)}>
-              Archive
+            <Button
+              variant="destructive"
+              onClick={() => void handleDelete()}
+              disabled={softDelete.isPending}
+            >
+              {softDelete.isPending ? 'Archiving…' : 'Archive'}
             </Button>
           )}
         </div>
@@ -138,7 +138,6 @@ export function CronDetail({ fingerprint }: CronDetailProps) {
           </CardHeader>
           <CardContent>
             <CronForm
-              mode="edit"
               defaultValues={cron}
               onSubmit={handleSave}
               errorMessage={editError}
@@ -184,15 +183,6 @@ export function CronDetail({ fingerprint }: CronDetailProps) {
           </Card>
         </div>
       </div>
-
-      <ConfirmDeleteModal
-        open={deleteOpen}
-        onOpenChange={setDeleteOpen}
-        cronName={cron.name}
-        onConfirm={handleDelete}
-        isDeleting={softDelete.isPending}
-        errorMessage={deleteError}
-      />
     </div>
   )
 }

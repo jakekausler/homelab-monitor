@@ -532,82 +532,6 @@
         "title": "CommentBody",
         "type": "object"
       },
-      "CronCreate": {
-        "additionalProperties": false,
-        "description": "Body for the deprecated ``POST /api/crons`` (gone in STAGE-002-004).\n\nExactly one of ``schedule`` (non-empty cron expression) OR\n``cadence_seconds`` (>0) must be set. Both-set or neither-set yields 422.",
-        "properties": {
-          "cadence_seconds": {
-            "default": 0,
-            "maximum": 86400.0,
-            "minimum": 0.0,
-            "title": "Cadence Seconds",
-            "type": "integer"
-          },
-          "command": {
-            "maxLength": 2000,
-            "minLength": 1,
-            "title": "Command",
-            "type": "string"
-          },
-          "enabled": {
-            "default": true,
-            "title": "Enabled",
-            "type": "boolean"
-          },
-          "expected_grace_seconds": {
-            "default": 300,
-            "maximum": 86400.0,
-            "minimum": 0.0,
-            "title": "Expected Grace Seconds",
-            "type": "integer"
-          },
-          "host": {
-            "maxLength": 200,
-            "minLength": 1,
-            "title": "Host",
-            "type": "string"
-          },
-          "name": {
-            "maxLength": 200,
-            "minLength": 1,
-            "title": "Name",
-            "type": "string"
-          },
-          "schedule": {
-            "anyOf": [
-              {
-                "maxLength": 200,
-                "minLength": 1,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Schedule"
-          },
-          "source_path": {
-            "anyOf": [
-              {
-                "maxLength": 500,
-                "minLength": 1,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Source Path"
-          }
-        },
-        "required": [
-          "name",
-          "host",
-          "command"
-        ],
-        "title": "CronCreate",
-        "type": "object"
-      },
       "CronListResponse": {
         "additionalProperties": false,
         "description": "Paginated list payload for ``GET /api/crons``.",
@@ -2231,51 +2155,11 @@
         "tags": [
           "crons"
         ]
-      },
-      "post": {
-        "description": "Create a new cron registry row. CSRF enforced by require_session().",
-        "operationId": "create_cron_api_crons_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CronCreate"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CronOut"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Create Cron",
-        "tags": [
-          "crons"
-        ]
       }
     },
     "/api/crons/preview-runs": {
       "get": {
-        "description": "Preview the next N fire times for an unsaved cron expression.\n\nUsed by the add-cron modal to preview the schedule before save. ``expr``\nis REQUIRED for this endpoint (the saved-cron variant omits it).",
+        "description": "Preview the next N fire times for an unsaved cron expression.\n\nUsed by UI clients to validate or preview an unsaved cron expression. ``expr``\nis REQUIRED for this endpoint (the saved-cron variant omits it).",
         "operationId": "preview_runs_unsaved_api_crons_preview_runs_get",
         "parameters": [
           {

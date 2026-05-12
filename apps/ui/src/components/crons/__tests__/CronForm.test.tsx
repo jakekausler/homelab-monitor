@@ -13,53 +13,75 @@ function wrap(ui: React.ReactNode) {
 }
 
 describe('CronForm', () => {
-  it('renders all required fields in create mode', () => {
-    wrap(<CronForm mode="create" onSubmit={vi.fn()} />)
+  it('renders name, grace, and enabled fields', () => {
+    wrap(<CronForm onSubmit={vi.fn()} />)
     expect(screen.getByLabelText(/Name/i)).toBeInTheDocument()
-    expect(screen.getByLabelText(/Host/i)).toBeInTheDocument()
-    expect(screen.getByLabelText(/Command/i)).toBeInTheDocument()
+    expect(screen.getByLabelText(/Expected grace/i)).toBeInTheDocument()
+    expect(screen.getByRole('checkbox')).toBeInTheDocument()
   })
 
-  it('shows validation error when submitting with empty required fields', async () => {
+  it('does not render host, command, schedule, or cadence fields', () => {
+    wrap(<CronForm onSubmit={vi.fn()} />)
+    expect(screen.queryByLabelText(/Host/i)).toBeNull()
+    expect(screen.queryByLabelText(/Command/i)).toBeNull()
+    expect(screen.queryByRole('radio')).toBeNull()
+    expect(screen.queryByLabelText(/Cron expression/i)).toBeNull()
+    expect(screen.queryByLabelText(/Cadence seconds/i)).toBeNull()
+  })
+
+  it('shows validation error when submitting with empty name', async () => {
     const onSubmit = vi.fn()
-    wrap(<CronForm mode="create" onSubmit={onSubmit} />)
+    wrap(<CronForm onSubmit={onSubmit} />)
     const user = userEvent.setup()
-    await user.click(screen.getByRole('button', { name: /Create/i }))
+    await user.clear(screen.getByLabelText(/Name/i))
+    await user.click(screen.getByRole('button', { name: /Save/i }))
     expect(screen.getByText(/Name is required/i)).toBeInTheDocument()
     expect(onSubmit).not.toHaveBeenCalled()
   })
 
-  it('calls onSubmit with mapped payload when valid', async () => {
+  it('calls onSubmit with CronUpdate-shaped payload', async () => {
     const onSubmit = vi.fn()
-    wrap(<CronForm mode="create" onSubmit={onSubmit} />)
-    const user = userEvent.setup()
-    await user.type(screen.getByLabelText(/Name/i), 'my-cron')
-    await user.type(screen.getByLabelText(/Host/i), 'host-x')
-    await user.type(screen.getByLabelText(/Command/i), '/opt/job')
-    await user.type(screen.getByRole('textbox', { name: /Cron expression/i }), '*/5 * * * *')
-    await user.click(screen.getByRole('button', { name: /Create/i }))
-    expect(onSubmit).toHaveBeenCalledTimes(1)
-    const arg = onSubmit.mock.calls[0]![0] as Record<string, unknown>
-    expect(arg.name).toBe('my-cron')
-    expect(arg.host).toBe('host-x')
-    expect(arg.command).toBe('/opt/job')
-    expect(arg.schedule).toBe('*/5 * * * *')
-    expect(arg.cadence_seconds).toBe(0)
-  })
-
-  it('switches to cadence mode and disables schedule field', async () => {
-    wrap(<CronForm mode="create" onSubmit={vi.fn()} />)
-    const user = userEvent.setup()
-    await user.click(screen.getByRole('radio', { name: /Cadence \(seconds\)/i }))
-    // Schedule input should be replaced with a number input
-    expect(screen.getByLabelText(/Cadence seconds/i)).toBeInTheDocument()
-    expect(screen.queryByRole('textbox', { name: /Cron expression/i })).toBeNull()
-  })
-
-  it('renders edit mode with default values', () => {
     wrap(
       <CronForm
-        mode="edit"
+        onSubmit={onSubmit}
+        defaultValues={{
+          fingerprint: 'c'.repeat(64),
+          name: 'existing',
+          expected_grace_seconds: 300,
+          enabled: true,
+          host: 'h',
+          command: '/x',
+          schedule: '* * * * *',
+          schedule_canonical: '* * * * *',
+          cadence_seconds: 0,
+          last_seen_state: 'ok',
+          created_at: '',
+          updated_at: '',
+          hidden_at: null,
+          source_path: null,
+          wrapper_installed_at: null,
+        }}
+      />,
+    )
+    const user = userEvent.setup()
+    await user.clear(screen.getByLabelText(/Name/i))
+    await user.type(screen.getByLabelText(/Name/i), 'renamed')
+    await user.click(screen.getByRole('button', { name: /Save/i }))
+    expect(onSubmit).toHaveBeenCalledTimes(1)
+    const arg = onSubmit.mock.calls[0]![0] as Record<string, unknown>
+    expect(arg.name).toBe('renamed')
+    expect(arg.expected_grace_seconds).toBe(300)
+    expect(arg.enabled).toBe(true)
+    // Must NOT include create-only fields
+    expect(arg.host).toBeUndefined()
+    expect(arg.command).toBeUndefined()
+    expect(arg.schedule).toBeUndefined()
+    expect(arg.cadence_seconds).toBeUndefined()
+  })
+
+  it('renders with default values populated', () => {
+    wrap(
+      <CronForm
         defaultValues={{
           fingerprint: 'c'.repeat(64),
           name: 'existing',

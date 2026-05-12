@@ -9,20 +9,13 @@ Field validators on ``schedule`` use ``canonicalize_schedule`` from
 ``schedule.py``: invalid cron expressions raise ``InvalidCronExpression``
 (a ValueError subclass) which Pydantic surfaces as a 422 with the message
 attached.
-
-The xor contract (schedule XOR cadence) is enforced via ``model_validator``
-on ``CronCreate`` (where both fields are required-ish) and on ``CronUpdate``
-(where both are optional but if supplied must still satisfy the rule —
-relaxed: only enforce when BOTH are supplied AND would still leave the
-row valid; full enforcement happens at the repo layer where current state
-is known).
 """
 
 from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from homelab_monitor.kernel.cron.schedule import (
     InvalidCronExpression,
@@ -87,48 +80,6 @@ class PreviewRunsQuery(BaseModel):
 
 
 # ---------- Request bodies ----------
-
-
-class CronCreate(BaseModel):
-    """Body for the deprecated ``POST /api/crons`` (gone in STAGE-002-004).
-
-    Exactly one of ``schedule`` (non-empty cron expression) OR
-    ``cadence_seconds`` (>0) must be set. Both-set or neither-set yields 422.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    name: str = Field(min_length=1, max_length=200)
-    host: str = Field(min_length=1, max_length=200)
-    command: str = Field(min_length=1, max_length=2000)
-    schedule: str | None = Field(default=None, min_length=1, max_length=200)
-    cadence_seconds: int = Field(default=0, ge=0, le=86_400)
-    expected_grace_seconds: int = Field(default=300, ge=0, le=86_400)
-    enabled: bool = True
-    source_path: str | None = Field(default=None, min_length=1, max_length=500)
-
-    @field_validator("schedule")
-    @classmethod
-    def _validate_schedule(cls, v: str | None) -> str | None:
-        if v is None:
-            return None
-        try:
-            canonicalize_schedule(v)
-        except InvalidCronExpression as exc:
-            raise ValueError(str(exc)) from exc
-        return v
-
-    @model_validator(mode="after")
-    def _validate_xor(self) -> CronCreate:
-        has_schedule = self.schedule is not None and self.schedule.strip() != ""
-        has_cadence = self.cadence_seconds > 0
-        if has_schedule and has_cadence:
-            msg = "set exactly one of schedule or cadence_seconds (got both)"
-            raise ValueError(msg)
-        if not has_schedule and not has_cadence:
-            msg = "set exactly one of schedule or cadence_seconds (got neither)"
-            raise ValueError(msg)
-        return self
 
 
 class CronUpdate(BaseModel):

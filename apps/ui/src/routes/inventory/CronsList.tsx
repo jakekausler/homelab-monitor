@@ -1,8 +1,7 @@
-import { useMemo, useState } from 'react'
+import { useMemo } from 'react'
 import { useNavigate, useSearch } from '@tanstack/react-router'
 
 import { useListCrons } from '@/api/crons'
-import { AddCronModal } from '@/components/crons/AddCronModal'
 import { CronsTable } from '@/components/crons/CronsTable'
 import { CronsToolbar, type ToolbarFilters } from '@/components/crons/CronsToolbar'
 import { Button } from '@/components/ui/button'
@@ -10,7 +9,6 @@ import { Button } from '@/components/ui/button'
 export function CronsListPage() {
   const search = useSearch({ from: '/protected/inventory/crons' })
   const navigate = useNavigate()
-  const [addOpen, setAddOpen] = useState(false)
 
   const filters: ToolbarFilters = {
     ...(search.host !== undefined && { host: search.host }),
@@ -59,7 +57,6 @@ export function CronsListPage() {
         filters={filters}
         knownHosts={knownHosts}
         onFiltersChange={handleFiltersChange}
-        onAddClick={() => setAddOpen(true)}
       />
 
       {list.error && (
@@ -91,8 +88,6 @@ export function CronsListPage() {
           }
         />
       )}
-
-      <AddCronModal open={addOpen} onOpenChange={setAddOpen} />
     </div>
   )
 }
