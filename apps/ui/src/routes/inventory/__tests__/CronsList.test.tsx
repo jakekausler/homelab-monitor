@@ -23,9 +23,12 @@ vi.mock('@/api/crons', () => ({
 }))
 
 import { useListCrons } from '@/api/crons'
+import type { components } from '@/api/schema'
 
-const sampleCron = {
-  id: 'c1',
+type CronOut = components['schemas']['CronOut']
+
+const sampleCron: CronOut = {
+  fingerprint: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
   name: 'daily-backup',
   host: 'host-a',
   command: '/opt/backup.sh',
@@ -33,12 +36,13 @@ const sampleCron = {
   schedule_canonical: '0 4 * * *',
   cadence_seconds: 0,
   expected_grace_seconds: 300,
-  integration_mode: 'observe' as const,
   enabled: true,
   last_seen_state: 'ok' as const,
   created_at: '2026-05-01T00:00:00Z',
   updated_at: '2026-05-01T00:00:00Z',
-  archived_at: null,
+  hidden_at: null,
+  source_path: null,
+  wrapper_installed_at: null,
 }
 
 function renderPage(search = '') {
@@ -137,7 +141,6 @@ describe('CronsListPage', () => {
   it('renders pagination when total exceeds items length', async () => {
     const items = Array.from({ length: 5 }, (_, i) => ({
       ...sampleCron,
-      id: `c${i}`,
       name: `cron-${i}`,
     }))
     vi.mocked(useListCrons).mockReturnValue({
@@ -153,7 +156,6 @@ describe('CronsListPage', () => {
   it('Previous button is disabled and Next enabled on page 1 with small page_size', async () => {
     const items = Array.from({ length: 5 }, (_, i) => ({
       ...sampleCron,
-      id: `c${i}`,
       name: `cron-${i}`,
     }))
     vi.mocked(useListCrons).mockReturnValue({
@@ -170,7 +172,6 @@ describe('CronsListPage', () => {
   it('shows correct page summary text', async () => {
     const items = Array.from({ length: 5 }, (_, i) => ({
       ...sampleCron,
-      id: `c${i}`,
       name: `cron-${i}`,
     }))
     vi.mocked(useListCrons).mockReturnValue({

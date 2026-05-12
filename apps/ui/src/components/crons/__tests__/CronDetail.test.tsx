@@ -32,7 +32,7 @@ vi.mock('@/lib/relativeTime', () => ({
 import { useGetCron } from '@/api/crons'
 
 const sampleCron = {
-  id: 'c1',
+  fingerprint: 'a'.repeat(64),
   name: 'daily-backup',
   host: 'host-a',
   command: '/opt/backup.sh',
@@ -40,12 +40,13 @@ const sampleCron = {
   schedule_canonical: '0 4 * * *',
   cadence_seconds: 0,
   expected_grace_seconds: 300,
-  integration_mode: 'observe' as const,
   enabled: true,
   last_seen_state: 'ok' as const,
   created_at: '2026-05-01T00:00:00Z',
   updated_at: '2026-05-01T00:00:00Z',
-  archived_at: null,
+  hidden_at: null,
+  source_path: null,
+  wrapper_installed_at: null,
 }
 
 function renderInRouter(ui: React.ReactNode) {
@@ -84,7 +85,7 @@ describe('CronDetail', () => {
       error: null,
       data: undefined,
     } as unknown as ReturnType<typeof useGetCron>)
-    renderInRouter(<CronDetail cronId="c1" />)
+    renderInRouter(<CronDetail fingerprint={'a'.repeat(64)} />)
     expect(await screen.findByText(/Loading cron/i)).toBeInTheDocument()
   })
 
@@ -94,7 +95,7 @@ describe('CronDetail', () => {
       error: { message: 'Not found' } as Error,
       data: undefined,
     } as unknown as ReturnType<typeof useGetCron>)
-    renderInRouter(<CronDetail cronId="c1" />)
+    renderInRouter(<CronDetail fingerprint={'a'.repeat(64)} />)
     expect(await screen.findByRole('alert')).toHaveTextContent('Not found')
   })
 
@@ -104,7 +105,7 @@ describe('CronDetail', () => {
       error: null,
       data: null,
     } as unknown as ReturnType<typeof useGetCron>)
-    renderInRouter(<CronDetail cronId="c1" />)
+    renderInRouter(<CronDetail fingerprint={'a'.repeat(64)} />)
     expect(await screen.findByText(/Cron not found/i)).toBeInTheDocument()
   })
 
@@ -114,19 +115,19 @@ describe('CronDetail', () => {
       error: null,
       data: { cron: sampleCron, state: null },
     } as unknown as ReturnType<typeof useGetCron>)
-    renderInRouter(<CronDetail cronId="c1" />)
+    renderInRouter(<CronDetail fingerprint={'a'.repeat(64)} />)
     expect(await screen.findByText('daily-backup')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Archive/i })).toBeInTheDocument()
   })
 
   it('renders Restore button for archived cron', async () => {
-    const archived = { ...sampleCron, archived_at: '2026-05-10T00:00:00Z' }
+    const hidden = { ...sampleCron, hidden_at: '2026-05-10T00:00:00Z' }
     vi.mocked(useGetCron).mockReturnValue({
       isLoading: false,
       error: null,
-      data: { cron: archived, state: null },
+      data: { cron: hidden, state: null },
     } as unknown as ReturnType<typeof useGetCron>)
-    renderInRouter(<CronDetail cronId="c1" />)
+    renderInRouter(<CronDetail fingerprint={'a'.repeat(64)} />)
     expect(await screen.findByRole('button', { name: /Restore/i })).toBeInTheDocument()
   })
 
@@ -136,7 +137,7 @@ describe('CronDetail', () => {
       error: null,
       data: { cron: sampleCron, state: null },
     } as unknown as ReturnType<typeof useGetCron>)
-    renderInRouter(<CronDetail cronId="c1" />)
+    renderInRouter(<CronDetail fingerprint={'a'.repeat(64)} />)
     expect(await screen.findByText(/No pings received yet/i)).toBeInTheDocument()
   })
 
@@ -155,7 +156,7 @@ describe('CronDetail', () => {
         },
       },
     } as unknown as ReturnType<typeof useGetCron>)
-    renderInRouter(<CronDetail cronId="c1" />)
+    renderInRouter(<CronDetail fingerprint={'a'.repeat(64)} />)
     expect(await screen.findByText('Streak')).toBeInTheDocument()
     expect(screen.getByText('5')).toBeInTheDocument()
   })
@@ -166,7 +167,7 @@ describe('CronDetail', () => {
       error: null,
       data: { cron: sampleCron, state: null },
     } as unknown as ReturnType<typeof useGetCron>)
-    renderInRouter(<CronDetail cronId="c1" />)
+    renderInRouter(<CronDetail fingerprint={'a'.repeat(64)} />)
     const deleteBtn = await screen.findByRole('button', { name: /Archive/i })
     await userEvent.setup().click(deleteBtn)
     expect(await screen.findByText(/Archive cron\?/i)).toBeInTheDocument()
@@ -178,18 +179,18 @@ describe('CronDetail', () => {
       error: null,
       data: { cron: { ...sampleCron, schedule: null }, state: null },
     } as unknown as ReturnType<typeof useGetCron>)
-    renderInRouter(<CronDetail cronId="c1" />)
+    renderInRouter(<CronDetail fingerprint={'a'.repeat(64)} />)
     expect(await screen.findByText(/Cadence-based/i)).toBeInTheDocument()
   })
 
-  it('shows archived badge for archived cron', async () => {
-    const archived = { ...sampleCron, archived_at: '2026-05-10T00:00:00Z' }
+  it('shows archived badge for hidden cron', async () => {
+    const hidden = { ...sampleCron, hidden_at: '2026-05-10T00:00:00Z' }
     vi.mocked(useGetCron).mockReturnValue({
       isLoading: false,
       error: null,
-      data: { cron: archived, state: null },
+      data: { cron: hidden, state: null },
     } as unknown as ReturnType<typeof useGetCron>)
-    renderInRouter(<CronDetail cronId="c1" />)
+    renderInRouter(<CronDetail fingerprint={'a'.repeat(64)} />)
     expect(await screen.findByText('archived')).toBeInTheDocument()
   })
 
@@ -199,7 +200,7 @@ describe('CronDetail', () => {
       error: null,
       data: { cron: sampleCron, state: null },
     } as unknown as ReturnType<typeof useGetCron>)
-    renderInRouter(<CronDetail cronId="c1" />)
+    renderInRouter(<CronDetail fingerprint={'a'.repeat(64)} />)
     expect(await screen.findByText('/opt/backup.sh')).toBeInTheDocument()
   })
 
@@ -215,27 +216,27 @@ describe('CronDetail', () => {
       error: null,
       data: { cron: sampleCron, state: null },
     } as unknown as ReturnType<typeof useGetCron>)
-    renderInRouter(<CronDetail cronId="c1" />)
+    renderInRouter(<CronDetail fingerprint={'a'.repeat(64)} />)
     await screen.findByText('daily-backup')
     await userEvent.setup().click(screen.getByRole('button', { name: /Save changes/i }))
     expect(mutateAsync).toHaveBeenCalledTimes(1)
   })
 
-  it('calls updateCron with archived_at: null when Restore is clicked', async () => {
+  it('calls updateCron with hidden_at: null when Restore is clicked', async () => {
     const mutateAsync = vi.fn().mockResolvedValue(sampleCron)
     const { useUpdateCron } = await import('@/api/crons')
     vi.mocked(useUpdateCron).mockReturnValue({
       mutateAsync,
       isPending: false,
     } as unknown as ReturnType<typeof useUpdateCron>)
-    const archived = { ...sampleCron, archived_at: '2026-05-10T00:00:00Z' }
+    const hidden = { ...sampleCron, hidden_at: '2026-05-10T00:00:00Z' }
     vi.mocked(useGetCron).mockReturnValue({
       isLoading: false,
       error: null,
-      data: { cron: archived, state: null },
+      data: { cron: hidden, state: null },
     } as unknown as ReturnType<typeof useGetCron>)
-    renderInRouter(<CronDetail cronId="c1" />)
+    renderInRouter(<CronDetail fingerprint={'a'.repeat(64)} />)
     await userEvent.setup().click(await screen.findByRole('button', { name: /Restore/i }))
-    expect(mutateAsync).toHaveBeenCalledWith({ archived_at: null })
+    expect(mutateAsync).toHaveBeenCalledWith({ hidden_at: null })
   })
 })

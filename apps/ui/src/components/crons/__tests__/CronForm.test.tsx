@@ -18,7 +18,6 @@ describe('CronForm', () => {
     expect(screen.getByLabelText(/Name/i)).toBeInTheDocument()
     expect(screen.getByLabelText(/Host/i)).toBeInTheDocument()
     expect(screen.getByLabelText(/Command/i)).toBeInTheDocument()
-    expect(screen.getByLabelText(/Integration mode/i)).toBeInTheDocument()
   })
 
   it('shows validation error when submitting with empty required fields', async () => {
@@ -62,7 +61,7 @@ describe('CronForm', () => {
       <CronForm
         mode="edit"
         defaultValues={{
-          id: 'c1',
+          fingerprint: 'c'.repeat(64),
           name: 'existing',
           host: 'h',
           command: '/x',
@@ -70,12 +69,13 @@ describe('CronForm', () => {
           schedule_canonical: '* * * * *',
           cadence_seconds: 0,
           expected_grace_seconds: 300,
-          integration_mode: 'observe',
           enabled: true,
           last_seen_state: 'ok',
           created_at: '',
           updated_at: '',
-          archived_at: null,
+          hidden_at: null,
+          source_path: null,
+          wrapper_installed_at: null,
         }}
         onSubmit={vi.fn()}
       />,

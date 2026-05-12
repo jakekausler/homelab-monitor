@@ -6,7 +6,7 @@ import { CronsToolbar, type ToolbarFilters } from '@/components/crons/CronsToolb
 
 afterEach(cleanup)
 
-const defaultFilters: ToolbarFilters = { include_archived: false }
+const defaultFilters: ToolbarFilters = { include_hidden: false }
 
 describe('CronsToolbar', () => {
   it('renders search input, selects, and Add cron button', () => {
@@ -20,9 +20,6 @@ describe('CronsToolbar', () => {
     )
     expect(screen.getByRole('textbox', { name: /Search by name/i })).toBeInTheDocument()
     expect(screen.getByRole('combobox', { name: /Filter by host/i })).toBeInTheDocument()
-    expect(
-      screen.getByRole('combobox', { name: /Filter by integration mode/i }),
-    ).toBeInTheDocument()
     expect(screen.getByRole('combobox', { name: /Filter by state/i })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Add cron/i })).toBeInTheDocument()
   })
@@ -70,7 +67,7 @@ describe('CronsToolbar', () => {
     expect(onFiltersChange).toHaveBeenCalledWith(expect.objectContaining({ host: 'host-a' }))
   })
 
-  it('calls onFiltersChange with include_archived when checkbox toggled', async () => {
+  it('calls onFiltersChange with include_hidden when checkbox toggled', async () => {
     const onFiltersChange = vi.fn()
     render(
       <CronsToolbar
@@ -81,30 +78,7 @@ describe('CronsToolbar', () => {
       />,
     )
     await userEvent.setup().click(screen.getByRole('checkbox'))
-    expect(onFiltersChange).toHaveBeenCalledWith(
-      expect.objectContaining({ include_archived: true }),
-    )
-  })
-
-  it('calls onFiltersChange when integration mode select changes', async () => {
-    const onFiltersChange = vi.fn()
-    render(
-      <CronsToolbar
-        filters={defaultFilters}
-        knownHosts={[]}
-        onFiltersChange={onFiltersChange}
-        onAddClick={vi.fn()}
-      />,
-    )
-    await userEvent
-      .setup()
-      .selectOptions(
-        screen.getByRole('combobox', { name: /Filter by integration mode/i }),
-        'heartbeat',
-      )
-    expect(onFiltersChange).toHaveBeenCalledWith(
-      expect.objectContaining({ integration_mode: 'heartbeat' }),
-    )
+    expect(onFiltersChange).toHaveBeenCalledWith(expect.objectContaining({ include_hidden: true }))
   })
 
   it('calls onFiltersChange when state select changes', async () => {

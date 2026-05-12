@@ -102,11 +102,10 @@ const inventoryIndexRoute = createRoute({
         page: 1,
         page_size: 100,
         host: undefined,
-        integration_mode: undefined,
         enabled: undefined,
         state: undefined,
         q: undefined,
-        include_archived: false,
+        include_hidden: false,
       },
     })
   },
@@ -122,21 +121,14 @@ const cronsListRoute = createRoute({
     page: number
     page_size: number
     host?: string | undefined
-    integration_mode?: 'observe' | 'heartbeat' | 'both' | undefined
     enabled?: boolean | undefined
     state?: 'unknown' | 'running' | 'ok' | 'failed' | 'late' | undefined
     q?: string | undefined
-    include_archived: boolean
+    include_hidden: boolean
   } => ({
     page: typeof search.page === 'number' ? search.page : 1,
     page_size: typeof search.page_size === 'number' ? search.page_size : 100,
     host: typeof search.host === 'string' ? search.host : undefined,
-    integration_mode:
-      search.integration_mode === 'observe' ||
-      search.integration_mode === 'heartbeat' ||
-      search.integration_mode === 'both'
-        ? search.integration_mode
-        : undefined,
     enabled: typeof search.enabled === 'boolean' ? search.enabled : undefined,
     state:
       search.state === 'unknown' ||
@@ -147,14 +139,13 @@ const cronsListRoute = createRoute({
         ? search.state
         : undefined,
     q: typeof search.q === 'string' ? search.q : undefined,
-    include_archived:
-      typeof search.include_archived === 'boolean' ? search.include_archived : false,
+    include_hidden: typeof search.include_hidden === 'boolean' ? search.include_hidden : false,
   }),
 })
 
 const cronDetailRoute = createRoute({
   getParentRoute: () => inventoryLayoutRoute,
-  path: '/crons/$cronId',
+  path: '/crons/$fingerprint',
   component: CronDetailPage,
 })
 

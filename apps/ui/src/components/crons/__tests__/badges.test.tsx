@@ -1,19 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { render, screen } from '@testing-library/react'
 
-import { ModeBadge, StateBadge } from '@/components/crons/badges'
-
-describe('ModeBadge', () => {
-  it('renders the mode label', () => {
-    render(<ModeBadge mode="heartbeat" />)
-    expect(screen.getByText('Heartbeat')).toBeInTheDocument()
-  })
-
-  it('uses an aria-label describing the mode', () => {
-    render(<ModeBadge mode="observe" />)
-    expect(screen.getByLabelText('Integration mode observe')).toBeInTheDocument()
-  })
-})
+import { StateBadge } from '@/components/crons/badges'
 
 describe('StateBadge', () => {
   it('renders ok state', () => {

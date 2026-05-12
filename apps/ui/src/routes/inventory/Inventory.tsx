@@ -10,11 +10,10 @@ const TABS = [
       page: 1,
       page_size: 100,
       host: undefined,
-      integration_mode: undefined,
       enabled: undefined,
       state: undefined,
       q: undefined,
-      include_archived: false,
+      include_hidden: false,
     },
   },
 ] as const

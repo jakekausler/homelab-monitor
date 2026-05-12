@@ -20,7 +20,6 @@ crons-CRUD stage (002-002) populates it.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -28,58 +27,48 @@ from sqlalchemy import text
 from sqlalchemy.engine import Row
 from sqlalchemy.ext.asyncio import AsyncConnection
 
-from homelab_monitor.kernel.cron.repository import CronRecord  # re-exported below
+from homelab_monitor.kernel.cron.repository import (
+    CronRecord,
+    HeartbeatStateRecord,
+)
 from homelab_monitor.kernel.db.audit import insert_audit
 from homelab_monitor.kernel.db.repository import SqliteRepository
 from homelab_monitor.kernel.db.time import utc_now_iso
 
 
-@dataclass(slots=True, frozen=True)
-class HeartbeatStateRecord:
-    """Hydrated row from ``heartbeats_state``."""
-
-    cron_id: str
-    current_state: str  # unknown | running | ok | failed | late
-    last_start_at: str | None
-    last_ok_at: str | None
-    last_fail_at: str | None
-    current_streak: int
-    expected_next_at: str | None
-    last_duration_seconds: float | None
-    last_exit_code: int | None
-    updated_at: str
-
-
 def _row_to_cron(row: Row[Any]) -> CronRecord:
     return CronRecord(
-        id=str(row.id),
+        fingerprint=str(row.fingerprint),
         name=str(row.name),
         host=str(row.host),
         command=str(row.command),
-        schedule=str(row.schedule),
+        schedule="" if row.schedule is None else str(row.schedule),
         schedule_canonical=(
             None if row.schedule_canonical is None else str(row.schedule_canonical)
         ),
         cadence_seconds=int(row.cadence_seconds),
         expected_grace_seconds=int(row.expected_grace_seconds),
-        integration_mode=str(row.integration_mode),
         enabled=bool(row.enabled),
         last_seen_state=str(row.last_seen_state),
         created_at=str(row.created_at),
         updated_at=str(row.updated_at),
-        archived_at=None if row.archived_at is None else str(row.archived_at),
+        hidden_at=None if row.hidden_at is None else str(row.hidden_at),
+        source_path=None if row.source_path is None else str(row.source_path),
+        wrapper_installed_at=(
+            None if row.wrapper_installed_at is None else str(row.wrapper_installed_at)
+        ),
     )
 
 
 def _row_to_state(row: Row[Any]) -> HeartbeatStateRecord:
     return HeartbeatStateRecord(
-        cron_id=str(row.cron_id),
+        cron_fingerprint=str(row.cron_fingerprint),
         current_state=str(row.current_state),
         last_start_at=None if row.last_start_at is None else str(row.last_start_at),
         last_ok_at=None if row.last_ok_at is None else str(row.last_ok_at),
         last_fail_at=None if row.last_fail_at is None else str(row.last_fail_at),
         current_streak=int(row.current_streak),
-        expected_next_at=None if row.expected_next_at is None else str(row.expected_next_at),
+        expected_next_at=(None if row.expected_next_at is None else str(row.expected_next_at)),
         last_duration_seconds=(
             None if row.last_duration_seconds is None else float(row.last_duration_seconds)
         ),
@@ -89,29 +78,30 @@ def _row_to_state(row: Row[Any]) -> HeartbeatStateRecord:
 
 
 _SELECT_CRON_SQL = text(
-    "SELECT id, name, host, command, schedule, schedule_canonical, cadence_seconds, "
-    "expected_grace_seconds, integration_mode, enabled, last_seen_state, "
-    "created_at, updated_at, archived_at "
-    "FROM crons WHERE id = :id AND archived_at IS NULL"
+    "SELECT fingerprint, name, host, command, schedule, schedule_canonical, "
+    "cadence_seconds, expected_grace_seconds, enabled, last_seen_state, "
+    "created_at, updated_at, hidden_at, source_path, wrapper_installed_at "
+    "FROM crons WHERE fingerprint = :fingerprint AND hidden_at IS NULL"
 )
 
 _SELECT_STATE_SQL = text(
-    "SELECT cron_id, current_state, last_start_at, last_ok_at, last_fail_at, "
-    "current_streak, expected_next_at, last_duration_seconds, last_exit_code, "
-    "updated_at FROM heartbeats_state WHERE cron_id = :cron_id"
+    "SELECT cron_fingerprint, current_state, last_start_at, last_ok_at, "
+    "last_fail_at, current_streak, expected_next_at, last_duration_seconds, "
+    "last_exit_code, updated_at FROM heartbeats_state "
+    "WHERE cron_fingerprint = :cron_fingerprint"
 )
 
 _UPSERT_STATE_SQL = text(
     "INSERT INTO heartbeats_state ("
-    "  cron_id, current_state, last_start_at, last_ok_at, last_fail_at, "
+    "  cron_fingerprint, current_state, last_start_at, last_ok_at, last_fail_at, "
     "  current_streak, expected_next_at, last_duration_seconds, "
     "  last_exit_code, updated_at"
     ") VALUES ("
-    "  :cron_id, :current_state, :last_start_at, :last_ok_at, :last_fail_at, "
-    "  :current_streak, :expected_next_at, :last_duration_seconds, "
-    "  :last_exit_code, :updated_at"
+    "  :cron_fingerprint, :current_state, :last_start_at, :last_ok_at, "
+    "  :last_fail_at, :current_streak, :expected_next_at, "
+    "  :last_duration_seconds, :last_exit_code, :updated_at"
     ") "
-    "ON CONFLICT(cron_id) DO UPDATE SET "
+    "ON CONFLICT(cron_fingerprint) DO UPDATE SET "
     "  current_state = excluded.current_state, "
     "  last_start_at = excluded.last_start_at, "
     "  last_ok_at = excluded.last_ok_at, "
@@ -124,7 +114,8 @@ _UPSERT_STATE_SQL = text(
 )
 
 _UPDATE_CRONS_LAST_SEEN_SQL = text(
-    "UPDATE crons SET last_seen_state = :state, updated_at = :updated_at WHERE id = :id"
+    "UPDATE crons SET last_seen_state = :state, updated_at = :updated_at "
+    "WHERE fingerprint = :fingerprint"
 )
 
 
@@ -162,16 +153,16 @@ class HeartbeatRepo:
 
     # ----- reads -----
 
-    async def get_cron(self, cron_id: str) -> CronRecord | None:
-        """Return the cron with ``id == cron_id``, or ``None``."""
-        row = await self._db.fetch_one(_SELECT_CRON_SQL, {"id": cron_id})
+    async def get_cron(self, fingerprint: str) -> CronRecord | None:
+        """Return the cron with ``fingerprint == fingerprint``, or ``None``."""
+        row = await self._db.fetch_one(_SELECT_CRON_SQL, {"fingerprint": fingerprint})
         if row is None:
             return None
         return _row_to_cron(row)
 
-    async def get_heartbeat_state(self, cron_id: str) -> HeartbeatStateRecord | None:
-        """Return the heartbeat state for ``cron_id``, or ``None`` if no pings yet."""
-        row = await self._db.fetch_one(_SELECT_STATE_SQL, {"cron_id": cron_id})
+    async def get_heartbeat_state(self, fingerprint: str) -> HeartbeatStateRecord | None:
+        """Return the heartbeat state for ``fingerprint``, or ``None`` if no pings yet."""
+        row = await self._db.fetch_one(_SELECT_STATE_SQL, {"cron_fingerprint": fingerprint})
         if row is None:
             return None
         return _row_to_state(row)
@@ -179,16 +170,16 @@ class HeartbeatRepo:
     async def list_crons(self) -> list[CronRecord]:
         """Return all crons ordered by ``name`` (helper for tests / future Inventory).
 
-        Includes archived crons by design — this is the legacy debugging helper
+        Includes hidden crons by design — this is the legacy debugging helper
         that pre-dates the soft-delete model. Production list queries go
         through ``CronRepo.list_crons``.
         """
         rows = await self._db.fetch_all(
             text(
-                "SELECT id, name, host, command, schedule, schedule_canonical, "
-                "cadence_seconds, expected_grace_seconds, integration_mode, enabled, "
-                "last_seen_state, created_at, updated_at, archived_at "
-                "FROM crons ORDER BY name, id"
+                "SELECT fingerprint, name, host, command, schedule, schedule_canonical, "
+                "cadence_seconds, expected_grace_seconds, enabled, last_seen_state, "
+                "created_at, updated_at, hidden_at, source_path, wrapper_installed_at "
+                "FROM crons ORDER BY name, fingerprint"
             )
         )
         return [_row_to_cron(r) for r in rows]
@@ -197,7 +188,7 @@ class HeartbeatRepo:
 
     async def record_start(
         self,
-        cron_id: str,
+        fingerprint: str,
         *,
         who: str,
         ip: str | None,
@@ -209,7 +200,7 @@ class HeartbeatRepo:
         """
         now = utc_now_iso()
         return await self._record_state_transition(
-            cron_id=cron_id,
+            fingerprint=fingerprint,
             new_state="running",
             now=now,
             last_start_at=now,
@@ -220,7 +211,7 @@ class HeartbeatRepo:
 
     async def record_ok(
         self,
-        cron_id: str,
+        fingerprint: str,
         *,
         duration_seconds: float | None,
         who: str,
@@ -234,7 +225,7 @@ class HeartbeatRepo:
         """
         now = utc_now_iso()
         return await self._record_state_transition(
-            cron_id=cron_id,
+            fingerprint=fingerprint,
             new_state="ok",
             now=now,
             last_ok_at=now,
@@ -246,7 +237,7 @@ class HeartbeatRepo:
 
     async def record_fail(
         self,
-        cron_id: str,
+        fingerprint: str,
         *,
         duration_seconds: float | None,
         exit_code: int | None,
@@ -256,7 +247,7 @@ class HeartbeatRepo:
         """Record a ``/fail`` ping. Returns the updated state row."""
         now = utc_now_iso()
         return await self._record_state_transition(
-            cron_id=cron_id,
+            fingerprint=fingerprint,
             new_state="failed",
             now=now,
             last_fail_at=now,
@@ -269,10 +260,10 @@ class HeartbeatRepo:
 
     # ----- single chokepoint for state writes -----
 
-    async def _record_state_transition(  # noqa: PLR0913 -- intentional consolidation per Decision 4
+    async def _record_state_transition(  # noqa: PLR0913
         self,
         *,
-        cron_id: str,
+        fingerprint: str,
         new_state: str,
         now: str,
         last_start_at: str | None = None,
@@ -286,15 +277,15 @@ class HeartbeatRepo:
     ) -> HeartbeatStateRecord:
         """Atomic upsert of state + crons mirror + audit row.
 
-        Caller MUST have already verified ``cron_id`` exists (404 happens at
+        Caller MUST have already verified ``fingerprint`` exists (404 happens at
         the router; this method assumes the row is present).
         """
         async with self._db.engine.begin() as conn:
-            cron = await self._fetch_cron_in_conn(conn, cron_id)
+            cron = await self._fetch_cron_in_conn(conn, fingerprint)
             if cron is None:  # pragma: no cover  # defensive; router already 404'd
-                msg = f"cron not found: {cron_id}"
+                msg = f"cron not found: {fingerprint}"
                 raise LookupError(msg)
-            previous = await self._fetch_state_in_conn(conn, cron_id)
+            previous = await self._fetch_state_in_conn(conn, fingerprint)
 
             new_streak = self._compute_streak(previous=previous, new_state=new_state)
             new_last_start_at = self._merge_optional(
@@ -336,7 +327,7 @@ class HeartbeatRepo:
             await conn.execute(
                 _UPSERT_STATE_SQL,
                 {
-                    "cron_id": cron_id,
+                    "cron_fingerprint": fingerprint,
                     "current_state": new_state,
                     "last_start_at": new_last_start_at,
                     "last_ok_at": new_last_ok_at,
@@ -350,7 +341,7 @@ class HeartbeatRepo:
             )
             await conn.execute(
                 _UPDATE_CRONS_LAST_SEEN_SQL,
-                {"state": new_state, "updated_at": now, "id": cron_id},
+                {"state": new_state, "updated_at": now, "fingerprint": fingerprint},
             )
             await insert_audit(
                 conn,
@@ -360,13 +351,13 @@ class HeartbeatRepo:
                     None
                     if previous is None
                     else {
-                        "cron_id": cron_id,
+                        "cron_fingerprint": fingerprint,
                         "current_state": previous.current_state,
                         "current_streak": previous.current_streak,
                     }
                 ),
                 after={
-                    "cron_id": cron_id,
+                    "cron_fingerprint": fingerprint,
                     "current_state": new_state,
                     "current_streak": new_streak,
                     "duration_seconds": new_duration,
@@ -377,7 +368,7 @@ class HeartbeatRepo:
                 when=now,
             )
 
-            new_row = await self._fetch_state_in_conn(conn, cron_id)
+            new_row = await self._fetch_state_in_conn(conn, fingerprint)
             assert new_row is not None  # we just upserted it
             return new_row
 
@@ -403,16 +394,16 @@ class HeartbeatRepo:
         return previous
 
     @staticmethod
-    async def _fetch_cron_in_conn(conn: AsyncConnection, cron_id: str) -> CronRecord | None:
-        result = await conn.execute(_SELECT_CRON_SQL, {"id": cron_id})
+    async def _fetch_cron_in_conn(conn: AsyncConnection, fingerprint: str) -> CronRecord | None:
+        result = await conn.execute(_SELECT_CRON_SQL, {"fingerprint": fingerprint})
         row = result.first()
         return None if row is None else _row_to_cron(row)
 
     @staticmethod
     async def _fetch_state_in_conn(
-        conn: AsyncConnection, cron_id: str
+        conn: AsyncConnection, fingerprint: str
     ) -> HeartbeatStateRecord | None:
-        result = await conn.execute(_SELECT_STATE_SQL, {"cron_id": cron_id})
+        result = await conn.execute(_SELECT_STATE_SQL, {"cron_fingerprint": fingerprint})
         row = result.first()
         return None if row is None else _row_to_state(row)
 

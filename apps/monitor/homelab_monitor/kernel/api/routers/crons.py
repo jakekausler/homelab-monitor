@@ -6,13 +6,13 @@ methods (POST/PATCH/DELETE) inherit CSRF enforcement from
 ``require_session_with_csrf`` factory in this codebase.
 
 Audit verbs (recorded by ``CronRepo``):
-- ``crons.create`` (POST)
-- ``crons.update`` (PATCH that changes a non-archive field)
-- ``crons.delete`` (PATCH archived_at non-null OR DELETE)
-- ``crons.restore`` (PATCH archived_at -> null)
+- ``crons.create`` (POST /api/crons, deprecated; removed in STAGE-002-004)
+- ``crons.update`` (PATCH that changes a non-hidden_at field)
+- ``crons.hide`` (PATCH hidden_at non-null OR DELETE)
+- ``crons.unhide`` (PATCH hidden_at -> null)
 
 Preview endpoints (read-only, GET):
-- ``GET /api/crons/{id}/preview-runs?count=N`` — saved cron
+- ``GET /api/crons/{fingerprint}/preview-runs?count=N`` — saved cron
 - ``GET /api/crons/preview-runs?expr=<cron>&count=N`` — unsaved input from
   add-modal. Both go through the SAME croniter helper so the UI's preview
   cannot drift from server-side validation.
@@ -26,7 +26,7 @@ from fastapi import APIRouter, Depends, Request
 from starlette.responses import JSONResponse, Response
 
 from homelab_monitor.kernel.api.dependencies import get_cron_repo, require_session
-from homelab_monitor.kernel.api.errors import NotFoundProblem
+from homelab_monitor.kernel.api.errors import NotFoundProblem, envelope_response
 from homelab_monitor.kernel.auth.models import User
 from homelab_monitor.kernel.cron.repository import CronRecord, CronRepo, CronWithState
 from homelab_monitor.kernel.cron.schedule import (
@@ -57,7 +57,7 @@ def _client_ip(request: Request) -> str | None:
 
 def _record_to_out(rec: CronRecord) -> CronOut:
     return CronOut(
-        id=rec.id,
+        fingerprint=rec.fingerprint,
         name=rec.name,
         host=rec.host,
         command=rec.command,
@@ -66,12 +66,13 @@ def _record_to_out(rec: CronRecord) -> CronOut:
         schedule_canonical=rec.schedule_canonical,
         cadence_seconds=rec.cadence_seconds,
         expected_grace_seconds=rec.expected_grace_seconds,
-        integration_mode=rec.integration_mode,  # type: ignore[arg-type]
         enabled=rec.enabled,
         last_seen_state=rec.last_seen_state,  # type: ignore[arg-type]
         created_at=rec.created_at,
         updated_at=rec.updated_at,
-        archived_at=rec.archived_at,
+        hidden_at=rec.hidden_at,
+        source_path=rec.source_path,
+        wrapper_installed_at=rec.wrapper_installed_at,
     )
 
 
@@ -80,7 +81,7 @@ def _with_state_to_out(joined: CronWithState) -> CronWithStateOut:
     if joined.state is not None:  # pragma: no cover
         s = joined.state
         state_out = HeartbeatStateOut(
-            cron_id=s.cron_id,
+            cron_fingerprint=s.cron_fingerprint,
             current_state=s.current_state,  # type: ignore[arg-type]
             last_start_at=s.last_start_at,
             last_ok_at=s.last_ok_at,
@@ -110,11 +111,10 @@ async def list_crons(
         page=query.page,
         page_size=query.page_size,
         host=query.host,
-        integration_mode=query.integration_mode,
         enabled=query.enabled,
         state=query.state,
         q=query.q,
-        include_archived=query.include_archived,
+        include_hidden=query.include_hidden,
     )
     return CronListResponse(
         items=[_record_to_out(r) for r in page.items],
@@ -124,8 +124,8 @@ async def list_crons(
     )
 
 
-# Preview endpoints come BEFORE the {cron_id} routes so FastAPI matches
-# `/preview-runs` as a literal segment instead of trying to bind it as cron_id.
+# Preview endpoints come BEFORE the {fingerprint} routes so FastAPI matches
+# `/preview-runs` as a literal segment instead of trying to bind it as fingerprint.
 
 
 @router.get("/preview-runs", response_model=PreviewRunsResponse)
@@ -155,9 +155,9 @@ async def preview_runs_unsaved(
     return PreviewRunsResponse(runs=runs)
 
 
-@router.get("/{cron_id}/preview-runs", response_model=PreviewRunsResponse)
+@router.get("/{fingerprint}/preview-runs", response_model=PreviewRunsResponse)
 async def preview_runs_saved(
-    cron_id: str,
+    fingerprint: str,
     _user: Annotated[User, Depends(require_session())],
     repo: Annotated[CronRepo, Depends(get_cron_repo)],
     query: Annotated[PreviewRunsQuery, Depends(query_model(PreviewRunsQuery))],
@@ -166,32 +166,32 @@ async def preview_runs_saved(
 
     404 if the cron is missing OR has no schedule (cadence-only cron has no
     schedule to preview)."""
-    cron = await repo.get_cron(cron_id, include_archived=False)
+    cron = await repo.get_cron(fingerprint, include_hidden=False)
     if cron is None:
-        raise NotFoundProblem(message=f"cron not found: {cron_id}")
+        raise NotFoundProblem(message=f"cron not found: {fingerprint}")
     if not cron.schedule:
         raise NotFoundProblem(
-            message=f"cron has no schedule (cadence-only): {cron_id}",
+            message=f"cron has no schedule (cadence-only): {fingerprint}",
         )
     runs = compute_next_runs(cron.schedule, count=query.count)
     return PreviewRunsResponse(runs=runs)
 
 
-@router.get("/{cron_id}", response_model=CronWithStateOut)
+@router.get("/{fingerprint}", response_model=CronWithStateOut)
 async def get_cron(
-    cron_id: str,
+    fingerprint: str,
     _user: Annotated[User, Depends(require_session())],
     repo: Annotated[CronRepo, Depends(get_cron_repo)],
-    include_archived: bool = False,
+    include_hidden: bool = False,
 ) -> CronWithStateOut:
     """Return a single cron + its joined heartbeat state.
 
-    By default archived crons return 404; pass ``?include_archived=true``
+    By default hidden crons return 404; pass ``?include_hidden=true``
     for admin recovery flows.
     """
-    joined = await repo.get_cron_with_state(cron_id, include_archived=include_archived)
+    joined = await repo.get_cron_with_state(fingerprint, include_hidden=include_hidden)
     if joined is None:
-        raise NotFoundProblem(message=f"cron not found: {cron_id}")
+        raise NotFoundProblem(message=f"cron not found: {fingerprint}")
     return _with_state_to_out(joined)
 
 
@@ -203,16 +203,24 @@ async def create_cron(
     repo: Annotated[CronRepo, Depends(get_cron_repo)],
 ) -> JSONResponse:
     """Create a new cron registry row. CSRF enforced by require_session()."""
-    rec = await repo.create_cron(payload, who=user.username, ip=_client_ip(request))
+    try:
+        rec = await repo.create_cron(payload, who=user.username, ip=_client_ip(request))
+    except ValueError as exc:
+        return envelope_response(
+            status=409,
+            code="cron_conflict",
+            message=str(exc),
+            details={},
+        )
     return JSONResponse(
         status_code=201,
         content=_record_to_out(rec).model_dump(mode="json"),
     )
 
 
-@router.patch("/{cron_id}", response_model=CronOut)
+@router.patch("/{fingerprint}", response_model=CronOut)
 async def update_cron(
-    cron_id: str,
+    fingerprint: str,
     payload: CronUpdate,
     request: Request,
     user: Annotated[User, Depends(require_session())],
@@ -220,22 +228,24 @@ async def update_cron(
 ) -> CronOut:
     """Partial update of a cron. Empty diff returns 200 with no audit row."""
     try:
-        rec = await repo.update_cron(cron_id, payload, who=user.username, ip=_client_ip(request))
+        rec = await repo.update_cron(
+            fingerprint, payload, who=user.username, ip=_client_ip(request)
+        )
     except LookupError as exc:
         raise NotFoundProblem(message=str(exc)) from exc
     return _record_to_out(rec)
 
 
-@router.delete("/{cron_id}", status_code=204)
+@router.delete("/{fingerprint}", status_code=204)
 async def delete_cron(
-    cron_id: str,
+    fingerprint: str,
     request: Request,
     user: Annotated[User, Depends(require_session())],
     repo: Annotated[CronRepo, Depends(get_cron_repo)],
 ) -> Response:
-    """Soft-delete (archive) a cron. 404 if missing OR already archived."""
+    """Soft-delete (hide) a cron. 404 if missing OR already hidden."""
     try:
-        await repo.soft_delete_cron(cron_id, who=user.username, ip=_client_ip(request))
+        await repo.soft_delete_cron(fingerprint, who=user.username, ip=_client_ip(request))
     except LookupError as exc:
         raise NotFoundProblem(message=str(exc)) from exc
     return Response(status_code=204)

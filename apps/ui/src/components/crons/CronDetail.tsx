@@ -6,7 +6,7 @@ import { useGetCron, useSoftDeleteCron, useUpdateCron } from '@/api/crons'
 import type { Schema } from '@/api/types'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { ModeBadge, StateBadge } from '@/components/crons/badges'
+import { StateBadge } from '@/components/crons/badges'
 import { ConfirmDeleteModal } from '@/components/crons/ConfirmDeleteModal'
 import { CronForm } from '@/components/crons/CronForm'
 import { SchedulePreviewForSaved } from '@/components/crons/SchedulePreview'
@@ -16,14 +16,14 @@ type CronCreate = Schema<'CronCreate'>
 type CronUpdate = Schema<'CronUpdate'>
 
 export interface CronDetailProps {
-  cronId: string
+  fingerprint: string
 }
 
-export function CronDetail({ cronId }: CronDetailProps) {
+export function CronDetail({ fingerprint }: CronDetailProps) {
   const navigate = useNavigate()
-  const detail = useGetCron(cronId, { includeArchived: true })
-  const update = useUpdateCron(cronId)
-  const softDelete = useSoftDeleteCron(cronId)
+  const detail = useGetCron(fingerprint, { includeHidden: true })
+  const update = useUpdateCron(fingerprint)
+  const softDelete = useSoftDeleteCron(fingerprint)
   const [editError, setEditError] = useState<string | null>(null)
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [deleteError, setDeleteError] = useState<string | null>(null)
@@ -44,7 +44,7 @@ export function CronDetail({ cronId }: CronDetailProps) {
 
   const cron = detail.data.cron
   const state = detail.data.state
-  const isArchived = cron.archived_at !== null
+  const isHidden = cron.hidden_at !== null
 
   const handleSave = async (body: CronCreate | CronUpdate) => {
     setEditError(null)
@@ -56,11 +56,10 @@ export function CronDetail({ cronId }: CronDetailProps) {
           page: 1,
           page_size: 100,
           host: undefined,
-          integration_mode: undefined,
           enabled: undefined,
           state: undefined,
           q: undefined,
-          include_archived: false,
+          include_hidden: false,
         },
       })
     } catch (err) {
@@ -71,7 +70,7 @@ export function CronDetail({ cronId }: CronDetailProps) {
   const handleRestore = async () => {
     setEditError(null)
     try {
-      await update.mutateAsync({ archived_at: null })
+      await update.mutateAsync({ hidden_at: null })
     } catch (err) {
       setEditError(err instanceof ApiError ? err.message : 'Restore failed')
     }
@@ -82,7 +81,7 @@ export function CronDetail({ cronId }: CronDetailProps) {
     try {
       await softDelete.mutateAsync()
       setDeleteOpen(false)
-      // include_archived:true keeps the just-archived row visible on the list
+      // include_hidden:true keeps the just-hidden row visible on the list
       // (with its `archived` badge); otherwise the row vanishes and the user
       // can't tell whether the action took effect.
       void navigate({
@@ -91,11 +90,10 @@ export function CronDetail({ cronId }: CronDetailProps) {
           page: 1,
           page_size: 100,
           host: undefined,
-          integration_mode: undefined,
           enabled: undefined,
           state: undefined,
           q: undefined,
-          include_archived: true,
+          include_hidden: true,
         },
       })
     } catch (err) {
@@ -109,9 +107,8 @@ export function CronDetail({ cronId }: CronDetailProps) {
         <div>
           <div className="flex items-center gap-2">
             <h1 className="text-2xl font-semibold tracking-tight">{cron.name}</h1>
-            <ModeBadge mode={cron.integration_mode} />
             <StateBadge state={cron.last_seen_state} />
-            {isArchived && (
+            {isHidden && (
               <span className="rounded bg-muted px-2 py-0.5 text-xs text-muted-foreground">
                 archived
               </span>
@@ -122,7 +119,7 @@ export function CronDetail({ cronId }: CronDetailProps) {
           </p>
         </div>
         <div className="flex gap-2">
-          {isArchived ? (
+          {isHidden ? (
             <Button onClick={() => void handleRestore()} disabled={update.isPending}>
               Restore
             </Button>
@@ -179,7 +176,7 @@ export function CronDetail({ cronId }: CronDetailProps) {
             </CardHeader>
             <CardContent>
               {cron.schedule !== null && cron.schedule !== '' ? (
-                <SchedulePreviewForSaved cronId={cron.id} count={3} />
+                <SchedulePreviewForSaved fingerprint={cron.fingerprint} count={3} />
               ) : (
                 <p className="text-sm text-muted-foreground">Cadence-based; no schedule preview.</p>
               )}

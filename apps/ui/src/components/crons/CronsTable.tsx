@@ -1,6 +1,6 @@
 import { Link } from '@tanstack/react-router'
 
-import { ModeBadge, StateBadge } from '@/components/crons/badges'
+import { StateBadge } from '@/components/crons/badges'
 import { formatRelative } from '@/lib/relativeTime'
 import type { Schema } from '@/api/types'
 
@@ -42,9 +42,6 @@ export function CronsTable({ items, isLoading, emptyHint }: CronsTableProps) {
               Schedule
             </th>
             <th scope="col" className="px-3 py-2 text-left">
-              Mode
-            </th>
-            <th scope="col" className="px-3 py-2 text-left">
               State
             </th>
             <th scope="col" className="px-3 py-2 text-left">
@@ -57,11 +54,11 @@ export function CronsTable({ items, isLoading, emptyHint }: CronsTableProps) {
         </thead>
         <tbody className="divide-y divide-border">
           {items.map((c) => (
-            <tr key={c.id} className="hover:bg-accent/30">
+            <tr key={c.fingerprint} className="hover:bg-accent/30">
               <td className="px-3 py-2">
                 <Link
-                  to="/inventory/crons/$cronId"
-                  params={{ cronId: c.id }}
+                  to="/inventory/crons/$fingerprint"
+                  params={{ fingerprint: c.fingerprint }}
                   className="font-medium text-primary hover:underline"
                 >
                   {c.name}
@@ -72,15 +69,12 @@ export function CronsTable({ items, isLoading, emptyHint }: CronsTableProps) {
                 {c.schedule ?? `every ${String(c.cadence_seconds)}s`}
               </td>
               <td className="px-3 py-2">
-                <ModeBadge mode={c.integration_mode} />
-              </td>
-              <td className="px-3 py-2">
                 <StateBadge state={c.last_seen_state} />
               </td>
               <td className="px-3 py-2 text-xs text-muted-foreground">—</td>
               <td className="px-3 py-2 text-xs">
                 {c.enabled ? 'Yes' : 'No'}
-                {c.archived_at !== null && (
+                {c.hidden_at !== null && (
                   <span className="ml-2 rounded bg-muted px-1 text-muted-foreground">archived</span>
                 )}
               </td>

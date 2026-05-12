@@ -281,8 +281,8 @@ async def test_api_tokens_hash_unique_constraint_enforced(db_engine: AsyncEngine
             await conn.commit()
 
 
-async def test_migration_0006_crons_columns_present(db_engine: AsyncEngine) -> None:
-    """After head-migration, ``crons`` has all behavioural columns added by 0006."""
+async def test_migration_0006_crons_columns_present(db_url: str) -> None:
+    """After upgrading to 0006, ``crons`` has all behavioural columns added by 0006."""
     expected = {
         "id",
         "command",
@@ -299,17 +299,26 @@ async def test_migration_0006_crons_columns_present(db_engine: AsyncEngine) -> N
         "archived_at",
     }
 
+    cfg = Config()
+    cfg.set_main_option("script_location", str(ALEMBIC_DIR))
+    cfg.set_main_option("sqlalchemy.url", db_url)
+    command.upgrade(cfg, "0006")
+
     def _list_cols(sync_conn: object) -> set[str]:
         ins = inspect(sync_conn)
         return {c["name"] for c in ins.get_columns("crons")} if ins is not None else set()
 
-    async with db_engine.connect() as conn:
-        cols = await conn.run_sync(_list_cols)
-    assert expected.issubset(cols)
+    engine = get_engine(url=db_url)
+    try:
+        async with engine.connect() as conn:
+            cols = await conn.run_sync(_list_cols)
+        assert expected.issubset(cols)
+    finally:
+        await engine.dispose()
 
 
-async def test_migration_0006_heartbeats_state_replaced(db_engine: AsyncEngine) -> None:
-    """After head-migration, ``heartbeats_state`` is keyed by cron_id (not id)."""
+async def test_migration_0006_heartbeats_state_replaced(db_url: str) -> None:
+    """After upgrading to 0006, ``heartbeats_state`` is keyed by cron_id (not id)."""
     expected = {
         "cron_id",
         "current_state",
@@ -323,6 +332,11 @@ async def test_migration_0006_heartbeats_state_replaced(db_engine: AsyncEngine) 
         "updated_at",
     }
 
+    cfg = Config()
+    cfg.set_main_option("script_location", str(ALEMBIC_DIR))
+    cfg.set_main_option("sqlalchemy.url", db_url)
+    command.upgrade(cfg, "0006")
+
     def _inspect(sync_conn: object) -> tuple[set[str], set[str]]:
         ins = inspect(sync_conn)
         if ins is None:
@@ -331,10 +345,14 @@ async def test_migration_0006_heartbeats_state_replaced(db_engine: AsyncEngine) 
         pk = set(ins.get_pk_constraint("heartbeats_state")["constrained_columns"])
         return cols, pk
 
-    async with db_engine.connect() as conn:
-        cols, pk = await conn.run_sync(_inspect)
-    assert cols == expected
-    assert pk == {"cron_id"}
+    engine = get_engine(url=db_url)
+    try:
+        async with engine.connect() as conn:
+            cols, pk = await conn.run_sync(_inspect)
+        assert cols == expected
+        assert pk == {"cron_id"}
+    finally:
+        await engine.dispose()
 
 
 async def test_migration_0006_round_trip(db_url: str) -> None:
@@ -342,8 +360,8 @@ async def test_migration_0006_round_trip(db_url: str) -> None:
     cfg = Config()
     cfg.set_main_option("script_location", str(ALEMBIC_DIR))
     cfg.set_main_option("sqlalchemy.url", db_url)
-    command.upgrade(cfg, "head")
-    # Downgrade past 0007 (head) AND 0006 to land at 0005 — the assertion
+    command.upgrade(cfg, "0006")
+    # Downgrade past 0006 to land at 0005 — the assertion
     # below verifies 0006's downgrade restored the stub heartbeats_state shape.
     command.downgrade(cfg, "0005")
 
@@ -361,7 +379,7 @@ async def test_migration_0006_round_trip(db_url: str) -> None:
     finally:
         await engine.dispose()
 
-    command.upgrade(cfg, "head")
+    command.upgrade(cfg, "0006")
 
     engine = get_engine(url=db_url)
     try:
@@ -390,48 +408,66 @@ async def test_migration_0007_schedule_canonical_column_present(db_engine: Async
 
 
 async def test_migration_0007_at_least_one_check_constraint_enforced(
-    db_engine: AsyncEngine,
+    db_url: str,
 ) -> None:
     """The CHECK constraint rejects rows with neither schedule nor cadence_seconds set."""
     from sqlalchemy.exc import IntegrityError  # noqa: PLC0415
 
-    with pytest.raises(IntegrityError):
-        async with db_engine.connect() as conn:
-            await conn.execute(
-                text(
-                    "INSERT INTO crons ("
-                    "  id, name, host, command, schedule, schedule_canonical, "
-                    "  cadence_seconds, expected_grace_seconds, integration_mode, "
-                    "  enabled, last_seen_state, created_at, updated_at, archived_at"
-                    ") VALUES ("
-                    "  'bad', 'bad', 'h', '/x', '', NULL, "
-                    "  0, 300, 'observe', 1, 'unknown', "
-                    "  '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00', NULL"
-                    ")"
+    cfg = Config()
+    cfg.set_main_option("script_location", str(ALEMBIC_DIR))
+    cfg.set_main_option("sqlalchemy.url", db_url)
+    command.upgrade(cfg, "0007")
+
+    engine = get_engine(url=db_url)
+    try:
+        with pytest.raises(IntegrityError):
+            async with engine.connect() as conn:
+                await conn.execute(
+                    text(
+                        "INSERT INTO crons ("
+                        "  id, name, host, command, schedule, schedule_canonical, "
+                        "  cadence_seconds, expected_grace_seconds, integration_mode, "
+                        "  enabled, last_seen_state, created_at, updated_at, archived_at"
+                        ") VALUES ("
+                        "  'bad', 'bad', 'h', '/x', '', NULL, "
+                        "  0, 300, 'observe', 1, 'unknown', "
+                        "  '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00', NULL"
+                        ")"
+                    )
                 )
-            )
-            await conn.commit()
+                await conn.commit()
+    finally:
+        await engine.dispose()
 
 
-async def test_migration_0007_xor_rejects_neither(db_engine: AsyncEngine) -> None:
+async def test_migration_0007_xor_rejects_neither(db_url: str) -> None:
     """The xor CHECK rejects rows with neither schedule nor cadence_seconds."""
     from sqlalchemy.exc import IntegrityError  # noqa: PLC0415
 
-    with pytest.raises(IntegrityError):
-        async with db_engine.connect() as conn:
-            await conn.execute(
-                text(
-                    "INSERT INTO crons ("
-                    "  id, name, host, command, schedule, schedule_canonical, "
-                    "  cadence_seconds, expected_grace_seconds, integration_mode, "
-                    "  enabled, last_seen_state, created_at, updated_at, archived_at"
-                    ") VALUES ("
-                    "  'bad2', 'bad2', 'h', '/x', '', NULL, 0, 300, 'observe', 1, 'unknown', "
-                    "  '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00', NULL"
-                    ")"
+    cfg = Config()
+    cfg.set_main_option("script_location", str(ALEMBIC_DIR))
+    cfg.set_main_option("sqlalchemy.url", db_url)
+    command.upgrade(cfg, "0007")
+
+    engine = get_engine(url=db_url)
+    try:
+        with pytest.raises(IntegrityError):
+            async with engine.connect() as conn:
+                await conn.execute(
+                    text(
+                        "INSERT INTO crons ("
+                        "  id, name, host, command, schedule, schedule_canonical, "
+                        "  cadence_seconds, expected_grace_seconds, integration_mode, "
+                        "  enabled, last_seen_state, created_at, updated_at, archived_at"
+                        ") VALUES ("
+                        "  'bad2', 'bad2', 'h', '/x', '', NULL, 0, 300, 'observe', 1, 'unknown', "
+                        "  '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00', NULL"
+                        ")"
+                    )
                 )
-            )
-            await conn.commit()
+                await conn.commit()
+    finally:
+        await engine.dispose()
 
 
 async def test_migration_0007_partial_index_idx_crons_active_present(
@@ -450,8 +486,8 @@ async def test_migration_0007_round_trip(db_url: str) -> None:
     cfg = Config()
     cfg.set_main_option("script_location", str(ALEMBIC_DIR))
     cfg.set_main_option("sqlalchemy.url", db_url)
-    command.upgrade(cfg, "head")
-    command.downgrade(cfg, "-1")
+    command.upgrade(cfg, "0007")
+    command.downgrade(cfg, "0006")
 
     engine = get_engine(url=db_url)
     try:
@@ -466,7 +502,7 @@ async def test_migration_0007_round_trip(db_url: str) -> None:
     finally:
         await engine.dispose()
 
-    command.upgrade(cfg, "head")
+    command.upgrade(cfg, "0007")
     engine = get_engine(url=db_url)
     try:
 
@@ -477,5 +513,145 @@ async def test_migration_0007_round_trip(db_url: str) -> None:
 
         async with engine.connect() as conn:
             assert await conn.run_sync(_has_canonical_after) is True
+    finally:
+        await engine.dispose()
+
+
+async def test_migration_0008_crons_columns_present(db_engine: AsyncEngine) -> None:
+    """After head, ``crons`` has the redesigned column set (fingerprint PK,
+    hidden_at, source_path, wrapper_installed_at; NO integration_mode, NO
+    archived_at, NO id)."""
+    expected = {
+        "fingerprint",
+        "name",
+        "host",
+        "command",
+        "schedule",
+        "schedule_canonical",
+        "cadence_seconds",
+        "expected_grace_seconds",
+        "enabled",
+        "last_seen_state",
+        "created_at",
+        "updated_at",
+        "hidden_at",
+        "source_path",
+        "wrapper_installed_at",
+    }
+    forbidden = {"id", "integration_mode", "archived_at"}
+
+    def _list_cols(sync_conn: object) -> set[str]:
+        ins = inspect(sync_conn)
+        return {c["name"] for c in ins.get_columns("crons")} if ins is not None else set()
+
+    async with db_engine.connect() as conn:
+        cols = await conn.run_sync(_list_cols)
+    assert cols == expected
+    assert forbidden.isdisjoint(cols)
+
+
+async def test_migration_0008_heartbeats_state_keyed_by_fingerprint(
+    db_engine: AsyncEngine,
+) -> None:
+    """After head, ``heartbeats_state.cron_fingerprint`` is the PK (replacing
+    ``cron_id``)."""
+
+    def _inspect(sync_conn: object) -> tuple[set[str], set[str]]:
+        ins = inspect(sync_conn)
+        if ins is None:
+            return set(), set()
+        cols = {c["name"] for c in ins.get_columns("heartbeats_state")}
+        pk = set(ins.get_pk_constraint("heartbeats_state")["constrained_columns"])
+        return cols, pk
+
+    async with db_engine.connect() as conn:
+        cols, pk = await conn.run_sync(_inspect)
+    assert "cron_fingerprint" in cols
+    assert "cron_id" not in cols
+    assert pk == {"cron_fingerprint"}
+
+
+async def test_migration_0008_seed_rows_present(db_engine: AsyncEngine) -> None:
+    """After head, ``crons`` contains the four demo rows inserted by 0008."""
+    async with db_engine.connect() as conn:
+        result = await conn.execute(text("SELECT COUNT(*) FROM crons"))
+        row = result.first()
+    assert row is not None
+    assert int(row[0]) == 0  # seeds only inserted when HOMELAB_MONITOR_INCLUDE_DEMO_SEEDS=1
+
+
+async def test_migration_0008_remote_seed_row_has_null_source_path(
+    db_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The remote-host seed row uses NULL source_path (per D2)."""
+    monkeypatch.setenv("HOMELAB_MONITOR_INCLUDE_DEMO_SEEDS", "1")
+    cfg = Config()
+    cfg.set_main_option("script_location", str(ALEMBIC_DIR))
+    cfg.set_main_option("sqlalchemy.url", db_url)
+    command.upgrade(cfg, "head")
+
+    engine = get_engine(url=db_url)
+    try:
+        async with engine.connect() as conn:
+            result = await conn.execute(
+                text("SELECT source_path FROM crons WHERE host = 'remote-host'")
+            )
+            row = result.first()
+        assert row is not None
+        assert row[0] is None
+    finally:
+        await engine.dispose()
+
+
+async def test_migration_0008_partial_index_idx_crons_active_uses_hidden_at(
+    db_engine: AsyncEngine,
+) -> None:
+    """idx_crons_active is partial on hidden_at IS NULL (replacing archived_at)."""
+    async with db_engine.connect() as conn:
+        rows = (await conn.execute(text("PRAGMA index_list('crons')"))).fetchall()
+        found = any(r[1] == "idx_crons_active" and r[4] == 1 for r in rows)
+    assert found
+
+
+async def test_migration_0008_round_trip(db_url: str) -> None:
+    """upgrade -> downgrade -1 -> upgrade leaves the DB at head with new shape."""
+    cfg = Config()
+    cfg.set_main_option("script_location", str(ALEMBIC_DIR))
+    cfg.set_main_option("sqlalchemy.url", db_url)
+    command.upgrade(cfg, "head")
+    command.downgrade(cfg, "0007")
+
+    engine = get_engine(url=db_url)
+    try:
+
+        def _has_legacy(sync_conn: object) -> set[str]:
+            ins = inspect(sync_conn)
+            assert ins is not None
+            return {c["name"] for c in ins.get_columns("crons")}
+
+        async with engine.connect() as conn:
+            legacy_cols = await conn.run_sync(_has_legacy)
+        # Downgrade restored 0007's shape: id PK, integration_mode, archived_at.
+        assert "id" in legacy_cols
+        assert "integration_mode" in legacy_cols
+        assert "archived_at" in legacy_cols
+        assert "fingerprint" not in legacy_cols
+    finally:
+        await engine.dispose()
+
+    command.upgrade(cfg, "head")
+    engine = get_engine(url=db_url)
+    try:
+
+        def _has_new(sync_conn: object) -> set[str]:
+            ins = inspect(sync_conn)
+            assert ins is not None
+            return {c["name"] for c in ins.get_columns("crons")}
+
+        async with engine.connect() as conn:
+            new_cols = await conn.run_sync(_has_new)
+        assert "fingerprint" in new_cols
+        assert "hidden_at" in new_cols
     finally:
         await engine.dispose()

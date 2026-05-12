@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 from sqlalchemy import text
 
+from homelab_monitor.kernel.cron.fingerprint import compute_fingerprint
 from homelab_monitor.kernel.db.repository import SqliteRepository
 from homelab_monitor.kernel.db.time import utc_now_iso
 from homelab_monitor.kernel.heartbeat import repository as repo_mod
@@ -17,37 +18,42 @@ from homelab_monitor.kernel.heartbeat.repository import (
 async def _seed_cron(  # noqa: PLR0913
     repo: SqliteRepository,
     *,
-    id_: str = "c1",
+    fingerprint: str | None = None,
     name: str = "n1",
     host: str = "h1",
-    integration_mode: str = "heartbeat",
     cadence_seconds: int = 60,
     grace_seconds: int = 300,
-) -> None:
+    command: str = "/bin/true",
+    source_path: str | None = "/etc/crontab",
+) -> str:
+    """Insert a cron row and return its fingerprint."""
+    fp = fingerprint or compute_fingerprint(
+        host=host, source_path=source_path, schedule="* * * * *", command=command
+    )
     now = utc_now_iso()
     async with repo.engine.begin() as conn:
         await conn.execute(
             text(
-                "INSERT INTO crons ("
-                "  id, name, host, command, schedule, cadence_seconds, "
-                "  expected_grace_seconds, integration_mode, enabled, "
-                "  last_seen_state, created_at, updated_at"
-                ") VALUES ("
-                "  :id, :name, :host, '/bin/true', '* * * * *', :cadence, "
-                "  :grace, :mode, 1, 'unknown', :created, :updated"
-                ")"
+                "INSERT INTO crons (fingerprint, name, host, command, schedule, "
+                "schedule_canonical, cadence_seconds, expected_grace_seconds, "
+                "enabled, last_seen_state, created_at, updated_at, hidden_at, "
+                "source_path, wrapper_installed_at) VALUES ("
+                ":fp, :name, :host, :command, '* * * * *', '* * * * *', :cadence, "
+                ":grace, 1, 'unknown', :created, :updated, NULL, :sp, NULL)"
             ),
             {
-                "id": id_,
+                "fp": fp,
                 "name": name,
                 "host": host,
+                "command": command,
                 "cadence": cadence_seconds,
                 "grace": grace_seconds,
-                "mode": integration_mode,
                 "created": now,
                 "updated": now,
+                "sp": source_path,
             },
         )
+    return fp
 
 
 @pytest.mark.asyncio
@@ -58,21 +64,21 @@ async def test_get_cron_returns_none_for_unknown_id(repo: SqliteRepository) -> N
 
 @pytest.mark.asyncio
 async def test_get_cron_returns_record_for_registered_id(repo: SqliteRepository) -> None:
-    await _seed_cron(repo, id_="cA", name="cron-a")
+    fp = await _seed_cron(repo, fingerprint="cA", name="cron-a")
     hr = HeartbeatRepo(repo)
-    cron = await hr.get_cron("cA")
+    cron = await hr.get_cron(fp)
     assert cron is not None
     assert cron.name == "cron-a"
-    assert cron.integration_mode == "heartbeat"
+    assert cron.fingerprint == fp
 
 
 @pytest.mark.asyncio
 async def test_record_start_creates_state_row_with_streak_1(
     repo: SqliteRepository,
 ) -> None:
-    await _seed_cron(repo)
+    fp = await _seed_cron(repo)
     hr = HeartbeatRepo(repo)
-    state = await hr.record_start("c1", who="t", ip=None)
+    state = await hr.record_start(fp, who="t", ip=None)
     assert state.current_state == "running"
     assert state.current_streak == 1
     assert state.last_start_at is not None
@@ -80,49 +86,49 @@ async def test_record_start_creates_state_row_with_streak_1(
 
 @pytest.mark.asyncio
 async def test_record_ok_after_start_resets_streak(repo: SqliteRepository) -> None:
-    await _seed_cron(repo)
+    fp = await _seed_cron(repo)
     hr = HeartbeatRepo(repo)
-    await hr.record_start("c1", who="t", ip=None)
-    state = await hr.record_ok("c1", duration_seconds=None, who="t", ip=None)
+    await hr.record_start(fp, who="t", ip=None)
+    state = await hr.record_ok(fp, duration_seconds=None, who="t", ip=None)
     assert state.current_state == "ok"
     assert state.current_streak == 1  # transition resets
 
 
 @pytest.mark.asyncio
 async def test_record_consecutive_oks_increments_streak(repo: SqliteRepository) -> None:
-    await _seed_cron(repo)
+    fp = await _seed_cron(repo)
     hr = HeartbeatRepo(repo)
-    await hr.record_ok("c1", duration_seconds=None, who="t", ip=None)
-    await hr.record_ok("c1", duration_seconds=None, who="t", ip=None)
-    state = await hr.record_ok("c1", duration_seconds=None, who="t", ip=None)
+    await hr.record_ok(fp, duration_seconds=None, who="t", ip=None)
+    await hr.record_ok(fp, duration_seconds=None, who="t", ip=None)
+    state = await hr.record_ok(fp, duration_seconds=None, who="t", ip=None)
     assert state.current_streak == 3  # noqa: PLR2004
 
 
 @pytest.mark.asyncio
 async def test_record_fail_after_ok_resets_streak(repo: SqliteRepository) -> None:
-    await _seed_cron(repo)
+    fp = await _seed_cron(repo)
     hr = HeartbeatRepo(repo)
-    await hr.record_ok("c1", duration_seconds=None, who="t", ip=None)
-    await hr.record_ok("c1", duration_seconds=None, who="t", ip=None)
-    state = await hr.record_fail("c1", duration_seconds=None, exit_code=None, who="t", ip=None)
+    await hr.record_ok(fp, duration_seconds=None, who="t", ip=None)
+    await hr.record_ok(fp, duration_seconds=None, who="t", ip=None)
+    state = await hr.record_fail(fp, duration_seconds=None, exit_code=None, who="t", ip=None)
     assert state.current_state == "failed"
     assert state.current_streak == 1
 
 
 @pytest.mark.asyncio
 async def test_consecutive_fails_increment_streak(repo: SqliteRepository) -> None:
-    await _seed_cron(repo)
+    fp = await _seed_cron(repo)
     hr = HeartbeatRepo(repo)
-    await hr.record_fail("c1", duration_seconds=None, exit_code=None, who="t", ip=None)
-    state = await hr.record_fail("c1", duration_seconds=None, exit_code=None, who="t", ip=None)
+    await hr.record_fail(fp, duration_seconds=None, exit_code=None, who="t", ip=None)
+    state = await hr.record_fail(fp, duration_seconds=None, exit_code=None, who="t", ip=None)
     assert state.current_streak == 2  # noqa: PLR2004
 
 
 @pytest.mark.asyncio
 async def test_record_ok_with_duration_persists_value(repo: SqliteRepository) -> None:
-    await _seed_cron(repo)
+    fp = await _seed_cron(repo)
     hr = HeartbeatRepo(repo)
-    state = await hr.record_ok("c1", duration_seconds=4.25, who="t", ip=None)
+    state = await hr.record_ok(fp, duration_seconds=4.25, who="t", ip=None)
     assert state.last_duration_seconds == 4.25  # noqa: PLR2004
 
 
@@ -130,9 +136,9 @@ async def test_record_ok_with_duration_persists_value(repo: SqliteRepository) ->
 async def test_record_ok_computes_expected_next_at_with_cadence(
     repo: SqliteRepository,
 ) -> None:
-    await _seed_cron(repo, cadence_seconds=60, grace_seconds=300)
+    fp = await _seed_cron(repo, cadence_seconds=60, grace_seconds=300)
     hr = HeartbeatRepo(repo)
-    state = await hr.record_ok("c1", duration_seconds=None, who="t", ip=None)
+    state = await hr.record_ok(fp, duration_seconds=None, who="t", ip=None)
     assert state.expected_next_at is not None
 
 
@@ -140,24 +146,22 @@ async def test_record_ok_computes_expected_next_at_with_cadence(
 async def test_record_ok_leaves_expected_next_at_null_when_cadence_zero(
     repo: SqliteRepository,
 ) -> None:
-    await _seed_cron(repo, cadence_seconds=0)
+    fp = await _seed_cron(repo, cadence_seconds=0)
     hr = HeartbeatRepo(repo)
-    state = await hr.record_ok("c1", duration_seconds=None, who="t", ip=None)
+    state = await hr.record_ok(fp, duration_seconds=None, who="t", ip=None)
     assert state.expected_next_at is None
 
 
 @pytest.mark.asyncio
 async def test_fail_after_ok_clears_expected_next_at(repo: SqliteRepository) -> None:
     """A /fail transition must NULL expected_next_at to prevent phantom alerts."""
-    await _seed_cron(repo, cadence_seconds=60)
+    fp = await _seed_cron(repo, cadence_seconds=60)
     hbr = HeartbeatRepo(repo)
     # First /ok sets expected_next_at.
-    ok_state = await hbr.record_ok("c1", duration_seconds=None, who="t", ip=None)
+    ok_state = await hbr.record_ok(fp, duration_seconds=None, who="t", ip=None)
     assert ok_state.expected_next_at is not None
     # Then /fail should clear it.
-    fail_state = await hbr.record_fail(
-        "c1", duration_seconds=None, exit_code=None, who="t", ip=None
-    )
+    fail_state = await hbr.record_fail(fp, duration_seconds=None, exit_code=None, who="t", ip=None)
     assert fail_state.expected_next_at is None
 
 
@@ -165,11 +169,11 @@ async def test_fail_after_ok_clears_expected_next_at(repo: SqliteRepository) -> 
 async def test_state_transition_updates_crons_last_seen_state_mirror(
     repo: SqliteRepository,
 ) -> None:
-    await _seed_cron(repo)
+    fp = await _seed_cron(repo)
     hr = HeartbeatRepo(repo)
-    await hr.record_ok("c1", duration_seconds=None, who="t", ip=None)
+    await hr.record_ok(fp, duration_seconds=None, who="t", ip=None)
     row = await repo.fetch_one(
-        text("SELECT last_seen_state FROM crons WHERE id = :id"), {"id": "c1"}
+        text("SELECT last_seen_state FROM crons WHERE fingerprint = :fp"), {"fp": fp}
     )
     assert row is not None
     assert row[0] == "ok"
@@ -179,12 +183,14 @@ async def test_state_transition_updates_crons_last_seen_state_mirror(
 async def test_state_transition_writes_audit_log_in_same_transaction(
     repo: SqliteRepository,
 ) -> None:
-    await _seed_cron(repo)
+    fp = await _seed_cron(repo)
     hr = HeartbeatRepo(repo)
-    await hr.record_ok("c1", duration_seconds=None, who="actor-x", ip="1.2.3.4")
+    await hr.record_ok(fp, duration_seconds=None, who="actor-x", ip="1.2.3.4")
     row = await repo.fetch_one(
         text(
-            "SELECT who, what, ip FROM audit_log "
+            "SELECT who, what, ip, "
+            "json_extract(after_json, '$.cron_fingerprint') AS cron_fingerprint "
+            "FROM audit_log "
             "WHERE what = 'heartbeat.ok' ORDER BY id DESC LIMIT 1"
         ),
     )
@@ -192,6 +198,7 @@ async def test_state_transition_writes_audit_log_in_same_transaction(
     assert row[0] == "actor-x"
     assert row[1] == "heartbeat.ok"
     assert row[2] == "1.2.3.4"
+    assert row[3] == fp
 
 
 @pytest.mark.asyncio
@@ -199,7 +206,7 @@ async def test_writes_are_atomic_under_simulated_failure(
     repo: SqliteRepository, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """If insert_audit raises, both heartbeats_state and crons mirror roll back."""
-    await _seed_cron(repo)
+    fp = await _seed_cron(repo)
     hbr = HeartbeatRepo(repo)
 
     async def boom(*_args: object, **_kwargs: object) -> None:
@@ -208,14 +215,20 @@ async def test_writes_are_atomic_under_simulated_failure(
     monkeypatch.setattr(repo_mod, "insert_audit", boom)
 
     with pytest.raises(RuntimeError, match="simulated"):
-        await hbr.record_ok("c1", duration_seconds=None, who="t", ip=None)
+        await hbr.record_ok(fp, duration_seconds=None, who="t", ip=None)
 
     # heartbeats_state row must NOT exist (transaction rolled back)
-    hb_row = await repo.fetch_one(text("SELECT 1 FROM heartbeats_state WHERE cron_id = 'c1'"))
+    hb_row = await repo.fetch_one(
+        text("SELECT 1 FROM heartbeats_state WHERE cron_fingerprint = :fp"),
+        {"fp": fp},
+    )
     assert hb_row is None
 
     # crons.last_seen_state must still be 'unknown' (mirror not updated)
-    crons_row = await repo.fetch_one(text("SELECT last_seen_state FROM crons WHERE id = 'c1'"))
+    crons_row = await repo.fetch_one(
+        text("SELECT last_seen_state FROM crons WHERE fingerprint = :fp"),
+        {"fp": fp},
+    )
     assert crons_row is not None
     assert crons_row[0] == "unknown"
 
@@ -225,11 +238,11 @@ async def test_three_consecutive_oks_write_three_audit_rows(
     repo: SqliteRepository,
 ) -> None:
     """Verify no accidental de-duplication of audit rows on repeated same-state pings."""
-    await _seed_cron(repo)
+    fp = await _seed_cron(repo)
     hbr = HeartbeatRepo(repo)
 
     for _ in range(3):
-        await hbr.record_ok("c1", duration_seconds=None, who="t", ip=None)
+        await hbr.record_ok(fp, duration_seconds=None, who="t", ip=None)
 
     row = await repo.fetch_one(text("SELECT COUNT(*) FROM audit_log WHERE what LIKE '%heartbeat%'"))
     assert row is not None
@@ -238,8 +251,8 @@ async def test_three_consecutive_oks_write_three_audit_rows(
 
 @pytest.mark.asyncio
 async def test_list_crons_orders_by_name(repo: SqliteRepository) -> None:
-    await _seed_cron(repo, id_="c-x", name="zeta")
-    await _seed_cron(repo, id_="c-y", name="alpha")
+    await _seed_cron(repo, fingerprint="c-x", name="zeta")
+    await _seed_cron(repo, fingerprint="c-y", name="alpha")
     hr = HeartbeatRepo(repo)
     rows = await hr.list_crons()
     names = [r.name for r in rows]
@@ -281,7 +294,7 @@ async def test_get_heartbeat_state_returns_none_for_unknown_id(
     repo: SqliteRepository,
 ) -> None:
     hbr = HeartbeatRepo(repo)
-    result = await hbr.get_heartbeat_state("nonexistent-cron-id")
+    result = await hbr.get_heartbeat_state("nonexistent-cron-fingerprint")
     assert result is None
 
 
@@ -290,18 +303,16 @@ async def test_get_heartbeat_state_returns_record_after_ok(
     repo: SqliteRepository,
 ) -> None:
     hbr = HeartbeatRepo(repo)
-    await _seed_cron(
-        repo, id_="cron-x", name="x", host="h", integration_mode="heartbeat", cadence_seconds=60
-    )
+    fp = await _seed_cron(repo, fingerprint="cron-x", name="x", host="h", cadence_seconds=60)
     await hbr.record_ok(
-        "cron-x",
+        fp,
         duration_seconds=None,
         who="test",
         ip=None,
     )
-    state = await hbr.get_heartbeat_state("cron-x")
+    state = await hbr.get_heartbeat_state(fp)
     assert state is not None
-    assert state.cron_id == "cron-x"
+    assert state.cron_fingerprint == fp
     assert state.current_state == "ok"
     assert state.last_ok_at is not None
     assert state.current_streak == 1

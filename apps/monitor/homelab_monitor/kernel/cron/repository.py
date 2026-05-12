@@ -1,23 +1,18 @@
 """Async write-side CRUD repository for the cron registry.
 
 This module is the single source of truth for ``CronRecord`` (the hydrated
-row dataclass) — ``HeartbeatRepo`` imports from here as of STAGE-002-002.
+row dataclass) — ``HeartbeatRepo`` imports from here.
 
 Audit-log discipline: every mutation writes a row in the SAME transaction
 as the data change (atomicity). Verb taxonomy:
 
-- ``crons.create`` — POST
-- ``crons.update`` — PATCH that changed at least one non-archive field
-- ``crons.delete`` — PATCH that set ``archived_at`` to a non-null value
-- ``crons.restore`` — PATCH that set ``archived_at`` back to null
+- ``crons.create`` — POST /api/crons (deprecated; removed in STAGE-002-004)
+- ``crons.update`` — PATCH that changed at least one non-hidden_at field
+- ``crons.hide`` — PATCH that set ``hidden_at`` to a non-null value, or DELETE
+- ``crons.unhide`` — PATCH that set ``hidden_at`` back to null
 
 Empty-diff PATCH (no fields actually changed): NO audit row is written and
 the existing record is returned unchanged.
-
-xor invariant: every write recomputes ``schedule_canonical`` if ``schedule``
-changed, and the repo enforces the schedule XOR cadence_seconds rule against
-the merged row state (the migration's CHECK constraint is the second line of
-defense).
 """
 
 from __future__ import annotations
@@ -30,13 +25,13 @@ from sqlalchemy import text
 from sqlalchemy.engine import Row
 from sqlalchemy.ext.asyncio import AsyncConnection
 
+from homelab_monitor.kernel.cron.fingerprint import compute_fingerprint
 from homelab_monitor.kernel.cron.schedule import (
     canonicalize_schedule,
     compute_average_interval_seconds,
 )
 from homelab_monitor.kernel.cron.schemas import CronCreate, CronUpdate
 from homelab_monitor.kernel.db.audit import insert_audit
-from homelab_monitor.kernel.db.ids import uuid7
 from homelab_monitor.kernel.db.repository import SqliteRepository
 from homelab_monitor.kernel.db.time import utc_now_iso
 
@@ -47,9 +42,9 @@ from homelab_monitor.kernel.db.time import utc_now_iso
 
 @dataclass(slots=True, frozen=True)
 class CronRecord:
-    """Hydrated row from ``crons``. Includes ``schedule_canonical`` from 0007."""
+    """Hydrated row from ``crons`` (fingerprint-keyed)."""
 
-    id: str
+    fingerprint: str
     name: str
     host: str
     command: str
@@ -57,12 +52,13 @@ class CronRecord:
     schedule_canonical: str | None
     cadence_seconds: int
     expected_grace_seconds: int
-    integration_mode: str  # observe | heartbeat | both
     enabled: bool
     last_seen_state: str
     created_at: str
     updated_at: str
-    archived_at: str | None
+    hidden_at: str | None
+    source_path: str | None
+    wrapper_installed_at: str | None
 
 
 @dataclass(slots=True, frozen=True)
@@ -70,7 +66,7 @@ class HeartbeatStateRecord:
     """Hydrated row from ``heartbeats_state``. Re-exported here so the cron
     module can return ``CronWithState`` without circular imports."""
 
-    cron_id: str
+    cron_fingerprint: str
     current_state: str
     last_start_at: str | None
     last_ok_at: str | None
@@ -107,28 +103,31 @@ class CronListPage:
 
 def _row_to_cron(row: Row[Any]) -> CronRecord:
     return CronRecord(
-        id=str(row.id),
+        fingerprint=str(row.fingerprint),
         name=str(row.name),
         host=str(row.host),
         command=str(row.command),
-        schedule=str(row.schedule),
+        schedule="" if row.schedule is None else str(row.schedule),
         schedule_canonical=(
             None if row.schedule_canonical is None else str(row.schedule_canonical)
         ),
         cadence_seconds=int(row.cadence_seconds),
         expected_grace_seconds=int(row.expected_grace_seconds),
-        integration_mode=str(row.integration_mode),
         enabled=bool(row.enabled),
         last_seen_state=str(row.last_seen_state),
         created_at=str(row.created_at),
         updated_at=str(row.updated_at),
-        archived_at=None if row.archived_at is None else str(row.archived_at),
+        hidden_at=None if row.hidden_at is None else str(row.hidden_at),
+        source_path=None if row.source_path is None else str(row.source_path),
+        wrapper_installed_at=(
+            None if row.wrapper_installed_at is None else str(row.wrapper_installed_at)
+        ),
     )
 
 
 def _row_to_state(row: Row[Any]) -> HeartbeatStateRecord:
     return HeartbeatStateRecord(
-        cron_id=str(row.cron_id),
+        cron_fingerprint=str(row.cron_fingerprint),
         current_state=str(row.current_state),
         last_start_at=None if row.last_start_at is None else str(row.last_start_at),
         last_ok_at=None if row.last_ok_at is None else str(row.last_ok_at),
@@ -148,24 +147,27 @@ def _row_to_state(row: Row[Any]) -> HeartbeatStateRecord:
 # ---------------------------------------------------------------------------
 
 _CRON_COLS = (
-    "id, name, host, command, schedule, schedule_canonical, cadence_seconds, "
-    "expected_grace_seconds, integration_mode, enabled, last_seen_state, "
-    "created_at, updated_at, archived_at"
+    "fingerprint, name, host, command, schedule, schedule_canonical, "
+    "cadence_seconds, expected_grace_seconds, enabled, last_seen_state, "
+    "created_at, updated_at, hidden_at, source_path, wrapper_installed_at"
 )
 
-_SELECT_BY_ID_SQL = text(f"SELECT {_CRON_COLS} FROM crons WHERE id = :id")
+_SELECT_BY_FINGERPRINT_SQL = text(
+    f"SELECT {_CRON_COLS} FROM crons WHERE fingerprint = :fingerprint"
+)
 
 _SELECT_STATE_SQL = text(
-    "SELECT cron_id, current_state, last_start_at, last_ok_at, last_fail_at, "
-    "current_streak, expected_next_at, last_duration_seconds, last_exit_code, "
-    "updated_at FROM heartbeats_state WHERE cron_id = :cron_id"
+    "SELECT cron_fingerprint, current_state, last_start_at, last_ok_at, "
+    "last_fail_at, current_streak, expected_next_at, last_duration_seconds, "
+    "last_exit_code, updated_at FROM heartbeats_state "
+    "WHERE cron_fingerprint = :cron_fingerprint"
 )
 
 _INSERT_CRON_SQL = text(
     f"INSERT INTO crons ({_CRON_COLS}) VALUES ("
-    "  :id, :name, :host, :command, :schedule, :schedule_canonical, :cadence_seconds, "
-    "  :expected_grace_seconds, :integration_mode, :enabled, :last_seen_state, "
-    "  :created_at, :updated_at, :archived_at"
+    "  :fingerprint, :name, :host, :command, :schedule, :schedule_canonical, "
+    "  :cadence_seconds, :expected_grace_seconds, :enabled, :last_seen_state, "
+    "  :created_at, :updated_at, :hidden_at, :source_path, :wrapper_installed_at"
     ")"
 )
 
@@ -187,17 +189,16 @@ class CronRepo:
 
     # ----- reads -----
 
-    async def list_crons(  # noqa: PLR0913 -- query DSL has many filter knobs by design
+    async def list_crons(  # noqa: PLR0913
         self,
         *,
         page: int,
         page_size: int,
         host: str | None,
-        integration_mode: str | None,
         enabled: bool | None,
         state: str | None,
         q: str | None,
-        include_archived: bool,
+        include_hidden: bool,
     ) -> CronListPage:
         """List crons with combinatorial filters + offset/limit pagination.
 
@@ -207,14 +208,11 @@ class CronRepo:
         where_clauses: list[str] = []
         params: dict[str, Any] = {}
 
-        if not include_archived:
-            where_clauses.append("archived_at IS NULL")
+        if not include_hidden:
+            where_clauses.append("hidden_at IS NULL")
         if host is not None:
             where_clauses.append("host = :host")
             params["host"] = host
-        if integration_mode is not None:
-            where_clauses.append("integration_mode = :integration_mode")
-            params["integration_mode"] = integration_mode
         if enabled is not None:
             where_clauses.append("enabled = :enabled")
             params["enabled"] = 1 if enabled else 0
@@ -237,72 +235,89 @@ class CronRepo:
         list_params = {**params, "limit": page_size, "offset": offset}
         list_sql = text(
             f"SELECT {_CRON_COLS} FROM crons{where_sql} "
-            "ORDER BY name ASC, id ASC LIMIT :limit OFFSET :offset"
+            "ORDER BY name ASC, fingerprint ASC LIMIT :limit OFFSET :offset"
         )
         rows = await self._db.fetch_all(list_sql, list_params)
         items = [_row_to_cron(r) for r in rows]
         return CronListPage(items=items, total=total, page=page, page_size=page_size)
 
     async def get_cron_with_state(
-        self, cron_id: str, *, include_archived: bool = False
+        self, fingerprint: str, *, include_hidden: bool = False
     ) -> CronWithState | None:
         """Return the cron (joined with heartbeat state) or None if not found.
 
-        When ``include_archived=False`` (the default), an archived row is
+        When ``include_hidden=False`` (the default), a hidden row is
         treated as not-found. When ``True``, the row is returned regardless.
         """
-        row = await self._db.fetch_one(_SELECT_BY_ID_SQL, {"id": cron_id})
+        row = await self._db.fetch_one(_SELECT_BY_FINGERPRINT_SQL, {"fingerprint": fingerprint})
         if row is None:
             return None
         cron = _row_to_cron(row)
-        if not include_archived and cron.archived_at is not None:
+        if not include_hidden and cron.hidden_at is not None:
             return None
-        state_row = await self._db.fetch_one(_SELECT_STATE_SQL, {"cron_id": cron_id})
+        state_row = await self._db.fetch_one(_SELECT_STATE_SQL, {"cron_fingerprint": fingerprint})
         state = None if state_row is None else _row_to_state(state_row)
         return CronWithState(cron=cron, state=state)
 
-    async def get_cron(self, cron_id: str, *, include_archived: bool = False) -> CronRecord | None:
+    async def get_cron(
+        self, fingerprint: str, *, include_hidden: bool = False
+    ) -> CronRecord | None:
         """Return the bare cron record (no heartbeat join). Used by routers
-        that need the cron only, e.g. ``GET /api/crons/{id}/preview-runs``."""
-        row = await self._db.fetch_one(_SELECT_BY_ID_SQL, {"id": cron_id})
+        that need the cron only, e.g. ``GET /api/crons/{fingerprint}/preview-runs``."""
+        row = await self._db.fetch_one(_SELECT_BY_FINGERPRINT_SQL, {"fingerprint": fingerprint})
         if row is None:
             return None
         cron = _row_to_cron(row)
-        if not include_archived and cron.archived_at is not None:
+        if not include_hidden and cron.hidden_at is not None:
             return None
         return cron
 
     # ----- writes -----
 
     async def create_cron(self, payload: CronCreate, *, who: str, ip: str | None) -> CronRecord:
-        """INSERT a new cron + audit ``crons.create`` in one transaction."""
-        new_id = uuid7()
+        """INSERT a new cron + audit ``crons.create`` in one transaction.
+
+        DEPRECATED: STAGE-002-004 removes ``POST /api/crons`` entirely. This method
+        survives through STAGE-002-003 so existing test fixtures continue to work
+        during the transition. Discovery (STAGE-002-007) and ``/register``
+        (STAGE-002-005) are the going-forward creation paths.
+        """
         now = utc_now_iso()
         schedule = payload.schedule or ""
         schedule_canonical = canonicalize_schedule(schedule) if schedule else None
-        # When schedule is set, mirror it into cadence_seconds via the
-        # average-interval helper so cadence is a fast-lookup mirror of the
-        # cron expression (DB CHECK only forbids "neither set").
         cadence_seconds = (
             compute_average_interval_seconds(schedule) if schedule else payload.cadence_seconds
         )
+        fingerprint = compute_fingerprint(
+            host=payload.host,
+            source_path=payload.source_path,
+            schedule=schedule,
+            command=payload.command,
+        )
         row_params: dict[str, Any] = {
-            "id": new_id,
+            "fingerprint": fingerprint,
             "name": payload.name,
             "host": payload.host,
             "command": payload.command,
-            "schedule": schedule,
+            "schedule": schedule if schedule else None,
             "schedule_canonical": schedule_canonical,
             "cadence_seconds": cadence_seconds,
             "expected_grace_seconds": payload.expected_grace_seconds,
-            "integration_mode": payload.integration_mode,
             "enabled": 1 if payload.enabled else 0,
             "last_seen_state": "unknown",
             "created_at": now,
             "updated_at": now,
-            "archived_at": None,
+            "hidden_at": None,
+            "source_path": payload.source_path,
+            "wrapper_installed_at": None,
         }
         async with self._db.transaction() as conn:
+            existing = (
+                await conn.execute(_SELECT_BY_FINGERPRINT_SQL, {"fingerprint": fingerprint})
+            ).first()
+            if existing is not None:
+                msg = f"cron already exists: {fingerprint}"
+                raise ValueError(msg)
             await conn.execute(_INSERT_CRON_SQL, row_params)
             await insert_audit(
                 conn,
@@ -313,40 +328,41 @@ class CronRepo:
                 ip=ip,
                 when=now,
             )
-            row = (await conn.execute(_SELECT_BY_ID_SQL, {"id": new_id})).first()
-            assert row is not None  # we just inserted it
+            row = (
+                await conn.execute(_SELECT_BY_FINGERPRINT_SQL, {"fingerprint": fingerprint})
+            ).first()
+            assert row is not None
             return _row_to_cron(row)
 
-    async def update_cron(  # noqa: PLR0912, PLR0915
+    async def update_cron(  # noqa: PLR0915
         self,
-        cron_id: str,
+        fingerprint: str,
         payload: CronUpdate,
         *,
         who: str,
         ip: str | None,
     ) -> CronRecord:
-        """PATCH a cron with changed-fields-only semantics + audit verb routing.
+        """PATCH a cron with the trimmed editable-fields whitelist + audit verb routing.
+
+        Editable fields: ``name``, ``expected_grace_seconds``, ``enabled``,
+        ``hidden_at``. All others are rejected by Pydantic ``extra='forbid'``
+        before this method is called.
 
         Verb routing:
-        - if archived_at went from None -> non-None: ``crons.delete``
-        - if archived_at went from non-None -> None: ``crons.restore``
-        - else if any other field changed: ``crons.update``
-        - else (empty diff): no audit row, returns existing record unchanged.
-
-        Raises:
-            LookupError: when ``cron_id`` does not exist.
-            ValueError: when the merged row would violate the schedule-XOR-cadence
-                invariant (also enforced at the DB CHECK level).
+        - hidden_at None → non-None: ``crons.hide``
+        - hidden_at non-None → None: ``crons.unhide``
+        - other-field change: ``crons.update``
+        - empty diff: no audit row, return existing record unchanged.
         """
         async with self._db.transaction() as conn:
-            existing_row = (await conn.execute(_SELECT_BY_ID_SQL, {"id": cron_id})).first()
+            existing_row = (
+                await conn.execute(_SELECT_BY_FINGERPRINT_SQL, {"fingerprint": fingerprint})
+            ).first()
             if existing_row is None:
-                msg = f"cron not found: {cron_id}"
+                msg = f"cron not found: {fingerprint}"
                 raise LookupError(msg)
             existing = _row_to_cron(existing_row)
 
-            # Compute change set: only fields the client explicitly supplied
-            # (model_fields_set) AND whose value differs from the current row.
             provided = payload.model_fields_set
             diff_before: dict[str, Any] = {}
             diff_after: dict[str, Any] = {}
@@ -354,37 +370,17 @@ class CronRepo:
 
             field_map: dict[str, Any] = {
                 "name": existing.name,
-                "host": existing.host,
-                "command": existing.command,
-                "schedule": existing.schedule,
-                "cadence_seconds": existing.cadence_seconds,
                 "expected_grace_seconds": existing.expected_grace_seconds,
-                "integration_mode": existing.integration_mode,
                 "enabled": existing.enabled,
-                "archived_at": existing.archived_at,
+                "hidden_at": existing.hidden_at,
             }
 
-            for field in (
-                "name",
-                "host",
-                "command",
-                "schedule",
-                "cadence_seconds",
-                "expected_grace_seconds",
-                "integration_mode",
-                "enabled",
-                "archived_at",
-            ):
+            for field in ("name", "expected_grace_seconds", "enabled", "hidden_at"):
                 if field not in provided:
                     continue
                 new_val = getattr(payload, field)
-                # Normalize: payload.schedule None means "set to empty"; the
-                # column is NOT NULL with default ''.
-                if field == "schedule" and new_val is None:
-                    new_val = ""
                 old_val = field_map[field]
                 if field == "enabled":
-                    # Compare booleans (existing is bool; payload is bool|None).
                     if bool(new_val) == bool(old_val):
                         continue
                     diff_before[field] = bool(old_val)
@@ -398,68 +394,23 @@ class CronRepo:
                     updates[field] = new_val
 
             if not updates:
-                # Empty diff: return existing unchanged, no audit row.
                 return existing
 
-            # Recompute canonical if schedule changed.
-            if "schedule" in updates:
-                sched = updates["schedule"]
-                updates["schedule_canonical"] = canonicalize_schedule(sched) if sched else None
-                diff_after["schedule_canonical"] = updates["schedule_canonical"]
-                diff_before["schedule_canonical"] = existing.schedule_canonical
-                # Mirror cadence_seconds from the new schedule (unless the
-                # client also explicitly set cadence_seconds in this PATCH).
-                if sched and "cadence_seconds" not in updates:
-                    new_cadence = compute_average_interval_seconds(sched)
-                    if new_cadence != existing.cadence_seconds:
-                        updates["cadence_seconds"] = new_cadence
-                        diff_before["cadence_seconds"] = existing.cadence_seconds
-                        diff_after["cadence_seconds"] = new_cadence
-                elif not sched and "cadence_seconds" not in updates:
-                    # schedule cleared and cadence not explicitly set — zero
-                    # the mirror so the row stays at "cadence-driven" semantics.
-                    if existing.cadence_seconds != 0:
-                        updates["cadence_seconds"] = 0
-                        diff_before["cadence_seconds"] = existing.cadence_seconds
-                        diff_after["cadence_seconds"] = 0
-
-            # Validate "at-least-one" against merged state (DB CHECK mirror).
-            merged_schedule = updates.get("schedule", existing.schedule)
-            merged_cadence = updates.get("cadence_seconds", existing.cadence_seconds)
-            has_schedule = isinstance(merged_schedule, str) and merged_schedule != ""
-            has_cadence = int(merged_cadence) > 0
-            if not has_schedule and not has_cadence:
-                msg = "merged row violates: neither schedule nor cadence_seconds set"
-                raise ValueError(msg)
-
-            # Determine audit verb.
-            archive_changed = "archived_at" in updates
-            went_to_archived = (
-                archive_changed
-                and updates["archived_at"] is not None
-                and existing.archived_at is None
+            hidden_changed = "hidden_at" in updates
+            went_to_hidden = (
+                hidden_changed and updates["hidden_at"] is not None and existing.hidden_at is None
             )
-            went_to_active = (
-                archive_changed
-                and updates["archived_at"] is None
-                and existing.archived_at is not None
+            went_to_visible = (
+                hidden_changed and updates["hidden_at"] is None and existing.hidden_at is not None
             )
-            other_fields_changed = any(
-                f in updates for f in updates if f not in {"archived_at", "schedule_canonical"}
-            )
-            # NOTE: schedule_canonical alone is bookkeeping; the verb decision
-            # tracks user-meaningful field changes only.
+            other_fields_changed = any(f != "hidden_at" for f in updates)
 
-            if went_to_archived and not other_fields_changed:
-                verb = "crons.delete"
-            elif went_to_active and not other_fields_changed:
-                verb = "crons.restore"
-            elif went_to_archived or went_to_active:
-                # Mixed: archive flag flipped AND other fields changed in the
-                # same PATCH. We follow D2/D3: emit the archive-side verb so
-                # operators see the audit trail of the destructive action; the
-                # other field changes are recorded in the same row's after JSON.
-                verb = "crons.delete" if went_to_archived else "crons.restore"
+            if went_to_hidden and not other_fields_changed:
+                verb = "crons.hide"
+            elif went_to_visible and not other_fields_changed:
+                verb = "crons.unhide"
+            elif went_to_hidden or went_to_visible:
+                verb = "crons.hide" if went_to_hidden else "crons.unhide"
             else:
                 verb = "crons.update"
 
@@ -468,10 +419,9 @@ class CronRepo:
             diff_before["updated_at"] = existing.updated_at
             diff_after["updated_at"] = now
 
-            # Build dynamic UPDATE.
             set_clause = ", ".join(f"{col} = :{col}" for col in updates)
-            update_sql = text(f"UPDATE crons SET {set_clause} WHERE id = :id")
-            update_params = {**updates, "id": cron_id}
+            update_sql = text(f"UPDATE crons SET {set_clause} WHERE fingerprint = :fingerprint")
+            update_params = {**updates, "fingerprint": fingerprint}
             await conn.execute(update_sql, update_params)
 
             await insert_audit(
@@ -484,32 +434,29 @@ class CronRepo:
                 when=now,
             )
 
-            row = (await conn.execute(_SELECT_BY_ID_SQL, {"id": cron_id})).first()
+            row = (
+                await conn.execute(_SELECT_BY_FINGERPRINT_SQL, {"fingerprint": fingerprint})
+            ).first()
             assert row is not None
             return _row_to_cron(row)
 
-    async def soft_delete_cron(self, cron_id: str, *, who: str, ip: str | None) -> CronRecord:
-        """Soft-delete (archive) a cron. 404 semantics: also raises LookupError
-        if the cron is already archived (clear semantics — no double-delete)."""
-        existing = await self.get_cron(cron_id, include_archived=True)
+    async def soft_delete_cron(self, fingerprint: str, *, who: str, ip: str | None) -> CronRecord:
+        """Soft-delete (hide) a cron. 404 if missing OR already hidden."""
+        existing = await self.get_cron(fingerprint, include_hidden=True)
         if existing is None:
-            msg = f"cron not found: {cron_id}"
+            msg = f"cron not found: {fingerprint}"
             raise LookupError(msg)
-        if existing.archived_at is not None:
-            msg = f"cron already archived: {cron_id}"
+        if existing.hidden_at is not None:
+            msg = f"cron already hidden: {fingerprint}"
             raise LookupError(msg)
-        # Reuse update_cron so the verb routing logic stays in one place.
-        payload = CronUpdate.model_validate({"archived_at": utc_now_iso()})
-        return await self.update_cron(cron_id, payload, who=who, ip=ip)
+        payload = CronUpdate.model_validate({"hidden_at": utc_now_iso()})
+        return await self.update_cron(fingerprint, payload, who=who, ip=ip)
 
 
 def _audit_after_for_create(row_params: Mapping[str, Any]) -> dict[str, Any]:
-    """Project the INSERT params into an audit-friendly ``after`` dict.
-
-    Drops the ``id`` (already discoverable from the audit_log row's foreign
-    context) and serializes ``enabled`` as a bool for human-readable trails.
-    """
+    """Project the INSERT params into an audit-friendly ``after`` dict."""
     return {
+        "fingerprint": row_params["fingerprint"],
         "name": row_params["name"],
         "host": row_params["host"],
         "command": row_params["command"],
@@ -517,10 +464,11 @@ def _audit_after_for_create(row_params: Mapping[str, Any]) -> dict[str, Any]:
         "schedule_canonical": row_params["schedule_canonical"],
         "cadence_seconds": row_params["cadence_seconds"],
         "expected_grace_seconds": row_params["expected_grace_seconds"],
-        "integration_mode": row_params["integration_mode"],
         "enabled": bool(row_params["enabled"]),
         "last_seen_state": row_params["last_seen_state"],
         "created_at": row_params["created_at"],
+        "source_path": row_params["source_path"],
+        "wrapper_installed_at": row_params["wrapper_installed_at"],
     }
 
 

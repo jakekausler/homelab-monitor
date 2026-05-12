@@ -34,7 +34,7 @@ function renderInRouter(ui: React.ReactNode) {
 }
 
 const sampleCron: CronOut = {
-  id: 'c1',
+  fingerprint: 'b'.repeat(64),
   name: 'daily-backup',
   host: 'host-a',
   command: '/opt/backup.sh',
@@ -42,12 +42,13 @@ const sampleCron: CronOut = {
   schedule_canonical: '0 4 * * *',
   cadence_seconds: 0,
   expected_grace_seconds: 300,
-  integration_mode: 'observe',
   enabled: true,
   last_seen_state: 'ok',
   created_at: '2026-05-01T00:00:00Z',
   updated_at: '2026-05-01T00:00:00Z',
-  archived_at: null,
+  hidden_at: null,
+  source_path: null,
+  wrapper_installed_at: null,
 }
 
 describe('CronsTable', () => {
@@ -61,12 +62,11 @@ describe('CronsTable', () => {
     expect(await screen.findByText(/Loading crons/i)).toBeInTheDocument()
   })
 
-  it('renders rows with name, host, schedule, mode, state', async () => {
+  it('renders rows with name, host, schedule, state', async () => {
     renderInRouter(<CronsTable items={[sampleCron]} isLoading={false} />)
     expect(await screen.findByText('daily-backup')).toBeInTheDocument()
     expect(screen.getByText('host-a')).toBeInTheDocument()
     expect(screen.getByText('0 4 * * *')).toBeInTheDocument()
-    expect(screen.getByText('Observe')).toBeInTheDocument()
     expect(screen.getByText('Ok')).toBeInTheDocument()
   })
 
@@ -76,9 +76,9 @@ describe('CronsTable', () => {
     expect(await screen.findByText('every 60s')).toBeInTheDocument()
   })
 
-  it('renders archived badge for archived crons', async () => {
-    const archived: CronOut = { ...sampleCron, archived_at: '2026-05-10T00:00:00Z' }
-    renderInRouter(<CronsTable items={[archived]} isLoading={false} />)
+  it('renders archived badge for hidden crons', async () => {
+    const hidden: CronOut = { ...sampleCron, hidden_at: '2026-05-10T00:00:00Z' }
+    renderInRouter(<CronsTable items={[hidden]} isLoading={false} />)
     expect(await screen.findByText('archived')).toBeInTheDocument()
   })
 })

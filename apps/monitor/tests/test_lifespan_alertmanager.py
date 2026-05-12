@@ -106,6 +106,7 @@ async def test_lifespan_swallows_missing_template(
 
 
 @pytest.mark.asyncio
+@pytest.mark.httpx_mock(assert_all_responses_were_requested=False)
 async def test_lifespan_skips_reload_when_url_disabled(
     db_url: str,
     master_key: bytes,
@@ -128,13 +129,16 @@ async def test_lifespan_skips_reload_when_url_disabled(
     from homelab_monitor.kernel.api.app import create_app  # noqa: PLC0415
 
     app = create_app(lifespan_enabled=True)
-    # httpx_mock will fail if any HTTP call is made (strict by default)
+    # Allow the VictoriaLogs collector probe (unrelated to Alertmanager).
+    # The httpx_mock assertion is about Alertmanager-specific calls being skipped.
+    httpx_mock.add_response(url="http://victorialogs:9428/select/logsql/stats", method="GET")
     async with app.router.lifespan_context(app):
-        # Should complete without making any HTTP calls
+        # Should complete without making any Alertmanager HTTP calls
         assert output_path.exists()
 
 
 @pytest.mark.asyncio
+@pytest.mark.httpx_mock(assert_all_responses_were_requested=False)
 async def test_lifespan_skips_reload_when_url_empty(
     db_url: str,
     master_key: bytes,
@@ -157,7 +161,9 @@ async def test_lifespan_skips_reload_when_url_empty(
     from homelab_monitor.kernel.api.app import create_app  # noqa: PLC0415
 
     app = create_app(lifespan_enabled=True)
-    # httpx_mock will fail if any HTTP call is made (strict by default)
+    # Allow the VictoriaLogs collector probe (unrelated to Alertmanager).
+    # The httpx_mock assertion is about Alertmanager-specific calls being skipped.
+    httpx_mock.add_response(url="http://victorialogs:9428/select/logsql/stats", method="GET")
     async with app.router.lifespan_context(app):
-        # Should complete without making any HTTP calls
+        # Should complete without making any Alertmanager HTTP calls
         assert output_path.exists()

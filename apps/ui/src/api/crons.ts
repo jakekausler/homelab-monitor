@@ -20,11 +20,10 @@ export interface CronListQuery {
   page?: number
   page_size?: number
   host?: string
-  integration_mode?: 'observe' | 'heartbeat' | 'both'
   enabled?: boolean
   state?: 'unknown' | 'running' | 'ok' | 'failed' | 'late'
   q?: string
-  include_archived?: boolean
+  include_hidden?: boolean
 }
 
 export const cronQueryKeys = {
@@ -52,15 +51,15 @@ export function useListCrons(query: CronListQuery): UseQueryResult<CronListRespo
 
 export function useGetCron(
   id: string,
-  options: { includeArchived?: boolean } = {},
+  options: { includeHidden?: boolean } = {},
 ): UseQueryResult<CronWithStateOut, ApiError> {
   return useQuery({
     queryKey: cronQueryKeys.detail(id),
     queryFn: async () => {
-      const result = await apiClient.GET('/api/crons/{cron_id}', {
+      const result = await apiClient.GET('/api/crons/{fingerprint}', {
         params: {
-          path: { cron_id: id },
-          query: { include_archived: options.includeArchived ?? false },
+          path: { fingerprint: id },
+          query: { include_hidden: options.includeHidden ?? false },
         },
       })
       return unwrap(result)
@@ -87,8 +86,8 @@ export function useUpdateCron(id: string): UseMutationResult<CronOut, ApiError, 
   const qc = useQueryClient()
   return useMutation({
     mutationFn: async (body: CronUpdate) => {
-      const result = await apiClient.PATCH('/api/crons/{cron_id}', {
-        params: { path: { cron_id: id } },
+      const result = await apiClient.PATCH('/api/crons/{fingerprint}', {
+        params: { path: { fingerprint: id } },
         body,
       })
       return unwrap(result)
@@ -104,8 +103,8 @@ export function useSoftDeleteCron(id: string): UseMutationResult<void, ApiError,
   const qc = useQueryClient()
   return useMutation({
     mutationFn: async () => {
-      const result = await apiClient.DELETE('/api/crons/{cron_id}', {
-        params: { path: { cron_id: id } },
+      const result = await apiClient.DELETE('/api/crons/{fingerprint}', {
+        params: { path: { fingerprint: id } },
       })
       if (result.response.status === 204) return
       unwrap(result)
@@ -124,8 +123,8 @@ export function usePreviewSavedCron(
   return useQuery({
     queryKey: cronQueryKeys.previewSaved(id, count),
     queryFn: async () => {
-      const result = await apiClient.GET('/api/crons/{cron_id}/preview-runs', {
-        params: { path: { cron_id: id }, query: { count } },
+      const result = await apiClient.GET('/api/crons/{fingerprint}/preview-runs', {
+        params: { path: { fingerprint: id }, query: { count } },
       })
       return unwrap(result)
     },

@@ -82,7 +82,7 @@ describe('SchedulePreviewForSaved', () => {
       error: null,
       data: undefined,
     } as unknown as ReturnType<typeof usePreviewSavedCron>)
-    wrap(<SchedulePreviewForSaved cronId="c1" />)
+    wrap(<SchedulePreviewForSaved fingerprint={'a'.repeat(64)} />)
     expect(screen.getByText(/Calculating/i)).toBeInTheDocument()
   })
 
@@ -92,7 +92,7 @@ describe('SchedulePreviewForSaved', () => {
       error: { message: 'timeout' } as Error,
       data: undefined,
     } as unknown as ReturnType<typeof usePreviewSavedCron>)
-    wrap(<SchedulePreviewForSaved cronId="c1" />)
+    wrap(<SchedulePreviewForSaved fingerprint={'a'.repeat(64)} />)
     expect(screen.getByText(/Schedule preview unavailable/i)).toBeInTheDocument()
   })
 
@@ -102,7 +102,7 @@ describe('SchedulePreviewForSaved', () => {
       error: null,
       data: { runs: ['2026-05-11T04:00:00Z'] },
     } as unknown as ReturnType<typeof usePreviewSavedCron>)
-    wrap(<SchedulePreviewForSaved cronId="c1" />)
+    wrap(<SchedulePreviewForSaved fingerprint={'a'.repeat(64)} />)
     expect(screen.getByText('formatted:2026-05-11T04:00:00Z')).toBeInTheDocument()
   })
 })

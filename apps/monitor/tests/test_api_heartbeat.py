@@ -1,4 +1,4 @@
-"""Unit tests for /api/hb/{cron_id}/{start|ok|fail} heartbeat receiver endpoints."""
+"""Unit tests for /api/hb/{fingerprint}/{start|ok|fail} heartbeat receiver endpoints."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 
+from homelab_monitor.kernel.cron.fingerprint import compute_fingerprint
 from homelab_monitor.kernel.db.repository import SqliteRepository
 from homelab_monitor.kernel.db.time import utc_now_iso
 from homelab_monitor.kernel.heartbeat.rate_limiter import cron_rate_limiter
@@ -16,59 +17,63 @@ from homelab_monitor.kernel.heartbeat.rate_limiter import cron_rate_limiter
 
 @dataclass(frozen=True, slots=True)
 class _SeededCron:
-    id: str
+    fingerprint: str
     name: str
     host: str
-    integration_mode: str
 
 
 @dataclass(frozen=True, slots=True)
 class SeededCrons:
-    observe: _SeededCron
-    heartbeat: _SeededCron
-    both: _SeededCron
+    first: _SeededCron
+    second: _SeededCron
+    third: _SeededCron
 
 
 async def _insert_cron(  # noqa: PLR0913
     repo: SqliteRepository,
     *,
-    id_: str,
-    name: str,
-    host: str,
-    integration_mode: str,
+    fingerprint: str | None = None,
+    name: str = "test-cron",
+    host: str = "test-host",
     schedule: str = "* * * * *",
     cadence_seconds: int = 60,
     command_str: str = "/usr/bin/true",
-) -> None:
-    """Insert a cron row directly via raw SQL (CRUD UI is STAGE-002-002)."""
+    source_path: str | None = "/etc/crontab",
+) -> str:
+    """Insert a cron row directly via raw SQL. Returns the fingerprint."""
+    fp = fingerprint or compute_fingerprint(
+        host=host, source_path=source_path, schedule=schedule, command=command_str
+    )
     now = utc_now_iso()
     async with repo.engine.begin() as conn:
         await conn.execute(
             text(
-                "INSERT INTO crons ("
-                "  id, name, host, command, schedule, cadence_seconds, "
-                "  expected_grace_seconds, integration_mode, enabled, "
-                "  last_seen_state, created_at, updated_at"
-                ") VALUES ("
-                "  :id, :name, :host, :command, :schedule, :cadence, "
-                "  :grace, :mode, :enabled, :last_seen, :created, :updated"
-                ")"
+                "INSERT INTO crons (fingerprint, name, host, command, schedule, "
+                "schedule_canonical, cadence_seconds, expected_grace_seconds, "
+                "enabled, last_seen_state, created_at, updated_at, hidden_at, "
+                "source_path, wrapper_installed_at) VALUES ("
+                ":fp, :name, :host, :command, :schedule, :sched_canon, :cadence, "
+                ":grace, :enabled, :last_seen, :created, :updated, :hidden, :sp, :wia)"
             ),
             {
-                "id": id_,
+                "fp": fp,
                 "name": name,
                 "host": host,
                 "command": command_str,
                 "schedule": schedule,
+                "sched_canon": schedule,
                 "cadence": cadence_seconds,
                 "grace": 300,
-                "mode": integration_mode,
                 "enabled": 1,
                 "last_seen": "unknown",
                 "created": now,
                 "updated": now,
+                "hidden": None,
+                "sp": source_path,
+                "wia": None,
             },
         )
+    return fp
 
 
 @pytest.fixture(autouse=True)
@@ -82,27 +87,25 @@ async def seeded_crons(
     api_token_client: AsyncClient,
     repo: SqliteRepository,
 ) -> SeededCrons:
-    """Seed three crons (observe / heartbeat / both) into the api_token_client app."""
+    """Seed three crons with different commands into the api_token_client app."""
     # api_token_client and repo share the same aiosqlite engine via get_engine singleton.
     # Writes via repo land on the same engine the route handler will read from.
     seeds = [
-        ("test-cron-observe", "test-observe", "test-host", "observe"),
-        ("test-cron-heartbeat", "test-heartbeat", "test-host", "heartbeat"),
-        ("test-cron-both", "test-both", "test-host", "both"),
+        ("test-observe", "/opt/observe.sh"),
+        ("test-heartbeat", "/opt/heartbeat.sh"),
+        ("test-both", "/opt/both.sh"),
     ]
-    for id_, name, host, mode in seeds:
-        await _insert_cron(
+    crons: list[_SeededCron] = []
+    for name, cmd in seeds:
+        fp = await _insert_cron(
             repo,
-            id_=id_,
             name=name,
-            host=host,
-            integration_mode=mode,
+            host="test-host",
+            command_str=cmd,
         )
-    return SeededCrons(
-        observe=_SeededCron(*seeds[0]),
-        heartbeat=_SeededCron(*seeds[1]),
-        both=_SeededCron(*seeds[2]),
-    )
+        crons.append(_SeededCron(fingerprint=fp, name=name, host="test-host"))
+
+    return SeededCrons(first=crons[0], second=crons[1], third=crons[2])
 
 
 # ----- existing auth tests (rewritten to use seeded_crons) -----
@@ -114,7 +117,7 @@ async def test_heartbeat_returns_401_without_auth(
     seeded_crons: SeededCrons,
 ) -> None:
     authenticated_client.cookies.clear()
-    resp = await authenticated_client.post(f"/api/hb/{seeded_crons.heartbeat.id}/ok")
+    resp = await authenticated_client.post(f"/api/hb/{seeded_crons.second.fingerprint}/ok")
     assert resp.status_code == 401  # noqa: PLR2004
 
 
@@ -128,7 +131,7 @@ async def test_heartbeat_returns_401_with_session_only(
     if csrf_cookie:
         headers["X-CSRF-Token"] = csrf_cookie
     resp = await authenticated_client.post(
-        f"/api/hb/{seeded_crons.heartbeat.id}/ok",
+        f"/api/hb/{seeded_crons.second.fingerprint}/ok",
         headers=headers,
     )
     assert resp.status_code == 401  # noqa: PLR2004
@@ -156,12 +159,11 @@ async def test_heartbeat_returns_403_with_wrong_scope_token(
 
     app = create_app(lifespan_enabled=True)
     async with app.router.lifespan_context(app):
-        await _insert_cron(
+        fp = await _insert_cron(
             app.state.repo,
-            id_="cron-403-test",
             name="t-403",
             host="th",
-            integration_mode="heartbeat",
+            command_str="/opt/test.sh",
         )
         plaintext, _ = make_api_token(prefix="test")
         await app.state.auth_repo.create_api_token(
@@ -174,7 +176,7 @@ async def test_heartbeat_returns_403_with_wrong_scope_token(
             base_url="http://test",
             headers={"Authorization": f"Bearer {plaintext}"},
         ) as client:
-            resp = await client.post("/api/hb/cron-403-test/ok")
+            resp = await client.post(f"/api/hb/{fp}/ok")
             assert resp.status_code == 403  # noqa: PLR2004
 
 
@@ -185,7 +187,7 @@ async def test_heartbeat_returns_403_with_wrong_scope_token(
 async def test_start_returns_204_for_registered_cron(
     api_token_client: AsyncClient, seeded_crons: SeededCrons
 ) -> None:
-    resp = await api_token_client.post(f"/api/hb/{seeded_crons.heartbeat.id}/start")
+    resp = await api_token_client.post(f"/api/hb/{seeded_crons.second.fingerprint}/start")
     assert resp.status_code == 204  # noqa: PLR2004
 
 
@@ -195,12 +197,15 @@ async def test_ok_returns_204_for_registered_cron_and_records_state(
     repo: SqliteRepository,
     seeded_crons: SeededCrons,
 ) -> None:
-    resp = await api_token_client.post(f"/api/hb/{seeded_crons.heartbeat.id}/ok")
+    resp = await api_token_client.post(f"/api/hb/{seeded_crons.second.fingerprint}/ok")
     assert resp.status_code == 204  # noqa: PLR2004
 
     row = await repo.fetch_one(
-        text("SELECT current_state, current_streak FROM heartbeats_state WHERE cron_id = :id"),
-        {"id": seeded_crons.heartbeat.id},
+        text(
+            "SELECT current_state, current_streak "
+            "FROM heartbeats_state WHERE cron_fingerprint = :fp"
+        ),
+        {"fp": seeded_crons.second.fingerprint},
     )
     assert row is not None
     assert row[0] == "ok"
@@ -213,12 +218,12 @@ async def test_fail_returns_204_for_registered_cron_and_records_state(
     repo: SqliteRepository,
     seeded_crons: SeededCrons,
 ) -> None:
-    resp = await api_token_client.post(f"/api/hb/{seeded_crons.heartbeat.id}/fail")
+    resp = await api_token_client.post(f"/api/hb/{seeded_crons.second.fingerprint}/fail")
     assert resp.status_code == 204  # noqa: PLR2004
 
     row = await repo.fetch_one(
-        text("SELECT current_state FROM heartbeats_state WHERE cron_id = :id"),
-        {"id": seeded_crons.heartbeat.id},
+        text("SELECT current_state FROM heartbeats_state WHERE cron_fingerprint = :fp"),
+        {"fp": seeded_crons.second.fingerprint},
     )
     assert row is not None
     assert row[0] == "failed"
@@ -242,13 +247,13 @@ async def test_ok_with_duration_query_param_persists_duration(
     seeded_crons: SeededCrons,
 ) -> None:
     resp = await api_token_client.post(
-        f"/api/hb/{seeded_crons.heartbeat.id}/ok?duration=12.5",
+        f"/api/hb/{seeded_crons.second.fingerprint}/ok?duration=12.5",
     )
     assert resp.status_code == 204  # noqa: PLR2004
 
     row = await repo.fetch_one(
-        text("SELECT last_duration_seconds FROM heartbeats_state WHERE cron_id = :id"),
-        {"id": seeded_crons.heartbeat.id},
+        text("SELECT last_duration_seconds FROM heartbeats_state WHERE cron_fingerprint = :fp"),
+        {"fp": seeded_crons.second.fingerprint},
     )
     assert row is not None
     assert float(row[0]) == 12.5  # noqa: PLR2004
@@ -261,13 +266,13 @@ async def test_fail_with_exit_code_query_param_persists_exit_code(
     seeded_crons: SeededCrons,
 ) -> None:
     resp = await api_token_client.post(
-        f"/api/hb/{seeded_crons.heartbeat.id}/fail?exit_code=42",
+        f"/api/hb/{seeded_crons.second.fingerprint}/fail?exit_code=42",
     )
     assert resp.status_code == 204  # noqa: PLR2004
 
     row = await repo.fetch_one(
-        text("SELECT last_exit_code FROM heartbeats_state WHERE cron_id = :id"),
-        {"id": seeded_crons.heartbeat.id},
+        text("SELECT last_exit_code FROM heartbeats_state WHERE cron_fingerprint = :fp"),
+        {"fp": seeded_crons.second.fingerprint},
     )
     assert row is not None
     assert int(row[0]) == 42  # noqa: PLR2004
@@ -281,7 +286,7 @@ async def test_ok_with_invalid_duration_returns_422(
     bad: str,
 ) -> None:
     resp = await api_token_client.post(
-        f"/api/hb/{seeded_crons.heartbeat.id}/ok?duration={bad}",
+        f"/api/hb/{seeded_crons.second.fingerprint}/ok?duration={bad}",
     )
     assert resp.status_code == 422  # noqa: PLR2004
 
@@ -294,7 +299,7 @@ async def test_fail_with_invalid_exit_code_returns_422(
     bad: str,
 ) -> None:
     resp = await api_token_client.post(
-        f"/api/hb/{seeded_crons.heartbeat.id}/fail?exit_code={bad}",
+        f"/api/hb/{seeded_crons.second.fingerprint}/fail?exit_code={bad}",
     )
     assert resp.status_code == 422  # noqa: PLR2004
 
@@ -305,7 +310,7 @@ async def test_start_with_unknown_query_param_returns_422(
     seeded_crons: SeededCrons,
 ) -> None:
     resp = await api_token_client.post(
-        f"/api/hb/{seeded_crons.heartbeat.id}/start?foo=bar",
+        f"/api/hb/{seeded_crons.second.fingerprint}/start?foo=bar",
     )
     assert resp.status_code == 422  # noqa: PLR2004
 
@@ -316,7 +321,7 @@ async def test_ok_with_unknown_query_param_returns_422(
     seeded_crons: SeededCrons,
 ) -> None:
     resp = await api_token_client.post(
-        f"/api/hb/{seeded_crons.heartbeat.id}/ok?foo=bar",
+        f"/api/hb/{seeded_crons.second.fingerprint}/ok?foo=bar",
     )
     assert resp.status_code == 422  # noqa: PLR2004
 
@@ -327,7 +332,7 @@ async def test_fail_with_unknown_query_param_returns_422(
     seeded_crons: SeededCrons,
 ) -> None:
     resp = await api_token_client.post(
-        f"/api/hb/{seeded_crons.heartbeat.id}/fail?foo=bar",
+        f"/api/hb/{seeded_crons.second.fingerprint}/fail?foo=bar",
     )
     assert resp.status_code == 422  # noqa: PLR2004
 
@@ -339,7 +344,7 @@ async def test_unknown_query_param_returns_structured_validation_error(
 ) -> None:
     """The 422 body uses ErrorEnvelope with structured details.errors."""
     resp = await api_token_client.post(
-        f"/api/hb/{seeded_crons.heartbeat.id}/start?foo=bar",
+        f"/api/hb/{seeded_crons.second.fingerprint}/start?foo=bar",
     )
     assert resp.status_code == 422  # noqa: PLR2004
     body = resp.json()
@@ -355,12 +360,12 @@ async def test_ok_increments_streak_on_consecutive_oks(
     seeded_crons: SeededCrons,
 ) -> None:
     for _ in range(3):
-        r = await api_token_client.post(f"/api/hb/{seeded_crons.heartbeat.id}/ok")
+        r = await api_token_client.post(f"/api/hb/{seeded_crons.second.fingerprint}/ok")
         assert r.status_code == 204  # noqa: PLR2004
 
     row = await repo.fetch_one(
-        text("SELECT current_streak FROM heartbeats_state WHERE cron_id = :id"),
-        {"id": seeded_crons.heartbeat.id},
+        text("SELECT current_streak FROM heartbeats_state WHERE cron_fingerprint = :fp"),
+        {"fp": seeded_crons.second.fingerprint},
     )
     assert row is not None
     assert int(row[0]) == 3  # noqa: PLR2004
@@ -372,47 +377,21 @@ async def test_state_transition_resets_streak_to_1(
     repo: SqliteRepository,
     seeded_crons: SeededCrons,
 ) -> None:
-    cid = seeded_crons.heartbeat.id
+    cid = seeded_crons.second.fingerprint
     await api_token_client.post(f"/api/hb/{cid}/ok")
     await api_token_client.post(f"/api/hb/{cid}/ok")
     await api_token_client.post(f"/api/hb/{cid}/fail")
 
     row = await repo.fetch_one(
-        text("SELECT current_state, current_streak FROM heartbeats_state WHERE cron_id = :id"),
-        {"id": cid},
+        text(
+            "SELECT current_state, current_streak "
+            "FROM heartbeats_state WHERE cron_fingerprint = :fp"
+        ),
+        {"fp": cid},
     )
     assert row is not None
     assert row[0] == "failed"
     assert int(row[1]) == 1
-
-
-@pytest.mark.asyncio
-async def test_observe_mode_cron_logs_warning_but_records(
-    api_token_client: AsyncClient,
-    repo: SqliteRepository,
-    seeded_crons: SeededCrons,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    resp = await api_token_client.post(f"/api/hb/{seeded_crons.observe.id}/ok")
-    assert resp.status_code == 204  # noqa: PLR2004
-
-    # Verify the warning was emitted (captured via capsys stdout):
-    # TODO: Replace capsys substring match with structlog.testing.capture_logs() once a
-    # shared log_capture pytest fixture exists. Current pattern depends on the configured
-    # structlog renderer routing to stdout — brittle to log-format changes (e.g., piping
-    # logs to a file or stderr would silently break this test). Tracked in EPIC-002 regression.md.
-    captured_out = capsys.readouterr().out
-    assert "heartbeat.received_in_observe_mode" in captured_out, (
-        f"expected observe-mode warning in logs; got: {captured_out}"
-    )
-
-    # Verify the row was written despite the warning:
-    row = await repo.fetch_one(
-        text("SELECT current_state FROM heartbeats_state WHERE cron_id = :id"),
-        {"id": seeded_crons.observe.id},
-    )
-    assert row is not None
-    assert row[0] == "ok"
 
 
 @pytest.mark.asyncio
@@ -429,10 +408,10 @@ async def test_rate_limit_returns_429_with_retry_after(
     router_mod.cron_rate_limiter = tiny
     try:
         # First request consumes the only token -> 204.
-        r1 = await api_token_client.post(f"/api/hb/{seeded_crons.heartbeat.id}/ok")
+        r1 = await api_token_client.post(f"/api/hb/{seeded_crons.second.fingerprint}/ok")
         assert r1.status_code == 204  # noqa: PLR2004
         # Second request immediately -> 429.
-        r2 = await api_token_client.post(f"/api/hb/{seeded_crons.heartbeat.id}/ok")
+        r2 = await api_token_client.post(f"/api/hb/{seeded_crons.second.fingerprint}/ok")
         assert r2.status_code == 429  # noqa: PLR2004
         assert "Retry-After" in r2.headers
         assert int(r2.headers["Retry-After"]) >= 1
@@ -454,10 +433,10 @@ async def test_rate_limit_returns_429_with_retry_after_per_verb(
     router_mod.cron_rate_limiter = tiny
     try:
         # First request consumes the only token -> 204.
-        r1 = await api_token_client.post(f"/api/hb/{seeded_crons.heartbeat.id}/{verb}")
+        r1 = await api_token_client.post(f"/api/hb/{seeded_crons.second.fingerprint}/{verb}")
         assert r1.status_code == 204  # noqa: PLR2004
         # Second request immediately -> 429.
-        r2 = await api_token_client.post(f"/api/hb/{seeded_crons.heartbeat.id}/{verb}")
+        r2 = await api_token_client.post(f"/api/hb/{seeded_crons.second.fingerprint}/{verb}")
         assert r2.status_code == 429  # noqa: PLR2004
         assert "Retry-After" in r2.headers
         assert int(r2.headers["Retry-After"]) >= 1
@@ -478,11 +457,11 @@ async def test_rate_limiter_does_not_share_buckets_across_crons(
     router_mod.cron_rate_limiter = tiny
     try:
         # Exhaust cron A.
-        await api_token_client.post(f"/api/hb/{seeded_crons.heartbeat.id}/ok")
-        r_a_2 = await api_token_client.post(f"/api/hb/{seeded_crons.heartbeat.id}/ok")
+        await api_token_client.post(f"/api/hb/{seeded_crons.second.fingerprint}/ok")
+        r_a_2 = await api_token_client.post(f"/api/hb/{seeded_crons.second.fingerprint}/ok")
         assert r_a_2.status_code == 429  # noqa: PLR2004
         # Cron B still has a fresh bucket.
-        r_b = await api_token_client.post(f"/api/hb/{seeded_crons.both.id}/ok")
+        r_b = await api_token_client.post(f"/api/hb/{seeded_crons.third.fingerprint}/ok")
         assert r_b.status_code == 204  # noqa: PLR2004
     finally:
         router_mod.cron_rate_limiter = original
@@ -494,13 +473,19 @@ async def test_audit_row_written_for_state_change(
     repo: SqliteRepository,
     seeded_crons: SeededCrons,
 ) -> None:
-    await api_token_client.post(f"/api/hb/{seeded_crons.heartbeat.id}/ok")
+    await api_token_client.post(f"/api/hb/{seeded_crons.second.fingerprint}/ok")
     row = await repo.fetch_one(
-        text('SELECT who, what FROM audit_log WHERE what = :w ORDER BY "when" DESC LIMIT 1'),
+        text(
+            "SELECT who, what, json_extract(after_json, '$.cron_fingerprint') AS cron_fingerprint "
+            "FROM audit_log WHERE what = :w "
+            'ORDER BY "when" DESC LIMIT 1'
+        ),
         {"w": "heartbeat.ok"},
     )
     assert row is not None
     assert row[1] == "heartbeat.ok"
+    # Verify audit includes the cron_fingerprint key.
+    assert row[2] == seeded_crons.second.fingerprint
     # ``who`` is the token name (set in the api_token_client fixture).
     assert row[0] == "test-token"
 
@@ -533,11 +518,11 @@ async def test_expected_next_at_computed_when_cadence_set(
     repo: SqliteRepository,
     seeded_crons: SeededCrons,
 ) -> None:
-    """seeded_crons.heartbeat has cadence_seconds=60; /ok must populate expected_next_at."""
-    await api_token_client.post(f"/api/hb/{seeded_crons.heartbeat.id}/ok")
+    """seeded_crons.second has cadence_seconds=60; /ok must populate expected_next_at."""
+    await api_token_client.post(f"/api/hb/{seeded_crons.second.fingerprint}/ok")
     row = await repo.fetch_one(
-        text("SELECT expected_next_at FROM heartbeats_state WHERE cron_id = :id"),
-        {"id": seeded_crons.heartbeat.id},
+        text("SELECT expected_next_at FROM heartbeats_state WHERE cron_fingerprint = :fp"),
+        {"fp": seeded_crons.second.fingerprint},
     )
     assert row is not None
     assert row[0] is not None  # ISO-8601 string
@@ -549,42 +534,40 @@ async def test_expected_next_at_null_when_cadence_zero(
     repo: SqliteRepository,
 ) -> None:
     """A cron with cadence_seconds=0 leaves expected_next_at NULL after /ok."""
-    await _insert_cron(
+    fp = await _insert_cron(
         repo,
-        id_="cron-zero-cadence",
         name="zerocad",
         host="th",
-        integration_mode="heartbeat",
+        command_str="/opt/test.sh",
         cadence_seconds=0,
     )
-    await api_token_client.post("/api/hb/cron-zero-cadence/ok")
+    await api_token_client.post(f"/api/hb/{fp}/ok")
     row = await repo.fetch_one(
-        text("SELECT expected_next_at FROM heartbeats_state WHERE cron_id = :id"),
-        {"id": "cron-zero-cadence"},
+        text("SELECT expected_next_at FROM heartbeats_state WHERE cron_fingerprint = :fp"),
+        {"fp": fp},
     )
     assert row is not None
     assert row[0] is None
 
 
 @pytest.mark.asyncio
-async def test_heartbeat_returns_404_for_archived_cron(
+async def test_heartbeat_returns_404_for_hidden_cron(
     api_token_client: AsyncClient,
     repo: SqliteRepository,
 ) -> None:
-    """D2a: receiver MUST 404 on archived crons (no audit, no state row)."""
-    # Seed an archived cron.
-    await _insert_cron(
+    """D2a: receiver MUST 404 on hidden crons (no audit, no state row)."""
+    # Seed a hidden cron.
+    fp = await _insert_cron(
         repo,
-        id_="archived-cron",
         name="dead",
         host="h",
-        integration_mode="heartbeat",
+        command_str="/opt/test.sh",
     )
-    # Set archived_at directly (the _insert_cron helper has no archived param).
+    # Set hidden_at directly (the _insert_cron helper has no hidden param).
     async with repo.engine.begin() as conn:
         await conn.execute(
-            text("UPDATE crons SET archived_at = :ts WHERE id = :id"),
-            {"ts": utc_now_iso(), "id": "archived-cron"},
+            text("UPDATE crons SET hidden_at = :ts WHERE fingerprint = :fp"),
+            {"ts": utc_now_iso(), "fp": fp},
         )
 
     # Pre-state: no audit rows for this cron, no heartbeats_state row.
@@ -593,7 +576,7 @@ async def test_heartbeat_returns_404_for_archived_cron(
     )
     audit_count_before = int(audit_before[0]) if audit_before is not None else 0
 
-    resp = await api_token_client.post("/api/hb/archived-cron/start")
+    resp = await api_token_client.post(f"/api/hb/{fp}/start")
     assert resp.status_code == 404  # noqa: PLR2004
 
     # Post-state: no new audit rows, no heartbeats_state row created.
@@ -604,7 +587,7 @@ async def test_heartbeat_returns_404_for_archived_cron(
     assert audit_count_after == audit_count_before
 
     state_row = await repo.fetch_one(
-        text("SELECT cron_id FROM heartbeats_state WHERE cron_id = :id"),
-        {"id": "archived-cron"},
+        text("SELECT cron_fingerprint FROM heartbeats_state WHERE cron_fingerprint = :fp"),
+        {"fp": fp},
     )
     assert state_row is None

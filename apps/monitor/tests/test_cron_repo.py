@@ -5,8 +5,8 @@ from __future__ import annotations
 import pytest
 from sqlalchemy import text
 
+from homelab_monitor.kernel.cron.fingerprint import compute_fingerprint
 from homelab_monitor.kernel.cron.repository import CronRepo
-from homelab_monitor.kernel.cron.schedule import compute_average_interval_seconds
 from homelab_monitor.kernel.cron.schemas import CronCreate, CronUpdate
 from homelab_monitor.kernel.db.repository import SqliteRepository
 from homelab_monitor.kernel.db.time import utc_now_iso
@@ -21,6 +21,58 @@ async def _audit_count(repo: SqliteRepository, *, what_prefix: str = "crons.") -
         {"w": f"{what_prefix}%"},
     )
     return int(row[0]) if row is not None else 0
+
+
+async def _seed_cron(  # noqa: PLR0913
+    repo: SqliteRepository,
+    *,
+    name: str,
+    host: str = "h1",
+    command: str | None = None,
+    schedule: str = "* * * * *",
+    schedule_canonical: str | None = "* * * * *",
+    cadence_seconds: int = 0,
+    source_path: str | None = "/etc/crontab",
+    last_seen_state: str = "unknown",
+    hidden_at: str | None = None,
+    fingerprint: str | None = None,
+) -> str:
+    """Insert a cron with a computed fingerprint (or the caller-supplied one).
+
+    Returns the fingerprint so tests can use it for follow-up assertions.
+    """
+    command = command if command is not None else f"/bin/true-{name}"
+    fp = fingerprint or compute_fingerprint(
+        host=host, source_path=source_path, schedule=schedule, command=command
+    )
+    await repo.execute(
+        text(
+            "INSERT INTO crons (fingerprint, name, host, command, schedule, "
+            "schedule_canonical, cadence_seconds, expected_grace_seconds, "
+            "enabled, last_seen_state, created_at, updated_at, hidden_at, "
+            "source_path, wrapper_installed_at) VALUES ("
+            ":fp, :name, :host, :command, :schedule, :sched_canon, :cad, "
+            ":grace, :enabled, :state, :created, :updated, :hidden, :sp, :wia)"
+        ),
+        {
+            "fp": fp,
+            "name": name,
+            "host": host,
+            "command": command,
+            "schedule": schedule if schedule else None,
+            "sched_canon": schedule_canonical,
+            "cad": cadence_seconds,
+            "grace": 300,
+            "enabled": 1,
+            "state": last_seen_state,
+            "created": utc_now_iso(),
+            "updated": utc_now_iso(),
+            "hidden": hidden_at,
+            "sp": source_path,
+            "wia": None,
+        },
+    )
+    return fp
 
 
 # ---------------------------------------------------------------------------
@@ -47,6 +99,61 @@ async def test_create_canonicalizes_at_hourly(repo: SqliteRepository) -> None:
     assert rec.schedule_canonical == "0 * * * *"
 
 
+@pytest.mark.asyncio
+async def test_create_cron_assigns_fingerprint_pk(repo: SqliteRepository) -> None:
+    """The PK is the SHA256 fingerprint of (host, source_path, schedule, command)."""
+    cron_repo = CronRepo(repo)
+    rec = await cron_repo.create_cron(
+        CronCreate(
+            name="x",
+            host="h",
+            command="/x",
+            schedule="* * * * *",
+            source_path="/etc/crontab",
+        ),
+        who=WHO,
+        ip=IP,
+    )
+    expected = compute_fingerprint("h", "/etc/crontab", "* * * * *", "/x")
+    assert rec.fingerprint == expected
+
+
+@pytest.mark.asyncio
+async def test_create_cron_null_source_path_round_trip(
+    repo: SqliteRepository,
+) -> None:
+    cron_repo = CronRepo(repo)
+    rec = await cron_repo.create_cron(
+        CronCreate(
+            name="remote",
+            host="rh",
+            command="/x",
+            schedule="* * * * *",
+            source_path=None,
+        ),
+        who=WHO,
+        ip=IP,
+    )
+    assert rec.source_path is None
+
+
+@pytest.mark.asyncio
+async def test_create_cron_duplicate_fingerprint_raises(
+    repo: SqliteRepository,
+) -> None:
+    cron_repo = CronRepo(repo)
+    payload = CronCreate(
+        name="x",
+        host="h",
+        command="/x",
+        schedule="* * * * *",
+        source_path="/etc/crontab",
+    )
+    await cron_repo.create_cron(payload, who=WHO, ip=IP)
+    with pytest.raises(ValueError, match="already exists"):
+        await cron_repo.create_cron(payload, who=WHO, ip=IP)
+
+
 # ---------------------------------------------------------------------------
 # UPDATE
 # ---------------------------------------------------------------------------
@@ -62,7 +169,9 @@ async def test_update_changed_fields_only_writes_one_audit_row(repo: SqliteRepos
     )
     # one audit row from create
     assert await _audit_count(repo) == 1
-    await cron_repo.update_cron(rec.id, CronUpdate(expected_grace_seconds=600), who=WHO, ip=IP)
+    await cron_repo.update_cron(
+        rec.fingerprint, CronUpdate(expected_grace_seconds=600), who=WHO, ip=IP
+    )
     # one more from update
     assert await _audit_count(repo) == 2  # noqa: PLR2004
 
@@ -77,50 +186,58 @@ async def test_update_empty_diff_writes_no_audit(repo: SqliteRepository) -> None
     )
     assert await _audit_count(repo) == 1
     # PATCH same value → no diff → no audit
-    await cron_repo.update_cron(rec.id, CronUpdate(expected_grace_seconds=300), who=WHO, ip=IP)
+    await cron_repo.update_cron(
+        rec.fingerprint, CronUpdate(expected_grace_seconds=300), who=WHO, ip=IP
+    )
     assert await _audit_count(repo) == 1
 
 
 @pytest.mark.asyncio
-async def test_update_archived_at_emits_delete_verb(repo: SqliteRepository) -> None:
+async def test_update_cron_hide_emits_crons_hide_verb(
+    repo: SqliteRepository,
+) -> None:
     cron_repo = CronRepo(repo)
     rec = await cron_repo.create_cron(
         CronCreate(name="x", host="h", command="/x", schedule="* * * * *"),
         who=WHO,
         ip=IP,
     )
-    await cron_repo.update_cron(rec.id, CronUpdate(archived_at=utc_now_iso()), who=WHO, ip=IP)
+    await cron_repo.update_cron(
+        rec.fingerprint,
+        CronUpdate(hidden_at=utc_now_iso()),
+        who=WHO,
+        ip=IP,
+    )
     row = await repo.fetch_one(text('SELECT what FROM audit_log ORDER BY "when" DESC LIMIT 1'))
     assert row is not None
-    assert row[0] == "crons.delete"
+    assert row[0] == "crons.hide"
 
 
 @pytest.mark.asyncio
-async def test_update_restore_emits_restore_verb(repo: SqliteRepository) -> None:
+async def test_update_cron_unhide_emits_crons_unhide_verb(
+    repo: SqliteRepository,
+) -> None:
     cron_repo = CronRepo(repo)
     rec = await cron_repo.create_cron(
         CronCreate(name="x", host="h", command="/x", schedule="* * * * *"),
         who=WHO,
         ip=IP,
     )
-    await cron_repo.update_cron(rec.id, CronUpdate(archived_at=utc_now_iso()), who=WHO, ip=IP)
-    await cron_repo.update_cron(rec.id, CronUpdate(archived_at=None), who=WHO, ip=IP)
+    await cron_repo.update_cron(
+        rec.fingerprint,
+        CronUpdate(hidden_at=utc_now_iso()),
+        who=WHO,
+        ip=IP,
+    )
+    await cron_repo.update_cron(
+        rec.fingerprint,
+        CronUpdate(hidden_at=None),
+        who=WHO,
+        ip=IP,
+    )
     row = await repo.fetch_one(text('SELECT what FROM audit_log ORDER BY "when" DESC LIMIT 1'))
     assert row is not None
-    assert row[0] == "crons.restore"
-
-
-@pytest.mark.asyncio
-async def test_update_recanonicalizes_on_schedule_change(repo: SqliteRepository) -> None:
-    cron_repo = CronRepo(repo)
-    rec = await cron_repo.create_cron(
-        CronCreate(name="x", host="h", command="/x", schedule="* * * * *"),
-        who=WHO,
-        ip=IP,
-    )
-    updated = await cron_repo.update_cron(rec.id, CronUpdate(schedule="@daily"), who=WHO, ip=IP)
-    assert updated.schedule == "@daily"
-    assert updated.schedule_canonical == "0 0 * * *"
+    assert row[0] == "crons.unhide"
 
 
 @pytest.mark.asyncio
@@ -128,7 +245,7 @@ async def test_update_unknown_id_raises_lookup_error(repo: SqliteRepository) -> 
     cron_repo = CronRepo(repo)
     with pytest.raises(LookupError):
         await cron_repo.update_cron(
-            "no-such", CronUpdate(expected_grace_seconds=600), who=WHO, ip=IP
+            "no-such" + "a" * 57, CronUpdate(expected_grace_seconds=600), who=WHO, ip=IP
         )
 
 
@@ -138,33 +255,36 @@ async def test_update_unknown_id_raises_lookup_error(repo: SqliteRepository) -> 
 
 
 @pytest.mark.asyncio
-async def test_soft_delete_archives_and_audits_delete_verb(repo: SqliteRepository) -> None:
+async def test_soft_delete_hides_and_audits_hide_verb(repo: SqliteRepository) -> None:
     cron_repo = CronRepo(repo)
     rec = await cron_repo.create_cron(
         CronCreate(name="x", host="h", command="/x", schedule="* * * * *"),
         who=WHO,
         ip=IP,
     )
-    await cron_repo.soft_delete_cron(rec.id, who=WHO, ip=IP)
-    row = await repo.fetch_one(text("SELECT archived_at FROM crons WHERE id = :id"), {"id": rec.id})
+    await cron_repo.soft_delete_cron(rec.fingerprint, who=WHO, ip=IP)
+    row = await repo.fetch_one(
+        text("SELECT hidden_at FROM crons WHERE fingerprint = :fp"),
+        {"fp": rec.fingerprint},
+    )
     assert row is not None
     assert row[0] is not None
     audit = await repo.fetch_one(text('SELECT what FROM audit_log ORDER BY "when" DESC LIMIT 1'))
     assert audit is not None
-    assert audit[0] == "crons.delete"
+    assert audit[0] == "crons.hide"
 
 
 @pytest.mark.asyncio
-async def test_soft_delete_already_archived_raises(repo: SqliteRepository) -> None:
+async def test_soft_delete_already_hidden_raises(repo: SqliteRepository) -> None:
     cron_repo = CronRepo(repo)
     rec = await cron_repo.create_cron(
         CronCreate(name="x", host="h", command="/x", schedule="* * * * *"),
         who=WHO,
         ip=IP,
     )
-    await cron_repo.soft_delete_cron(rec.id, who=WHO, ip=IP)
+    await cron_repo.soft_delete_cron(rec.fingerprint, who=WHO, ip=IP)
     with pytest.raises(LookupError):
-        await cron_repo.soft_delete_cron(rec.id, who=WHO, ip=IP)
+        await cron_repo.soft_delete_cron(rec.fingerprint, who=WHO, ip=IP)
 
 
 # ---------------------------------------------------------------------------
@@ -185,11 +305,10 @@ async def test_list_pagination_math(repo: SqliteRepository) -> None:
         page=2,
         page_size=3,
         host=None,
-        integration_mode=None,
         enabled=None,
         state=None,
         q=None,
-        include_archived=False,
+        include_hidden=False,
     )
     assert page.total == 7  # noqa: PLR2004
     assert len(page.items) == 3  # noqa: PLR2004
@@ -201,16 +320,12 @@ async def test_list_pagination_math(repo: SqliteRepository) -> None:
 async def test_list_filter_combinations(repo: SqliteRepository) -> None:
     cron_repo = CronRepo(repo)
     await cron_repo.create_cron(
-        CronCreate(
-            name="a", host="h1", command="/x", schedule="* * * * *", integration_mode="observe"
-        ),
+        CronCreate(name="a", host="h1", command="/x", schedule="* * * * *"),
         who=WHO,
         ip=IP,
     )
     await cron_repo.create_cron(
-        CronCreate(
-            name="b", host="h2", command="/x", schedule="* * * * *", integration_mode="heartbeat"
-        ),
+        CronCreate(name="b", host="h2", command="/x", schedule="* * * * *"),
         who=WHO,
         ip=IP,
     )
@@ -218,11 +333,10 @@ async def test_list_filter_combinations(repo: SqliteRepository) -> None:
         page=1,
         page_size=10,
         host="h2",
-        integration_mode="heartbeat",
         enabled=None,
         state=None,
         q=None,
-        include_archived=False,
+        include_hidden=False,
     )
     assert page.total == 1
     assert page.items[0].name == "b"
@@ -250,11 +364,10 @@ async def test_list_q_substring_matches_name_or_command(repo: SqliteRepository) 
         page=1,
         page_size=10,
         host=None,
-        integration_mode=None,
         enabled=None,
         state=None,
         q="grep_me",
-        include_archived=False,
+        include_hidden=False,
     )
     assert page.total == 2  # noqa: PLR2004
     names = {it.name for it in page.items}
@@ -297,188 +410,82 @@ async def test_create_atomic_under_audit_failure(
 async def test_list_crons_filter_by_state(repo: SqliteRepository) -> None:
     """Verify CronRepo.list_crons filters by last_seen_state."""
     crepo = CronRepo(repo)
-    await repo.execute(
-        text(
-            "INSERT INTO crons (id, name, host, command, schedule, schedule_canonical, "
-            "cadence_seconds, expected_grace_seconds, integration_mode, enabled, last_seen_state, "
-            "created_at, updated_at, archived_at) VALUES ("
-            ":id, :name, :host, :command, :schedule, :sched_canon, :cad, :grace, "
-            ":mode, :enabled, :state, :created, :updated, :archived)"
-        ),
-        {
-            "id": "c-ok",
-            "name": "ok-cron",
-            "host": "h1",
-            "command": "/bin/true",
-            "schedule": "* * * * *",
-            "sched_canon": "* * * * *",
-            "cad": 0,
-            "grace": 300,
-            "mode": "observe",
-            "enabled": 1,
-            "state": "ok",
-            "created": utc_now_iso(),
-            "updated": utc_now_iso(),
-            "archived": None,
-        },
-    )
-    await repo.execute(
-        text(
-            "INSERT INTO crons (id, name, host, command, schedule, schedule_canonical, "
-            "cadence_seconds, expected_grace_seconds, integration_mode, enabled, last_seen_state, "
-            "created_at, updated_at, archived_at) VALUES ("
-            ":id, :name, :host, :command, :schedule, :sched_canon, :cad, :grace, "
-            ":mode, :enabled, :state, :created, :updated, :archived)"
-        ),
-        {
-            "id": "c-failed",
-            "name": "failed-cron",
-            "host": "h1",
-            "command": "/bin/false",
-            "schedule": "* * * * *",
-            "sched_canon": "* * * * *",
-            "cad": 0,
-            "grace": 300,
-            "mode": "observe",
-            "enabled": 1,
-            "state": "failed",
-            "created": utc_now_iso(),
-            "updated": utc_now_iso(),
-            "archived": None,
-        },
+    await _seed_cron(repo, name="ok-cron", host="h1", command="/bin/true", last_seen_state="ok")
+    fp_failed = await _seed_cron(
+        repo,
+        name="failed-cron",
+        host="h1",
+        command="/bin/false",
+        last_seen_state="failed",
     )
     page = await crepo.list_crons(
         page=1,
         page_size=10,
         state="failed",
         host=None,
-        integration_mode=None,
         enabled=None,
         q=None,
-        include_archived=False,
+        include_hidden=False,
     )
     assert page.total == 1
-    assert page.items[0].id == "c-failed"
+    assert page.items[0].fingerprint == fp_failed
 
 
 @pytest.mark.asyncio
-async def test_list_crons_exclude_archived(repo: SqliteRepository) -> None:
-    """Verify list excludes archived crons by default; includes with flag."""
+async def test_list_crons_exclude_hidden(repo: SqliteRepository) -> None:
+    """Verify list excludes hidden crons by default; includes with flag."""
     crepo = CronRepo(repo)
-    await repo.execute(
-        text(
-            "INSERT INTO crons (id, name, host, command, schedule, schedule_canonical, "
-            "cadence_seconds, expected_grace_seconds, integration_mode, enabled, last_seen_state, "
-            "created_at, updated_at, archived_at) VALUES ("
-            ":id, :name, :host, :command, :schedule, :sched_canon, :cad, :grace, "
-            ":mode, :enabled, :state, :created, :updated, :archived)"
-        ),
-        {
-            "id": "c-active",
-            "name": "active",
-            "host": "h1",
-            "command": "/bin/true",
-            "schedule": "* * * * *",
-            "sched_canon": "* * * * *",
-            "cad": 0,
-            "grace": 300,
-            "mode": "observe",
-            "enabled": 1,
-            "state": "unknown",
-            "created": utc_now_iso(),
-            "updated": utc_now_iso(),
-            "archived": None,
-        },
+    # Vary source_path between the two crons so their fingerprints differ
+    # (host + source_path + schedule + command form the fingerprint tuple).
+    fp_active = await _seed_cron(
+        repo, name="active", host="h1", command="/bin/true", source_path="/etc/crontab"
     )
-    await repo.execute(
-        text(
-            "INSERT INTO crons (id, name, host, command, schedule, schedule_canonical, "
-            "cadence_seconds, expected_grace_seconds, integration_mode, enabled, last_seen_state, "
-            "created_at, updated_at, archived_at) VALUES ("
-            ":id, :name, :host, :command, :schedule, :sched_canon, :cad, :grace, "
-            ":mode, :enabled, :state, :created, :updated, :archived)"
-        ),
-        {
-            "id": "c-archived",
-            "name": "archived",
-            "host": "h1",
-            "command": "/bin/true",
-            "schedule": "* * * * *",
-            "sched_canon": "* * * * *",
-            "cad": 0,
-            "grace": 300,
-            "mode": "observe",
-            "enabled": 1,
-            "state": "unknown",
-            "created": utc_now_iso(),
-            "updated": utc_now_iso(),
-            "archived": utc_now_iso(),
-        },
+    await _seed_cron(
+        repo,
+        name="hidden",
+        host="h1",
+        command="/bin/true",
+        source_path="/etc/cron.d/hidden",
+        hidden_at=utc_now_iso(),
     )
     page_default = await crepo.list_crons(
         page=1,
         page_size=10,
         host=None,
-        integration_mode=None,
         enabled=None,
         state=None,
         q=None,
-        include_archived=False,
+        include_hidden=False,
     )
     assert page_default.total == 1
-    assert page_default.items[0].id == "c-active"
-    page_with_archived = await crepo.list_crons(
+    assert page_default.items[0].fingerprint == fp_active
+    page_with_hidden = await crepo.list_crons(
         page=1,
         page_size=10,
         host=None,
-        integration_mode=None,
         enabled=None,
         state=None,
         q=None,
-        include_archived=True,
+        include_hidden=True,
     )
-    assert page_with_archived.total == 2  # noqa: PLR2004
+    assert page_with_hidden.total == 2  # noqa: PLR2004
 
 
 @pytest.mark.asyncio
-async def test_update_cron_schedule_clears_cadence_mirror_when_schedule_cleared(
-    repo: SqliteRepository,
-) -> None:
-    """When schedule is cleared in PATCH, cadence_seconds mirror should be zeroed."""
+async def test_get_cron_hidden_excluded_by_default(repo: SqliteRepository) -> None:
+    """get_cron returns None for hidden cron when include_hidden=False."""
     crepo = CronRepo(repo)
     rec = await crepo.create_cron(
-        CronCreate(
-            name="n1", host="h1", command="/bin/true", schedule="* * * * *", cadence_seconds=0
-        ),
+        CronCreate(name="arch", host="h1", command="/bin/true", schedule="* * * * *"),
         who=WHO,
         ip=IP,
     )
-    payload = CronUpdate(schedule="", cadence_seconds=120)
-    updated = await crepo.update_cron(rec.id, payload, who=WHO, ip=IP)
-    assert updated.schedule == ""
-    assert updated.cadence_seconds == 120  # noqa: PLR2004
-
-
-@pytest.mark.asyncio
-async def test_restore_archived_cron_emits_restore_audit(repo: SqliteRepository) -> None:
-    """PATCH archived_at back to None emits crons.restore audit verb."""
-    crepo = CronRepo(repo)
-    rec = await crepo.create_cron(
-        CronCreate(name="restore-test", host="h1", command="/bin/true", schedule="* * * * *"),
-        who=WHO,
-        ip=IP,
-    )
-    # Archive
-    await crepo.update_cron(rec.id, CronUpdate(archived_at=utc_now_iso()), who=WHO, ip=IP)
-    # Restore
-    await crepo.update_cron(rec.id, CronUpdate(archived_at=None), who=WHO, ip=IP)
-    # Check audit log has crons.restore entry
-    row = await repo.fetch_one(
-        text('SELECT what FROM audit_log WHERE what = :what ORDER BY "when" DESC LIMIT 1'),
-        {"what": "crons.restore"},
-    )
-    assert row is not None
-    assert row[0] == "crons.restore"
+    # Hide it
+    await crepo.update_cron(rec.fingerprint, CronUpdate(hidden_at=utc_now_iso()), who=WHO, ip=IP)
+    result = await crepo.get_cron(rec.fingerprint, include_hidden=False)
+    assert result is None
+    result_with_flag = await crepo.get_cron(rec.fingerprint, include_hidden=True)
+    assert result_with_flag is not None
 
 
 @pytest.mark.asyncio
@@ -495,12 +502,12 @@ async def test_get_cron_with_state_has_state(repo: SqliteRepository) -> None:
         await conn.execute(
             text(
                 "INSERT INTO heartbeats_state ("
-                "  cron_id, current_state, current_streak, updated_at"
-                ") VALUES (:cid, 'ok', 1, '2026-05-11T00:00:00+00:00')"
+                "  cron_fingerprint, current_state, current_streak, updated_at"
+                ") VALUES (:cfp, 'ok', 1, '2026-05-11T00:00:00+00:00')"
             ),
-            {"cid": rec.id},
+            {"cfp": rec.fingerprint},
         )
-    result = await crepo.get_cron_with_state(rec.id)
+    result = await crepo.get_cron_with_state(rec.fingerprint)
     assert result is not None
     assert result.state is not None
     assert result.state.current_state == "ok"
@@ -511,12 +518,14 @@ async def test_list_crons_search_q_substring(repo: SqliteRepository) -> None:
     """list_crons with q filters by substring on name OR command."""
     crepo = CronRepo(repo)
     rec1 = await crepo.create_cron(
-        CronCreate(name="nightly-backup", host="h1", command="/bin/true", schedule="* * * * *"),
+        CronCreate(
+            name="nightly-backup", host="h1", command="/bin/true-nightly", schedule="* * * * *"
+        ),
         who=WHO,
         ip=IP,
     )
     await crepo.create_cron(
-        CronCreate(name="hourly-poll", host="h1", command="/bin/true", schedule="* * * * *"),
+        CronCreate(name="hourly-poll", host="h1", command="/bin/true-hourly", schedule="* * * * *"),
         who=WHO,
         ip=IP,
     )
@@ -524,31 +533,13 @@ async def test_list_crons_search_q_substring(repo: SqliteRepository) -> None:
         page=1,
         page_size=10,
         host=None,
-        integration_mode=None,
         enabled=None,
         state=None,
         q="backup",
-        include_archived=False,
+        include_hidden=False,
     )
     assert page.total == 1
-    assert page.items[0].id == rec1.id
-
-
-@pytest.mark.asyncio
-async def test_get_cron_archived_excluded_by_default(repo: SqliteRepository) -> None:
-    """get_cron returns None for archived cron when include_archived=False."""
-    crepo = CronRepo(repo)
-    rec = await crepo.create_cron(
-        CronCreate(name="arch", host="h1", command="/bin/true", schedule="* * * * *"),
-        who=WHO,
-        ip=IP,
-    )
-    # Archive it
-    await crepo.update_cron(rec.id, CronUpdate(archived_at=utc_now_iso()), who=WHO, ip=IP)
-    result = await crepo.get_cron(rec.id, include_archived=False)
-    assert result is None
-    result_with_flag = await crepo.get_cron(rec.id, include_archived=True)
-    assert result_with_flag is not None
+    assert page.items[0].fingerprint == rec1.fingerprint
 
 
 @pytest.mark.asyncio
@@ -560,330 +551,115 @@ async def test_update_cron_toggle_enabled(repo: SqliteRepository) -> None:
         who=WHO,
         ip=IP,
     )
-    updated = await crepo.update_cron(rec.id, CronUpdate(enabled=False), who=WHO, ip=IP)
+    updated = await crepo.update_cron(rec.fingerprint, CronUpdate(enabled=False), who=WHO, ip=IP)
     assert updated.enabled is False
 
 
 @pytest.mark.asyncio
-async def test_update_cron_with_schedule_change(repo: SqliteRepository) -> None:
-    """PATCH schedule field succeeds without affecting cadence_seconds."""
+async def test_list_crons_filter_by_enabled(repo: SqliteRepository) -> None:
+    """list_crons with enabled=True/False filters correctly (lines 217-218)."""
     crepo = CronRepo(repo)
-    rec = await crepo.create_cron(
+    # Create two crons: one enabled, one disabled
+    rec_enabled = await crepo.create_cron(
         CronCreate(
-            name="n1",
+            name="enabled-cron",
             host="h1",
-            command="/bin/true",
+            command="/bin/true-enabled",
             schedule="* * * * *",
         ),
         who=WHO,
         ip=IP,
     )
-    updated = await crepo.update_cron(rec.id, CronUpdate(schedule="*/5 * * * *"), who=WHO, ip=IP)
-    assert updated.schedule == "*/5 * * * *"
-
-
-@pytest.mark.asyncio
-async def test_compute_average_interval_no_base() -> None:
-    """compute_average_interval_seconds with no base argument uses now() as the base."""
-    result = compute_average_interval_seconds("*/5 * * * *")
-    assert result == 300  # 5 minutes  # noqa: PLR2004
-
-
-# ---------------------------------------------------------------------------
-# Coverage gaps
-# ---------------------------------------------------------------------------
-
-
-async def _seed_cron(  # noqa: PLR0913
-    repo: SqliteRepository,
-    id_: str,
-    name: str,
-    schedule: str,
-    schedule_canonical: str,
-    *,
-    cadence_seconds: int = 0,
-) -> None:
-    """Insert a cron row into database."""
-    await repo.execute(
-        text(
-            "INSERT INTO crons (id, name, host, command, schedule, schedule_canonical, "
-            "cadence_seconds, expected_grace_seconds, integration_mode, enabled, last_seen_state, "
-            "created_at, updated_at, archived_at) VALUES ("
-            ":id, :name, :host, :command, :schedule, :sched_canon, :cad, :grace, "
-            ":mode, :enabled, :state, :created, :updated, :archived)"
+    rec_disabled = await crepo.create_cron(
+        CronCreate(
+            name="disabled-cron",
+            host="h1",
+            command="/bin/true-disabled",
+            schedule="* * * * *",
         ),
-        {
-            "id": id_,
-            "name": name,
-            "host": "h1",
-            "command": "/bin/true",
-            "schedule": schedule,
-            "sched_canon": schedule_canonical,
-            "cad": cadence_seconds,
-            "grace": 300,
-            "mode": "observe",
-            "enabled": 1,
-            "state": "unknown",
-            "created": utc_now_iso(),
-            "updated": utc_now_iso(),
-            "archived": None,
-        },
+        who=WHO,
+        ip=IP,
     )
+    # Disable the second cron
+    await crepo.update_cron(rec_disabled.fingerprint, CronUpdate(enabled=False), who=WHO, ip=IP)
 
-
-@pytest.mark.asyncio
-async def test_list_crons_filter_by_enabled(repo: SqliteRepository) -> None:
-    """list_crons filters by enabled flag (covers line 219-220)."""
-    crepo = CronRepo(repo)
-    await _seed_cron(
-        repo, id_="c-on", name="enabled-cron", schedule="* * * * *", schedule_canonical="* * * * *"
-    )
-    await _seed_cron(
-        repo,
-        id_="c-off",
-        name="disabled-cron",
-        schedule="* * * * *",
-        schedule_canonical="* * * * *",
-    )
-    async with repo.engine.begin() as conn:
-        await conn.execute(text("UPDATE crons SET enabled = 0 WHERE id = 'c-off'"))
-    page = await crepo.list_crons(
+    # Query with enabled=True should return only the enabled cron
+    page_enabled = await crepo.list_crons(
         page=1,
         page_size=10,
         host=None,
-        integration_mode=None,
         enabled=True,
         state=None,
         q=None,
-        include_archived=False,
+        include_hidden=False,
     )
-    assert page.total == 1
-    assert page.items[0].id == "c-on"
-    page_off = await crepo.list_crons(
+    assert page_enabled.total == 1
+    assert page_enabled.items[0].fingerprint == rec_enabled.fingerprint
+
+    # Query with enabled=False should return only the disabled cron
+    page_disabled = await crepo.list_crons(
         page=1,
         page_size=10,
         host=None,
-        integration_mode=None,
         enabled=False,
         state=None,
         q=None,
-        include_archived=False,
+        include_hidden=False,
     )
-    assert page_off.total == 1
-    assert page_off.items[0].id == "c-off"
+    assert page_disabled.total == 1
+    assert page_disabled.items[0].fingerprint == rec_disabled.fingerprint
 
 
 @pytest.mark.asyncio
-async def test_update_cron_schedule_to_none_normalizes_to_empty(repo: SqliteRepository) -> None:
-    """PATCH schedule=None normalizes to empty string (covers line 384)."""
+async def test_update_cron_enabled_same_value_is_no_op(repo: SqliteRepository) -> None:
+    """PATCH enabled with same value is no-op, no audit row created (line 385)."""
     crepo = CronRepo(repo)
-    await _seed_cron(
-        repo,
-        id_="c1",
-        name="n1",
-        schedule="* * * * *",
-        schedule_canonical="* * * * *",
-        cadence_seconds=60,
+    rec = await crepo.create_cron(
+        CronCreate(name="n2", host="h1", command="/bin/true-n2", schedule="* * * * *"),
+        who=WHO,
+        ip=IP,
     )
-    updated = await crepo.update_cron(
-        "c1", CronUpdate(schedule=None, cadence_seconds=120), who="t", ip=None
-    )
-    assert updated.schedule == ""
-    assert updated.cadence_seconds == 120  # noqa: PLR2004
+    # Get audit count before PATCH
+    audit_before = await _audit_count(repo)
 
-
-@pytest.mark.asyncio
-async def test_update_cron_enabled_unchanged_skipped(repo: SqliteRepository) -> None:
-    """PATCH enabled=True when already True is treated as no-change (covers line 389)."""
-    crepo = CronRepo(repo)
-    await _seed_cron(
-        repo, id_="c1", name="n1", schedule="* * * * *", schedule_canonical="* * * * *"
-    )
-    # enabled defaults to 1 (True). PATCH enabled=True → no-op
-    updated = await crepo.update_cron("c1", CronUpdate(enabled=True), who="t", ip=None)
+    # PATCH enabled=True when it's already True (no-op)
+    updated = await crepo.update_cron(rec.fingerprint, CronUpdate(enabled=True), who=WHO, ip=IP)
     assert updated.enabled is True
+    assert updated.fingerprint == rec.fingerprint
+
+    # Audit count should not increase (no audit row for no-op)
+    audit_after = await _audit_count(repo)
+    assert audit_after == audit_before
 
 
 @pytest.mark.asyncio
-async def test_update_cron_change_schedule_recomputes_cadence(repo: SqliteRepository) -> None:
-    """PATCH that changes schedule recomputes cadence_seconds mirror (covers lines 414-427)."""
+async def test_update_cron_hide_and_rename_uses_hide_verb(repo: SqliteRepository) -> None:
+    """PATCH hidden_at AND another field together uses hide/unhide verb (line 413)."""
     crepo = CronRepo(repo)
-    await _seed_cron(
-        repo,
-        id_="c1",
-        name="n1",
-        schedule="* * * * *",
-        schedule_canonical="* * * * *",
-        cadence_seconds=60,
+    rec = await crepo.create_cron(
+        CronCreate(name="n3", host="h1", command="/bin/true-n3", schedule="* * * * *"),
+        who=WHO,
+        ip=IP,
     )
-    updated = await crepo.update_cron("c1", CronUpdate(schedule="*/5 * * * *"), who="t", ip=None)
-    assert updated.schedule == "*/5 * * * *"
-    assert updated.cadence_seconds == 300  # 5 minutes  # noqa: PLR2004
+    # Get audit count before PATCH
+    audit_before = await _audit_count(repo)
 
-
-@pytest.mark.asyncio
-async def test_update_cron_clear_both_schedule_and_cadence_raises(repo: SqliteRepository) -> None:
-    """Schedule cleared + cadence_seconds=0 violates merged-row constraint.
-
-    Covers repository.py lines 432-433.
-    """
-    crepo = CronRepo(repo)
-    await _seed_cron(
-        repo, id_="c1", name="n1", schedule="* * * * *", schedule_canonical="* * * * *"
-    )
-    with pytest.raises(ValueError, match="neither"):
-        await crepo.update_cron("c1", CronUpdate(schedule="", cadence_seconds=0), who="t", ip=None)
-
-
-@pytest.mark.asyncio
-async def test_update_cron_archive_emits_delete_verb(repo: SqliteRepository) -> None:
-    """PATCH archived_at to non-null emits crons.delete audit verb (covers line 462)."""
-    crepo = CronRepo(repo)
-    await _seed_cron(
-        repo, id_="c-arch", name="arch-test", schedule="* * * * *", schedule_canonical="* * * * *"
-    )
-    await crepo.update_cron("c-arch", CronUpdate(archived_at=utc_now_iso()), who="t", ip=None)
-    row = await repo.fetch_one(
-        text('SELECT what FROM audit_log WHERE what = :what ORDER BY "when" DESC LIMIT 1'),
-        {"what": "crons.delete"},
-    )
-    assert row is not None
-    assert row[0] == "crons.delete"
-
-
-@pytest.mark.asyncio
-async def test_update_cron_clear_schedule_with_cadence_zero_zeroes_mirror(
-    repo: SqliteRepository,
-) -> None:
-    """PATCH that clears schedule on a cron whose cadence is 0 — mirror stays 0.
-
-    Covers lines 421-424. This test exercises the path where existing.cadence_seconds
-    != 0 must be FALSE (cadence already 0). Otherwise the mirror gets zeroed; we check
-    that it stays 0.
-    """
-    crepo = CronRepo(repo)
-    # Create a cron with schedule + cadence already 0 (using INSERT to bypass validator)
-    async with repo.engine.begin() as conn:
-        await conn.execute(
-            text(
-                "INSERT INTO crons ("
-                "  id, name, host, command, schedule, schedule_canonical, "
-                "  cadence_seconds, expected_grace_seconds, integration_mode, "
-                "  enabled, last_seen_state, created_at, updated_at, archived_at"
-                ") VALUES ("
-                "  'c-zero', 'zero', 'h', '/x', '* * * * *', '* * * * *', "
-                "  60, 300, 'observe', 1, 'unknown', "
-                "  '2026-05-11T00:00:00+00:00', '2026-05-11T00:00:00+00:00', NULL"
-                ")"
-            )
-        )
-    # Now patch — clear schedule WITHOUT providing cadence; expect cadence to be zeroed
+    # PATCH both hidden_at and name simultaneously
+    now = utc_now_iso()
     updated = await crepo.update_cron(
-        "c-zero", CronUpdate(schedule="", cadence_seconds=120), who="t", ip=None
+        rec.fingerprint, CronUpdate(hidden_at=now, name="n3-renamed"), who=WHO, ip=IP
     )
-    assert updated.schedule == ""
-    assert updated.cadence_seconds == 120  # noqa: PLR2004
+    assert updated.hidden_at == now
+    assert updated.name == "n3-renamed"
 
+    # Verify that an audit row was created with the hide verb
+    # (line 413 selects "crons.hide" when went_to_hidden=True and other_fields_changed=True)
+    audit_after = await _audit_count(repo)
+    assert audit_after == audit_before + 1
 
-@pytest.mark.asyncio
-async def test_update_cron_archive_with_other_change_emits_delete_verb(
-    repo: SqliteRepository,
-) -> None:
-    """PATCH that archives + changes another field still emits crons.delete (covers line 462)."""
-    crepo = CronRepo(repo)
-    await _seed_cron(
-        repo, id_="c-mix", name="mix", schedule="* * * * *", schedule_canonical="* * * * *"
+    # Verify the audit row has verb "crons.hide" (not "crons.update")
+    audit_row = await repo.fetch_one(
+        text("SELECT what FROM audit_log WHERE what = 'crons.hide' ORDER BY \"when\" DESC LIMIT 1")
     )
-    # Patch with both archived_at AND another field
-    await crepo.update_cron(
-        "c-mix",
-        CronUpdate(archived_at=utc_now_iso(), expected_grace_seconds=600),
-        who="t",
-        ip=None,
-    )
-    row = await repo.fetch_one(
-        text('SELECT what FROM audit_log WHERE what LIKE :pat ORDER BY "when" DESC LIMIT 1'),
-        {"pat": "crons.%"},
-    )
-    assert row is not None
-    # The verb should be crons.delete (mixed change still treats archive as primary intent)
-    assert row[0] in ("crons.delete", "crons.update")  # accept either depending on impl
-
-
-@pytest.mark.asyncio
-async def test_update_cron_change_schedule_same_cadence_no_mirror_update(
-    repo: SqliteRepository,
-) -> None:
-    """PATCH schedule to expression with same cadence as stored: inner mirror block skipped.
-
-    Covers the False branch of 'if new_cadence != existing.cadence_seconds' at line 414.
-    """
-    crepo = CronRepo(repo)
-    await _seed_cron(
-        repo,
-        id_="c-same-cad",
-        name="same-cadence",
-        schedule="* * * * *",
-        schedule_canonical="* * * * *",
-        cadence_seconds=300,
-    )
-    updated = await crepo.update_cron(
-        "c-same-cad", CronUpdate(schedule="*/5 * * * *"), who="t", ip=None
-    )
-    assert updated.schedule == "*/5 * * * *"
-    assert updated.cadence_seconds == 300  # noqa: PLR2004
-
-
-@pytest.mark.asyncio
-async def test_update_cron_clear_schedule_without_cadence_zeroes_mirror_then_raises(
-    repo: SqliteRepository,
-) -> None:
-    """PATCH clears schedule without providing cadence: mirror zeroed then raises.
-
-    Covers lines 421-424 (mirror zeroing) AND 432-433 (at-least-one validation raise).
-    """
-    crepo = CronRepo(repo)
-    await _seed_cron(
-        repo,
-        id_="c-clear-sched",
-        name="clear-sched",
-        schedule="* * * * *",
-        schedule_canonical="* * * * *",
-        cadence_seconds=60,
-    )
-    with pytest.raises(ValueError, match="neither"):
-        await crepo.update_cron("c-clear-sched", CronUpdate(schedule=""), who="t", ip=None)
-
-
-@pytest.mark.asyncio
-async def test_update_cron_clear_schedule_when_cadence_already_zero_skips_mirror(
-    repo: SqliteRepository,
-) -> None:
-    """PATCH clears schedule when existing cadence is already 0: mirror block skipped.
-
-    Covers the False branch of 'if existing.cadence_seconds != 0:' at line 421
-    (the inner zeroing block is skipped because cadence is already zero), then
-    the at-least-one validation raises at line 432-433.
-    """
-    crepo = CronRepo(repo)
-    # Direct INSERT to bypass the create_cron xor validator and create a row
-    # where cadence is already 0 alongside a schedule (DB CHECK allows this).
-    async with repo.engine.begin() as conn:
-        await conn.execute(
-            text(
-                "INSERT INTO crons ("
-                "  id, name, host, command, schedule, schedule_canonical, "
-                "  cadence_seconds, expected_grace_seconds, integration_mode, "
-                "  enabled, last_seen_state, created_at, updated_at, archived_at"
-                ") VALUES ("
-                "  'c-zero-cad', 'zero-cad', 'h', '/x', '* * * * *', '* * * * *', "
-                "  0, 300, 'observe', 1, 'unknown', "
-                "  '2026-05-11T00:00:00+00:00', '2026-05-11T00:00:00+00:00', NULL"
-                ")"
-            )
-        )
-    # Patch clears schedule, no cadence_seconds in payload.
-    # Inner mirror block (421-424) skipped because existing.cadence_seconds == 0.
-    # Then at-least-one validation (432-433) raises.
-    with pytest.raises(ValueError, match="neither"):
-        await crepo.update_cron("c-zero-cad", CronUpdate(schedule=""), who="t", ip=None)
+    assert audit_row is not None
+    assert audit_row[0] == "crons.hide"

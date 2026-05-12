@@ -25,8 +25,11 @@ export function SchedulePreviewForExpr({ expr, count = 3 }: BaseProps & { expr: 
   return <PreviewList runs={query.data?.runs ?? []} />
 }
 
-export function SchedulePreviewForSaved({ cronId, count = 3 }: BaseProps & { cronId: string }) {
-  const query = usePreviewSavedCron(cronId, count, true)
+export function SchedulePreviewForSaved({
+  fingerprint,
+  count = 3,
+}: BaseProps & { fingerprint: string }) {
+  const query = usePreviewSavedCron(fingerprint, count, true)
 
   if (query.isLoading) {
     return <p className="text-sm text-muted-foreground">Calculating…</p>

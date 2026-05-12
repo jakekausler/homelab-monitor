@@ -6,16 +6,12 @@ import { z } from 'zod'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Select } from '@/components/ui/select'
 import { SchedulePreviewForExpr } from '@/components/crons/SchedulePreview'
-import { titleCase } from './badges'
 import type { components } from '@/api/schema'
 
 type CronCreate = components['schemas']['CronCreate']
 type CronUpdate = components['schemas']['CronUpdate']
 type CronOut = components['schemas']['CronOut']
-
-const integrationModes = ['observe', 'heartbeat', 'both'] as const
 
 /**
  * Zod schema with the SAME xor validation the backend enforces. Field-level
@@ -32,7 +28,6 @@ const cronFormSchema = z
     schedule: z.string().max(200).optional(),
     cadence_seconds: z.number().int().min(0).max(86400),
     expected_grace_seconds: z.number().int().min(0).max(86400),
-    integration_mode: z.enum(integrationModes),
     enabled: z.boolean(),
   })
   .superRefine((val, ctx) => {
@@ -99,7 +94,6 @@ export function CronForm({
         ? 0
         : (defaultValues?.cadence_seconds ?? 0),
     expected_grace_seconds: defaultValues?.expected_grace_seconds ?? 300,
-    integration_mode: defaultValues?.integration_mode ?? 'observe',
     enabled: defaultValues?.enabled ?? true,
   }
 
@@ -129,7 +123,7 @@ export function CronForm({
         ? defaultValues.cadence_seconds
         : 3600
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [defaultValues?.id])
+  }, [defaultValues?.fingerprint])
 
   const scheduleMode = form.watch('scheduleMode')
   const scheduleValue = form.watch('schedule') ?? ''
@@ -149,16 +143,24 @@ export function CronForm({
   }, [cadenceValue, scheduleMode])
 
   const submit = form.handleSubmit((values) => {
-    const payload: CronCreate | CronUpdate = {
-      name: values.name,
-      host: values.host,
-      command: values.command,
-      schedule: values.scheduleMode === 'schedule' ? (values.schedule ?? null) : null,
-      cadence_seconds: values.scheduleMode === 'cadence' ? values.cadence_seconds : 0,
-      expected_grace_seconds: values.expected_grace_seconds,
-      integration_mode: values.integration_mode,
-      enabled: values.enabled,
-    }
+    const payload: CronCreate | CronUpdate =
+      mode === 'create'
+        ? {
+            name: values.name,
+            host: values.host,
+            command: values.command,
+            schedule: values.scheduleMode === 'schedule' ? (values.schedule ?? null) : null,
+            cadence_seconds: values.scheduleMode === 'cadence' ? values.cadence_seconds : 0,
+            expected_grace_seconds: values.expected_grace_seconds,
+            enabled: values.enabled,
+          }
+        : {
+            // Edit mode: server-side CronUpdate whitelist is { name, expected_grace_seconds, enabled, hidden_at }.
+            // host, command, schedule, cadence_seconds, source_path are read-only post-creation per STAGE-002-003 D-spec.
+            name: values.name,
+            expected_grace_seconds: values.expected_grace_seconds,
+            enabled: values.enabled,
+          }
     void onSubmit(payload)
   })
 
@@ -184,24 +186,14 @@ export function CronForm({
         )}
       </div>
 
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-        <div className="space-y-2">
-          <Label htmlFor="cron-host">Host</Label>
-          <Input id="cron-host" {...form.register('host')} />
-          {form.formState.errors.host && (
-            <p role="alert" className="text-sm text-red-600">
-              {form.formState.errors.host.message}
-            </p>
-          )}
-        </div>
-        <div className="space-y-2">
-          <Label htmlFor="cron-mode">Integration mode</Label>
-          <Select id="cron-mode" {...form.register('integration_mode')}>
-            <option value="observe">{titleCase('observe')}</option>
-            <option value="heartbeat">{titleCase('heartbeat')}</option>
-            <option value="both">{titleCase('both')}</option>
-          </Select>
-        </div>
+      <div className="space-y-2">
+        <Label htmlFor="cron-host">Host</Label>
+        <Input id="cron-host" {...form.register('host')} />
+        {form.formState.errors.host && (
+          <p role="alert" className="text-sm text-red-600">
+            {form.formState.errors.host.message}
+          </p>
+        )}
       </div>
 
       <div className="space-y-2">

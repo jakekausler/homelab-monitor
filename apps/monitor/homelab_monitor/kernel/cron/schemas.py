@@ -29,7 +29,6 @@ from homelab_monitor.kernel.cron.schedule import (
     canonicalize_schedule,
 )
 
-IntegrationMode = Literal["observe", "heartbeat", "both"]
 LastSeenState = Literal["unknown", "running", "ok", "failed", "late"]
 
 
@@ -51,18 +50,17 @@ class CronListQuery(BaseModel):
     page: int = Field(default=1, ge=1)
     page_size: int = Field(default=100, ge=1, le=500)
     host: str | None = Field(default=None, max_length=200)
-    integration_mode: IntegrationMode | None = None
     enabled: bool | None = None
     state: LastSeenState | None = None
     q: str | None = Field(default=None, max_length=200)
-    include_archived: bool = False
+    include_hidden: bool = False
 
 
 class PreviewRunsQuery(BaseModel):
     """Query params for both preview-runs endpoints.
 
     Used by:
-    - ``GET /api/crons/{id}/preview-runs?count=N`` (saved cron)
+    - ``GET /api/crons/{fingerprint}/preview-runs?count=N`` (saved cron)
     - ``GET /api/crons/preview-runs?expr=...&count=N`` (unsaved input from
       add-cron modal). For the unsaved form ``expr`` is required; for the
       saved form ``expr`` is omitted (router never asks for it).
@@ -92,7 +90,7 @@ class PreviewRunsQuery(BaseModel):
 
 
 class CronCreate(BaseModel):
-    """Body for ``POST /api/crons``.
+    """Body for the deprecated ``POST /api/crons`` (gone in STAGE-002-004).
 
     Exactly one of ``schedule`` (non-empty cron expression) OR
     ``cadence_seconds`` (>0) must be set. Both-set or neither-set yields 422.
@@ -106,8 +104,8 @@ class CronCreate(BaseModel):
     schedule: str | None = Field(default=None, min_length=1, max_length=200)
     cadence_seconds: int = Field(default=0, ge=0, le=86_400)
     expected_grace_seconds: int = Field(default=300, ge=0, le=86_400)
-    integration_mode: IntegrationMode = "observe"
     enabled: bool = True
+    source_path: str | None = Field(default=None, min_length=1, max_length=500)
 
     @field_validator("schedule")
     @classmethod
@@ -134,65 +132,20 @@ class CronCreate(BaseModel):
 
 
 class CronUpdate(BaseModel):
-    """Body for ``PATCH /api/crons/{id}``.
+    """Body for ``PATCH /api/crons/{fingerprint}``. Editable fields only.
 
-    All fields optional. The xor invariant is rechecked at the repo layer
-    against the merged (current + provided) row state — Pydantic only
-    enforces local consistency when BOTH fields are supplied in the same
-    request.
-
-    ``archived_at``: pass an ISO-8601 string to soft-delete (audit verb
-    becomes ``crons.delete``); pass ``null`` to restore (audit verb becomes
-    ``crons.restore``).
+    Per the derived-state model, the user can only edit policy fields. The
+    cron's identity (host/source_path/schedule/command) is read-only — to
+    change identity, the user edits the underlying crontab and rediscovery
+    creates a new fingerprinted row.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     name: str | None = Field(default=None, min_length=1, max_length=200)
-    host: str | None = Field(default=None, min_length=1, max_length=200)
-    command: str | None = Field(default=None, min_length=1, max_length=2000)
-    schedule: str | None = Field(default=None, max_length=200)
-    cadence_seconds: int | None = Field(default=None, ge=0, le=86_400)
     expected_grace_seconds: int | None = Field(default=None, ge=0, le=86_400)
-    integration_mode: IntegrationMode | None = None
     enabled: bool | None = None
-    archived_at: str | None = Field(default=None, max_length=64)
-    # archived_at sentinel: clients pass null to RESTORE; passing the literal
-    # string "" is rejected. To distinguish "not provided" from "set to null"
-    # we use ``model_fields_set`` at the repo layer.
-
-    @field_validator("schedule")
-    @classmethod
-    def _validate_schedule(cls, v: str | None) -> str | None:
-        if v is None or v == "":  # pragma: no cover
-            return v
-        try:
-            canonicalize_schedule(v)
-        except (
-            InvalidCronExpression
-        ) as exc:  # pragma: no cover -- defense in depth, repo validator rejects first
-            raise ValueError(str(exc)) from exc
-        return v
-
-    @model_validator(mode="after")
-    def _validate_xor_when_both_supplied(self) -> CronUpdate:
-        """Local xor check: only fires if BOTH schedule and cadence are in payload.
-
-        Repo layer does the full check against merged state.
-        """
-        provided = self.model_fields_set
-        if "schedule" in provided and "cadence_seconds" in provided:
-            sched = self.schedule
-            cad = self.cadence_seconds or 0
-            has_schedule = sched is not None and sched.strip() != ""
-            has_cadence = cad > 0
-            if has_schedule and has_cadence:
-                msg = "set at most one of schedule or cadence_seconds (got both)"
-                raise ValueError(msg)
-            if not has_schedule and not has_cadence:
-                msg = "set at least one of schedule or cadence_seconds (got neither)"
-                raise ValueError(msg)
-        return self
+    hidden_at: str | None = Field(default=None, max_length=64)
 
 
 # ---------- Response models ----------
@@ -201,13 +154,13 @@ class CronUpdate(BaseModel):
 class HeartbeatStateOut(BaseModel):
     """Public projection of a ``heartbeats_state`` row.
 
-    Mirrors ``HeartbeatStateRecord`` from heartbeat/repository.py but with
+    Mirrors ``HeartbeatStateRecord`` from cron/repository.py but with
     Pydantic for serialization. Used inside ``CronWithStateOut``.
     """
 
     model_config = ConfigDict(extra="forbid")
 
-    cron_id: str
+    cron_fingerprint: str
     current_state: LastSeenState
     last_start_at: str | None
     last_ok_at: str | None
@@ -224,7 +177,7 @@ class CronOut(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    id: str
+    fingerprint: str
     name: str
     host: str
     command: str
@@ -232,12 +185,13 @@ class CronOut(BaseModel):
     schedule_canonical: str | None
     cadence_seconds: int
     expected_grace_seconds: int
-    integration_mode: IntegrationMode
     enabled: bool
     last_seen_state: LastSeenState
     created_at: str
     updated_at: str
-    archived_at: str | None
+    hidden_at: str | None
+    source_path: str | None
+    wrapper_installed_at: str | None
 
 
 class CronListResponse(BaseModel):
@@ -252,7 +206,7 @@ class CronListResponse(BaseModel):
 
 
 class CronWithStateOut(BaseModel):
-    """Combined cron + heartbeat state for ``GET /api/crons/{id}``."""
+    """Combined cron + heartbeat state for ``GET /api/crons/{fingerprint}``."""
 
     model_config = ConfigDict(extra="forbid")
 

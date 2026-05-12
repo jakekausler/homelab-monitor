@@ -534,7 +534,7 @@
       },
       "CronCreate": {
         "additionalProperties": false,
-        "description": "Body for ``POST /api/crons``.\n\nExactly one of ``schedule`` (non-empty cron expression) OR\n``cadence_seconds`` (>0) must be set. Both-set or neither-set yields 422.",
+        "description": "Body for the deprecated ``POST /api/crons`` (gone in STAGE-002-004).\n\nExactly one of ``schedule`` (non-empty cron expression) OR\n``cadence_seconds`` (>0) must be set. Both-set or neither-set yields 422.",
         "properties": {
           "cadence_seconds": {
             "default": 0,
@@ -567,16 +567,6 @@
             "title": "Host",
             "type": "string"
           },
-          "integration_mode": {
-            "default": "observe",
-            "enum": [
-              "observe",
-              "heartbeat",
-              "both"
-            ],
-            "title": "Integration Mode",
-            "type": "string"
-          },
           "name": {
             "maxLength": 200,
             "minLength": 1,
@@ -595,6 +585,19 @@
               }
             ],
             "title": "Schedule"
+          },
+          "source_path": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Path"
           }
         },
         "required": [
@@ -642,17 +645,6 @@
         "additionalProperties": false,
         "description": "Public projection of a ``crons`` row.",
         "properties": {
-          "archived_at": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Archived At"
-          },
           "cadence_seconds": {
             "title": "Cadence Seconds",
             "type": "integer"
@@ -673,21 +665,23 @@
             "title": "Expected Grace Seconds",
             "type": "integer"
           },
+          "fingerprint": {
+            "title": "Fingerprint",
+            "type": "string"
+          },
+          "hidden_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hidden At"
+          },
           "host": {
             "title": "Host",
-            "type": "string"
-          },
-          "id": {
-            "title": "Id",
-            "type": "string"
-          },
-          "integration_mode": {
-            "enum": [
-              "observe",
-              "heartbeat",
-              "both"
-            ],
-            "title": "Integration Mode",
             "type": "string"
           },
           "last_seen_state": {
@@ -727,13 +721,35 @@
             ],
             "title": "Schedule Canonical"
           },
+          "source_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Path"
+          },
           "updated_at": {
             "title": "Updated At",
             "type": "string"
+          },
+          "wrapper_installed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wrapper Installed At"
           }
         },
         "required": [
-          "id",
+          "fingerprint",
           "name",
           "host",
           "command",
@@ -741,58 +757,21 @@
           "schedule_canonical",
           "cadence_seconds",
           "expected_grace_seconds",
-          "integration_mode",
           "enabled",
           "last_seen_state",
           "created_at",
           "updated_at",
-          "archived_at"
+          "hidden_at",
+          "source_path",
+          "wrapper_installed_at"
         ],
         "title": "CronOut",
         "type": "object"
       },
       "CronUpdate": {
         "additionalProperties": false,
-        "description": "Body for ``PATCH /api/crons/{id}``.\n\nAll fields optional. The xor invariant is rechecked at the repo layer\nagainst the merged (current + provided) row state \u2014 Pydantic only\nenforces local consistency when BOTH fields are supplied in the same\nrequest.\n\n``archived_at``: pass an ISO-8601 string to soft-delete (audit verb\nbecomes ``crons.delete``); pass ``null`` to restore (audit verb becomes\n``crons.restore``).",
+        "description": "Body for ``PATCH /api/crons/{fingerprint}``. Editable fields only.\n\nPer the derived-state model, the user can only edit policy fields. The\ncron's identity (host/source_path/schedule/command) is read-only \u2014 to\nchange identity, the user edits the underlying crontab and rediscovery\ncreates a new fingerprinted row.",
         "properties": {
-          "archived_at": {
-            "anyOf": [
-              {
-                "maxLength": 64,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Archived At"
-          },
-          "cadence_seconds": {
-            "anyOf": [
-              {
-                "maximum": 86400.0,
-                "minimum": 0.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Cadence Seconds"
-          },
-          "command": {
-            "anyOf": [
-              {
-                "maxLength": 2000,
-                "minLength": 1,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Command"
-          },
           "enabled": {
             "anyOf": [
               {
@@ -817,34 +796,17 @@
             ],
             "title": "Expected Grace Seconds"
           },
-          "host": {
+          "hidden_at": {
             "anyOf": [
               {
-                "maxLength": 200,
-                "minLength": 1,
+                "maxLength": 64,
                 "type": "string"
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Host"
-          },
-          "integration_mode": {
-            "anyOf": [
-              {
-                "enum": [
-                  "observe",
-                  "heartbeat",
-                  "both"
-                ],
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Integration Mode"
+            "title": "Hidden At"
           },
           "name": {
             "anyOf": [
@@ -858,18 +820,6 @@
               }
             ],
             "title": "Name"
-          },
-          "schedule": {
-            "anyOf": [
-              {
-                "maxLength": 200,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Schedule"
           }
         },
         "title": "CronUpdate",
@@ -877,7 +827,7 @@
       },
       "CronWithStateOut": {
         "additionalProperties": false,
-        "description": "Combined cron + heartbeat state for ``GET /api/crons/{id}``.",
+        "description": "Combined cron + heartbeat state for ``GET /api/crons/{fingerprint}``.",
         "properties": {
           "cron": {
             "$ref": "#/components/schemas/CronOut"
@@ -1006,10 +956,10 @@
       },
       "HeartbeatStateOut": {
         "additionalProperties": false,
-        "description": "Public projection of a ``heartbeats_state`` row.\n\nMirrors ``HeartbeatStateRecord`` from heartbeat/repository.py but with\nPydantic for serialization. Used inside ``CronWithStateOut``.",
+        "description": "Public projection of a ``heartbeats_state`` row.\n\nMirrors ``HeartbeatStateRecord`` from cron/repository.py but with\nPydantic for serialization. Used inside ``CronWithStateOut``.",
         "properties": {
-          "cron_id": {
-            "title": "Cron Id",
+          "cron_fingerprint": {
+            "title": "Cron Fingerprint",
             "type": "string"
           },
           "current_state": {
@@ -1099,7 +1049,7 @@
           }
         },
         "required": [
-          "cron_id",
+          "cron_fingerprint",
           "current_state",
           "last_start_at",
           "last_ok_at",
@@ -2191,27 +2141,6 @@
           },
           {
             "in": "query",
-            "name": "integration_mode",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "enum": [
-                    "observe",
-                    "heartbeat",
-                    "both"
-                  ],
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Integration Mode"
-            }
-          },
-          {
-            "in": "query",
             "name": "enabled",
             "required": false,
             "schema": {
@@ -2267,11 +2196,11 @@
           },
           {
             "in": "query",
-            "name": "include_archived",
+            "name": "include_hidden",
             "required": false,
             "schema": {
               "default": false,
-              "title": "Include Archived",
+              "title": "Include Hidden",
               "type": "boolean"
             }
           }
@@ -2404,17 +2333,17 @@
         ]
       }
     },
-    "/api/crons/{cron_id}": {
+    "/api/crons/{fingerprint}": {
       "delete": {
-        "description": "Soft-delete (archive) a cron. 404 if missing OR already archived.",
-        "operationId": "delete_cron_api_crons__cron_id__delete",
+        "description": "Soft-delete (hide) a cron. 404 if missing OR already hidden.",
+        "operationId": "delete_cron_api_crons__fingerprint__delete",
         "parameters": [
           {
             "in": "path",
-            "name": "cron_id",
+            "name": "fingerprint",
             "required": true,
             "schema": {
-              "title": "Cron Id",
+              "title": "Fingerprint",
               "type": "string"
             }
           }
@@ -2440,25 +2369,25 @@
         ]
       },
       "get": {
-        "description": "Return a single cron + its joined heartbeat state.\n\nBy default archived crons return 404; pass ``?include_archived=true``\nfor admin recovery flows.",
-        "operationId": "get_cron_api_crons__cron_id__get",
+        "description": "Return a single cron + its joined heartbeat state.\n\nBy default hidden crons return 404; pass ``?include_hidden=true``\nfor admin recovery flows.",
+        "operationId": "get_cron_api_crons__fingerprint__get",
         "parameters": [
           {
             "in": "path",
-            "name": "cron_id",
+            "name": "fingerprint",
             "required": true,
             "schema": {
-              "title": "Cron Id",
+              "title": "Fingerprint",
               "type": "string"
             }
           },
           {
             "in": "query",
-            "name": "include_archived",
+            "name": "include_hidden",
             "required": false,
             "schema": {
               "default": false,
-              "title": "Include Archived",
+              "title": "Include Hidden",
               "type": "boolean"
             }
           }
@@ -2492,14 +2421,14 @@
       },
       "patch": {
         "description": "Partial update of a cron. Empty diff returns 200 with no audit row.",
-        "operationId": "update_cron_api_crons__cron_id__patch",
+        "operationId": "update_cron_api_crons__fingerprint__patch",
         "parameters": [
           {
             "in": "path",
-            "name": "cron_id",
+            "name": "fingerprint",
             "required": true,
             "schema": {
-              "title": "Cron Id",
+              "title": "Fingerprint",
               "type": "string"
             }
           }
@@ -2542,17 +2471,17 @@
         ]
       }
     },
-    "/api/crons/{cron_id}/preview-runs": {
+    "/api/crons/{fingerprint}/preview-runs": {
       "get": {
         "description": "Preview the next N fire times for a saved cron's schedule.\n\n404 if the cron is missing OR has no schedule (cadence-only cron has no\nschedule to preview).",
-        "operationId": "preview_runs_saved_api_crons__cron_id__preview_runs_get",
+        "operationId": "preview_runs_saved_api_crons__fingerprint__preview_runs_get",
         "parameters": [
           {
             "in": "path",
-            "name": "cron_id",
+            "name": "fingerprint",
             "required": true,
             "schema": {
-              "title": "Cron Id",
+              "title": "Fingerprint",
               "type": "string"
             }
           },
@@ -2628,17 +2557,17 @@
         "summary": "Stream Events"
       }
     },
-    "/api/hb/{cron_id}/fail": {
+    "/api/hb/{fingerprint}/fail": {
       "post": {
-        "description": "Record a ``/fail`` ping for ``cron_id``. Optional ``?duration``, ``?exit_code``.",
-        "operationId": "receive_fail_api_hb__cron_id__fail_post",
+        "description": "Record a ``/fail`` ping for ``fingerprint``. Optional ``?duration``, ``?exit_code``.",
+        "operationId": "receive_fail_api_hb__fingerprint__fail_post",
         "parameters": [
           {
             "in": "path",
-            "name": "cron_id",
+            "name": "fingerprint",
             "required": true,
             "schema": {
-              "title": "Cron Id",
+              "title": "Fingerprint",
               "type": "string"
             }
           },
@@ -2696,17 +2625,17 @@
         ]
       }
     },
-    "/api/hb/{cron_id}/ok": {
+    "/api/hb/{fingerprint}/ok": {
       "post": {
-        "description": "Record an ``/ok`` ping for ``cron_id``. Optional ``?duration=<seconds>``.\n\nNOTE: Prometheus metric emission is deferred to STAGE-002-006 \u2014 this\nhandler does not touch the prometheus registry. The state write to\n``heartbeats_state`` is sufficient; the future metric collector reads\nfrom that table on each scrape.",
-        "operationId": "receive_ok_api_hb__cron_id__ok_post",
+        "description": "Record an ``/ok`` ping for ``fingerprint``. Optional ``?duration=<seconds>``.\n\nNOTE: Prometheus metric emission is deferred to STAGE-002-006 \u2014 this\nhandler does not touch the prometheus registry. The state write to\n``heartbeats_state`` is sufficient; the future metric collector reads\nfrom that table on each scrape.",
+        "operationId": "receive_ok_api_hb__fingerprint__ok_post",
         "parameters": [
           {
             "in": "path",
-            "name": "cron_id",
+            "name": "fingerprint",
             "required": true,
             "schema": {
-              "title": "Cron Id",
+              "title": "Fingerprint",
               "type": "string"
             }
           },
@@ -2748,17 +2677,17 @@
         ]
       }
     },
-    "/api/hb/{cron_id}/start": {
+    "/api/hb/{fingerprint}/start": {
       "post": {
-        "description": "Record a ``/start`` ping for ``cron_id``.",
-        "operationId": "receive_start_api_hb__cron_id__start_post",
+        "description": "Record a ``/start`` ping for ``fingerprint``.",
+        "operationId": "receive_start_api_hb__fingerprint__start_post",
         "parameters": [
           {
             "in": "path",
-            "name": "cron_id",
+            "name": "fingerprint",
             "required": true,
             "schema": {
-              "title": "Cron Id",
+              "title": "Fingerprint",
               "type": "string"
             }
           }

@@ -28,7 +28,7 @@ vi.mock('@/lib/relativeTime', () => ({
   formatRelative: () => 'never',
 }))
 
-function renderPage(cronId?: string) {
+function renderPage(fingerprint?: string) {
   const rootRoute = createRootRoute({ component: () => <Outlet /> })
   const inventoryRoute = createRoute({
     getParentRoute: () => rootRoute,
@@ -42,7 +42,7 @@ function renderPage(cronId?: string) {
   })
   const cronDetailRoute = createRoute({
     getParentRoute: () => inventoryRoute,
-    path: '/crons/$cronId',
+    path: '/crons/$fingerprint',
     component: CronDetailPage,
   })
   const noIdRoute = createRoute({
@@ -50,7 +50,7 @@ function renderPage(cronId?: string) {
     path: '/',
     component: CronDetailPage,
   })
-  const initialPath = cronId ? `/inventory/crons/${cronId}` : '/'
+  const initialPath = fingerprint ? `/inventory/crons/${fingerprint}` : '/'
   const router = createRouter({
     routeTree: rootRoute.addChildren([
       inventoryRoute.addChildren([cronsRoute, cronDetailRoute]),
@@ -72,12 +72,12 @@ describe('CronDetailPage', () => {
     expect(await screen.findByRole('link', { name: /Back to crons/i })).toBeInTheDocument()
   })
 
-  it('renders missing cron id message when no cronId param', async () => {
+  it('renders missing cron fingerprint message when no fingerprint param', async () => {
     renderPage()
-    expect(await screen.findByText(/Missing cron id/i)).toBeInTheDocument()
+    expect(await screen.findByText(/Missing cron fingerprint/i)).toBeInTheDocument()
   })
 
-  it('renders CronDetail (not found state) when cronId is present', async () => {
+  it('renders CronDetail (not found state) when fingerprint is present', async () => {
     renderPage('c1')
     expect(await screen.findByText(/Cron not found/i)).toBeInTheDocument()
   })

@@ -1,4 +1,4 @@
-"""POST /api/hb/{cron_id}/{start|ok|fail} -- heartbeat receiver.
+"""POST /api/hb/{fingerprint}/{start|ok|fail} -- heartbeat receiver.
 
 Auth: API token with ``Scope.HEARTBEAT_WRITE`` (single global token per
 Decision 3). Per-cron rate-limiting (Decision 3a) defends against spoofed
@@ -7,11 +7,6 @@ ping floods if the global token leaks.
 State recorded atomically into ``heartbeats_state`` + mirrored to
 ``crons.last_seen_state`` + audit row in ONE transaction (Decision 4 mirror,
 dual-write through ``HeartbeatRepo._record_state_transition``).
-
-observe-mode crons receiving any of /start, /ok, /fail get the same
-recording as heartbeat-mode crons PLUS a structlog warning
-``heartbeat.received_in_observe_mode`` (Decision 1a). The receiver does NOT
-auto-promote ``integration_mode``.
 
 404 (cron unknown) does NOT write an audit row -- no state change occurred.
 429 (rate-limited) does NOT write an audit row -- request never executed.
@@ -60,22 +55,22 @@ def _client_ip(request: Request) -> str | None:
 
 async def _resolve_cron_or_404(
     repo: HeartbeatRepo,
-    cron_id: str,
+    fingerprint: str,
 ) -> CronRecord:
-    cron = await repo.get_cron(cron_id)
+    cron = await repo.get_cron(fingerprint)
     if cron is None:
-        raise NotFoundProblem(message=f"cron not found: {cron_id}")
+        raise NotFoundProblem(message=f"cron not found: {fingerprint}")
     return cron
 
 
-def _enforce_rate_limit(cron_id: str) -> None:
+def _enforce_rate_limit(fingerprint: str) -> None:
     """Raise a Response-shaped 429 by setting headers on a dedicated exception path.
 
     We use FastAPI's HTTPException via ``HttpProblem``-equivalent to attach
     ``Retry-After``. Returning a Response from a dependency wouldn't compose;
     raising surfaces through the registered HTTP problem handler.
     """
-    allowed, retry_after = cron_rate_limiter.try_acquire(cron_id)
+    allowed, retry_after = cron_rate_limiter.try_acquire(fingerprint)
     if allowed:
         return
     # Round retry_after up to the nearest integer second per RFC 7231 §7.1.3
@@ -95,99 +90,87 @@ class _RateLimitedError(Exception):
 _log: BoundLogger = cast(BoundLogger, structlog.get_logger().bind(component="heartbeat.receiver"))
 
 
-def _maybe_log_observe_warning(cron: CronRecord, endpoint: str) -> None:
-    if cron.integration_mode == "observe":
-        _log.warning(
-            "heartbeat.received_in_observe_mode",
-            cron_id=cron.id,
-            endpoint=endpoint,
-        )
-
-
 # ---- routes -----------------------------------------------------------------
 
 
-@router.post("/{cron_id}/start", status_code=204)
+@router.post("/{fingerprint}/start", status_code=204)
 async def receive_start(
-    cron_id: str,
+    fingerprint: str,
     request: Request,
     token: Annotated[ApiToken, Depends(require_token_scope(Scope.HEARTBEAT_WRITE))],
     repo: Annotated[HeartbeatRepo, Depends(get_heartbeat_repo)],
     _query: Annotated[HeartbeatStartQuery, Depends(query_model(HeartbeatStartQuery))],
 ) -> Response:
-    """Record a ``/start`` ping for ``cron_id``."""
-    cron = await _resolve_cron_or_404(repo, cron_id)
+    """Record a ``/start`` ping for ``fingerprint``."""
+    await _resolve_cron_or_404(repo, fingerprint)
     try:
-        _enforce_rate_limit(cron_id)
+        _enforce_rate_limit(fingerprint)
     except _RateLimitedError as exc:
         return _rate_limited_response(exc)
-    _maybe_log_observe_warning(cron, endpoint="start")
     state = await repo.record_start(
-        cron_id,
+        fingerprint,
         who=token.name,
         ip=_client_ip(request),
     )
     _log.info(
         "heartbeat.start.received",
-        cron_id=cron_id,
+        cron_fingerprint=fingerprint,
         streak=state.current_streak,
     )
     return Response(status_code=204)
 
 
-@router.post("/{cron_id}/ok", status_code=204)
+@router.post("/{fingerprint}/ok", status_code=204)
 async def receive_ok(
-    cron_id: str,
+    fingerprint: str,
     request: Request,
     token: Annotated[ApiToken, Depends(require_token_scope(Scope.HEARTBEAT_WRITE))],
     repo: Annotated[HeartbeatRepo, Depends(get_heartbeat_repo)],
     query: Annotated[HeartbeatOkQuery, Depends(query_model(HeartbeatOkQuery))],
 ) -> Response:
-    """Record an ``/ok`` ping for ``cron_id``. Optional ``?duration=<seconds>``.
+    """Record an ``/ok`` ping for ``fingerprint``. Optional ``?duration=<seconds>``.
 
     NOTE: Prometheus metric emission is deferred to STAGE-002-006 — this
     handler does not touch the prometheus registry. The state write to
     ``heartbeats_state`` is sufficient; the future metric collector reads
     from that table on each scrape.
     """
-    cron = await _resolve_cron_or_404(repo, cron_id)
+    await _resolve_cron_or_404(repo, fingerprint)
     try:
-        _enforce_rate_limit(cron_id)
+        _enforce_rate_limit(fingerprint)
     except _RateLimitedError as exc:
         return _rate_limited_response(exc)
-    _maybe_log_observe_warning(cron, endpoint="ok")
     state = await repo.record_ok(
-        cron_id,
+        fingerprint,
         duration_seconds=query.duration,
         who=token.name,
         ip=_client_ip(request),
     )
     _log.info(
         "heartbeat.ok.received",
-        cron_id=cron_id,
+        cron_fingerprint=fingerprint,
         duration_seconds=query.duration,
         streak=state.current_streak,
     )
     return Response(status_code=204)
 
 
-@router.post("/{cron_id}/fail", status_code=204)
+@router.post("/{fingerprint}/fail", status_code=204)
 async def receive_fail(
-    cron_id: str,
+    fingerprint: str,
     request: Request,
     token: Annotated[ApiToken, Depends(require_token_scope(Scope.HEARTBEAT_WRITE))],
     repo: Annotated[HeartbeatRepo, Depends(get_heartbeat_repo)],
     query: Annotated[HeartbeatFailQuery, Depends(query_model(HeartbeatFailQuery))],
 ) -> Response:
-    """Record a ``/fail`` ping for ``cron_id``. Optional ``?duration``, ``?exit_code``."""
-    cron = await _resolve_cron_or_404(repo, cron_id)
+    """Record a ``/fail`` ping for ``fingerprint``. Optional ``?duration``, ``?exit_code``."""
+    await _resolve_cron_or_404(repo, fingerprint)
     try:
-        _enforce_rate_limit(cron_id)
+        _enforce_rate_limit(fingerprint)
     except _RateLimitedError as exc:
         return _rate_limited_response(exc)
-    _maybe_log_observe_warning(cron, endpoint="fail")
     state = await repo.record_fail(
-        cron_id,
+        fingerprint,
         duration_seconds=query.duration,
         exit_code=query.exit_code,
         who=token.name,
@@ -195,7 +178,7 @@ async def receive_fail(
     )
     _log.info(
         "heartbeat.fail.received",
-        cron_id=cron_id,
+        cron_fingerprint=fingerprint,
         exit_code=query.exit_code,
         streak=state.current_streak,
     )

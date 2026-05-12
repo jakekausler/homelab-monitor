@@ -1,20 +1,6 @@
 import { Badge } from '@/components/ui/badge'
 import { capitalize as titleCase } from '@/lib/text'
 
-const MODE_VARIANT = {
-  observe: 'muted',
-  heartbeat: 'default',
-  both: 'secondary',
-} as const
-
-export function ModeBadge({ mode }: { mode: 'observe' | 'heartbeat' | 'both' }) {
-  return (
-    <Badge variant={MODE_VARIANT[mode]} aria-label={`Integration mode ${mode}`}>
-      {titleCase(mode)}
-    </Badge>
-  )
-}
-
 const STATE_VARIANT = {
   unknown: 'muted',
   running: 'default',

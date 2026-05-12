@@ -14,22 +14,20 @@ export function CronsListPage() {
 
   const filters: ToolbarFilters = {
     ...(search.host !== undefined && { host: search.host }),
-    ...(search.integration_mode !== undefined && { integration_mode: search.integration_mode }),
     ...(search.state !== undefined && { state: search.state }),
     ...(search.enabled !== undefined && { enabled: search.enabled }),
     ...(search.q !== undefined && { q: search.q }),
-    include_archived: search.include_archived ?? false,
+    include_hidden: search.include_hidden ?? false,
   }
 
   const list = useListCrons({
     page: search.page ?? 1,
     page_size: search.page_size ?? 100,
     ...(filters.host !== undefined && { host: filters.host }),
-    ...(filters.integration_mode !== undefined && { integration_mode: filters.integration_mode }),
     ...(filters.state !== undefined && { state: filters.state }),
     ...(filters.enabled !== undefined && { enabled: filters.enabled }),
     ...(filters.q !== undefined && { q: filters.q }),
-    include_archived: filters.include_archived,
+    include_hidden: filters.include_hidden,
   })
 
   const knownHosts = useMemo(() => {
@@ -44,11 +42,10 @@ export function CronsListPage() {
         page: 1,
         page_size: search.page_size ?? 100,
         ...(next.host !== undefined && { host: next.host }),
-        ...(next.integration_mode !== undefined && { integration_mode: next.integration_mode }),
         ...(next.state !== undefined && { state: next.state }),
         ...(next.enabled !== undefined && { enabled: next.enabled }),
         ...(next.q !== undefined && { q: next.q }),
-        include_archived: next.include_archived,
+        include_hidden: next.include_hidden,
       },
     })
   }
@@ -85,13 +82,10 @@ export function CronsListPage() {
                 page: p,
                 page_size: search.page_size ?? 100,
                 ...(search.host !== undefined && { host: search.host }),
-                ...(search.integration_mode !== undefined && {
-                  integration_mode: search.integration_mode,
-                }),
                 ...(search.state !== undefined && { state: search.state }),
                 ...(search.enabled !== undefined && { enabled: search.enabled }),
                 ...(search.q !== undefined && { q: search.q }),
-                include_archived: search.include_archived ?? false,
+                include_hidden: search.include_hidden ?? false,
               },
             })
           }

@@ -8,11 +8,10 @@ import { titleCase } from './badges'
 
 export interface ToolbarFilters {
   host?: string
-  integration_mode?: 'observe' | 'heartbeat' | 'both'
   state?: 'unknown' | 'running' | 'ok' | 'failed' | 'late'
   enabled?: boolean
   q?: string
-  include_archived: boolean
+  include_hidden: boolean
 }
 
 export interface CronsToolbarProps {
@@ -87,26 +86,6 @@ export function CronsToolbar({
       </Select>
 
       <Select
-        aria-label="Filter by integration mode"
-        className="w-auto"
-        value={filters.integration_mode ?? ''}
-        onChange={(e) => {
-          const next = { ...filters }
-          if ((e.target.value as ToolbarFilters['integration_mode'] | '') === '') {
-            delete next.integration_mode
-          } else {
-            next.integration_mode = e.target.value as 'observe' | 'heartbeat' | 'both'
-          }
-          update(next)
-        }}
-      >
-        <option value="">All modes</option>
-        <option value="observe">{titleCase('observe')}</option>
-        <option value="heartbeat">{titleCase('heartbeat')}</option>
-        <option value="both">{titleCase('both')}</option>
-      </Select>
-
-      <Select
         aria-label="Filter by state"
         className="w-auto"
         value={filters.state ?? ''}
@@ -131,10 +110,10 @@ export function CronsToolbar({
       <label className="flex items-center gap-2 text-sm">
         <input
           type="checkbox"
-          checked={filters.include_archived}
-          onChange={(e) => update({ ...filters, include_archived: e.target.checked })}
+          checked={filters.include_hidden}
+          onChange={(e) => update({ ...filters, include_hidden: e.target.checked })}
         />
-        Show archived
+        Show hidden
       </label>
 
       <div className="ml-auto flex gap-2">
