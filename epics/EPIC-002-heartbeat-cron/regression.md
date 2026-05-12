@@ -26,3 +26,18 @@
 - [ ] **AddCronModal** — opens via toolbar button; submit POSTs and closes; new row appears in list
 - [ ] **ConfirmDeleteModal** — heading "Archive cron?"; button text "Archive"/"Archiving…" when isDeleting; type-cron-name to enable
 - [ ] **Mobile (390px)** — Archive modal scrolls with max-h-[calc(100vh-2rem)] overflow-y-auto; CronsTable collapses to mobile layout
+
+## STAGE-002-003 (Cron schema redesign — fingerprint identity, drop integration_mode, rename archived_at→hidden_at)
+
+- [x] **compute_fingerprint stability** — `compute_fingerprint(host, source_path, schedule, command)` returns 64-char lowercase hex SHA256; same tuple → same fp; deterministic across processes
+- [x] **compute_fingerprint sensitivity** — Changing any of (host, source_path, schedule, command) produces a distinct fp; NULL source_path ≠ empty string source_path
+- [x] **Migration 0008 upgrade** — `alembic upgrade head` from any prior revision applies 0008 cleanly; schema has `fingerprint PK`, `hidden_at`, `source_path`, `wrapper_installed_at`; no `id`, `integration_mode`, or `archived_at`
+- [x] **Migration 0008 downgrade** — `alembic downgrade 0007` restores legacy schema; all post-redesign data lost (documented destructive behavior)
+- [x] **Migration 0008 seed gating** — `HOMELAB_MONITOR_INCLUDE_DEMO_SEEDS=1` enables 4 demo seed rows on upgrade; unset = no seeds (production default)
+- [x] **Migration 0008 seed audit_log bypass** — Seed inserts emit ZERO `audit_log` rows (per D5); only runtime discovery emits `crons.discover`
+- [x] **Heartbeat receiver fingerprint URLs** — `POST /api/hb/{fingerprint}/ok|fail|start` returns 204 on known fingerprint; 404 on unknown fingerprint (incl. zeros)
+- [x] **Heartbeat receiver hidden cron 404** — `POST /api/hb/{fp}/ok` where `crons.hidden_at IS NOT NULL` returns 404 (D2a cross-stage; `_SELECT_CRON_SQL` filters)
+- [x] **API CronCreate field shape** — POST /api/crons accepts `host, name, command, schedule, cadence_seconds, expected_grace_seconds, enabled, source_path`; no `integration_mode`; server computes fingerprint as PK
+- [x] **API CronUpdate whitelist** — PATCH /api/crons/{fp} accepts ONLY `name, expected_grace_seconds, enabled, hidden_at`; rejects all other fields with HTTP 422 (`extra_forbidden`)
+- [x] **API CronOut field shape** — GET /api/crons and /api/crons/{fp} return `fingerprint, hidden_at, source_path, wrapper_installed_at`; do NOT return `id`, `integration_mode`, or `archived_at`
+- [x] **Audit verb taxonomy** — `crons.create`, `crons.update`, `crons.hide`, `crons.unhide`; PATCH that sets `hidden_at != null` emits `crons.hide`; PATCH that sets `hidden_at = null` emits `crons.unhide`
