@@ -16,7 +16,7 @@ describe('ConfirmDeleteModal', () => {
         onConfirm={vi.fn()}
       />,
     )
-    expect(screen.queryByText(/Soft-delete cron/i)).toBeNull()
+    expect(screen.queryByText(/Archive cron/i)).toBeNull()
   })
 
   it('renders cron name in confirmation instruction', () => {
@@ -40,7 +40,7 @@ describe('ConfirmDeleteModal', () => {
         onConfirm={vi.fn()}
       />,
     )
-    const btn = screen.getByRole('button', { name: /Soft-delete/i })
+    const btn = screen.getByRole('button', { name: /Archive/i })
     expect(btn).toBeDisabled()
 
     const user = userEvent.setup()
@@ -60,7 +60,7 @@ describe('ConfirmDeleteModal', () => {
     )
     const user = userEvent.setup()
     await user.type(screen.getByRole('textbox'), 'my-cron')
-    await user.click(screen.getByRole('button', { name: /Soft-delete/i }))
+    await user.click(screen.getByRole('button', { name: /Archive/i }))
     expect(onConfirm).toHaveBeenCalledTimes(1)
   })
 
@@ -77,7 +77,7 @@ describe('ConfirmDeleteModal', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('Delete failed')
   })
 
-  it('shows Deleting… on the button when isDeleting is true', async () => {
+  it('shows Archiving… on the button when isDeleting is true', async () => {
     render(
       <ConfirmDeleteModal
         open={true}
@@ -89,7 +89,7 @@ describe('ConfirmDeleteModal', () => {
     )
     const user = userEvent.setup()
     await user.type(screen.getByRole('textbox'), 'my-cron')
-    expect(screen.getByRole('button', { name: /Deleting/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Archiving/i })).toBeInTheDocument()
   })
 
   it('resets typed value when dialog closes', async () => {

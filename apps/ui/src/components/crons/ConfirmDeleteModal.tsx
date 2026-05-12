@@ -42,7 +42,7 @@ export function ConfirmDeleteModal({
     >
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Soft-delete cron?</DialogTitle>
+          <DialogTitle>Archive cron?</DialogTitle>
           <DialogDescription>
             This archives the cron. Heartbeats from this cron will return 404 until restored. Type
             the cron name to confirm.
@@ -75,7 +75,7 @@ export function ConfirmDeleteModal({
               void onConfirm()
             }}
           >
-            {isDeleting ? 'Deleting…' : 'Soft-delete'}
+            {isDeleting ? 'Archiving…' : 'Archive'}
           </Button>
         </DialogFooter>
       </DialogContent>

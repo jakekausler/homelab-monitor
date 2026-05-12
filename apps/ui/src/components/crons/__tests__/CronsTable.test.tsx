@@ -66,8 +66,8 @@ describe('CronsTable', () => {
     expect(await screen.findByText('daily-backup')).toBeInTheDocument()
     expect(screen.getByText('host-a')).toBeInTheDocument()
     expect(screen.getByText('0 4 * * *')).toBeInTheDocument()
-    expect(screen.getByText('observe')).toBeInTheDocument()
-    expect(screen.getByText('ok')).toBeInTheDocument()
+    expect(screen.getByText('Observe')).toBeInTheDocument()
+    expect(screen.getByText('Ok')).toBeInTheDocument()
   })
 
   it('renders cadence-only crons with "every Xs" text', async () => {

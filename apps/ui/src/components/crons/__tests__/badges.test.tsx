@@ -6,7 +6,7 @@ import { ModeBadge, StateBadge } from '@/components/crons/badges'
 describe('ModeBadge', () => {
   it('renders the mode label', () => {
     render(<ModeBadge mode="heartbeat" />)
-    expect(screen.getByText('heartbeat')).toBeInTheDocument()
+    expect(screen.getByText('Heartbeat')).toBeInTheDocument()
   })
 
   it('uses an aria-label describing the mode', () => {
@@ -18,7 +18,7 @@ describe('ModeBadge', () => {
 describe('StateBadge', () => {
   it('renders ok state', () => {
     render(<StateBadge state="ok" />)
-    expect(screen.getByText('ok')).toBeInTheDocument()
+    expect(screen.getByText('Ok')).toBeInTheDocument()
   })
 
   it('renders failed state with critical aria-label', () => {

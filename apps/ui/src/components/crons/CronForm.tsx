@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { useForm, Controller } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select } from '@/components/ui/select'
 import { SchedulePreviewForExpr } from '@/components/crons/SchedulePreview'
+import { titleCase } from './badges'
 import type { components } from '@/api/schema'
 
 type CronCreate = components['schemas']['CronCreate']
@@ -93,7 +94,10 @@ export function CronForm({
           ? 'cadence'
           : 'schedule',
     schedule: defaultValues?.schedule ?? '',
-    cadence_seconds: defaultValues?.cadence_seconds ?? 0,
+    cadence_seconds:
+      defaultValues?.schedule !== null && defaultValues?.schedule !== undefined
+        ? 0
+        : (defaultValues?.cadence_seconds ?? 0),
     expected_grace_seconds: defaultValues?.expected_grace_seconds ?? 300,
     integration_mode: defaultValues?.integration_mode ?? 'observe',
     enabled: defaultValues?.enabled ?? true,
@@ -104,13 +108,45 @@ export function CronForm({
     defaultValues: initial,
   })
 
+  // Seed from raw defaultValues so flipping a cadence-driven cron to schedule
+  // mode preserves any schedule the backend mirrors (or falls back to a
+  // hint default if the cron is truly cadence-only).
+  const lastScheduleRef = useRef(defaultValues?.schedule || '0 * * * *')
+  // Seed from raw defaultValues. For schedule-driven crons the backend mirrors
+  // a croniter average-interval here; we want that as the "last cadence" so
+  // a schedule→cadence flip shows the meaningful value instead of 3600.
+  const lastCadenceRef = useRef(
+    defaultValues?.cadence_seconds !== undefined && defaultValues.cadence_seconds > 0
+      ? defaultValues.cadence_seconds
+      : 3600,
+  )
+
   useEffect(() => {
     form.reset(initial)
+    lastScheduleRef.current = defaultValues?.schedule || '0 * * * *'
+    lastCadenceRef.current =
+      defaultValues?.cadence_seconds !== undefined && defaultValues.cadence_seconds > 0
+        ? defaultValues.cadence_seconds
+        : 3600
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [defaultValues?.id])
 
   const scheduleMode = form.watch('scheduleMode')
   const scheduleValue = form.watch('schedule') ?? ''
+
+  // Track schedule changes to preserve when switching modes
+  useEffect(() => {
+    if (scheduleMode === 'schedule' && scheduleValue) {
+      lastScheduleRef.current = scheduleValue
+    }
+  }, [scheduleValue, scheduleMode])
+
+  const cadenceValue = form.watch('cadence_seconds')
+  useEffect(() => {
+    if (scheduleMode === 'cadence' && cadenceValue > 0) {
+      lastCadenceRef.current = cadenceValue
+    }
+  }, [cadenceValue, scheduleMode])
 
   const submit = form.handleSubmit((values) => {
     const payload: CronCreate | CronUpdate = {
@@ -161,9 +197,9 @@ export function CronForm({
         <div className="space-y-2">
           <Label htmlFor="cron-mode">Integration mode</Label>
           <Select id="cron-mode" {...form.register('integration_mode')}>
-            <option value="observe">observe</option>
-            <option value="heartbeat">heartbeat</option>
-            <option value="both">both</option>
+            <option value="observe">{titleCase('observe')}</option>
+            <option value="heartbeat">{titleCase('heartbeat')}</option>
+            <option value="both">{titleCase('both')}</option>
           </Select>
         </div>
       </div>
@@ -182,18 +218,81 @@ export function CronForm({
         <legend className="px-1 text-sm font-medium">Schedule</legend>
         <div className="flex gap-4 text-sm">
           <label className="flex items-center gap-2">
-            <input type="radio" value="schedule" {...form.register('scheduleMode')} />
+            <input
+              type="radio"
+              value="schedule"
+              {...form.register('scheduleMode')}
+              onChange={(e) => {
+                if (e.target.checked) {
+                  const currentCadence = form.getValues('cadence_seconds')
+                  if (currentCadence > 0) {
+                    lastCadenceRef.current = currentCadence
+                  }
+                  const restoreSchedule = lastScheduleRef.current || '0 * * * *'
+                  form.setValue('scheduleMode', 'schedule', {
+                    shouldDirty: true,
+                    shouldTouch: true,
+                    shouldValidate: true,
+                  })
+                  form.setValue('schedule', restoreSchedule, {
+                    shouldDirty: true,
+                    shouldTouch: true,
+                    shouldValidate: true,
+                  })
+                  form.setValue('cadence_seconds', 0, {
+                    shouldDirty: true,
+                    shouldTouch: true,
+                    shouldValidate: true,
+                  })
+                }
+              }}
+            />
             Cron expression
           </label>
           <label className="flex items-center gap-2">
-            <input type="radio" value="cadence" {...form.register('scheduleMode')} />
+            <input
+              type="radio"
+              value="cadence"
+              {...form.register('scheduleMode')}
+              onChange={(e) => {
+                if (e.target.checked) {
+                  const currentSchedule = form.getValues('schedule')
+                  if (currentSchedule) {
+                    lastScheduleRef.current = currentSchedule
+                  }
+                  form.setValue('scheduleMode', 'cadence', {
+                    shouldDirty: true,
+                    shouldTouch: true,
+                    shouldValidate: true,
+                  })
+                  form.setValue('schedule', '', {
+                    shouldDirty: true,
+                    shouldTouch: true,
+                    shouldValidate: true,
+                  })
+                  form.setValue(
+                    'cadence_seconds',
+                    lastCadenceRef.current > 0 ? lastCadenceRef.current : 3600,
+                    { shouldDirty: true, shouldTouch: true, shouldValidate: true },
+                  )
+                }
+              }}
+            />
             Cadence (seconds)
           </label>
         </div>
 
         {scheduleMode === 'schedule' ? (
           <div className="space-y-2">
+            {/*
+              Explicit key forces React to remount the input on mode swap.
+              Without it, React reuses the DOM node and the prior branch's
+              type="number" persists on the text input, causing the browser
+              to coerce cron-expression values (e.g. five-field "every 5 min"
+              expressions) to "0".
+            */}
             <Input
+              key="schedule-input"
               placeholder="*/5 * * * *"
               aria-label="Cron expression"
               {...form.register('schedule')}
@@ -212,7 +311,9 @@ export function CronForm({
           </div>
         ) : (
           <div className="space-y-2">
+            {/* See `key="schedule-input"` above — pairs with this remount key. */}
             <Input
+              key="cadence-input"
               type="number"
               min={1}
               max={86400}

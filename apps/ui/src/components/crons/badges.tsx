@@ -1,4 +1,5 @@
 import { Badge } from '@/components/ui/badge'
+import { capitalize as titleCase } from '@/lib/text'
 
 const MODE_VARIANT = {
   observe: 'muted',
@@ -9,7 +10,7 @@ const MODE_VARIANT = {
 export function ModeBadge({ mode }: { mode: 'observe' | 'heartbeat' | 'both' }) {
   return (
     <Badge variant={MODE_VARIANT[mode]} aria-label={`Integration mode ${mode}`}>
-      {mode}
+      {titleCase(mode)}
     </Badge>
   )
 }
@@ -25,7 +26,10 @@ const STATE_VARIANT = {
 export function StateBadge({ state }: { state: 'unknown' | 'running' | 'ok' | 'failed' | 'late' }) {
   return (
     <Badge variant={STATE_VARIANT[state]} aria-label={`Last seen state ${state}`}>
-      {state}
+      {titleCase(state)}
     </Badge>
   )
 }
+
+// Re-exported for backward-compatible imports from the crons module.
+export { titleCase }

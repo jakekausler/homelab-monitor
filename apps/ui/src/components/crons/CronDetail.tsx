@@ -50,6 +50,19 @@ export function CronDetail({ cronId }: CronDetailProps) {
     setEditError(null)
     try {
       await update.mutateAsync(body)
+      void navigate({
+        to: '/inventory/crons',
+        search: {
+          page: 1,
+          page_size: 100,
+          host: undefined,
+          integration_mode: undefined,
+          enabled: undefined,
+          state: undefined,
+          q: undefined,
+          include_archived: false,
+        },
+      })
     } catch (err) {
       setEditError(err instanceof ApiError ? err.message : 'Update failed')
     }
@@ -69,6 +82,9 @@ export function CronDetail({ cronId }: CronDetailProps) {
     try {
       await softDelete.mutateAsync()
       setDeleteOpen(false)
+      // include_archived:true keeps the just-archived row visible on the list
+      // (with its `archived` badge); otherwise the row vanishes and the user
+      // can't tell whether the action took effect.
       void navigate({
         to: '/inventory/crons',
         search: {
@@ -79,7 +95,7 @@ export function CronDetail({ cronId }: CronDetailProps) {
           enabled: undefined,
           state: undefined,
           q: undefined,
-          include_archived: false,
+          include_archived: true,
         },
       })
     } catch (err) {
@@ -112,7 +128,7 @@ export function CronDetail({ cronId }: CronDetailProps) {
             </Button>
           ) : (
             <Button variant="destructive" onClick={() => setDeleteOpen(true)}>
-              Soft-delete
+              Archive
             </Button>
           )}
         </div>

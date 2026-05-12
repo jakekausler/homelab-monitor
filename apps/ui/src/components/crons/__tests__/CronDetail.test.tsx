@@ -108,7 +108,7 @@ describe('CronDetail', () => {
     expect(await screen.findByText(/Cron not found/i)).toBeInTheDocument()
   })
 
-  it('renders cron name and Soft-delete button for active cron', async () => {
+  it('renders cron name and Archive button for active cron', async () => {
     vi.mocked(useGetCron).mockReturnValue({
       isLoading: false,
       error: null,
@@ -116,7 +116,7 @@ describe('CronDetail', () => {
     } as unknown as ReturnType<typeof useGetCron>)
     renderInRouter(<CronDetail cronId="c1" />)
     expect(await screen.findByText('daily-backup')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /Soft-delete/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Archive/i })).toBeInTheDocument()
   })
 
   it('renders Restore button for archived cron', async () => {
@@ -160,16 +160,16 @@ describe('CronDetail', () => {
     expect(screen.getByText('5')).toBeInTheDocument()
   })
 
-  it('opens delete modal when Soft-delete button is clicked', async () => {
+  it('opens delete modal when Archive button is clicked', async () => {
     vi.mocked(useGetCron).mockReturnValue({
       isLoading: false,
       error: null,
       data: { cron: sampleCron, state: null },
     } as unknown as ReturnType<typeof useGetCron>)
     renderInRouter(<CronDetail cronId="c1" />)
-    const deleteBtn = await screen.findByRole('button', { name: /Soft-delete/i })
+    const deleteBtn = await screen.findByRole('button', { name: /Archive/i })
     await userEvent.setup().click(deleteBtn)
-    expect(await screen.findByText(/Soft-delete cron\?/i)).toBeInTheDocument()
+    expect(await screen.findByText(/Archive cron\?/i)).toBeInTheDocument()
   })
 
   it('shows cadence-based schedule preview message when schedule is null', async () => {

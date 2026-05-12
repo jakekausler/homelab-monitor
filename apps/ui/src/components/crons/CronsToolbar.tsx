@@ -4,6 +4,7 @@ import { Plus, Search } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
+import { titleCase } from './badges'
 
 export interface ToolbarFilters {
   host?: string
@@ -100,9 +101,9 @@ export function CronsToolbar({
         }}
       >
         <option value="">All modes</option>
-        <option value="observe">observe</option>
-        <option value="heartbeat">heartbeat</option>
-        <option value="both">both</option>
+        <option value="observe">{titleCase('observe')}</option>
+        <option value="heartbeat">{titleCase('heartbeat')}</option>
+        <option value="both">{titleCase('both')}</option>
       </Select>
 
       <Select
@@ -120,11 +121,11 @@ export function CronsToolbar({
         }}
       >
         <option value="">All states</option>
-        <option value="unknown">unknown</option>
-        <option value="running">running</option>
-        <option value="ok">ok</option>
-        <option value="failed">failed</option>
-        <option value="late">late</option>
+        <option value="unknown">{titleCase('unknown')}</option>
+        <option value="running">{titleCase('running')}</option>
+        <option value="ok">{titleCase('ok')}</option>
+        <option value="failed">{titleCase('failed')}</option>
+        <option value="late">{titleCase('late')}</option>
       </Select>
 
       <label className="flex items-center gap-2 text-sm">
