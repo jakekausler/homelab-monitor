@@ -38,7 +38,7 @@ After EPIC-002 is complete, EPIC-003+ can rely on: an authoritative cron registr
 | Stage         | Name                                                                  | Status      |
 | ------------- | --------------------------------------------------------------------- | ----------- |
 | STAGE-002-001 | Heartbeat receiver + `crons`/`heartbeats_state` schema + audit         | Complete |
-| STAGE-002-002 | Cron registry CRUD API + Inventory "Crons" tab UI                     | Build (Complete) |
+| STAGE-002-002 | Cron registry CRUD API + Inventory "Crons" tab UI                     | Complete |
 | STAGE-002-003 | Schema redesign — fingerprint identity, drop integration_mode, rename archived_at→hidden_at, add source_path + wrapper_installed_at | Not Started |
 | STAGE-002-004 | API removal — drop POST /api/crons + AddCronModal + CronCreate + create-mode of CronForm | Not Started |
 | STAGE-002-005 | `/api/hb/{fingerprint}/register` endpoint + heartbeat receiver behavior change | Not Started |
@@ -48,8 +48,8 @@ After EPIC-002 is complete, EPIC-003+ can rely on: an authoritative cron registr
 | STAGE-002-009 | Wrapper helpers — REWORKED to embed fingerprint at install time, call /register first, "Install heartbeat" UI button local-host only (was 005) | Not Started |
 | STAGE-002-010 | vmalert rules — REWORKED to include wrapper-health alert via separate monitoring-health channel (was 006) | Not Started |
 
-## Current Stage: STAGE-002-002
-## Current Phase: Build (Complete)
+## Current Stage: STAGE-002-003
+## Current Phase: Not Started
 
 ## Cross-stage acceptance criteria
 
