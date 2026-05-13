@@ -33,6 +33,9 @@ Same as EPIC-001 plus:
 - **Setup instructions never include the private key.** They include the public key the user adds to `authorized_keys`. The private key stays on our side, in the secrets store.
 - **Forced-commands enforced.** A test probe verifies that connecting and trying to run an arbitrary command fails (because `command="..."` restricts to one).
 - **Per-target user.** The Synology user is `homelab-monitor-probe`; never `root`, never `admin`. Document.
+- **STAGE-002-006 cross-epic criterion (added 2026-05-12):** When SSH-pull cron discovery or SSH-push wrapper install ships in this epic, two STAGE-002-006 UI elements need updating:
+  1. The `source_path IS NULL` remote-cron banner in `apps/ui/src/routes/inventory/CronDetail.tsx` MUST be removed (or trigger condition updated) for remote crons whose source files become readable via SSH-pull discovery.
+  2. The disabled "Install heartbeat wrapper" button in the Actions panel of CronDetail.tsx (introduced disabled in STAGE-002-006, enabled for local hosts in STAGE-002-009) needs to be enabled for remote hosts when SSH-push wrapper install ships. The tooltip currently reads: "Local install ships in STAGE-002-009. Remote install requires cross-host work in EPIC-015 / EPIC-017." Replace the disabled state with a functional button OR remove the EPIC-017 reference from the tooltip when this epic delivers the remote-install path.
 
 ## Dependencies
 

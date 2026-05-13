@@ -30,6 +30,7 @@ Same as EPIC-001 plus:
 - **Netdata's own UI is auth-gated** through our reverse proxy; never exposed directly to the LAN.
 - **Resource budget enforced.** Netdata is the heaviest sidecar in our stack (~200-500 MB); if its measured RSS exceeds the configured cap, an alert fires and we surface a recommendation in Tool Analysis to reduce its scope.
 - **The shadow-rule pair is the integration test.** EPIC-001's canonical e2e tests do not change; this epic adds shadow-rule-pair-tested alerts to the rig.
+- **STAGE-002-006 cross-epic criterion (added 2026-05-12):** When agent-push cross-host cron discovery ships in this epic, the `source_path IS NULL` remote-cron banner in `apps/ui/src/routes/inventory/CronDetail.tsx` (introduced in STAGE-002-006) MUST be removed (or updated) for newly-discovered remote crons whose `source_path` becomes populated via the new discovery mechanism. The banner copy currently reads: "Remote cron on `<host>`. The monitor doesn't have direct file access to this host. Wrapper-based heartbeats are the only signal." Update the trigger condition (the banner shows only when `source_path IS NULL`) so the banner stops showing for newly-enrolled hosts whose disk-source files become readable via the agent push.
 
 ## Dependencies
 

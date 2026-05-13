@@ -81,3 +81,24 @@ When making changes to the heartbeat receiver or cron schema, re-verify:
 
 9. **Migration 0009 round-trip:**
    The `wrapper_installed_at` → `wrapper_last_seen_at` rename must round-trip cleanly via alembic upgrade + downgrade.
+
+## STAGE-002-006 — UI redesign (4-panel detail page + Archive→Hide + Remote banner + sonner toasts)
+
+When making changes to the cron inventory UI, re-verify:
+
+1. **Cron detail page header:** cron name + StateBadge + "Remote" badge (when source_path null) + "Hidden" badge (when hidden_at set). Host · Command subtitle.
+2. **4-panel grid layout:** at `lg:` (1024px+) renders 2x2; below 1024px stacks 1-column in order: Heartbeat state → Disk source → Monitoring policy → Actions.
+3. **Heartbeat state panel:** current_state, current_streak, last_ok_at, last_fail_at, expected_next_at, last_duration_seconds, last_exit_code, "Wrapper last seen <ts>" OR "No wrapper installed".
+4. **Disk source panel:** host, source_path, schedule, command. Blue info banner at top of panel when source_path is null: "Remote cron on `<host>`. The monitor doesn't have direct file access to this host. Wrapper-based heartbeats are the only signal."
+5. **Monitoring policy panel:** CronForm editable (name, expected_grace_seconds, enabled). Save → `toast.success("Cron updated")` (sonner top-right).
+6. **Actions panel:** Hide/Unhide button + disabled "Install heartbeat wrapper" button with tooltip ("Local install ships in STAGE-002-009. Remote install requires cross-host work in EPIC-015 / EPIC-017.").
+7. **Hide button:** click → `toast.success("Cron hidden")` → STAYS on detail page (no navigation). Refetch shows "Hidden" badge in header. In-flight text: "Hiding…".
+8. **Unhide button (on hidden cron):** click → `toast.success("Cron restored")`. In-flight text: "Unhiding…".
+9. **No confirmation modal** — silent hide pattern (per STAGE-002-004 lock).
+10. **No wrapper handshake history panel** (removed during Refinement of this stage — wrapper refreshes don't represent meaningful state changes).
+11. **List view CronsTable:** Name + Host (with "Remote" badge for null source_path) + Schedule + State + Last OK + Wrapper column (✓ when wrapper_last_seen_at set) + Hidden column (badge when hidden_at set).
+12. **List view CronsToolbar:** search, host select, state select, "Wrapper installed" dropdown (Any wrapper / Wrapper installed / No wrapper), "Show hidden" checkbox. NO "+ Add cron" button.
+13. **Empty state copy:** "No crons yet. Crons will appear here once they are discovered or have registered a heartbeat."
+14. **sonner Toaster** mounted at app root (top-right, richColors).
+15. **sonner Toaster mount:** verify `<Toaster position="top-right" richColors />` is mounted in `apps/ui/src/routes/__root.tsx` inside the TooltipProvider, before the main `<Outlet />`. Toasts appear top-right and use richColors styling.
+16. **`wrapper_installed` URL search param round-trips through bookmarks:** opening `/inventory/crons?wrapper_installed=true` filters the list to crons with `wrapper_last_seen_at !== null` AND the toolbar dropdown reflects "Wrapper installed". Setting/clearing the toolbar updates the URL. Bookmarking + reopening the URL restores the filter state.
