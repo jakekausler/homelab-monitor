@@ -1,5 +1,6 @@
 import { Link } from '@tanstack/react-router'
 
+import { Badge } from '@/components/ui/badge'
 import { StateBadge } from '@/components/crons/badges'
 import { formatRelative } from '@/lib/relativeTime'
 import type { Schema } from '@/api/types'
@@ -23,7 +24,8 @@ export function CronsTable({ items, isLoading, emptyHint }: CronsTableProps) {
   if (items.length === 0) {
     return (
       <div className="rounded-md border border-border bg-card p-6 text-center text-sm text-muted-foreground">
-        {emptyHint ?? 'No crons yet. Click "Add cron" to register your first.'}
+        {emptyHint ??
+          'No crons yet. Crons will appear here once they are discovered or have registered a heartbeat.'}
       </div>
     )
   }
@@ -48,7 +50,10 @@ export function CronsTable({ items, isLoading, emptyHint }: CronsTableProps) {
               Last OK
             </th>
             <th scope="col" className="px-3 py-2 text-left">
-              Enabled
+              Wrapper
+            </th>
+            <th scope="col" className="px-3 py-2 text-left">
+              Hidden
             </th>
           </tr>
         </thead>
@@ -64,7 +69,18 @@ export function CronsTable({ items, isLoading, emptyHint }: CronsTableProps) {
                   {c.name}
                 </Link>
               </td>
-              <td className="px-3 py-2 text-muted-foreground">{c.host}</td>
+              <td className="px-3 py-2 text-muted-foreground">
+                <span>{c.host}</span>
+                {c.source_path === null && (
+                  <Badge
+                    variant="secondary"
+                    className="ml-2"
+                    aria-label="Remote cron (no disk source)"
+                  >
+                    Remote
+                  </Badge>
+                )}
+              </td>
               <td className="px-3 py-2 font-mono text-xs">
                 {c.schedule ?? `every ${String(c.cadence_seconds)}s`}
               </td>
@@ -72,11 +88,17 @@ export function CronsTable({ items, isLoading, emptyHint }: CronsTableProps) {
                 <StateBadge state={c.last_seen_state} />
               </td>
               <td className="px-3 py-2 text-xs text-muted-foreground">—</td>
-              <td className="px-3 py-2 text-xs">
-                {c.enabled ? 'Yes' : 'No'}
-                {c.hidden_at !== null && (
-                  <span className="ml-2 rounded bg-muted px-1 text-muted-foreground">archived</span>
+              <td className="px-3 py-2 text-xs" data-testid="wrapper-cell">
+                {c.wrapper_last_seen_at !== null ? (
+                  <Badge variant="secondary" aria-label="Wrapper installed">
+                    ✓
+                  </Badge>
+                ) : (
+                  <span className="text-muted-foreground">—</span>
                 )}
+              </td>
+              <td className="px-3 py-2 text-xs">
+                {c.hidden_at !== null && <Badge variant="secondary">Hidden</Badge>}
               </td>
             </tr>
           ))}

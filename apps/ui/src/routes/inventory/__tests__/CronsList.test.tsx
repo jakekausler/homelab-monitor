@@ -8,6 +8,7 @@ import {
   createRouter,
 } from '@tanstack/react-router'
 import { cleanup, render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { CronsListPage } from '@/routes/inventory/CronsList'
@@ -40,14 +41,14 @@ const sampleCron: CronOut = {
   updated_at: '2026-05-01T00:00:00Z',
   hidden_at: null,
   source_path: null,
-  wrapper_installed_at: null,
+  wrapper_last_seen_at: null,
 }
 
 function renderPage(search = '') {
   const rootRoute = createRootRoute({ component: () => <Outlet /> })
   const protectedRoute = createRoute({
     getParentRoute: () => rootRoute,
-    path: '/protected',
+    id: 'protected',
     component: () => <Outlet />,
   })
   const inventoryRoute = createRoute({
@@ -59,13 +60,30 @@ function renderPage(search = '') {
     getParentRoute: () => inventoryRoute,
     path: '/crons',
     component: CronsListPage,
+    validateSearch: (search: Record<string, unknown>) => ({
+      page: search.page !== undefined ? Number(search.page) : undefined,
+      page_size: search.page_size !== undefined ? Number(search.page_size) : undefined,
+      q: typeof search.q === 'string' ? search.q : undefined,
+      state:
+        typeof search.state === 'string'
+          ? (search.state as 'unknown' | 'running' | 'ok' | 'failed' | 'late')
+          : undefined,
+      host: typeof search.host === 'string' ? search.host : undefined,
+      include_hidden: search.include_hidden === true || search.include_hidden === 'true',
+      wrapper_installed:
+        search.wrapper_installed === true || search.wrapper_installed === 'true'
+          ? true
+          : search.wrapper_installed === false || search.wrapper_installed === 'false'
+            ? false
+            : undefined,
+    }),
   })
   const cronDetailRoute = createRoute({
     getParentRoute: () => cronsRoute,
     path: '/$cronId',
     component: () => null,
   })
-  const path = `/protected/inventory/crons${search}`
+  const path = `/inventory/crons${search}`
   const router = createRouter({
     routeTree: rootRoute.addChildren([
       protectedRoute.addChildren([
@@ -168,5 +186,38 @@ describe('CronsListPage', () => {
     renderPage('?page=1&page_size=5')
     expect(await screen.findByText(/Page 1 of 10/i)).toBeInTheDocument()
     expect(screen.getByText(/50 crons/i)).toBeInTheDocument()
+  })
+
+  it('Next button click navigates to page 2', async () => {
+    const items = Array.from({ length: 5 }, (_, i) => ({
+      ...sampleCron,
+      name: `cron-${i}`,
+    }))
+    vi.mocked(useListCrons).mockReturnValue({
+      isLoading: false,
+      error: null,
+      data: { items, total: 50 },
+    } as unknown as ReturnType<typeof useListCrons>)
+    renderPage('?page=1&page_size=5')
+    const next = await screen.findByRole('button', { name: /Next/i })
+    await userEvent.setup().click(next)
+    // After navigation, page summary text updates to page 2
+    expect(await screen.findByText(/Page 2 of 10/i)).toBeInTheDocument()
+  })
+
+  it('Previous button click navigates back to page 1', async () => {
+    const items = Array.from({ length: 5 }, (_, i) => ({
+      ...sampleCron,
+      name: `cron-${i}`,
+    }))
+    vi.mocked(useListCrons).mockReturnValue({
+      isLoading: false,
+      error: null,
+      data: { items, total: 50 },
+    } as unknown as ReturnType<typeof useListCrons>)
+    renderPage('?page=2&page_size=5')
+    const prev = await screen.findByRole('button', { name: /Previous/i })
+    await userEvent.setup().click(prev)
+    expect(await screen.findByText(/Page 1 of 10/i)).toBeInTheDocument()
   })
 })

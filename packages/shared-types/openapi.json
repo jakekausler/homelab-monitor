@@ -2175,6 +2175,22 @@
               "title": "Include Hidden",
               "type": "boolean"
             }
+          },
+          {
+            "in": "query",
+            "name": "wrapper_installed",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Wrapper Installed"
+            }
           }
         ],
         "responses": {

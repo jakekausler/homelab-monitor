@@ -1,14 +1,14 @@
-import { useState } from 'react'
-import { useNavigate } from '@tanstack/react-router'
+import { toast } from 'sonner'
 
 import { ApiError } from '@/api/client'
-import { useGetCron, useSoftDeleteCron, useUpdateCron } from '@/api/crons'
+import { useGetCron, useHideCron, useUpdateCron } from '@/api/crons'
 import type { Schema } from '@/api/types'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { StateBadge } from '@/components/crons/badges'
 import { CronForm } from '@/components/crons/CronForm'
-import { SchedulePreviewForSaved } from '@/components/crons/SchedulePreview'
 import { formatAbsolute, formatRelative } from '@/lib/relativeTime'
 
 type CronUpdate = Schema<'CronUpdate'>
@@ -18,11 +18,9 @@ export interface CronDetailProps {
 }
 
 export function CronDetail({ fingerprint }: CronDetailProps) {
-  const navigate = useNavigate()
   const detail = useGetCron(fingerprint, { includeHidden: true })
   const update = useUpdateCron(fingerprint)
-  const softDelete = useSoftDeleteCron(fingerprint)
-  const [editError, setEditError] = useState<string | null>(null)
+  const hide = useHideCron(fingerprint)
 
   if (detail.isLoading) {
     return <p className="text-muted-foreground">Loading cron…</p>
@@ -41,149 +39,258 @@ export function CronDetail({ fingerprint }: CronDetailProps) {
   const cron = detail.data.cron
   const state = detail.data.state
   const isHidden = cron.hidden_at !== null
+  const isRemote = cron.source_path === null
 
   const handleSave = async (body: CronUpdate) => {
-    setEditError(null)
     try {
       await update.mutateAsync(body)
-      void navigate({
-        to: '/inventory/crons',
-        search: {
-          page: 1,
-          page_size: 100,
-          host: undefined,
-          enabled: undefined,
-          state: undefined,
-          q: undefined,
-          include_hidden: false,
-        },
-      })
+      toast.success('Cron updated')
     } catch (err) {
-      setEditError(err instanceof ApiError ? err.message : 'Update failed')
+      const msg = err instanceof ApiError ? err.message : 'Update failed'
+      toast.error(msg)
     }
   }
 
-  const handleRestore = async () => {
-    setEditError(null)
+  const handleHide = async () => {
+    try {
+      await hide.mutateAsync()
+      toast.success('Cron hidden')
+    } catch (err) {
+      const msg = err instanceof ApiError ? err.message : 'Hide failed'
+      toast.error(msg)
+    }
+  }
+
+  const handleUnhide = async () => {
     try {
       await update.mutateAsync({ hidden_at: null })
+      toast.success('Cron restored')
     } catch (err) {
-      setEditError(err instanceof ApiError ? err.message : 'Restore failed')
-    }
-  }
-
-  const handleDelete = async () => {
-    try {
-      await softDelete.mutateAsync()
-      // include_hidden:true keeps the just-archived row visible on the list
-      // (with its `archived` badge); otherwise the row vanishes and the user
-      // can't tell whether the action took effect.
-      void navigate({
-        to: '/inventory/crons',
-        search: {
-          page: 1,
-          page_size: 100,
-          host: undefined,
-          enabled: undefined,
-          state: undefined,
-          q: undefined,
-          include_hidden: true,
-        },
-      })
-    } catch (err) {
-      // TODO(STAGE-002-006): surface Archive failures via toast/snackbar.
-      // Currently silent (errors only logged); user retried via Restore from the list.
-      console.error('soft-delete failed', err)
+      const msg = err instanceof ApiError ? err.message : 'Restore failed'
+      toast.error(msg)
     }
   }
 
   return (
     <div className="space-y-6">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-2">
-            <h1 className="text-2xl font-semibold tracking-tight">{cron.name}</h1>
-            <StateBadge state={cron.last_seen_state} />
-            {isHidden && (
-              <span className="rounded bg-muted px-2 py-0.5 text-xs text-muted-foreground">
-                archived
-              </span>
-            )}
-          </div>
-          <p className="mt-1 text-sm text-muted-foreground">
-            {cron.host} · <span className="font-mono">{cron.command}</span>
-          </p>
+      <div>
+        <div className="flex items-center gap-2">
+          <h1 className="text-2xl font-semibold tracking-tight">{cron.name}</h1>
+          <StateBadge state={cron.last_seen_state} />
+          {isRemote && <Badge variant="secondary">Remote</Badge>}
+          {isHidden && <Badge variant="muted">Hidden</Badge>}
         </div>
-        <div className="flex gap-2">
+        <p className="mt-1 text-sm text-muted-foreground">
+          {cron.host} · <span className="font-mono">{cron.command}</span>
+        </p>
+      </div>
+
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+        <HeartbeatStatePanel cron={cron} state={state} />
+        <DiskSourcePanel cron={cron} isRemote={isRemote} />
+        <MonitoringPolicyPanel cron={cron} onSave={handleSave} isSubmitting={update.isPending} />
+        <ActionsPanel
+          isHidden={isHidden}
+          onHide={handleHide}
+          onUnhide={handleUnhide}
+          hidePending={hide.isPending}
+          unhidePending={update.isPending}
+        />
+      </div>
+    </div>
+  )
+}
+
+function WrapperRow({ at }: { at: string | null }) {
+  return (
+    <Row label="Wrapper">
+      {at !== null ? (
+        <span title={formatAbsolute(at)}>Wrapper last seen {formatRelative(at)}</span>
+      ) : (
+        <span className="text-muted-foreground">
+          No wrapper installed (heartbeats from ad-hoc curl)
+        </span>
+      )}
+    </Row>
+  )
+}
+
+function HeartbeatStatePanel({
+  cron,
+  state,
+}: {
+  cron: Schema<'CronOut'>
+  state: Schema<'HeartbeatStateOut'> | null
+}) {
+  return (
+    <Card aria-labelledby="panel-heartbeat-state">
+      <CardHeader>
+        <CardTitle id="panel-heartbeat-state">Heartbeat state</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-2 text-sm">
+        {state ? (
+          <>
+            <Row label="Current">
+              <StateBadge state={state.current_state} />
+            </Row>
+            <Row label="Streak">{state.current_streak}</Row>
+            <Row label="Last OK">{formatRelative(state.last_ok_at)}</Row>
+            <Row label="Last Fail">{formatRelative(state.last_fail_at)}</Row>
+            <Row label="Next due">{formatRelative(state.expected_next_at)}</Row>
+            {state.last_duration_seconds !== null && (
+              <Row label="Last duration">{state.last_duration_seconds}s</Row>
+            )}
+            {state.last_exit_code !== null && (
+              <Row label="Last exit code">{state.last_exit_code}</Row>
+            )}
+            <WrapperRow at={cron.wrapper_last_seen_at} />
+            {/* TODO(STAGE-002-009): append install method when wrapper_install_method ships */}
+          </>
+        ) : (
+          <>
+            <p className="text-muted-foreground">No pings received yet.</p>
+            <WrapperRow at={cron.wrapper_last_seen_at} />
+          </>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
+function DiskSourcePanel({ cron, isRemote }: { cron: Schema<'CronOut'>; isRemote: boolean }) {
+  return (
+    <Card aria-labelledby="panel-disk-source">
+      <CardHeader>
+        <CardTitle id="panel-disk-source">Disk source</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-2 text-sm">
+        {isRemote && (
+          <div
+            role="note"
+            className="rounded-md border border-blue-500/30 bg-blue-500/10 p-3 text-blue-900 dark:text-blue-200"
+            data-testid="remote-banner"
+          >
+            Remote cron on <span className="font-mono">{cron.host}</span>. The monitor doesn't have
+            direct file access to this host. Wrapper-based heartbeats are the only signal.
+          </div>
+        )}
+        <Row label="Host">{cron.host}</Row>
+        <Row label="Source path">
+          {cron.source_path !== null ? (
+            <span className="font-mono">{cron.source_path}</span>
+          ) : (
+            <span className="text-muted-foreground">—</span>
+          )}
+        </Row>
+        <Row label="Schedule">
+          <span className="font-mono" title={cron.schedule_canonical ?? undefined}>
+            {cron.schedule ?? `every ${String(cron.cadence_seconds)}s`}
+          </span>
+        </Row>
+        <Row label="Command">
+          <span className="font-mono break-all">{cron.command}</span>
+        </Row>
+        {/* TODO(STAGE-002-007): render Last discovered from cron.last_discovered_at once discovery ships */}
+      </CardContent>
+    </Card>
+  )
+}
+
+function MonitoringPolicyPanel({
+  cron,
+  onSave,
+  isSubmitting,
+}: {
+  cron: Schema<'CronOut'>
+  onSave: (body: Schema<'CronUpdate'>) => Promise<void>
+  isSubmitting: boolean
+}) {
+  return (
+    <Card aria-labelledby="panel-monitoring-policy">
+      <CardHeader>
+        <CardTitle id="panel-monitoring-policy">Monitoring policy</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <CronForm
+          defaultValues={cron}
+          onSubmit={onSave}
+          isSubmitting={isSubmitting}
+          submitLabel="Save changes"
+        />
+      </CardContent>
+    </Card>
+  )
+}
+
+function ActionsPanel({
+  isHidden,
+  onHide,
+  onUnhide,
+  hidePending,
+  unhidePending,
+}: {
+  isHidden: boolean
+  onHide: () => Promise<void>
+  onUnhide: () => Promise<void>
+  hidePending: boolean
+  unhidePending: boolean
+}) {
+  return (
+    <Card aria-labelledby="panel-actions">
+      <CardHeader>
+        <CardTitle id="panel-actions">Actions</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {/* Row 1: Hide / Unhide */}
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-sm font-medium">{isHidden ? 'Restore cron' : 'Hide cron'}</p>
+            <p className="text-xs text-muted-foreground">
+              {isHidden
+                ? 'Restore this cron to the default views and alert routing.'
+                : 'Hide this cron from default views and suppress its alerts.'}
+            </p>
+          </div>
           {isHidden ? (
-            <Button onClick={() => void handleRestore()} disabled={update.isPending}>
-              Restore
+            <Button onClick={() => void onUnhide()} disabled={unhidePending}>
+              {unhidePending ? 'Unhiding…' : 'Unhide'}
             </Button>
           ) : (
-            <Button
-              variant="destructive"
-              onClick={() => void handleDelete()}
-              disabled={softDelete.isPending}
-            >
-              {softDelete.isPending ? 'Archiving…' : 'Archive'}
+            <Button variant="destructive" onClick={() => void onHide()} disabled={hidePending}>
+              {hidePending ? 'Hiding…' : 'Hide'}
             </Button>
           )}
         </div>
-      </div>
 
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-        <Card className="lg:col-span-2">
-          <CardHeader>
-            <CardTitle>Edit</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <CronForm
-              defaultValues={cron}
-              onSubmit={handleSave}
-              errorMessage={editError}
-              isSubmitting={update.isPending}
-              submitLabel="Save changes"
-            />
-          </CardContent>
-        </Card>
+        <hr className="border-border" />
 
-        <div className="space-y-6">
-          <Card>
-            <CardHeader>
-              <CardTitle>Heartbeat state</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-2 text-sm">
-              {state ? (
-                <>
-                  <Row label="Current">
-                    <StateBadge state={state.current_state} />
-                  </Row>
-                  <Row label="Streak">{state.current_streak}</Row>
-                  <Row label="Last OK">{formatRelative(state.last_ok_at)}</Row>
-                  <Row label="Last Fail">{formatRelative(state.last_fail_at)}</Row>
-                  <Row label="Next due">{formatAbsolute(state.expected_next_at)}</Row>
-                </>
-              ) : (
-                <p className="text-muted-foreground">No pings received yet.</p>
-              )}
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle>Next runs</CardTitle>
-            </CardHeader>
-            <CardContent>
-              {cron.schedule !== null && cron.schedule !== '' ? (
-                <SchedulePreviewForSaved fingerprint={cron.fingerprint} count={3} />
-              ) : (
-                <p className="text-sm text-muted-foreground">Cadence-based; no schedule preview.</p>
-              )}
-            </CardContent>
-          </Card>
+        {/* Row 2: Install heartbeat wrapper (disabled) */}
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-sm font-medium">Install heartbeat wrapper</p>
+            <p className="text-xs text-muted-foreground">
+              Replace ad-hoc heartbeats with a managed wrapper script.
+            </p>
+          </div>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              {/* Wrap disabled button in a span so the tooltip can still trigger on hover.
+                  Radix Tooltip TriggerAsChild w/ disabled button: wrap in span to keep events. */}
+              <span tabIndex={0}>
+                <Button disabled aria-label="Install heartbeat wrapper">
+                  Install heartbeat wrapper
+                </Button>
+              </span>
+            </TooltipTrigger>
+            <TooltipContent>
+              Local install ships in STAGE-002-009. Remote install requires cross-host work in
+              EPIC-015 / EPIC-017.
+            </TooltipContent>
+          </Tooltip>
         </div>
-      </div>
-    </div>
+        {/* TODO(STAGE-002-010): render wrapper-health badge from vmalert / recorded label */}
+      </CardContent>
+    </Card>
   )
 }
 

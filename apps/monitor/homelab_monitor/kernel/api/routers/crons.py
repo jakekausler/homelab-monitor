@@ -93,6 +93,7 @@ async def list_crons(
         state=query.state,
         q=query.q,
         include_hidden=query.include_hidden,
+        wrapper_installed=query.wrapper_installed,
     )
     return CronListResponse(
         items=[cron_record_to_out(r) for r in page.items],

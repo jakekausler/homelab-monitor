@@ -235,6 +235,7 @@ class CronRepo:
         state: str | None,
         q: str | None,
         include_hidden: bool,
+        wrapper_installed: bool | None = None,
     ) -> CronListPage:
         """List crons with combinatorial filters + offset/limit pagination.
 
@@ -258,6 +259,11 @@ class CronRepo:
         if q is not None and q.strip():
             where_clauses.append("(LOWER(name) LIKE :q OR LOWER(command) LIKE :q)")
             params["q"] = f"%{q.strip().lower()}%"
+        if wrapper_installed is not None:
+            if wrapper_installed:
+                where_clauses.append("wrapper_last_seen_at IS NOT NULL")
+            else:
+                where_clauses.append("wrapper_last_seen_at IS NULL")
 
         where_sql = (" WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
 
@@ -404,6 +410,11 @@ class CronRepo:
             update_params = {**updates, "fingerprint": fingerprint}
             await conn.execute(update_sql, update_params)
 
+            # Backfill fingerprint into audit payload for future audit
+            # surfaces (STAGE-002-007A and later).
+            diff_before["fingerprint"] = fingerprint
+            diff_after["fingerprint"] = fingerprint
+
             await insert_audit(
                 conn,
                 who=who,
@@ -538,8 +549,8 @@ class CronRepo:
                 conn,
                 who=who,
                 what="crons.register",
-                before={"wrapper_last_seen_at": prev_ts},
-                after={"wrapper_last_seen_at": now},
+                before={"fingerprint": url_fingerprint, "wrapper_last_seen_at": prev_ts},
+                after={"fingerprint": url_fingerprint, "wrapper_last_seen_at": now},
                 ip=ip,
                 when=now,
             )

@@ -13,7 +13,9 @@ export function CronsListPage() {
   const filters: ToolbarFilters = {
     ...(search.host !== undefined && { host: search.host }),
     ...(search.state !== undefined && { state: search.state }),
-    ...(search.enabled !== undefined && { enabled: search.enabled }),
+    ...(search.wrapper_installed !== undefined && {
+      wrapper_installed: search.wrapper_installed,
+    }),
     ...(search.q !== undefined && { q: search.q }),
     include_hidden: search.include_hidden ?? false,
   }
@@ -23,7 +25,9 @@ export function CronsListPage() {
     page_size: search.page_size ?? 100,
     ...(filters.host !== undefined && { host: filters.host }),
     ...(filters.state !== undefined && { state: filters.state }),
-    ...(filters.enabled !== undefined && { enabled: filters.enabled }),
+    ...(filters.wrapper_installed !== undefined && {
+      wrapper_installed: filters.wrapper_installed,
+    }),
     ...(filters.q !== undefined && { q: filters.q }),
     include_hidden: filters.include_hidden,
   })
@@ -41,7 +45,7 @@ export function CronsListPage() {
         page_size: search.page_size ?? 100,
         ...(next.host !== undefined && { host: next.host }),
         ...(next.state !== undefined && { state: next.state }),
-        ...(next.enabled !== undefined && { enabled: next.enabled }),
+        ...(next.wrapper_installed !== undefined && { wrapper_installed: next.wrapper_installed }),
         ...(next.q !== undefined && { q: next.q }),
         include_hidden: next.include_hidden,
       },
@@ -80,7 +84,9 @@ export function CronsListPage() {
                 page_size: search.page_size ?? 100,
                 ...(search.host !== undefined && { host: search.host }),
                 ...(search.state !== undefined && { state: search.state }),
-                ...(search.enabled !== undefined && { enabled: search.enabled }),
+                ...(search.wrapper_installed !== undefined && {
+                  wrapper_installed: search.wrapper_installed,
+                }),
                 ...(search.q !== undefined && { q: search.q }),
                 include_hidden: search.include_hidden ?? false,
               },

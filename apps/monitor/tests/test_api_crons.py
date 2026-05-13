@@ -516,3 +516,161 @@ async def test_update_cron_not_found_returns_404(
         headers=csrf,
     )
     assert resp.status_code == 404  # noqa: PLR2004
+
+
+# ---------------------------------------------------------------------------
+# LIST — wrapper_installed filter
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_list_crons_filters_wrapper_installed_true(
+    authenticated_client: AsyncClient, repo: SqliteRepository
+) -> None:
+    """GET /api/crons?wrapper_installed=true returns only crons with wrapper_last_seen_at set."""
+    # 2 crons without wrapper (wia=None via _seed_cron default)
+    await _seed_cron(repo, name="no-wrap-a", command="/bin/no-wrap-a")
+    await _seed_cron(repo, name="no-wrap-b", command="/bin/no-wrap-b")
+    # 2 crons with wrapper — insert directly with wrapper_last_seen_at set
+    now = utc_now_iso()
+    async with repo.engine.begin() as conn:
+        for suffix in ("c", "d"):
+            fp = compute_fingerprint(
+                host="host-a",
+                source_path="/etc/crontab",
+                schedule="*/5 * * * *",
+                command=f"/bin/wrap-{suffix}",
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO crons (fingerprint, name, host, command, schedule, "
+                    "schedule_canonical, cadence_seconds, expected_grace_seconds, "
+                    "enabled, last_seen_state, created_at, updated_at, hidden_at, "
+                    "source_path, wrapper_last_seen_at) VALUES ("
+                    ":fp, :name, :host, :command, :schedule, :sched_canon, :cad, "
+                    ":grace, :enabled, :state, :created, :updated, :hidden, :sp, :wia)"
+                ),
+                {
+                    "fp": fp,
+                    "name": f"wrap-{suffix}",
+                    "host": "host-a",
+                    "command": f"/bin/wrap-{suffix}",
+                    "schedule": "*/5 * * * *",
+                    "sched_canon": "*/5 * * * *",
+                    "cad": 0,
+                    "grace": 300,
+                    "enabled": 1,
+                    "state": "unknown",
+                    "created": now,
+                    "updated": now,
+                    "hidden": None,
+                    "sp": "/etc/crontab",
+                    "wia": now,
+                },
+            )
+    resp = await authenticated_client.get("/api/crons?wrapper_installed=true")
+    assert resp.status_code == 200  # noqa: PLR2004
+    body = resp.json()
+    assert body["total"] == 2  # noqa: PLR2004
+    names = {it["name"] for it in body["items"]}
+    assert names == {"wrap-c", "wrap-d"}
+
+
+@pytest.mark.asyncio
+async def test_list_crons_filters_wrapper_installed_false(
+    authenticated_client: AsyncClient, repo: SqliteRepository
+) -> None:
+    """GET /api/crons?wrapper_installed=false returns only crons without wrapper_last_seen_at."""
+    await _seed_cron(repo, name="no-wrap-a", command="/bin/no-wrap-a")
+    await _seed_cron(repo, name="no-wrap-b", command="/bin/no-wrap-b")
+    now = utc_now_iso()
+    async with repo.engine.begin() as conn:
+        for suffix in ("c", "d"):
+            fp = compute_fingerprint(
+                host="host-a",
+                source_path="/etc/crontab",
+                schedule="*/5 * * * *",
+                command=f"/bin/wrap-{suffix}",
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO crons (fingerprint, name, host, command, schedule, "
+                    "schedule_canonical, cadence_seconds, expected_grace_seconds, "
+                    "enabled, last_seen_state, created_at, updated_at, hidden_at, "
+                    "source_path, wrapper_last_seen_at) VALUES ("
+                    ":fp, :name, :host, :command, :schedule, :sched_canon, :cad, "
+                    ":grace, :enabled, :state, :created, :updated, :hidden, :sp, :wia)"
+                ),
+                {
+                    "fp": fp,
+                    "name": f"wrap-{suffix}",
+                    "host": "host-a",
+                    "command": f"/bin/wrap-{suffix}",
+                    "schedule": "*/5 * * * *",
+                    "sched_canon": "*/5 * * * *",
+                    "cad": 0,
+                    "grace": 300,
+                    "enabled": 1,
+                    "state": "unknown",
+                    "created": now,
+                    "updated": now,
+                    "hidden": None,
+                    "sp": "/etc/crontab",
+                    "wia": now,
+                },
+            )
+    resp = await authenticated_client.get("/api/crons?wrapper_installed=false")
+    assert resp.status_code == 200  # noqa: PLR2004
+    body = resp.json()
+    assert body["total"] == 2  # noqa: PLR2004
+    names = {it["name"] for it in body["items"]}
+    assert names == {"no-wrap-a", "no-wrap-b"}
+
+
+@pytest.mark.asyncio
+async def test_list_crons_no_wrapper_filter_returns_all(
+    authenticated_client: AsyncClient, repo: SqliteRepository
+) -> None:
+    """GET /api/crons (no wrapper_installed param) returns all 4 crons."""
+    await _seed_cron(repo, name="no-wrap-a", command="/bin/no-wrap-a")
+    await _seed_cron(repo, name="no-wrap-b", command="/bin/no-wrap-b")
+    now = utc_now_iso()
+    async with repo.engine.begin() as conn:
+        for suffix in ("c", "d"):
+            fp = compute_fingerprint(
+                host="host-a",
+                source_path="/etc/crontab",
+                schedule="*/5 * * * *",
+                command=f"/bin/wrap-{suffix}",
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO crons (fingerprint, name, host, command, schedule, "
+                    "schedule_canonical, cadence_seconds, expected_grace_seconds, "
+                    "enabled, last_seen_state, created_at, updated_at, hidden_at, "
+                    "source_path, wrapper_last_seen_at) VALUES ("
+                    ":fp, :name, :host, :command, :schedule, :sched_canon, :cad, "
+                    ":grace, :enabled, :state, :created, :updated, :hidden, :sp, :wia)"
+                ),
+                {
+                    "fp": fp,
+                    "name": f"wrap-{suffix}",
+                    "host": "host-a",
+                    "command": f"/bin/wrap-{suffix}",
+                    "schedule": "*/5 * * * *",
+                    "sched_canon": "*/5 * * * *",
+                    "cad": 0,
+                    "grace": 300,
+                    "enabled": 1,
+                    "state": "unknown",
+                    "created": now,
+                    "updated": now,
+                    "hidden": None,
+                    "sp": "/etc/crontab",
+                    "wia": now,
+                },
+            )
+    resp = await authenticated_client.get("/api/crons")
+    assert resp.status_code == 200  # noqa: PLR2004
+    body = resp.json()
+    assert body["total"] == 4  # noqa: PLR2004

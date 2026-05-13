@@ -11,13 +11,14 @@ import { cleanup, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { CronDetailPage } from '@/routes/inventory/CronDetailPage'
+import { TooltipProvider } from '@/components/ui/tooltip'
 
 afterEach(cleanup)
 
 vi.mock('@/api/crons', () => ({
   useGetCron: vi.fn(() => ({ isLoading: false, error: null, data: null })),
   useUpdateCron: vi.fn(() => ({ mutateAsync: vi.fn(), isPending: false })),
-  useSoftDeleteCron: vi.fn(() => ({ mutateAsync: vi.fn(), isPending: false })),
+  useHideCron: vi.fn(() => ({ mutateAsync: vi.fn(), isPending: false })),
   usePreviewSavedCron: vi.fn(() => ({ isLoading: false, error: null, data: { runs: [] } })),
   usePreviewExpr: vi.fn(() => ({ isLoading: false, error: null, data: null })),
   cronQueryKeys: { all: ['crons'] },
@@ -61,7 +62,9 @@ function renderPage(fingerprint?: string) {
   const qc = new QueryClient()
   return render(
     <QueryClientProvider client={qc}>
-      <RouterProvider router={router} />
+      <TooltipProvider>
+        <RouterProvider router={router} />
+      </TooltipProvider>
     </QueryClientProvider>,
   )
 }

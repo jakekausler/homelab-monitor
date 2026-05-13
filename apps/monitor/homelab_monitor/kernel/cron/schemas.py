@@ -50,6 +50,7 @@ class CronListQuery(BaseModel):
     state: LastSeenState | None = None
     q: str | None = Field(default=None, max_length=200)
     include_hidden: bool = False
+    wrapper_installed: bool | None = None
 
 
 class PreviewRunsQuery(BaseModel):

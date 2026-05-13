@@ -59,7 +59,7 @@ describe('CronForm', () => {
           updated_at: '',
           hidden_at: null,
           source_path: null,
-          wrapper_installed_at: null,
+          wrapper_last_seen_at: null,
         }}
       />,
     )
@@ -97,7 +97,7 @@ describe('CronForm', () => {
           updated_at: '',
           hidden_at: null,
           source_path: null,
-          wrapper_installed_at: null,
+          wrapper_last_seen_at: null,
         }}
         onSubmit={vi.fn()}
       />,

@@ -15,7 +15,6 @@ export function CronDetailPage() {
           page: 1,
           page_size: 100,
           host: undefined,
-          enabled: undefined,
           state: undefined,
           q: undefined,
           include_hidden: false,

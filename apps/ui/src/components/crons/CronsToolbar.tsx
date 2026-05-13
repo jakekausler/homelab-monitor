@@ -7,7 +7,7 @@ import { titleCase } from './badges'
 export interface ToolbarFilters {
   host?: string
   state?: 'unknown' | 'running' | 'ok' | 'failed' | 'late'
-  enabled?: boolean
+  wrapper_installed?: boolean
   q?: string
   include_hidden: boolean
 }
@@ -97,6 +97,29 @@ export function CronsToolbar({ filters, knownHosts, onFiltersChange }: CronsTool
         <option value="ok">{titleCase('ok')}</option>
         <option value="failed">{titleCase('failed')}</option>
         <option value="late">{titleCase('late')}</option>
+      </Select>
+
+      <Select
+        aria-label="Filter by wrapper status"
+        className="w-auto"
+        value={
+          filters.wrapper_installed === undefined ? '' : filters.wrapper_installed ? 'yes' : 'no'
+        }
+        onChange={(e) => {
+          const next = { ...filters }
+          if (e.target.value === '') {
+            delete next.wrapper_installed
+          } else if (e.target.value === 'yes') {
+            next.wrapper_installed = true
+          } else {
+            next.wrapper_installed = false
+          }
+          update(next)
+        }}
+      >
+        <option value="">Any wrapper</option>
+        <option value="yes">Wrapper installed</option>
+        <option value="no">No wrapper</option>
       </Select>
 
       <label className="flex items-center gap-2 text-sm">

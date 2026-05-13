@@ -9,16 +9,27 @@ import {
 } from '@tanstack/react-router'
 import { cleanup, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { CronDetail } from '@/components/crons/CronDetail'
+import { TooltipProvider } from '@/components/ui/tooltip'
 
 afterEach(cleanup)
 
+// ---------------------------------------------------------------------------
+// Mock hooks
+// ---------------------------------------------------------------------------
+
 vi.mock('@/api/crons', () => ({
   useGetCron: vi.fn(),
-  useUpdateCron: vi.fn(() => ({ mutateAsync: vi.fn(), isPending: false })),
-  useSoftDeleteCron: vi.fn(() => ({ mutateAsync: vi.fn(), isPending: false })),
+  useUpdateCron: vi.fn(() => ({
+    mutateAsync: vi.fn().mockResolvedValue(undefined),
+    isPending: false,
+  })),
+  useHideCron: vi.fn(() => ({
+    mutateAsync: vi.fn().mockResolvedValue(undefined),
+    isPending: false,
+  })),
   usePreviewSavedCron: vi.fn(() => ({ isLoading: false, error: null, data: { runs: [] } })),
   usePreviewExpr: vi.fn(() => ({ isLoading: false, error: null, data: null })),
   cronQueryKeys: { all: ['crons'] },
@@ -29,10 +40,28 @@ vi.mock('@/lib/relativeTime', () => ({
   formatRelative: (s: string | null) => (s ? `rel:${s}` : 'never'),
 }))
 
-import { useGetCron } from '@/api/crons'
+vi.mock('sonner', () => ({
+  toast: {
+    success: vi.fn(),
+    error: vi.fn(),
+  },
+}))
 
-const sampleCron = {
-  fingerprint: 'a'.repeat(64),
+// ---------------------------------------------------------------------------
+// Imports that must come AFTER vi.mock declarations
+// ---------------------------------------------------------------------------
+
+import { useGetCron, useHideCron, useUpdateCron } from '@/api/crons'
+import { toast } from 'sonner'
+
+// ---------------------------------------------------------------------------
+// Fixtures
+// ---------------------------------------------------------------------------
+
+const FP = 'a'.repeat(64)
+
+const baseCron = {
+  fingerprint: FP,
   name: 'daily-backup',
   host: 'host-a',
   command: '/opt/backup.sh',
@@ -44,10 +73,24 @@ const sampleCron = {
   last_seen_state: 'ok' as const,
   created_at: '2026-05-01T00:00:00Z',
   updated_at: '2026-05-01T00:00:00Z',
-  hidden_at: null,
-  source_path: null,
-  wrapper_installed_at: null,
+  hidden_at: null as string | null,
+  source_path: null as string | null,
+  wrapper_last_seen_at: null,
 }
+
+const baseState = null
+
+function makeGetCronResult(overrides: Partial<typeof baseCron> = {}, state = baseState) {
+  return {
+    isLoading: false,
+    error: null,
+    data: { cron: { ...baseCron, ...overrides }, state },
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Router wrapper
+// ---------------------------------------------------------------------------
 
 function renderInRouter(ui: React.ReactNode) {
   const rootRoute = createRootRoute({ component: () => <Outlet /> })
@@ -73,176 +116,199 @@ function renderInRouter(ui: React.ReactNode) {
   const qc = new QueryClient()
   return render(
     <QueryClientProvider client={qc}>
-      <RouterProvider router={router} />
+      <TooltipProvider>
+        <RouterProvider router={router} />
+      </TooltipProvider>
     </QueryClientProvider>,
   )
 }
 
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
 describe('CronDetail', () => {
-  it('shows loading text while fetching', async () => {
+  beforeEach(() => {
+    vi.mocked(useGetCron).mockReturnValue(
+      makeGetCronResult() as unknown as ReturnType<typeof useGetCron>,
+    )
+    vi.mocked(toast.success).mockClear()
+    vi.mocked(toast.error).mockClear()
+  })
+
+  // 1. Renders cron name in header
+  it('renders cron name in header', async () => {
+    renderInRouter(<CronDetail fingerprint={FP} />)
+    expect(await screen.findByText('daily-backup')).toBeInTheDocument()
+  })
+
+  // 2. Renders all 4 panel headings
+  it('renders all 4 panel headings', async () => {
+    renderInRouter(<CronDetail fingerprint={FP} />)
+    await screen.findByText('daily-backup')
+    expect(screen.getByText('Heartbeat state')).toBeInTheDocument()
+    expect(screen.getByText('Disk source')).toBeInTheDocument()
+    expect(screen.getByText('Monitoring policy')).toBeInTheDocument()
+    expect(screen.getByText('Actions')).toBeInTheDocument()
+  })
+
+  // 3. Shows "Remote" badge when source_path === null
+  it('shows Remote badge in header when source_path is null', async () => {
+    renderInRouter(<CronDetail fingerprint={FP} />)
+    await screen.findByText('daily-backup')
+    expect(screen.getByText('Remote')).toBeInTheDocument()
+  })
+
+  // 4. Hides "Remote" badge when source_path is present
+  it('hides Remote badge when source_path is present', async () => {
+    vi.mocked(useGetCron).mockReturnValue(
+      makeGetCronResult({ source_path: '/etc/cron.d/backup' }) as unknown as ReturnType<
+        typeof useGetCron
+      >,
+    )
+    renderInRouter(<CronDetail fingerprint={FP} />)
+    await screen.findByText('daily-backup')
+    expect(screen.queryByText('Remote')).toBeNull()
+  })
+
+  // 5. Shows "Hidden" badge when hidden_at !== null
+  it('shows Hidden badge in header when hidden_at is set', async () => {
+    vi.mocked(useGetCron).mockReturnValue(
+      makeGetCronResult({ hidden_at: '2026-05-10T00:00:00Z' }) as unknown as ReturnType<
+        typeof useGetCron
+      >,
+    )
+    renderInRouter(<CronDetail fingerprint={FP} />)
+    await screen.findByText('daily-backup')
+    expect(screen.getByText('Hidden')).toBeInTheDocument()
+  })
+
+  // 6. Hides "Hidden" badge when not hidden
+  it('hides Hidden badge when hidden_at is null', async () => {
+    renderInRouter(<CronDetail fingerprint={FP} />)
+    await screen.findByText('daily-backup')
+    expect(screen.queryByText('Hidden')).toBeNull()
+  })
+
+  // 7. Shows remote banner inside Disk source panel when source_path === null
+  it('shows remote banner inside Disk source panel when source_path is null', async () => {
+    renderInRouter(<CronDetail fingerprint={FP} />)
+    await screen.findByText('daily-backup')
+    expect(screen.getByTestId('remote-banner')).toBeInTheDocument()
+  })
+
+  // 8. Hides remote banner when source_path is present
+  it('hides remote banner when source_path is present', async () => {
+    vi.mocked(useGetCron).mockReturnValue(
+      makeGetCronResult({ source_path: '/etc/cron.d/backup' }) as unknown as ReturnType<
+        typeof useGetCron
+      >,
+    )
+    renderInRouter(<CronDetail fingerprint={FP} />)
+    await screen.findByText('daily-backup')
+    expect(screen.queryByTestId('remote-banner')).toBeNull()
+  })
+
+  // 9. Hide button click triggers useHideCron mutateAsync + toast.success("Cron hidden")
+  it('Hide button click calls useHideCron mutateAsync and shows toast.success', async () => {
+    const mutateAsync = vi.fn().mockResolvedValue(undefined)
+    vi.mocked(useHideCron).mockReturnValue({
+      mutateAsync,
+      isPending: false,
+    } as unknown as ReturnType<typeof useHideCron>)
+    renderInRouter(<CronDetail fingerprint={FP} />)
+    await userEvent.setup().click(await screen.findByRole('button', { name: /Hide/i }))
+    expect(mutateAsync).toHaveBeenCalledTimes(1)
+    expect(toast.success).toHaveBeenCalledWith('Cron hidden')
+  })
+
+  // 10. Hide button shows toast.error on mutateAsync rejection
+  it('Hide button shows toast.error when mutateAsync rejects', async () => {
+    const mutateAsync = vi.fn().mockRejectedValue(new Error('Server error'))
+    vi.mocked(useHideCron).mockReturnValue({
+      mutateAsync,
+      isPending: false,
+    } as unknown as ReturnType<typeof useHideCron>)
+    renderInRouter(<CronDetail fingerprint={FP} />)
+    await userEvent.setup().click(await screen.findByRole('button', { name: /Hide/i }))
+    expect(toast.error).toHaveBeenCalledWith('Hide failed')
+  })
+
+  // 11. Unhide button calls useUpdateCron with {hidden_at: null} + toast.success
+  it('Unhide button calls useUpdateCron with hidden_at: null and shows toast.success', async () => {
+    const mutateAsync = vi.fn().mockResolvedValue(undefined)
+    vi.mocked(useUpdateCron).mockReturnValue({
+      mutateAsync,
+      isPending: false,
+    } as unknown as ReturnType<typeof useUpdateCron>)
+    vi.mocked(useGetCron).mockReturnValue(
+      makeGetCronResult({ hidden_at: '2026-05-10T00:00:00Z' }) as unknown as ReturnType<
+        typeof useGetCron
+      >,
+    )
+    renderInRouter(<CronDetail fingerprint={FP} />)
+    await userEvent.setup().click(await screen.findByRole('button', { name: /Unhide/i }))
+    expect(mutateAsync).toHaveBeenCalledWith({ hidden_at: null })
+    expect(toast.success).toHaveBeenCalledWith('Cron restored')
+  })
+
+  // 12. Install heartbeat button is disabled
+  it('Install heartbeat button is disabled', async () => {
+    renderInRouter(<CronDetail fingerprint={FP} />)
+    await screen.findByText('daily-backup')
+    expect(screen.getByRole('button', { name: /Install heartbeat wrapper/i })).toBeDisabled()
+  })
+
+  // 13. Renders loading state when detail.isLoading is true
+  it('renders loading paragraph when detail.isLoading is true', async () => {
     vi.mocked(useGetCron).mockReturnValue({
       isLoading: true,
       error: null,
       data: undefined,
     } as unknown as ReturnType<typeof useGetCron>)
-    renderInRouter(<CronDetail fingerprint={'a'.repeat(64)} />)
-    expect(await screen.findByText(/Loading cron/i)).toBeInTheDocument()
+    renderInRouter(<CronDetail fingerprint={FP} />)
+    expect(await screen.findByText('Loading cron…')).toBeInTheDocument()
   })
 
-  it('shows error message when fetch fails', async () => {
+  // 17b. Renders error state when detail.error is set
+  it('renders error alert when detail.error is set', async () => {
     vi.mocked(useGetCron).mockReturnValue({
       isLoading: false,
       error: { message: 'Not found' } as Error,
       data: undefined,
     } as unknown as ReturnType<typeof useGetCron>)
-    renderInRouter(<CronDetail fingerprint={'a'.repeat(64)} />)
+    renderInRouter(<CronDetail fingerprint={FP} />)
     expect(await screen.findByRole('alert')).toHaveTextContent('Not found')
   })
 
-  it('shows "Cron not found" when data is null', async () => {
-    vi.mocked(useGetCron).mockReturnValue({
-      isLoading: false,
-      error: null,
-      data: null,
-    } as unknown as ReturnType<typeof useGetCron>)
-    renderInRouter(<CronDetail fingerprint={'a'.repeat(64)} />)
-    expect(await screen.findByText(/Cron not found/i)).toBeInTheDocument()
-  })
-
-  it('renders cron name and Archive button for active cron', async () => {
-    vi.mocked(useGetCron).mockReturnValue({
-      isLoading: false,
-      error: null,
-      data: { cron: sampleCron, state: null },
-    } as unknown as ReturnType<typeof useGetCron>)
-    renderInRouter(<CronDetail fingerprint={'a'.repeat(64)} />)
-    expect(await screen.findByText('daily-backup')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /Archive/i })).toBeInTheDocument()
-  })
-
-  it('renders Restore button for archived cron', async () => {
-    const hidden = { ...sampleCron, hidden_at: '2026-05-10T00:00:00Z' }
-    vi.mocked(useGetCron).mockReturnValue({
-      isLoading: false,
-      error: null,
-      data: { cron: hidden, state: null },
-    } as unknown as ReturnType<typeof useGetCron>)
-    renderInRouter(<CronDetail fingerprint={'a'.repeat(64)} />)
-    expect(await screen.findByRole('button', { name: /Restore/i })).toBeInTheDocument()
-  })
-
-  it('shows no pings message when state is null', async () => {
-    vi.mocked(useGetCron).mockReturnValue({
-      isLoading: false,
-      error: null,
-      data: { cron: sampleCron, state: null },
-    } as unknown as ReturnType<typeof useGetCron>)
-    renderInRouter(<CronDetail fingerprint={'a'.repeat(64)} />)
-    expect(await screen.findByText(/No pings received yet/i)).toBeInTheDocument()
-  })
-
-  it('renders heartbeat state rows when state is present', async () => {
-    vi.mocked(useGetCron).mockReturnValue({
-      isLoading: false,
-      error: null,
-      data: {
-        cron: sampleCron,
-        state: {
-          current_state: 'ok',
-          current_streak: 5,
-          last_ok_at: '2026-05-11T03:00:00Z',
-          last_fail_at: null,
-          expected_next_at: '2026-05-12T04:00:00Z',
-        },
-      },
-    } as unknown as ReturnType<typeof useGetCron>)
-    renderInRouter(<CronDetail fingerprint={'a'.repeat(64)} />)
-    expect(await screen.findByText('Streak')).toBeInTheDocument()
-    expect(screen.getByText('5')).toBeInTheDocument()
-  })
-
-  it('calls softDeleteCron mutateAsync when Archive button is clicked', async () => {
-    const mutateAsync = vi.fn().mockResolvedValue(undefined)
-    const { useSoftDeleteCron } = await import('@/api/crons')
-    vi.mocked(useSoftDeleteCron).mockReturnValue({
-      mutateAsync,
-      isPending: false,
-    } as unknown as ReturnType<typeof useSoftDeleteCron>)
-    vi.mocked(useGetCron).mockReturnValue({
-      isLoading: false,
-      error: null,
-      data: { cron: sampleCron, state: null },
-    } as unknown as ReturnType<typeof useGetCron>)
-    renderInRouter(<CronDetail fingerprint={'a'.repeat(64)} />)
-    const archiveBtn = await screen.findByRole('button', { name: /Archive/i })
-    await userEvent.setup().click(archiveBtn)
-    expect(mutateAsync).toHaveBeenCalledTimes(1)
-  })
-
-  it('shows cadence-based schedule preview message when schedule is null', async () => {
-    vi.mocked(useGetCron).mockReturnValue({
-      isLoading: false,
-      error: null,
-      data: { cron: { ...sampleCron, schedule: null }, state: null },
-    } as unknown as ReturnType<typeof useGetCron>)
-    renderInRouter(<CronDetail fingerprint={'a'.repeat(64)} />)
-    expect(await screen.findByText(/Cadence-based/i)).toBeInTheDocument()
-  })
-
-  it('shows archived badge for hidden cron', async () => {
-    const hidden = { ...sampleCron, hidden_at: '2026-05-10T00:00:00Z' }
-    vi.mocked(useGetCron).mockReturnValue({
-      isLoading: false,
-      error: null,
-      data: { cron: hidden, state: null },
-    } as unknown as ReturnType<typeof useGetCron>)
-    renderInRouter(<CronDetail fingerprint={'a'.repeat(64)} />)
-    expect(await screen.findByText('archived')).toBeInTheDocument()
-  })
-
-  it('renders command in subtitle', async () => {
-    vi.mocked(useGetCron).mockReturnValue({
-      isLoading: false,
-      error: null,
-      data: { cron: sampleCron, state: null },
-    } as unknown as ReturnType<typeof useGetCron>)
-    renderInRouter(<CronDetail fingerprint={'a'.repeat(64)} />)
-    expect(await screen.findByText('/opt/backup.sh')).toBeInTheDocument()
-  })
-
-  it('calls updateCron mutateAsync when save form is submitted', async () => {
-    const mutateAsync = vi.fn().mockResolvedValue(sampleCron)
-    const { useUpdateCron } = await import('@/api/crons')
+  // 17c. handleSave catch branch shows toast.error on rejection
+  it('handleSave shows toast.error when update mutateAsync rejects', async () => {
+    const mutateAsync = vi.fn().mockRejectedValue(new Error('Save failed'))
     vi.mocked(useUpdateCron).mockReturnValue({
       mutateAsync,
       isPending: false,
     } as unknown as ReturnType<typeof useUpdateCron>)
-    vi.mocked(useGetCron).mockReturnValue({
-      isLoading: false,
-      error: null,
-      data: { cron: sampleCron, state: null },
-    } as unknown as ReturnType<typeof useGetCron>)
-    renderInRouter(<CronDetail fingerprint={'a'.repeat(64)} />)
+    renderInRouter(<CronDetail fingerprint={FP} />)
     await screen.findByText('daily-backup')
-    await userEvent.setup().click(screen.getByRole('button', { name: /Save changes/i }))
-    expect(mutateAsync).toHaveBeenCalledTimes(1)
+    const saveButton = screen.getByRole('button', { name: /Save changes/i })
+    await userEvent.setup().click(saveButton)
+    expect(toast.error).toHaveBeenCalledWith('Update failed')
   })
 
-  it('calls updateCron with hidden_at: null when Restore is clicked', async () => {
-    const mutateAsync = vi.fn().mockResolvedValue(sampleCron)
-    const { useUpdateCron } = await import('@/api/crons')
+  // 16. handleUnhide catch branch shows toast.error on rejection
+  it('handleUnhide shows toast.error when update mutateAsync rejects', async () => {
+    const mutateAsync = vi.fn().mockRejectedValue(new Error('Restore failed'))
     vi.mocked(useUpdateCron).mockReturnValue({
       mutateAsync,
       isPending: false,
     } as unknown as ReturnType<typeof useUpdateCron>)
-    const hidden = { ...sampleCron, hidden_at: '2026-05-10T00:00:00Z' }
-    vi.mocked(useGetCron).mockReturnValue({
-      isLoading: false,
-      error: null,
-      data: { cron: hidden, state: null },
-    } as unknown as ReturnType<typeof useGetCron>)
-    renderInRouter(<CronDetail fingerprint={'a'.repeat(64)} />)
-    await userEvent.setup().click(await screen.findByRole('button', { name: /Restore/i }))
-    expect(mutateAsync).toHaveBeenCalledWith({ hidden_at: null })
+    vi.mocked(useGetCron).mockReturnValue(
+      makeGetCronResult({ hidden_at: '2026-05-10T00:00:00Z' }) as unknown as ReturnType<
+        typeof useGetCron
+      >,
+    )
+    renderInRouter(<CronDetail fingerprint={FP} />)
+    await userEvent.setup().click(await screen.findByRole('button', { name: /Unhide/i }))
+    expect(toast.error).toHaveBeenCalledWith('Restore failed')
   })
 })

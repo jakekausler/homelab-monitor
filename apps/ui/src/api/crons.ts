@@ -19,7 +19,6 @@ export interface CronListQuery {
   page?: number
   page_size?: number
   host?: string
-  enabled?: boolean
   state?: 'unknown' | 'running' | 'ok' | 'failed' | 'late'
   q?: string
   include_hidden?: boolean
@@ -42,7 +41,7 @@ export function useListCrons(query: CronListQuery): UseQueryResult<CronListRespo
       const result = await apiClient.GET('/api/crons', {
         params: { query },
       })
-      return unwrap(result)
+      return unwrap<CronListResponse>(result)
     },
     refetchInterval: REFETCH_INTERVAL_MS,
   })
@@ -61,7 +60,7 @@ export function useGetCron(
           query: { include_hidden: options.includeHidden ?? false },
         },
       })
-      return unwrap(result)
+      return unwrap<CronWithStateOut>(result)
     },
     refetchInterval: REFETCH_INTERVAL_MS,
     enabled: id.length > 0,
@@ -76,7 +75,7 @@ export function useUpdateCron(id: string): UseMutationResult<CronOut, ApiError, 
         params: { path: { fingerprint: id } },
         body,
       })
-      return unwrap(result)
+      return unwrap<CronOut>(result)
     },
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: cronQueryKeys.all })
@@ -85,7 +84,7 @@ export function useUpdateCron(id: string): UseMutationResult<CronOut, ApiError, 
   })
 }
 
-export function useSoftDeleteCron(id: string): UseMutationResult<void, ApiError, void> {
+export function useHideCron(id: string): UseMutationResult<void, ApiError, void> {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: async () => {
@@ -97,6 +96,7 @@ export function useSoftDeleteCron(id: string): UseMutationResult<void, ApiError,
     },
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: cronQueryKeys.all })
+      void qc.invalidateQueries({ queryKey: cronQueryKeys.detail(id) })
     },
   })
 }
@@ -112,7 +112,7 @@ export function usePreviewSavedCron(
       const result = await apiClient.GET('/api/crons/{fingerprint}/preview-runs', {
         params: { path: { fingerprint: id }, query: { count } },
       })
-      return unwrap(result)
+      return unwrap<PreviewRunsResponse>(result)
     },
     enabled: enabled && id.length > 0,
   })
@@ -129,7 +129,7 @@ export function usePreviewExpr(
       const result = await apiClient.GET('/api/crons/preview-runs', {
         params: { query: { expr, count } },
       })
-      return unwrap(result)
+      return unwrap<PreviewRunsResponse>(result)
     },
     enabled: enabled && expr.trim().length > 0,
     retry: false,
