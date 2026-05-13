@@ -536,7 +536,7 @@ async def test_migration_0008_crons_columns_present(db_engine: AsyncEngine) -> N
         "updated_at",
         "hidden_at",
         "source_path",
-        "wrapper_installed_at",
+        "wrapper_last_seen_at",
     }
     forbidden = {"id", "integration_mode", "archived_at"}
 
@@ -653,5 +653,60 @@ async def test_migration_0008_round_trip(db_url: str) -> None:
             new_cols = await conn.run_sync(_has_new)
         assert "fingerprint" in new_cols
         assert "hidden_at" in new_cols
+    finally:
+        await engine.dispose()
+
+
+async def test_migration_0009_renames_wrapper_column(
+    db_engine: AsyncEngine,
+) -> None:
+    """After head (0009), wrapper_last_seen_at exists and wrapper_installed_at does not."""
+
+    def _list_cols(sync_conn: object) -> set[str]:
+        ins = inspect(sync_conn)
+        return {c["name"] for c in ins.get_columns("crons")} if ins is not None else set()
+
+    async with db_engine.connect() as conn:
+        cols = await conn.run_sync(_list_cols)
+    assert "wrapper_last_seen_at" in cols
+    assert "wrapper_installed_at" not in cols
+
+
+async def test_migration_0009_round_trip(db_url: str) -> None:
+    """upgrade head -> downgrade 0008 -> upgrade head leaves the new column shape."""
+    cfg = Config()
+    cfg.set_main_option("script_location", str(ALEMBIC_DIR))
+    cfg.set_main_option("sqlalchemy.url", db_url)
+    command.upgrade(cfg, "head")
+    command.downgrade(cfg, "0008")
+
+    engine = get_engine(url=db_url)
+    try:
+
+        def _cols_at_0008(sync_conn: object) -> set[str]:
+            ins = inspect(sync_conn)
+            assert ins is not None
+            return {c["name"] for c in ins.get_columns("crons")}
+
+        async with engine.connect() as conn:
+            cols = await conn.run_sync(_cols_at_0008)
+        assert "wrapper_installed_at" in cols
+        assert "wrapper_last_seen_at" not in cols
+    finally:
+        await engine.dispose()
+
+    command.upgrade(cfg, "head")
+    engine = get_engine(url=db_url)
+    try:
+
+        def _cols_at_head(sync_conn: object) -> set[str]:
+            ins = inspect(sync_conn)
+            assert ins is not None
+            return {c["name"] for c in ins.get_columns("crons")}
+
+        async with engine.connect() as conn:
+            cols = await conn.run_sync(_cols_at_head)
+        assert "wrapper_last_seen_at" in cols
+        assert "wrapper_installed_at" not in cols
     finally:
         await engine.dispose()

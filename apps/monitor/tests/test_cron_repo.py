@@ -2,17 +2,20 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from sqlalchemy import text
 
 from homelab_monitor.kernel.cron.fingerprint import compute_fingerprint
 from homelab_monitor.kernel.cron.repository import CronRepo
-from homelab_monitor.kernel.cron.schemas import CronUpdate
+from homelab_monitor.kernel.cron.schemas import CronUpdate, RegisterCronBody
 from homelab_monitor.kernel.db.repository import SqliteRepository
 from homelab_monitor.kernel.db.time import utc_now_iso
 
 WHO = "test-user"
 IP = "127.0.0.1"
+DEFAULT_EXPECTED_GRACE_SECONDS = 300  # matches kernel/cron/repository.py register_cron default
 
 
 async def _audit_count(repo: SqliteRepository, *, what_prefix: str = "crons.") -> int:
@@ -50,9 +53,9 @@ async def _seed_cron(  # noqa: PLR0913
             "INSERT INTO crons (fingerprint, name, host, command, schedule, "
             "schedule_canonical, cadence_seconds, expected_grace_seconds, "
             "enabled, last_seen_state, created_at, updated_at, hidden_at, "
-            "source_path, wrapper_installed_at) VALUES ("
+            "source_path, wrapper_last_seen_at) VALUES ("
             ":fp, :name, :host, :command, :schedule, :sched_canon, :cad, "
-            ":grace, :enabled, :state, :created, :updated, :hidden, :sp, :wia)"
+            ":grace, :enabled, :state, :created, :updated, :hidden, :sp, :wlsa)"
         ),
         {
             "fp": fp,
@@ -69,7 +72,7 @@ async def _seed_cron(  # noqa: PLR0913
             "updated": utc_now_iso(),
             "hidden": hidden_at,
             "sp": source_path,
-            "wia": None,
+            "wlsa": None,
         },
     )
     return fp
@@ -452,3 +455,208 @@ async def test_update_cron_hide_and_rename_uses_hide_verb(repo: SqliteRepository
     )
     assert audit_row is not None
     assert audit_row[0] == "crons.hide"
+
+
+# ---------------------------------------------------------------------------
+# REGISTER_CRON
+# ---------------------------------------------------------------------------
+
+_REG_BODY = RegisterCronBody(
+    host="reg-host",
+    source_path="/etc/crontab",
+    schedule="*/5 * * * *",
+    command="/usr/bin/backup.sh",
+    wrapper=False,
+)
+_REG_FP = compute_fingerprint(
+    host="reg-host",
+    source_path="/etc/crontab",
+    schedule="*/5 * * * *",
+    command="/usr/bin/backup.sh",
+)
+
+
+@pytest.mark.asyncio
+async def test_register_cron_creates_returns_tuple_true(repo: SqliteRepository) -> None:
+    """First call on a new fingerprint returns (CronRecord, True) and writes one audit row."""
+    crepo = CronRepo(repo)
+    record, created = await crepo.register_cron(
+        _REG_BODY, url_fingerprint=_REG_FP, who="testactor", ip="1.2.3.4"
+    )
+
+    assert created is True
+    assert record.fingerprint == _REG_FP
+    assert record.host == "reg-host"
+    assert record.command == "/usr/bin/backup.sh"
+    assert record.expected_grace_seconds == DEFAULT_EXPECTED_GRACE_SECONDS
+    assert record.enabled is True
+    assert record.hidden_at is None
+    assert record.wrapper_last_seen_at is None  # wrapper=False
+
+    # DB row present
+    db_row = await repo.fetch_one(
+        text("SELECT fingerprint FROM crons WHERE fingerprint = :fp"),
+        {"fp": _REG_FP},
+    )
+    assert db_row is not None
+
+    # Exactly one audit row for crons.register with correct attribution and shape
+    audit_row = await repo.fetch_one(
+        text(
+            "SELECT who, ip, before_json, after_json FROM audit_log "
+            "WHERE what = 'crons.register' ORDER BY \"when\" DESC LIMIT 1"
+        )
+    )
+    assert audit_row is not None
+    assert audit_row[0] == "testactor"
+    assert audit_row[1] == "1.2.3.4"
+    assert audit_row[2] is None  # before_json IS NULL on create
+    after = json.loads(audit_row[3])
+    assert after["fingerprint"] == _REG_FP
+
+
+@pytest.mark.asyncio
+async def test_register_cron_idempotent_returns_tuple_false_no_audit(
+    repo: SqliteRepository,
+) -> None:
+    """Second call with wrapper=False returns (CronRecord, False) and writes NO new audit row."""
+    crepo = CronRepo(repo)
+
+    body = RegisterCronBody(
+        host="reg-host",
+        source_path="/etc/crontab",
+        schedule="*/5 * * * *",
+        command="/usr/bin/backup.sh",
+        wrapper=False,
+    )
+    fp = compute_fingerprint(
+        host="reg-host",
+        source_path="/etc/crontab",
+        schedule="*/5 * * * *",
+        command="/usr/bin/backup.sh",
+    )
+
+    _, created_first = await crepo.register_cron(body, url_fingerprint=fp, who="testactor", ip=None)
+    assert created_first is True
+
+    # Audit count after first call: 1
+    audit_row = await repo.fetch_one(
+        text("SELECT COUNT(*) FROM audit_log WHERE what = 'crons.register'")
+    )
+    assert audit_row is not None
+    assert int(audit_row[0]) == 1
+
+    # Second call: same body, wrapper=False
+    _, created_second = await crepo.register_cron(
+        body, url_fingerprint=fp, who="testactor", ip=None
+    )
+    assert created_second is False
+
+    # Audit count must still be exactly 1 (no new row written)
+    audit_row2 = await repo.fetch_one(
+        text("SELECT COUNT(*) FROM audit_log WHERE what = 'crons.register'")
+    )
+    assert audit_row2 is not None
+    assert int(audit_row2[0]) == 1
+
+
+@pytest.mark.asyncio
+async def test_register_cron_refresh_emits_audit(repo: SqliteRepository) -> None:
+    """Two wrapper=True calls: first creates, second refreshes wrapper_last_seen_at with audit."""
+    crepo = CronRepo(repo)
+
+    body = RegisterCronBody(
+        host="wrap-host",
+        source_path="/etc/crontab",
+        schedule="0 * * * *",
+        command="/usr/bin/wrap.sh",
+        wrapper=True,
+    )
+    fp = compute_fingerprint(
+        host="wrap-host",
+        source_path="/etc/crontab",
+        schedule="0 * * * *",
+        command="/usr/bin/wrap.sh",
+    )
+
+    rec1, created1 = await crepo.register_cron(body, url_fingerprint=fp, who="testactor", ip=None)
+    assert created1 is True
+    assert rec1.wrapper_last_seen_at is not None
+    ts1 = rec1.wrapper_last_seen_at
+
+    rec2, created2 = await crepo.register_cron(body, url_fingerprint=fp, who="testactor", ip=None)
+    assert created2 is False
+    assert rec2.wrapper_last_seen_at is not None
+    ts2 = rec2.wrapper_last_seen_at
+    assert ts2 >= ts1
+
+    # Two audit rows: creation + refresh
+    audit_count_row = await repo.fetch_one(
+        text("SELECT COUNT(*) FROM audit_log WHERE what = 'crons.register'")
+    )
+    assert audit_count_row is not None
+    assert int(audit_count_row[0]) == 2  # noqa: PLR2004
+
+    # Second audit row: before_json has old ts, after_json has new ts
+    second_audit = await repo.fetch_one(
+        text(
+            "SELECT before_json, after_json FROM audit_log "
+            "WHERE what = 'crons.register' ORDER BY \"when\" DESC LIMIT 1"
+        )
+    )
+    assert second_audit is not None
+    before = json.loads(second_audit[0])
+    after = json.loads(second_audit[1])
+    assert before["wrapper_last_seen_at"] == ts1
+    assert after["wrapper_last_seen_at"] == ts2
+
+
+@pytest.mark.asyncio
+async def test_register_cron_first_wrapper_install_on_existing_emits_audit(
+    repo: SqliteRepository,
+) -> None:
+    """Existing row (wrapper_last_seen_at=NULL) + wrapper=True call writes audit with null→ts."""
+    crepo = CronRepo(repo)
+
+    # Manually seed a row with wrapper_last_seen_at=NULL (simulates discovery path)
+    fp = await _seed_cron(
+        repo,
+        name="discovered",
+        host="disc-host",
+        command="/usr/bin/discovered.sh",
+        schedule="30 6 * * *",
+        source_path="/etc/cron.d/discovered",
+    )
+    # Confirm wrapper_last_seen_at is NULL
+    pre_row = await repo.fetch_one(
+        text("SELECT wrapper_last_seen_at FROM crons WHERE fingerprint = :fp"),
+        {"fp": fp},
+    )
+    assert pre_row is not None
+    assert pre_row[0] is None
+
+    # Construct matching body and call register_cron with wrapper=True
+    body = RegisterCronBody(
+        host="disc-host",
+        source_path="/etc/cron.d/discovered",
+        schedule="30 6 * * *",
+        command="/usr/bin/discovered.sh",
+        wrapper=True,
+    )
+    record, created = await crepo.register_cron(body, url_fingerprint=fp, who="testactor", ip=None)
+
+    assert created is False  # row already existed
+    assert record.wrapper_last_seen_at is not None
+
+    # Exactly one audit row for this call
+    audit_row = await repo.fetch_one(
+        text(
+            "SELECT before_json, after_json FROM audit_log "
+            "WHERE what = 'crons.register' ORDER BY \"when\" DESC LIMIT 1"
+        )
+    )
+    assert audit_row is not None
+    before = json.loads(audit_row[0])
+    after = json.loads(audit_row[1])
+    assert before["wrapper_last_seen_at"] is None
+    assert after["wrapper_last_seen_at"] == record.wrapper_last_seen_at

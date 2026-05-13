@@ -51,9 +51,9 @@ async def _insert_cron(  # noqa: PLR0913
                 "INSERT INTO crons (fingerprint, name, host, command, schedule, "
                 "schedule_canonical, cadence_seconds, expected_grace_seconds, "
                 "enabled, last_seen_state, created_at, updated_at, hidden_at, "
-                "source_path, wrapper_installed_at) VALUES ("
+                "source_path, wrapper_last_seen_at) VALUES ("
                 ":fp, :name, :host, :command, :schedule, :sched_canon, :cadence, "
-                ":grace, :enabled, :last_seen, :created, :updated, :hidden, :sp, :wia)"
+                ":grace, :enabled, :last_seen, :created, :updated, :hidden, :sp, :wlsa)"
             ),
             {
                 "fp": fp,
@@ -70,7 +70,7 @@ async def _insert_cron(  # noqa: PLR0913
                 "updated": now,
                 "hidden": None,
                 "sp": source_path,
-                "wia": None,
+                "wlsa": None,
             },
         )
     return fp
@@ -550,12 +550,17 @@ async def test_expected_next_at_null_when_cadence_zero(
     assert row[0] is None
 
 
+# STAGE-002-005 D5: hidden crons accept heartbeats; they continue to capture
+# data and write audit rows. Hidden affects display + notification suppression only.
+
+
 @pytest.mark.asyncio
-async def test_heartbeat_returns_404_for_hidden_cron(
+async def test_heartbeat_returns_204_for_hidden_cron(
     api_token_client: AsyncClient,
     repo: SqliteRepository,
 ) -> None:
-    """D2a: receiver MUST 404 on hidden crons (no audit, no state row)."""
+    """D5 (STAGE-002-005): hidden_at suppresses display + notifications only;
+    /start/ok/fail accept and write state + audit normally."""
     # Seed a hidden cron.
     fp = await _insert_cron(
         repo,
@@ -563,31 +568,67 @@ async def test_heartbeat_returns_404_for_hidden_cron(
         host="h",
         command_str="/opt/test.sh",
     )
-    # Set hidden_at directly (the _insert_cron helper has no hidden param).
     async with repo.engine.begin() as conn:
         await conn.execute(
             text("UPDATE crons SET hidden_at = :ts WHERE fingerprint = :fp"),
             {"ts": utc_now_iso(), "fp": fp},
         )
 
-    # Pre-state: no audit rows for this cron, no heartbeats_state row.
     audit_before = await repo.fetch_one(
         text("SELECT COUNT(*) FROM audit_log WHERE what LIKE 'heartbeat.%'")
     )
     audit_count_before = int(audit_before[0]) if audit_before is not None else 0
 
+    # Hidden cron: /start MUST succeed (204) and write state.
     resp = await api_token_client.post(f"/api/hb/{fp}/start")
-    assert resp.status_code == 404  # noqa: PLR2004
+    assert resp.status_code == 204  # noqa: PLR2004
 
-    # Post-state: no new audit rows, no heartbeats_state row created.
+    # New audit row written.
     audit_after = await repo.fetch_one(
         text("SELECT COUNT(*) FROM audit_log WHERE what LIKE 'heartbeat.%'")
     )
     audit_count_after = int(audit_after[0]) if audit_after is not None else 0
-    assert audit_count_after == audit_count_before
+    assert audit_count_after == audit_count_before + 1
 
+    # heartbeats_state row created.
     state_row = await repo.fetch_one(
-        text("SELECT cron_fingerprint FROM heartbeats_state WHERE cron_fingerprint = :fp"),
+        text("SELECT current_state FROM heartbeats_state WHERE cron_fingerprint = :fp"),
         {"fp": fp},
     )
-    assert state_row is None
+    assert state_row is not None
+    assert state_row[0] == "running"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "verb,expected_state",
+    [("start", "running"), ("ok", "ok"), ("fail", "failed")],
+)
+async def test_heartbeat_accepts_hidden_cron_per_verb(
+    api_token_client: AsyncClient,
+    repo: SqliteRepository,
+    verb: str,
+    expected_state: str,
+) -> None:
+    """D5: each of /start /ok /fail accepts hidden crons normally."""
+    fp = await _insert_cron(
+        repo,
+        name=f"hid-{verb}",
+        host="h",
+        command_str=f"/opt/{verb}.sh",
+    )
+    async with repo.engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE crons SET hidden_at = :ts WHERE fingerprint = :fp"),
+            {"ts": utc_now_iso(), "fp": fp},
+        )
+
+    resp = await api_token_client.post(f"/api/hb/{fp}/{verb}")
+    assert resp.status_code == 204  # noqa: PLR2004
+
+    state_row = await repo.fetch_one(
+        text("SELECT current_state FROM heartbeats_state WHERE cron_fingerprint = :fp"),
+        {"fp": fp},
+    )
+    assert state_row is not None
+    assert state_row[0] == expected_state

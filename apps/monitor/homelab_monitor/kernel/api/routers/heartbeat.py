@@ -23,17 +23,29 @@ import math
 from typing import Annotated, cast
 
 import structlog
-from fastapi import APIRouter, Depends, Request
-from starlette.responses import Response
+from fastapi import APIRouter, Depends, HTTPException, Request
+from starlette.responses import JSONResponse, Response
 from structlog.stdlib import BoundLogger
 
 from homelab_monitor.kernel.api.dependencies import (
+    get_cron_repo,
     get_heartbeat_repo,
     require_token_scope,
 )
 from homelab_monitor.kernel.api.errors import NotFoundProblem, envelope_response
 from homelab_monitor.kernel.auth.models import ApiToken
 from homelab_monitor.kernel.auth.scopes import Scope
+from homelab_monitor.kernel.cron.fingerprint import compute_fingerprint
+from homelab_monitor.kernel.cron.repository import CronRepo
+from homelab_monitor.kernel.cron.schedule import (
+    InvalidCronExpression,
+    canonicalize_schedule,
+)
+from homelab_monitor.kernel.cron.schemas import (
+    CronOut,
+    RegisterCronBody,
+    cron_record_to_out,
+)
 from homelab_monitor.kernel.heartbeat.rate_limiter import cron_rate_limiter
 from homelab_monitor.kernel.heartbeat.repository import CronRecord, HeartbeatRepo
 from homelab_monitor.kernel.heartbeat.schemas import (
@@ -183,6 +195,99 @@ async def receive_fail(
         streak=state.current_streak,
     )
     return Response(status_code=204)
+
+
+@router.post(
+    "/{fingerprint}/register",
+    response_model=CronOut,
+    responses={
+        201: {"model": CronOut, "description": "Cron registered"},
+        200: {
+            "model": CronOut,
+            "description": "Cron already registered; wrapper_last_seen_at may be refreshed",
+        },
+        401: {"description": "Missing or invalid bearer token"},
+        403: {"description": "Token lacks HEARTBEAT_WRITE scope"},
+        422: {"description": "Body validation failed, fingerprint mismatch, or invalid schedule"},
+        429: {"description": "Rate limit exceeded"},
+    },
+)
+async def receive_register(
+    fingerprint: str,
+    request: Request,
+    body: RegisterCronBody,
+    token: Annotated[ApiToken, Depends(require_token_scope(Scope.HEARTBEAT_WRITE))],
+    cron_repo: Annotated[CronRepo, Depends(get_cron_repo)],
+) -> Response:
+    """Idempotent wrapper handshake.
+
+    See ``docs/architecture/cron-identity.md`` §2 for the full contract.
+    Status code matrix:
+    - 201 — new row inserted
+    - 200 — row already existed (with or without wrapper_last_seen_at refresh)
+    - 422 — fingerprint mismatch OR invalid schedule (detail flag carried)
+    - 401 / 403 — auth (handled by ``require_token_scope``)
+    - 429 — rate limited
+    """
+    # 1. URL-vs-body fingerprint check.
+    expected = compute_fingerprint(
+        host=body.host,
+        source_path=body.source_path,
+        schedule=body.schedule,
+        command=body.command,
+    )
+    if expected != fingerprint:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "fingerprint_mismatch": True,
+                "message": "URL fingerprint does not match body-computed fingerprint",
+            },
+        )
+
+    # 2. Schedule validation (croniter).
+    try:
+        canonicalize_schedule(body.schedule)
+    except InvalidCronExpression as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "invalid_schedule": True,
+                "reason": str(exc),
+            },
+        ) from exc
+
+    # 3. Rate-limit (shared 60/min per-fingerprint bucket).
+    try:
+        _enforce_rate_limit(fingerprint)
+    except _RateLimitedError as exc:
+        return _rate_limited_response(exc)
+
+    # 4. Idempotent upsert.
+    record, created = await cron_repo.register_cron(
+        body,
+        url_fingerprint=fingerprint,
+        who=token.name,
+        ip=_client_ip(request),
+    )
+
+    _log.info(
+        "heartbeat.register.received",
+        cron_fingerprint=fingerprint,
+        created=created,
+        wrapper=body.wrapper,
+    )
+
+    return _cron_json_response(
+        status=201 if created else 200,
+        record=record,
+    )
+
+
+def _cron_json_response(*, status: int, record: CronRecord) -> Response:
+    """Build a CronOut JSON response with the given HTTP status code."""
+    out = cron_record_to_out(record)
+    return JSONResponse(status_code=status, content=out.model_dump(mode="json"))
 
 
 def _rate_limited_response(exc: _RateLimitedError) -> Response:

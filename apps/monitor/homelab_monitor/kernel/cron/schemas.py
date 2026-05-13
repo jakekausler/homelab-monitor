@@ -13,7 +13,7 @@ attached.
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -21,6 +21,9 @@ from homelab_monitor.kernel.cron.schedule import (
     InvalidCronExpression,
     canonicalize_schedule,
 )
+
+if TYPE_CHECKING:
+    from homelab_monitor.kernel.cron.repository import CronRecord
 
 LastSeenState = Literal["unknown", "running", "ok", "failed", "late"]
 
@@ -99,6 +102,29 @@ class CronUpdate(BaseModel):
     hidden_at: str | None = Field(default=None, max_length=64)
 
 
+class RegisterCronBody(BaseModel):
+    """Body for ``POST /api/hb/{fingerprint}/register``.
+
+    The wrapper script (or any heartbeat client) posts the 4-tuple of identity
+    fields plus a ``wrapper`` flag. The server recomputes the fingerprint from
+    these fields and rejects with 422 if the URL fingerprint does not match
+    (defensive — should only happen if the wrapper has a hash bug or the URL is
+    tampered with).
+
+    The ``source_path`` field is optional (``None`` for remote-only crons whose
+    disk source the monitor cannot see). JSON ``null`` is the serialized form;
+    the empty string is NOT equivalent (see ``fingerprint.py`` docstring).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    host: str = Field(min_length=1, max_length=255)
+    source_path: str | None = Field(default=None, max_length=500)
+    schedule: str = Field(min_length=1, max_length=200)
+    command: str = Field(min_length=1, max_length=2000)
+    wrapper: bool = False
+
+
 # ---------- Response models ----------
 
 
@@ -142,7 +168,7 @@ class CronOut(BaseModel):
     updated_at: str
     hidden_at: str | None
     source_path: str | None
-    wrapper_installed_at: str | None
+    wrapper_last_seen_at: str | None
 
 
 class CronListResponse(BaseModel):
@@ -171,3 +197,30 @@ class PreviewRunsResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     runs: list[str]
+
+
+# ---------- Helpers ----------
+
+
+def cron_record_to_out(rec: CronRecord) -> CronOut:
+    """Convert a CronRecord (database row) to CronOut (public projection).
+
+    Shared across heartbeat and crons routers to avoid duplication.
+    """
+    return CronOut(
+        fingerprint=rec.fingerprint,
+        name=rec.name,
+        host=rec.host,
+        command=rec.command,
+        schedule=None if rec.schedule == "" else rec.schedule,
+        schedule_canonical=rec.schedule_canonical,
+        cadence_seconds=rec.cadence_seconds,
+        expected_grace_seconds=rec.expected_grace_seconds,
+        enabled=rec.enabled,
+        last_seen_state=rec.last_seen_state,  # type: ignore[arg-type]
+        created_at=rec.created_at,
+        updated_at=rec.updated_at,
+        hidden_at=rec.hidden_at,
+        source_path=rec.source_path,
+        wrapper_last_seen_at=rec.wrapper_last_seen_at,
+    )

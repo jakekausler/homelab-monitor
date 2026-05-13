@@ -27,7 +27,7 @@ from starlette.responses import Response
 from homelab_monitor.kernel.api.dependencies import get_cron_repo, require_session
 from homelab_monitor.kernel.api.errors import NotFoundProblem
 from homelab_monitor.kernel.auth.models import User
-from homelab_monitor.kernel.cron.repository import CronRecord, CronRepo, CronWithState
+from homelab_monitor.kernel.cron.repository import CronRepo, CronWithState
 from homelab_monitor.kernel.cron.schedule import (
     InvalidCronExpression,
     compute_next_runs,
@@ -41,6 +41,7 @@ from homelab_monitor.kernel.cron.schemas import (
     HeartbeatStateOut,
     PreviewRunsQuery,
     PreviewRunsResponse,
+    cron_record_to_out,
 )
 from homelab_monitor.kernel.heartbeat.schemas import query_model
 
@@ -51,27 +52,6 @@ def _client_ip(request: Request) -> str | None:
     if request.client is not None:
         return request.client.host
     return None  # pragma: no cover -- defensive
-
-
-def _record_to_out(rec: CronRecord) -> CronOut:
-    return CronOut(
-        fingerprint=rec.fingerprint,
-        name=rec.name,
-        host=rec.host,
-        command=rec.command,
-        # schedule is stored as '' for cadence-only rows; surface as None publicly.
-        schedule=None if rec.schedule == "" else rec.schedule,
-        schedule_canonical=rec.schedule_canonical,
-        cadence_seconds=rec.cadence_seconds,
-        expected_grace_seconds=rec.expected_grace_seconds,
-        enabled=rec.enabled,
-        last_seen_state=rec.last_seen_state,  # type: ignore[arg-type]
-        created_at=rec.created_at,
-        updated_at=rec.updated_at,
-        hidden_at=rec.hidden_at,
-        source_path=rec.source_path,
-        wrapper_installed_at=rec.wrapper_installed_at,
-    )
 
 
 def _with_state_to_out(joined: CronWithState) -> CronWithStateOut:
@@ -90,7 +70,7 @@ def _with_state_to_out(joined: CronWithState) -> CronWithStateOut:
             last_exit_code=s.last_exit_code,
             updated_at=s.updated_at,
         )
-    return CronWithStateOut(cron=_record_to_out(joined.cron), state=state_out)
+    return CronWithStateOut(cron=cron_record_to_out(joined.cron), state=state_out)
 
 
 # ---------------------------------------------------------------------------
@@ -115,7 +95,7 @@ async def list_crons(
         include_hidden=query.include_hidden,
     )
     return CronListResponse(
-        items=[_record_to_out(r) for r in page.items],
+        items=[cron_record_to_out(r) for r in page.items],
         total=page.total,
         page=page.page,
         page_size=page.page_size,
@@ -208,7 +188,7 @@ async def update_cron(
         )
     except LookupError as exc:
         raise NotFoundProblem(message=str(exc)) from exc
-    return _record_to_out(rec)
+    return cron_record_to_out(rec)
 
 
 @router.delete("/{fingerprint}", status_code=204)

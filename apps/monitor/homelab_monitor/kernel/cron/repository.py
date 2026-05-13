@@ -23,10 +23,44 @@ from sqlalchemy import text
 from sqlalchemy.engine import Row
 from sqlalchemy.ext.asyncio import AsyncConnection
 
-from homelab_monitor.kernel.cron.schemas import CronUpdate
+from homelab_monitor.kernel.cron.fingerprint import derive_name
+from homelab_monitor.kernel.cron.schedule import (
+    canonicalize_schedule,
+    compute_average_interval_seconds,
+)
+from homelab_monitor.kernel.cron.schemas import CronUpdate, RegisterCronBody
 from homelab_monitor.kernel.db.audit import insert_audit
 from homelab_monitor.kernel.db.repository import SqliteRepository
 from homelab_monitor.kernel.db.time import utc_now_iso
+
+# ---------------------------------------------------------------------------
+# Module-private helpers
+# ---------------------------------------------------------------------------
+
+
+def _cron_to_audit_after(record: CronRecord) -> dict[str, Any]:
+    """Convert a CronRecord to a JSON-safe dict for audit log 'after' field.
+
+    Serializes all CronRecord fields to JSON-compatible Python values.
+    """
+    return {
+        "fingerprint": record.fingerprint,
+        "name": record.name,
+        "host": record.host,
+        "command": record.command,
+        "schedule": record.schedule,
+        "schedule_canonical": record.schedule_canonical,
+        "cadence_seconds": record.cadence_seconds,
+        "expected_grace_seconds": record.expected_grace_seconds,
+        "enabled": record.enabled,
+        "last_seen_state": record.last_seen_state,
+        "created_at": record.created_at,
+        "updated_at": record.updated_at,
+        "hidden_at": record.hidden_at,
+        "source_path": record.source_path,
+        "wrapper_last_seen_at": record.wrapper_last_seen_at,
+    }
+
 
 # ---------------------------------------------------------------------------
 # Dataclasses (single source of truth — HeartbeatRepo imports CronRecord)
@@ -51,7 +85,7 @@ class CronRecord:
     updated_at: str
     hidden_at: str | None
     source_path: str | None
-    wrapper_installed_at: str | None
+    wrapper_last_seen_at: str | None
 
 
 @dataclass(slots=True, frozen=True)
@@ -112,8 +146,8 @@ def _row_to_cron(row: Row[Any]) -> CronRecord:
         updated_at=str(row.updated_at),
         hidden_at=None if row.hidden_at is None else str(row.hidden_at),
         source_path=None if row.source_path is None else str(row.source_path),
-        wrapper_installed_at=(
-            None if row.wrapper_installed_at is None else str(row.wrapper_installed_at)
+        wrapper_last_seen_at=(
+            None if row.wrapper_last_seen_at is None else str(row.wrapper_last_seen_at)
         ),
     )
 
@@ -142,11 +176,28 @@ def _row_to_state(row: Row[Any]) -> HeartbeatStateRecord:
 _CRON_COLS = (
     "fingerprint, name, host, command, schedule, schedule_canonical, "
     "cadence_seconds, expected_grace_seconds, enabled, last_seen_state, "
-    "created_at, updated_at, hidden_at, source_path, wrapper_installed_at"
+    "created_at, updated_at, hidden_at, source_path, wrapper_last_seen_at"
 )
 
 _SELECT_BY_FINGERPRINT_SQL = text(
     f"SELECT {_CRON_COLS} FROM crons WHERE fingerprint = :fingerprint"
+)
+
+_INSERT_CRON_SQL = text(
+    "INSERT INTO crons ("
+    "  fingerprint, name, host, command, schedule, schedule_canonical, "
+    "  cadence_seconds, expected_grace_seconds, enabled, last_seen_state, "
+    "  created_at, updated_at, hidden_at, source_path, wrapper_last_seen_at"
+    ") VALUES ("
+    "  :fingerprint, :name, :host, :command, :schedule, :schedule_canonical, "
+    "  :cadence_seconds, :expected_grace_seconds, :enabled, :last_seen_state, "
+    "  :created_at, :updated_at, :hidden_at, :source_path, :wrapper_last_seen_at"
+    ")"
+)
+
+_UPDATE_WRAPPER_LAST_SEEN_SQL = text(
+    "UPDATE crons SET wrapper_last_seen_at = :wlsa, updated_at = :now "
+    "WHERE fingerprint = :fingerprint"
 )
 
 _SELECT_STATE_SQL = text(
@@ -334,6 +385,10 @@ class CronRepo:
                 verb = "crons.hide"
             elif went_to_visible and not other_fields_changed:
                 verb = "crons.unhide"
+            # TODO: [STAGE-002-005 review] Combined-flip branch (hide+rename OR unhide+rename)
+            # has only the hide+rename case covered in test_cron_repo.py. Add explicit test for
+            # unhide+rename verb routing in a future hardening stage. Pre-existing pattern;
+            # behavior is correct, just lacks the parallel test.
             elif went_to_hidden or went_to_visible:
                 verb = "crons.hide" if went_to_hidden else "crons.unhide"
             else:
@@ -376,6 +431,127 @@ class CronRepo:
             raise LookupError(msg)
         payload = CronUpdate.model_validate({"hidden_at": utc_now_iso()})
         return await self.update_cron(fingerprint, payload, who=who, ip=ip)
+
+    async def register_cron(
+        self,
+        payload: RegisterCronBody,
+        *,
+        url_fingerprint: str,
+        who: str,
+        ip: str | None,
+    ) -> tuple[CronRecord, bool]:
+        """Idempotent upsert for ``POST /api/hb/{fingerprint}/register``.
+
+        Returns ``(record, created)`` where ``created`` is True on first insert
+        (-> 201) and False when the row already existed (-> 200).
+
+        Validation responsibilities (raised before this method by the router):
+        - URL fingerprint == server-recomputed fingerprint from body fields
+          (router raises 422 with ``fingerprint_mismatch`` flag)
+        - ``payload.schedule`` is a valid cron expression (router raises 422
+          with ``invalid_schedule`` flag)
+
+        Locked behavior (STAGE-002-005 D7 + D10):
+        - First insert: set name/expected_grace_seconds/enabled defaults; set
+          ``wrapper_last_seen_at`` to now if ``payload.wrapper`` else NULL.
+          Audit row written with ``before=None, after=<full row>``.
+        - Re-register with ``payload.wrapper=False``: NO state change, NO audit
+          row, return existing record.
+        - Re-register with ``payload.wrapper=True``: SET ``wrapper_last_seen_at``
+          to now (regardless of prior value — NULL or older ts). Audit row
+          written with ``before={wrapper_last_seen_at: <prev>}``,
+          ``after={wrapper_last_seen_at: <new>}``.
+        - Re-register NEVER touches ``name``, ``expected_grace_seconds``,
+          ``enabled``, ``hidden_at``, or the identity fields
+          (host/source_path/schedule/command — they're already pinned by the
+          fingerprint).
+        """
+        now = utc_now_iso()
+        schedule_canonical = canonicalize_schedule(payload.schedule)
+        cadence_seconds = compute_average_interval_seconds(payload.schedule)
+
+        async with self._db.transaction() as conn:
+            existing_row = (
+                await conn.execute(
+                    _SELECT_BY_FINGERPRINT_SQL,
+                    {"fingerprint": url_fingerprint},
+                )
+            ).first()
+
+            if existing_row is None:
+                # ---- 201 path: create ----
+                new_record_params: dict[str, Any] = {
+                    "fingerprint": url_fingerprint,
+                    "name": derive_name(payload.command),
+                    "host": payload.host,
+                    "command": payload.command,
+                    "schedule": payload.schedule,
+                    "schedule_canonical": schedule_canonical,
+                    "cadence_seconds": cadence_seconds,
+                    "expected_grace_seconds": 300,
+                    "enabled": 1,
+                    "last_seen_state": "unknown",
+                    "created_at": now,
+                    "updated_at": now,
+                    "hidden_at": None,
+                    "source_path": payload.source_path,
+                    "wrapper_last_seen_at": now if payload.wrapper else None,
+                }
+                await conn.execute(_INSERT_CRON_SQL, new_record_params)
+
+                # Hydrate the row we just wrote (so audit `after` carries the
+                # canonical projection).
+                inserted_row = (
+                    await conn.execute(
+                        _SELECT_BY_FINGERPRINT_SQL,
+                        {"fingerprint": url_fingerprint},
+                    )
+                ).first()
+                assert inserted_row is not None
+                inserted = _row_to_cron(inserted_row)
+
+                await insert_audit(
+                    conn,
+                    who=who,
+                    what="crons.register",
+                    before=None,
+                    after=_cron_to_audit_after(inserted),
+                    ip=ip,
+                    when=now,
+                )
+                return inserted, True
+
+            # ---- 200 path: exists ----
+            existing = _row_to_cron(existing_row)
+
+            if not payload.wrapper:
+                # True no-op: return existing row unchanged, no audit.
+                return existing, False
+
+            # wrapper=True on existing row → refresh wrapper_last_seen_at.
+            prev_ts = existing.wrapper_last_seen_at
+            await conn.execute(
+                _UPDATE_WRAPPER_LAST_SEEN_SQL,
+                {"wlsa": now, "now": now, "fingerprint": url_fingerprint},
+            )
+            await insert_audit(
+                conn,
+                who=who,
+                what="crons.register",
+                before={"wrapper_last_seen_at": prev_ts},
+                after={"wrapper_last_seen_at": now},
+                ip=ip,
+                when=now,
+            )
+
+            refreshed_row = (
+                await conn.execute(
+                    _SELECT_BY_FINGERPRINT_SQL,
+                    {"fingerprint": url_fingerprint},
+                )
+            ).first()
+            assert refreshed_row is not None
+            return _row_to_cron(refreshed_row), False
 
 
 # Re-export AsyncConnection so static-analyzer-driven imports stay tidy.

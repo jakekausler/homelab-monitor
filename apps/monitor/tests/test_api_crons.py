@@ -50,7 +50,7 @@ async def _seed_cron(  # noqa: PLR0913 -- seed helpers benefit from explicit kwa
                 "INSERT INTO crons (fingerprint, name, host, command, schedule, "
                 "schedule_canonical, cadence_seconds, expected_grace_seconds, "
                 "enabled, last_seen_state, created_at, updated_at, hidden_at, "
-                "source_path, wrapper_installed_at) VALUES ("
+                "source_path, wrapper_last_seen_at) VALUES ("
                 ":fp, :name, :host, :command, :schedule, :sched_canon, :cad, "
                 ":grace, :enabled, :state, :created, :updated, :hidden, :sp, :wia)"
             ),

@@ -660,7 +660,7 @@
             "title": "Updated At",
             "type": "string"
           },
-          "wrapper_installed_at": {
+          "wrapper_last_seen_at": {
             "anyOf": [
               {
                 "type": "string"
@@ -669,7 +669,7 @@
                 "type": "null"
               }
             ],
-            "title": "Wrapper Installed At"
+            "title": "Wrapper Last Seen At"
           }
         },
         "required": [
@@ -687,7 +687,7 @@
           "updated_at",
           "hidden_at",
           "source_path",
-          "wrapper_installed_at"
+          "wrapper_last_seen_at"
         ],
         "title": "CronOut",
         "type": "object"
@@ -1306,6 +1306,54 @@
           "runs"
         ],
         "title": "PreviewRunsResponse",
+        "type": "object"
+      },
+      "RegisterCronBody": {
+        "additionalProperties": false,
+        "description": "Body for ``POST /api/hb/{fingerprint}/register``.\n\nThe wrapper script (or any heartbeat client) posts the 4-tuple of identity\nfields plus a ``wrapper`` flag. The server recomputes the fingerprint from\nthese fields and rejects with 422 if the URL fingerprint does not match\n(defensive \u2014 should only happen if the wrapper has a hash bug or the URL is\ntampered with).\n\nThe ``source_path`` field is optional (``None`` for remote-only crons whose\ndisk source the monitor cannot see). JSON ``null`` is the serialized form;\nthe empty string is NOT equivalent (see ``fingerprint.py`` docstring).",
+        "properties": {
+          "command": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Command",
+            "type": "string"
+          },
+          "host": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Host",
+            "type": "string"
+          },
+          "schedule": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Schedule",
+            "type": "string"
+          },
+          "source_path": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Path"
+          },
+          "wrapper": {
+            "default": false,
+            "title": "Wrapper",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "host",
+          "schedule",
+          "command"
+        ],
+        "title": "RegisterCronBody",
         "type": "object"
       },
       "RetryResponse": {
@@ -2556,6 +2604,71 @@
           }
         },
         "summary": "Receive Ok",
+        "tags": [
+          "heartbeat"
+        ]
+      }
+    },
+    "/api/hb/{fingerprint}/register": {
+      "post": {
+        "description": "Idempotent wrapper handshake.\n\nSee ``docs/architecture/cron-identity.md`` \u00a72 for the full contract.\nStatus code matrix:\n- 201 \u2014 new row inserted\n- 200 \u2014 row already existed (with or without wrapper_last_seen_at refresh)\n- 422 \u2014 fingerprint mismatch OR invalid schedule (detail flag carried)\n- 401 / 403 \u2014 auth (handled by ``require_token_scope``)\n- 429 \u2014 rate limited",
+        "operationId": "receive_register_api_hb__fingerprint__register_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "fingerprint",
+            "required": true,
+            "schema": {
+              "title": "Fingerprint",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterCronBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CronOut"
+                }
+              }
+            },
+            "description": "Cron already registered; wrapper_last_seen_at may be refreshed"
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CronOut"
+                }
+              }
+            },
+            "description": "Cron registered"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Token lacks HEARTBEAT_WRITE scope"
+          },
+          "422": {
+            "description": "Body validation failed, fingerprint mismatch, or invalid schedule"
+          },
+          "429": {
+            "description": "Rate limit exceeded"
+          }
+        },
+        "summary": "Receive Register",
         "tags": [
           "heartbeat"
         ]
