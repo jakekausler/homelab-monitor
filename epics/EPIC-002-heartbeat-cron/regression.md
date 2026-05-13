@@ -47,3 +47,37 @@
 - [x] **CronsToolbar has no "+ Add cron" button** — toolbar contains only filter controls (host/state/search + include-hidden checkbox)
 - [x] **CronForm renders edit-only** — fields visible: name, expected_grace_seconds, enabled. No scheduleMode radio, no schedule input, no cadence_seconds input. Submit always sends CronUpdate payload (PATCH only)
 - [x] **Archive button has no confirmation modal** — clicking Archive on the cron detail page immediately calls soft-delete + navigates back to the list with `include_hidden=true`. No typed-name confirmation step. ConfirmDeleteModal component does not exist (grep returns 0 hits).
+
+## STAGE-002-005 — /api/hb/{fingerprint}/register + hidden semantic change
+
+When making changes to the heartbeat receiver or cron schema, re-verify:
+
+1. **POST /api/hb/{fingerprint}/register happy path (201):**
+   ```bash
+   # Compute fingerprint from {host, source_path, schedule, command} (JSON canonical SHA256)
+   # POST with heartbeat-write token → expect 201 + CronOut body
+   ```
+
+2. **Idempotent re-register (200 + no audit if wrapper=false):**
+   Second POST with identical body and wrapper=false returns 200; audit_log count does NOT increase.
+
+3. **Wrapper refresh (200 + audit row, D2 + D10 Path 3):**
+   Second POST with wrapper=true refreshes `wrapper_last_seen_at` AND writes a `crons.register` audit row with before/after timestamps.
+
+4. **422 fingerprint_mismatch detail flag:**
+   POST to URL with mismatching fingerprint vs body → 422 with `error.details.fingerprint_mismatch: true`.
+
+5. **422 invalid_schedule detail flag:**
+   POST with `schedule: "not a cron"` → 422 with `error.details.invalid_schedule: true, reason: <str>`.
+
+6. **Hidden cron heartbeat operations succeed (D5 architectural change):**
+   Set a cron's `hidden_at` (via PATCH). Then POST /api/hb/{fp}/start, /ok, /fail — all must return 204 (NOT 404). Audit rows must still be written. The `_SELECT_CRON_SQL` filter must NOT include `AND hidden_at IS NULL`.
+
+7. **Policy fields preserved on re-register (D7):**
+   Operator PATCH'es `name`, `expected_grace_seconds`, `enabled`. Wrapper re-registers. Those operator-set values MUST be preserved; only `wrapper_last_seen_at` mutates.
+
+8. **OpenAPI schema for /register:**
+   `GET /api/openapi.json` must show `CronOut` schema reference for both 200 and 201 responses of POST /api/hb/{fingerprint}/register, and RegisterCronBody for the request body.
+
+9. **Migration 0009 round-trip:**
+   The `wrapper_installed_at` → `wrapper_last_seen_at` rename must round-trip cleanly via alembic upgrade + downgrade.
