@@ -59,6 +59,7 @@ def _cron_to_audit_after(record: CronRecord) -> dict[str, Any]:
         "hidden_at": record.hidden_at,
         "source_path": record.source_path,
         "wrapper_last_seen_at": record.wrapper_last_seen_at,
+        "last_discovered_at": record.last_discovered_at,
     }
 
 
@@ -86,6 +87,7 @@ class CronRecord:
     hidden_at: str | None
     source_path: str | None
     wrapper_last_seen_at: str | None
+    last_discovered_at: str | None
 
 
 @dataclass(slots=True, frozen=True)
@@ -149,6 +151,9 @@ def _row_to_cron(row: Row[Any]) -> CronRecord:
         wrapper_last_seen_at=(
             None if row.wrapper_last_seen_at is None else str(row.wrapper_last_seen_at)
         ),
+        last_discovered_at=(
+            None if row.last_discovered_at is None else str(row.last_discovered_at)
+        ),
     )
 
 
@@ -176,7 +181,8 @@ def _row_to_state(row: Row[Any]) -> HeartbeatStateRecord:
 _CRON_COLS = (
     "fingerprint, name, host, command, schedule, schedule_canonical, "
     "cadence_seconds, expected_grace_seconds, enabled, last_seen_state, "
-    "created_at, updated_at, hidden_at, source_path, wrapper_last_seen_at"
+    "created_at, updated_at, hidden_at, source_path, wrapper_last_seen_at, "
+    "last_discovered_at"
 )
 
 _SELECT_BY_FINGERPRINT_SQL = text(
@@ -187,11 +193,13 @@ _INSERT_CRON_SQL = text(
     "INSERT INTO crons ("
     "  fingerprint, name, host, command, schedule, schedule_canonical, "
     "  cadence_seconds, expected_grace_seconds, enabled, last_seen_state, "
-    "  created_at, updated_at, hidden_at, source_path, wrapper_last_seen_at"
+    "  created_at, updated_at, hidden_at, source_path, wrapper_last_seen_at, "
+    "  last_discovered_at"
     ") VALUES ("
     "  :fingerprint, :name, :host, :command, :schedule, :schedule_canonical, "
     "  :cadence_seconds, :expected_grace_seconds, :enabled, :last_seen_state, "
-    "  :created_at, :updated_at, :hidden_at, :source_path, :wrapper_last_seen_at"
+    "  :created_at, :updated_at, :hidden_at, :source_path, :wrapper_last_seen_at, "
+    "  :last_discovered_at"
     ")"
 )
 
@@ -507,6 +515,7 @@ class CronRepo:
                     "hidden_at": None,
                     "source_path": payload.source_path,
                     "wrapper_last_seen_at": now if payload.wrapper else None,
+                    "last_discovered_at": None,
                 }
                 await conn.execute(_INSERT_CRON_SQL, new_record_params)
 
@@ -563,6 +572,170 @@ class CronRepo:
             ).first()
             assert refreshed_row is not None
             return _row_to_cron(refreshed_row), False
+
+    async def upsert_discovered(  # noqa: PLR0915
+        self,
+        *,
+        host: str,
+        source_path: str,
+        schedule: str,
+        command: str,
+        now: str,
+    ) -> tuple[CronRecord, bool, bool]:
+        """Upsert a discovered cron row.
+
+        Returns (record, inserted, updated_non_bump):
+        - inserted: True iff a new row was created (audit verb `crons.discover` written)
+        - updated_non_bump: True iff an existing row had a non-bump field change
+          (audit verb `crons.discover.update` written)
+        - bump-only path (existing row, no non-bump diff): only `last_discovered_at`
+          is updated, NO audit row written.
+
+        Bump field set: ONLY `last_discovered_at`.
+        Non-bump diffable fields (parser/helper may evolve): `name`, `schedule_canonical`,
+        `cadence_seconds`. `host`, `source_path`, `schedule`, `command` are baked into
+        the fingerprint and cannot change without producing a new fingerprint, so they
+        are NEVER diffed.
+
+        DOES NOT TOUCH: `enabled`, `expected_grace_seconds`, `last_seen_state`,
+        `hidden_at`, `wrapper_last_seen_at`. These are operator-controlled or set
+        by other code paths; discovery is read-only for them.
+
+        IMPORTANT: Fingerprint is computed from the RAW command (before scrubbing) to
+        ensure convergence with the wrapper installer. The scrubbed version is stored
+        in the database for display/audit purposes.
+        """
+        from homelab_monitor.kernel.cron.fingerprint import (  # noqa: PLC0415
+            compute_fingerprint,
+        )
+        from homelab_monitor.kernel.cron.schedule import (  # noqa: PLC0415
+            canonicalize_schedule,
+            compute_average_interval_seconds,
+        )
+        from homelab_monitor.kernel.cron.secrets import scrub_secrets  # noqa: PLC0415
+
+        # Compute fingerprint from RAW command (for wrapper convergence)
+        fp = compute_fingerprint(
+            host=host, source_path=source_path, schedule=schedule, command=command
+        )
+        # Scrub secrets for storage
+        scrubbed_command = scrub_secrets(command)
+        schedule_canonical = canonicalize_schedule(schedule)
+        cadence_seconds = compute_average_interval_seconds(schedule)
+
+        async with self._db.transaction() as conn:
+            existing_row = (
+                await conn.execute(_SELECT_BY_FINGERPRINT_SQL, {"fingerprint": fp})
+            ).first()
+
+            if existing_row is None:
+                # ---- INSERT path: audit verb `crons.discover`, before=None ----
+                params: dict[str, Any] = {
+                    "fingerprint": fp,
+                    "name": derive_name(command),
+                    "host": host,
+                    "command": scrubbed_command,
+                    "schedule": schedule,
+                    "schedule_canonical": schedule_canonical,
+                    "cadence_seconds": cadence_seconds,
+                    "expected_grace_seconds": 300,
+                    "enabled": 1,
+                    "last_seen_state": "unknown",
+                    "created_at": now,
+                    "updated_at": now,
+                    "hidden_at": None,
+                    "source_path": source_path,
+                    "wrapper_last_seen_at": None,
+                    "last_discovered_at": now,
+                }
+                await conn.execute(_INSERT_CRON_SQL, params)
+                inserted_row = (
+                    await conn.execute(_SELECT_BY_FINGERPRINT_SQL, {"fingerprint": fp})
+                ).first()
+                assert inserted_row is not None
+                record = _row_to_cron(inserted_row)
+                await insert_audit(
+                    conn,
+                    who="system",
+                    what="crons.discover",
+                    before=None,
+                    after=_cron_to_audit_after(record),
+                    ip=None,
+                    when=now,
+                )
+                return record, True, False
+
+            # ---- existing row path ----
+            existing = _row_to_cron(existing_row)
+
+            # Detect non-bump field drift (command, name, schedule_canonical, cadence_seconds).
+            # Command can drift if scrub_secrets() logic changes (e.g., fixing false-positive
+            # patterns). Name derives from the RAW command; it drifts if either the command
+            # or derive_name() logic changes.
+            #
+            # `name` only drifts if `derive_name(command)` produces something
+            # different from the stored value — which can only happen if a prior
+            # write mutated `name` separately. Discovery does NOT overwrite name
+            # if the user has edited it; we ONLY rewrite if it's still the
+            # `derive_name(command)` default. (See "name re-derivation rule" below.)
+            # SKIP automatic name re-derivation for now — see Risk §R5. Discovery
+            # leaves `name` alone after first insert. If a future stage wants to
+            # re-derive when the user has not edited it, gate on a separate
+            # `name_was_user_edited` flag (out of scope for 007).
+
+            diff_before: dict[str, Any] = {}
+            diff_after: dict[str, Any] = {}
+            updates: dict[str, Any] = {}
+
+            if existing.command != scrubbed_command:
+                diff_before["command"] = existing.command
+                diff_after["command"] = scrubbed_command
+                updates["command"] = scrubbed_command
+
+            derived_name = derive_name(command)
+            if existing.name != derived_name:
+                diff_before["name"] = existing.name
+                diff_after["name"] = derived_name
+                updates["name"] = derived_name
+
+            if existing.schedule_canonical != schedule_canonical:
+                diff_before["schedule_canonical"] = existing.schedule_canonical
+                diff_after["schedule_canonical"] = schedule_canonical
+                updates["schedule_canonical"] = schedule_canonical
+            if existing.cadence_seconds != cadence_seconds:
+                diff_before["cadence_seconds"] = existing.cadence_seconds
+                diff_after["cadence_seconds"] = cadence_seconds
+                updates["cadence_seconds"] = cadence_seconds
+
+            # ALWAYS bump last_discovered_at + updated_at on the existing row.
+            updates["last_discovered_at"] = now
+            updates["updated_at"] = now
+
+            set_clause = ", ".join(f"{col} = :{col}" for col in updates)
+            update_sql = text(f"UPDATE crons SET {set_clause} WHERE fingerprint = :fp")
+            await conn.execute(update_sql, {**updates, "fp": fp})
+
+            updated_non_bump = bool(diff_before)  # any non-bump field changed
+            if updated_non_bump:
+                diff_before["fingerprint"] = fp
+                diff_after["fingerprint"] = fp
+                diff_before["updated_at"] = existing.updated_at
+                diff_after["updated_at"] = now
+                await insert_audit(
+                    conn,
+                    who="system",
+                    what="crons.discover.update",
+                    before=diff_before,
+                    after=diff_after,
+                    ip=None,
+                    when=now,
+                )
+
+            refreshed_row = (
+                await conn.execute(_SELECT_BY_FINGERPRINT_SQL, {"fingerprint": fp})
+            ).first()
+            assert refreshed_row is not None
+            return _row_to_cron(refreshed_row), False, updated_non_bump
 
 
 # Re-export AsyncConnection so static-analyzer-driven imports stay tidy.

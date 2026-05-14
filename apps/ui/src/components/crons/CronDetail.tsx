@@ -190,7 +190,15 @@ function DiskSourcePanel({ cron, isRemote }: { cron: Schema<'CronOut'>; isRemote
         <Row label="Command">
           <span className="font-mono break-all">{cron.command}</span>
         </Row>
-        {/* TODO(STAGE-002-007): render Last discovered from cron.last_discovered_at once discovery ships */}
+        <Row label="Last discovered">
+          {cron.last_discovered_at !== null ? (
+            <span title={formatAbsolute(cron.last_discovered_at)}>
+              {formatRelative(cron.last_discovered_at)}
+            </span>
+          ) : (
+            <span className="text-muted-foreground">—</span>
+          )}
+        </Row>
       </CardContent>
     </Card>
   )

@@ -203,6 +203,27 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
         )
         degraded.append("log_stream_budget")
 
+    try:
+        from homelab_monitor.plugins.discoverers.cron_discoverer import (  # noqa: PLC0415
+            CronDiscoverer,
+        )
+
+        loader.register(
+            CronDiscoverer,
+            {
+                "name": "cron-discoverer",
+                "interval_seconds": int(CronDiscoverer.interval.total_seconds()),
+                "timeout_seconds": int(CronDiscoverer.timeout.total_seconds()),
+            },
+        )
+    except Exception as exc:  # pragma: no cover -- defensive
+        log.warning(
+            "lifespan.collector_register_failed",
+            name="cron-discoverer",
+            error=str(exc),
+        )
+        degraded.append("cron-discoverer")
+
     plugins_env = os.environ.get("HOMELAB_MONITOR_PLUGINS_DIR")
     if plugins_env is not None:
         plugins_dir: Path | None = Path(plugins_env)
@@ -259,6 +280,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
         dispatcher=alert_dispatcher,
     )
 
+    # 6b. Clear all quarantine on startup (prevents stale quarantine from blocking redeploys)
+    quarantine_cleared = await failure_budget.clear_all_quarantine(by="system_startup")
+    if quarantine_cleared > 0:
+        log.info(
+            "lifespan.quarantine_cleared_on_startup",
+            count=quarantine_cleared,
+        )
+
     def ctx_factory(c: Collector) -> CollectorContext:
         """Build a CollectorContext for a collector."""
         secrets_view = ttl_resolver.current().filtered(loader.declared_secrets(c.name))
@@ -280,12 +309,21 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
     # than mutating private attrs post-construction. Currently this is the
     # cleanest path because the loader doesn't support DI on registration.
     # Revisit when adding the next stateful collector.
-    for c in collectors:
+    for lc in collectors:
+        c = lc.collector  # unwrap LoadedCollector to get the actual collector instance
         # only fires when LogStreamBudgetCollector is loaded (integration-only)
         if isinstance(c, LogStreamBudgetCollector):  # pragma: no cover
             c._state = log_stream_state  # pyright: ignore[reportPrivateUsage]
             c._vl_url = vl_url.rstrip("/")  # pyright: ignore[reportPrivateUsage]
             c._http_client = http_client  # pyright: ignore[reportPrivateUsage]
+        # Wire cron_repo into the CronDiscoverer instance for API endpoint access
+        from homelab_monitor.plugins.discoverers.cron_discoverer import (  # noqa: PLC0415
+            CronDiscoverer,
+        )
+
+        if isinstance(c, CronDiscoverer):
+            c.cron_repo = cron_repo
+            app.state.cron_discoverer = c
     scheduler = Scheduler(
         collectors,
         ctx_factory,

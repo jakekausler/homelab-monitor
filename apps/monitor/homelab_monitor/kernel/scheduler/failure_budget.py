@@ -429,3 +429,27 @@ class FailureBudget:
             name=name,
             cleared_by=by,
         )
+
+    async def clear_all_quarantine(self, by: str = "system") -> int:
+        """Clear all quarantined collectors on startup.
+
+        Idempotent: if no collectors are quarantined, returns 0.
+
+        Args:
+            by: Actor identifier for audit ``who`` field. Default
+                ``"system"`` for startup clearing.
+
+        Returns:
+            Count of collectors that were quarantined and cleared.
+        """
+        if not self._loaded:
+            await self.load_state()
+
+        cleared_names = list(self._quarantined.keys())
+        if not cleared_names:
+            return 0
+
+        for name in cleared_names:
+            await self.clear_quarantine(name, by=by)
+
+        return len(cleared_names)

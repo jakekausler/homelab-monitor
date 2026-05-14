@@ -537,6 +537,7 @@ async def test_migration_0008_crons_columns_present(db_engine: AsyncEngine) -> N
         "hidden_at",
         "source_path",
         "wrapper_last_seen_at",
+        "last_discovered_at",
     }
     forbidden = {"id", "integration_mode", "archived_at"}
 

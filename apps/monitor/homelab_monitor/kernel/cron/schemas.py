@@ -170,6 +170,7 @@ class CronOut(BaseModel):
     hidden_at: str | None
     source_path: str | None
     wrapper_last_seen_at: str | None
+    last_discovered_at: str | None
 
 
 class CronListResponse(BaseModel):
@@ -224,4 +225,5 @@ def cron_record_to_out(rec: CronRecord) -> CronOut:
         hidden_at=rec.hidden_at,
         source_path=rec.source_path,
         wrapper_last_seen_at=rec.wrapper_last_seen_at,
+        last_discovered_at=rec.last_discovered_at,
     )

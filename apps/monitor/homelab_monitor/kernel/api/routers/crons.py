@@ -19,14 +19,21 @@ Preview endpoints (read-only, GET):
 
 from __future__ import annotations
 
+import asyncio
+import time as _time
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Request
-from starlette.responses import Response
+from starlette.responses import Response as _FastApiResponse
 
 from homelab_monitor.kernel.api.dependencies import get_cron_repo, require_session
-from homelab_monitor.kernel.api.errors import NotFoundProblem
+from homelab_monitor.kernel.api.errors import (
+    DependencyUnavailableProblem,
+    NotFoundProblem,
+    TooManyRequestsProblem,
+)
 from homelab_monitor.kernel.auth.models import User
+from homelab_monitor.kernel.cron.discovery_types import CronScanResult
 from homelab_monitor.kernel.cron.repository import CronRepo, CronWithState
 from homelab_monitor.kernel.cron.schedule import (
     InvalidCronExpression,
@@ -46,6 +53,11 @@ from homelab_monitor.kernel.cron.schemas import (
 from homelab_monitor.kernel.heartbeat.schemas import query_model
 
 router = APIRouter(prefix="/crons", tags=["crons"])
+
+# Throttle state for discover-now endpoint
+_DISCOVER_NOW_THROTTLE_SECONDS = 10.0
+_discover_now_lock = asyncio.Lock()
+_discover_now_last_call: float = 0.0
 
 
 def _client_ip(request: Request) -> str | None:
@@ -198,10 +210,59 @@ async def delete_cron(
     request: Request,
     user: Annotated[User, Depends(require_session())],
     repo: Annotated[CronRepo, Depends(get_cron_repo)],
-) -> Response:
+) -> None:
     """Soft-delete (hide) a cron. 404 if missing OR already hidden."""
     try:
         await repo.soft_delete_cron(fingerprint, who=user.username, ip=_client_ip(request))
     except LookupError as exc:
         raise NotFoundProblem(message=str(exc)) from exc
-    return Response(status_code=204)
+
+
+@router.post("/discover-now", status_code=202)
+async def discover_now(
+    request: Request,
+    response: _FastApiResponse,
+    user: Annotated[User, Depends(require_session())],
+) -> dict[str, object]:
+    """Trigger an ad-hoc cron discovery scan. Throttled to once per 10s.
+
+    Admin-only via session auth. 429 with Retry-After when called within
+    the throttle window. 202 Accepted on success, with a JSON summary of
+    the scan result.
+    """
+    global _discover_now_last_call  # noqa: PLW0603
+    async with _discover_now_lock:
+        now = _time.monotonic()
+        elapsed = now - _discover_now_last_call
+        if elapsed < _DISCOVER_NOW_THROTTLE_SECONDS:
+            retry_after = max(1, int(_DISCOVER_NOW_THROTTLE_SECONDS - elapsed))
+            raise TooManyRequestsProblem(
+                code="discover_now_throttled",
+                message=f"discovery scan recently triggered; retry in {retry_after}s",
+                details={"retry_after_seconds": retry_after},
+            )
+        _discover_now_last_call = now
+
+        discoverer = getattr(request.app.state, "cron_discoverer", None)
+        if discoverer is None:
+            raise DependencyUnavailableProblem(
+                code="cron_discoverer_unavailable",
+                message="cron-discoverer plugin not registered",
+            )
+        cron_repo = request.app.state.cron_repo
+        # use the lifespan logger instead — fetch from app.state if available
+        import structlog  # noqa: PLC0415
+
+        bound_log = structlog.stdlib.get_logger().bind(component="discover-now", who=user.username)
+        result: CronScanResult = await discoverer.scan(cron_repo, log=bound_log)
+        return {
+            "found_count": len(result.found_fingerprints),
+            "inserted_count": result.inserted_count,
+            "updated_count": result.updated_count,
+            "bump_only_count": result.bump_only_count,
+            "partial": result.partial,
+            "error_count": len(result.errors),
+            "errors": [
+                {"host_source_path": e.host_source_path, "error": e.error} for e in result.errors
+            ],
+        }

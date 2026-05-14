@@ -63,6 +63,9 @@ select = ["E", "F", "I", "B", "UP", "ANN", "SIM", "PL", "RUF"]
 # - RUF100: some `# noqa:` comments target rules used elsewhere in the file;
 #   ruff sees them as unused but they document the suppression intent for readers.
 "tests/test_coverage_gaps.py" = ["PLC0415", "RUF100"]
+# pytest fixtures (repo, tmp_path, monkeypatch, capsys, etc.) conventionally
+# lack type annotations; ANN001/ANN002/ANN003 suppressions for all test files.
+"tests/*.py" = ["ANN001", "ANN002", "ANN003"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

@@ -231,6 +231,141 @@ Operator action after intentional crontab edits: hide the stale row.
 | POST | `/api/hb/{fingerprint}/{start,ok,fail}` | Heartbeat receiver — 404 if fingerprint unknown |
 | POST | `/api/hb/{fingerprint}/register` | Wrapper handshake — upsert row; on `wrapper: true` refresh ``wrapper_last_seen_at`` (STAGE-002-005) |
 
+## Discovery (STAGE-002-007)
+
+The `cron-discoverer` builtin plugin polls the host's crontab files on a
+configurable interval (default 300s) and upserts the registry directly —
+no suggestion queue.
+
+### Sources scanned
+
+- `/etc/crontab` (system-wide; has USER field).
+- `/etc/cron.d/*` (drop-in files; have USER field; dotfiles skipped).
+- `/var/spool/cron/crontabs/*` (per-user; no USER field; filename = username).
+
+Each file is bind-mounted read-only into the container at `/host/etc/...` and
+`/host/var/spool/cron/crontabs/...`. The container runs as a dedicated host
+user — see `docs/deploy/host-prerequisites.md`.
+
+### `source_path` convention
+
+The DB stores HOST paths, not container paths:
+
+| File on host                              | `source_path` in DB     |
+|-------------------------------------------|-------------------------|
+| `/etc/crontab`                            | `/etc/crontab`          |
+| `/etc/cron.d/certbot`                     | `/etc/cron.d/certbot`   |
+| `/var/spool/cron/crontabs/alice`          | `crontab:alice`         |
+
+This decoupling is critical: wrapper installers (STAGE-002-006) commit to
+host paths. Discovery must use the same convention so the same cron has the
+same fingerprint regardless of which subsystem registered it first.
+
+### `last_discovered_at`
+
+UTC ISO-8601 timestamp; bumped on every discovery scan that sees the
+fingerprint. NULL means the discoverer has never seen this cron — typical
+for wrapper-only crons registered via `/api/hb/{fp}/register` from a remote
+host.
+
+This column DOES NOT signal "stale" or "deleted" on its own. STAGE-002-007A
+introduces `soft_deleted_at` for that purpose.
+
+### Audit verbs
+
+- `crons.discover` — new fingerprint inserted by discovery. `who="system"`,
+  `before=null`, `after=full row dict`.
+- `crons.discover.update` — existing fingerprint, non-bump field changed
+  (`name`, `schedule_canonical`, or `cadence_seconds`). Rare — typically
+  only when canonicalization rules or `derive_name` logic changes.
+- Bump-only path (just `last_discovered_at` updated) emits NO audit row.
+  Audit volume in steady state is ~0 rows/day from discovery.
+
+### Fingerprint stability & churn
+
+Per **D7**, the fingerprint is computed from the RAW schedule string on
+disk. Editing `@hourly` to `0 * * * *` changes the fingerprint, producing a
+new row. STAGE-002-007A's soft-delete will mark the old row as gone within
+one scan cycle. Acceptable churn for the operator-rare action of editing a
+schedule's textual representation.
+
+### Cross-stage interfaces
+
+- **STAGE-002-007A** consumes the `CronScanResult.partial` flag to gate
+  soft-delete reconciliation.
+- **STAGE-002-010** owns the `@reboot` lateness rule (compares
+  `heartbeats_state.last_ok_at` to host `last_boot_at`). Discovery is
+  responsible for storing the row with `cadence_seconds=0` so the lateness
+  rule has something to query.
+
+### Discoverer plugin shape
+
+The discoverer is a standard in-process `BaseCollector` registered by
+the kernel lifespan. Class-level configuration:
+
+| Attribute | Value | Effect |
+|---|---|---|
+| `name` | `"cron-discoverer"` | Identifier used in `homelab_collector_run_*` metrics and the scheduler registry. |
+| `interval` | `timedelta(seconds=HM_CRON_DISCOVERY_INTERVAL_SECONDS)` | Default 300s, resolved at module import. To override at runtime in tests, monkeypatch `CronDiscoverer.interval` directly. |
+| `timeout` | `timedelta(seconds=60)` | Hard scheduler timeout per tick. |
+| `concurrency_group` | `"discovery"` | Serializes against future discoverers (host/container/etc.) — only one discoverer scans at a time. |
+| `run_kind` | `RunKind.ASYNC` | In-process, no subprocess overhead. |
+| `trust_level` | `TrustLevel.BUILTIN` | Bypasses signature checks; ships with the kernel. |
+
+Source: `apps/monitor/homelab_monitor/plugins/discoverers/cron_discoverer.py`.
+
+### Manual trigger: `POST /api/crons/discover-now`
+
+**Auth:** session-only (admin dashboard surface). Inherits CSRF.
+
+**Throttle:** one call per 10 seconds, process-wide. Returns 429 with
+`{"code": "discover_now_throttled", "details": {"retry_after_seconds": N}}`
+inside the standard problem envelope. The throttle is in-memory (resets
+on monitor restart).
+
+**503:** Returns `dependency_unavailable` (code `cron_discoverer_unavailable`)
+if the discoverer was not registered at startup (e.g., the plugin failed
+to load).
+
+**202 response shape** (a JSON summary of the scan):
+
+```json
+{
+  "found_count": 17,
+  "inserted_count": 0,
+  "updated_count": 0,
+  "bump_only_count": 17,
+  "partial": false,
+  "error_count": 0,
+  "errors": []
+}
+```
+
+`errors[]` entries (only present when `partial: true` and individual
+files produced errors) carry `{"host_source_path": "...", "error": "..."}`.
+
+### CLI: `hm cron discover` and `hm collector unquarantine`
+
+Operator-side CLI entry points (defined in
+`apps/monitor/homelab_monitor/cli/cron.py` and `cli/collector.py`):
+
+```bash
+# One-shot discovery scan. Same code path as the scheduled tick;
+# writes the same audit verbs. Exits non-zero if scan was partial.
+uv run hm cron discover
+
+# Clear quarantine for one collector (or all if name omitted).
+# Use after a discoverer outage to re-enable the scheduler tick.
+uv run hm collector unquarantine cron-discoverer
+uv run hm collector unquarantine                   # clear all
+```
+
+`hm cron discover` is useful for first-time setup verification (run
+manually, confirm rows land in the DB) and for ad-hoc reconciliation
+without going through the API. `hm collector unquarantine` is the
+recovery path when the scheduler's failure-budget circuit-breaker has
+shelved the discoverer after repeated tick failures.
+
 ## Audit verb taxonomy
 
 - `crons.discover` — Auto-discovery scan creates a row (STAGE-002-007).

@@ -61,13 +61,33 @@ def test_fingerprint_unicode_command_does_not_crash() -> None:
 @pytest.mark.parametrize(
     ("command", "expected"),
     [
+        # Good cases (existing behavior preserved)
         ("/opt/scripts/backup.sh", "backup.sh"),
         ("/usr/bin/true", "true"),
         ("backup.sh", "backup.sh"),
-        ("python3 /opt/sync.py", "python3"),
+        ("/usr/bin/certbot renew --quiet", "certbot"),
+        ("/storage/scripts/startup/startup.sh", "startup.sh"),
         ("/opt/scripts/backup.sh --flag --other", "backup.sh"),
+        # Shell-wrapper skips (NEW)
+        ("bash /home/jakekausler/backup_library.sh", "backup_library.sh"),
+        ("sh /opt/script.sh", "script.sh"),
+        ("sudo /usr/bin/foo", "foo"),
+        ("nohup /usr/bin/foo &", "foo"),
+        ("env VAR=value /usr/bin/foo", "foo"),
+        # Conditional guards (NEW)
+        ("test -x /usr/sbin/anacron || run-parts", "anacron"),
+        ("test -x /sbin/e2scrub_all && /sbin/e2scrub_all -A", "e2scrub_all"),
+        ("command -v debian-sa1 > /dev/null && debian-sa1 1 1", "debian-sa1"),
+        ("[ -x /usr/lib/php/sessionclean ] && /usr/lib/php/sessionclean", "sessionclean"),
+        ("cd / && run-parts --report /etc/cron.hourly", "run-parts"),
+        # Pipelines (first binary)
+        ("mysqldump -u user -psecret db | gzip > out.gz", "mysqldump"),
+        # Edge cases — fallback to "cron"
         ("", "cron"),
         ("   ", "cron"),
+        ("test", "cron"),
+        ("bash", "cron"),
+        ("test -x /path", "path"),  # test is wrapper, -x is flag, /path's basename is path
         ("/", "cron"),
     ],
 )

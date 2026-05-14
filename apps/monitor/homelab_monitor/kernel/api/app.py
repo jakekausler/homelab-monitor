@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+import logging
+import os
+from pathlib import Path
+
 from fastapi import FastAPI
+from starlette.staticfiles import StaticFiles
 
 from homelab_monitor import __version__
 from homelab_monitor.kernel.api.errors import register_error_handlers
@@ -28,6 +33,8 @@ from homelab_monitor.kernel.api.routers import (
     observability,
 )
 from homelab_monitor.kernel.api.routers import auth as auth_router
+
+logger = logging.getLogger(__name__)
 
 
 def create_app(*, lifespan_enabled: bool = True) -> FastAPI:
@@ -81,5 +88,23 @@ def create_app(*, lifespan_enabled: bool = True) -> FastAPI:
     app.include_router(heartbeat.router, prefix="/api")
     app.include_router(crons.router, prefix="/api")
     app.include_router(observability.router)  # mounted at root: /metrics
+
+    # Mount the built UI as static files with SPA fallback.
+    # In production (docker), HOMELAB_MONITOR_UI_DIR defaults to /app/ui (where the built UI lives).
+    # In dev (local), the UI is served separately by Vite, so this mount is skipped.
+    ui_dir = Path(os.getenv("HOMELAB_MONITOR_UI_DIR", "/app/ui"))
+    index_html = ui_dir / "index.html"
+    if ui_dir.is_dir() and index_html.is_file():
+        # Starlette's StaticFiles with html=True enables SPA mode:
+        # - Serves files (JS, CSS, etc.) as-is when they match.
+        # - For non-existent paths (client-side router routes), falls back to index.html.
+        # - API routes (already handled by FastAPI routers above) are not affected.
+        app.mount("/", StaticFiles(directory=ui_dir, html=True), name="ui")
+        logger.info(f"UI mounted at / from {ui_dir}")
+    else:
+        logger.debug(
+            f"UI directory not found or incomplete: {ui_dir} (expected {index_html}). "
+            "Skipping UI mount."
+        )
 
     return app

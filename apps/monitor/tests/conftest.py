@@ -170,3 +170,27 @@ async def api_token_client(
             headers={"Authorization": f"Bearer {plaintext}"},
         ) as client:
             yield client
+
+
+@pytest_asyncio.fixture
+async def unauthenticated_client(
+    db_url: str, master_key: bytes, monkeypatch: pytest.MonkeyPatch
+) -> AsyncIterator[AsyncClient]:
+    """Async httpx client with no authentication.
+
+    Useful for testing 401/403 error cases. The app is initialized with
+    lifespan enabled so discoverer and other state is available.
+    """
+    monkeypatch.setenv("HOMELAB_MONITOR_DB_URL", db_url)
+    monkeypatch.setenv("HOMELAB_MONITOR_MASTER_KEY", base64.b64encode(master_key).decode())
+    monkeypatch.setenv("HOMELAB_MONITOR_HTTPS_ONLY_COOKIES", "false")
+    monkeypatch.setenv("HOMELAB_MONITOR_ALERTMANAGER_URL", "disabled")
+
+    from homelab_monitor.kernel.api.app import create_app  # noqa: PLC0415
+
+    app = create_app(lifespan_enabled=True)
+    async with (
+        app.router.lifespan_context(app),
+        AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client,
+    ):
+        yield client

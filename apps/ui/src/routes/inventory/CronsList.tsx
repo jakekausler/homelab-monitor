@@ -1,7 +1,9 @@
 import { useMemo } from 'react'
 import { useNavigate, useSearch } from '@tanstack/react-router'
+import { toast } from 'sonner'
 
-import { useListCrons } from '@/api/crons'
+import { useListCrons, useDiscoverNow } from '@/api/crons'
+import { ApiError } from '@/api/client'
 import { CronsTable } from '@/components/crons/CronsTable'
 import { CronsToolbar, type ToolbarFilters } from '@/components/crons/CronsToolbar'
 import { Button } from '@/components/ui/button'
@@ -9,6 +11,7 @@ import { Button } from '@/components/ui/button'
 export function CronsListPage() {
   const search = useSearch({ from: '/protected/inventory/crons' })
   const navigate = useNavigate()
+  const discover = useDiscoverNow()
 
   const filters: ToolbarFilters = {
     ...(search.host !== undefined && { host: search.host }),
@@ -31,6 +34,27 @@ export function CronsListPage() {
     ...(filters.q !== undefined && { q: filters.q }),
     include_hidden: filters.include_hidden,
   })
+
+  const handleDiscoverNow = async () => {
+    try {
+      const result = await discover.mutateAsync()
+      const msg = `Discovery scan complete. ${result.found_count} crons found${
+        result.error_count > 0 ? ` — ${result.error_count} errors` : ''
+      }.`
+      toast.success(msg)
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 429) {
+        const retryAfter = err.retryAfterSeconds != null ? String(err.retryAfterSeconds) : null
+        if (retryAfter) {
+          toast.error(`Discovery scan recently triggered. Retry in ${retryAfter}s.`)
+        } else {
+          toast.error('Discovery scan recently triggered. Try again later.')
+        }
+      } else {
+        toast.error('Discovery scan failed.')
+      }
+    }
+  }
 
   const knownHosts = useMemo(() => {
     const items = list.data?.items ?? []
@@ -61,6 +85,8 @@ export function CronsListPage() {
         filters={filters}
         knownHosts={knownHosts}
         onFiltersChange={handleFiltersChange}
+        onDiscoverNow={() => void handleDiscoverNow()}
+        isDiscovering={discover.isPending}
       />
 
       {list.error && (

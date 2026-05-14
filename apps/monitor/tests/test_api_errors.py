@@ -306,6 +306,39 @@ async def test_handle_generic_exception_returns_500() -> None:
 
 
 @pytest.mark.asyncio
+async def test_handle_too_many_requests_without_details_omits_retry_after() -> None:
+    """_handle_too_many_requests returns 429 with no Retry-After when details is None."""
+    from homelab_monitor.kernel.api.errors import (  # noqa: PLC0415
+        TooManyRequestsProblem,
+        _handle_too_many_requests,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    request = type("Request", (), {"app": type("App", (), {"state": type("State", (), {})()})()})()  # pyright: ignore[reportArgumentType]
+    exc = TooManyRequestsProblem(message="try later", details=None)
+    response = await _handle_too_many_requests(request, exc)  # pyright: ignore[reportArgumentType]
+    assert response.status_code == 429  # noqa: PLR2004
+    assert "retry-after" not in {k.lower() for k in response.headers}
+
+
+@pytest.mark.asyncio
+async def test_handle_too_many_requests_with_details_but_no_retry_after_key() -> None:
+    """_handle_too_many_requests returns 429 with no Retry-After.
+
+    When details lacks retry_after_seconds.
+    """
+    from homelab_monitor.kernel.api.errors import (  # noqa: PLC0415
+        TooManyRequestsProblem,
+        _handle_too_many_requests,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    request = type("Request", (), {"app": type("App", (), {"state": type("State", (), {})()})()})()  # pyright: ignore[reportArgumentType]
+    exc = TooManyRequestsProblem(message="try later", details={"other": "value"})
+    response = await _handle_too_many_requests(request, exc)  # pyright: ignore[reportArgumentType]
+    assert response.status_code == 429  # noqa: PLR2004
+    assert "retry-after" not in {k.lower() for k in response.headers}
+
+
+@pytest.mark.asyncio
 async def test_handle_http_exception_with_dict_detail() -> None:
     """_handle_http_exception preserves dict-shaped details from FastAPI validation errors."""
     from fastapi import HTTPException  # noqa: PLC0415

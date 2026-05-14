@@ -138,6 +138,28 @@ class ConflictProblem(HttpProblem):
         )
 
 
+class TooManyRequestsProblem(HttpProblem):
+    """429 Too Many Requests."""
+
+    DEFAULT_STATUS = 429
+    DEFAULT_CODE = "too_many_requests"
+
+    def __init__(
+        self,
+        *,
+        message: str,
+        details: dict[str, Any] | None = None,
+        status_code: int | None = None,
+        code: str | None = None,
+    ) -> None:
+        super().__init__(
+            status_code=status_code if status_code is not None else self.DEFAULT_STATUS,
+            code=code if code is not None else self.DEFAULT_CODE,
+            message=message,
+            details=details,
+        )
+
+
 class DependencyUnavailableProblem(HttpProblem):
     """503 Service Unavailable."""
 
@@ -168,6 +190,19 @@ def envelope_response(
     return JSONResponse(status_code=status, content=payload.model_dump(mode="json"))
 
 
+async def _handle_too_many_requests(request: Request, exc: Exception) -> JSONResponse:
+    """Handle TooManyRequestsProblem with Retry-After header."""
+    del request
+    assert isinstance(exc, TooManyRequestsProblem)
+    response = envelope_response(exc.status_code, exc.code, exc.message, exc.details)
+    # Extract retry_after_seconds from details if present
+    if exc.details:
+        retry_after = exc.details.get("retry_after_seconds")
+        if retry_after is not None:
+            response.headers["Retry-After"] = str(retry_after)
+    return response
+
+
 async def _handle_http_problem(request: Request, exc: Exception) -> JSONResponse:
     """Handle HttpProblem exceptions."""
     del request
@@ -194,6 +229,8 @@ async def _handle_http_exception(request: Request, exc: Exception) -> JSONRespon
         404: "not_found",
         409: "conflict",
         422: "validation_error",
+        429: "too_many_requests",
+        503: "service_unavailable",
     }
     code = status_to_code.get(exc.status_code, "internal_error")
     # Preserve dict-shaped details (FastAPI validation errors); coerce string
@@ -237,6 +274,7 @@ async def _handle_generic_exception(request: Request, exc: Exception) -> JSONRes
 
 def register_error_handlers(app: FastAPI) -> None:
     """Register all exception handlers on the FastAPI app."""
+    app.add_exception_handler(TooManyRequestsProblem, _handle_too_many_requests)
     app.add_exception_handler(HttpProblem, _handle_http_problem)
     app.add_exception_handler(ValidationError, _handle_validation_error)
     app.add_exception_handler(HTTPException, _handle_http_exception)

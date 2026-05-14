@@ -94,13 +94,13 @@ assert_ports_free() {
   local ports=(
     "${HM_DEV_UI_PORT:-5180}"
     "${HM_DEV_BACKEND_PORT:-19090}"
-    "${HM_DEV_VM_PORT:-8428}"
-    "${HM_DEV_VL_PORT:-9428}"
-    "${HM_DEV_AM_PORT:-9093}"
-    "${HM_DEV_KARMA_PORT:-8081}"
-    "${HM_DEV_GRAFANA_PORT:-3000}"
-    "${HM_DEV_VMALERT_METRICS_PORT:-8880}"
-    "${HM_DEV_VMALERT_LOGS_PORT:-8881}"
+    "${HM_DEV_VM_PORT:-18428}"
+    "${HM_DEV_VL_PORT:-19428}"
+    "${HM_DEV_AM_PORT:-19093}"
+    "${HM_DEV_KARMA_PORT:-18080}"
+    "${HM_DEV_GRAFANA_PORT:-13000}"
+    "${HM_DEV_VMALERT_METRICS_PORT:-18880}"
+    "${HM_DEV_VMALERT_LOGS_PORT:-18881}"
   )
   local detector=""
   if command -v ss >/dev/null 2>&1; then detector="ss"
@@ -312,13 +312,13 @@ print_banner() {
   Backend healthz:   ${backend_url}/api/healthz
 
   Sidecars (host-direct, hybrid mode only):
-    Alertmanager:    http://127.0.0.1:${HM_DEV_AM_PORT:-9093}
-    Karma:           http://127.0.0.1:${HM_DEV_KARMA_PORT:-8081}
-    Grafana:         http://127.0.0.1:${HM_DEV_GRAFANA_PORT:-3000}
-    VictoriaMetrics: http://127.0.0.1:${HM_DEV_VM_PORT:-8428}
-    VictoriaLogs:    http://127.0.0.1:${HM_DEV_VL_PORT:-9428}
-    vmalert (metrics): http://127.0.0.1:${HM_DEV_VMALERT_METRICS_PORT:-8880}
-    vmalert (logs):    http://127.0.0.1:${HM_DEV_VMALERT_LOGS_PORT:-8881}
+    Alertmanager:    http://127.0.0.1:${HM_DEV_AM_PORT:-19093}
+    Karma:           http://127.0.0.1:${HM_DEV_KARMA_PORT:-18080}
+    Grafana:         http://127.0.0.1:${HM_DEV_GRAFANA_PORT:-13000}
+    VictoriaMetrics: http://127.0.0.1:${HM_DEV_VM_PORT:-18428}
+    VictoriaLogs:    http://127.0.0.1:${HM_DEV_VL_PORT:-19428}
+    vmalert (metrics): http://127.0.0.1:${HM_DEV_VMALERT_METRICS_PORT:-18880}
+    vmalert (logs):    http://127.0.0.1:${HM_DEV_VMALERT_LOGS_PORT:-18881}
 
   Login:
     username:        ${HM_DEV_ADMIN_USERNAME:-admin}

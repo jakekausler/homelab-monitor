@@ -57,6 +57,9 @@ def _row_to_cron(row: Row[Any]) -> CronRecord:
         wrapper_last_seen_at=(
             None if row.wrapper_last_seen_at is None else str(row.wrapper_last_seen_at)
         ),
+        last_discovered_at=(
+            None if row.last_discovered_at is None else str(row.last_discovered_at)
+        ),
     )
 
 
@@ -80,7 +83,8 @@ def _row_to_state(row: Row[Any]) -> HeartbeatStateRecord:
 _SELECT_CRON_SQL = text(
     "SELECT fingerprint, name, host, command, schedule, schedule_canonical, "
     "cadence_seconds, expected_grace_seconds, enabled, last_seen_state, "
-    "created_at, updated_at, hidden_at, source_path, wrapper_last_seen_at "
+    "created_at, updated_at, hidden_at, source_path, wrapper_last_seen_at, "
+    "last_discovered_at "
     "FROM crons WHERE fingerprint = :fingerprint"
 )
 
@@ -178,7 +182,8 @@ class HeartbeatRepo:
             text(
                 "SELECT fingerprint, name, host, command, schedule, schedule_canonical, "
                 "cadence_seconds, expected_grace_seconds, enabled, last_seen_state, "
-                "created_at, updated_at, hidden_at, source_path, wrapper_last_seen_at "
+                "created_at, updated_at, hidden_at, source_path, wrapper_last_seen_at, "
+                "last_discovered_at "
                 "FROM crons ORDER BY name, fingerprint"
             )
         )

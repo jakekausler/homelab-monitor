@@ -10,10 +10,11 @@ services:
     image: ghcr.io/${GITHUB_REPOSITORY:-jakekausler/homelab-monitor}:${IMAGE_TAG:-latest}
     container_name: homelab-monitor
     restart: unless-stopped
+    user: "${HM_CRON_HOST_UID:-1000}:${HM_CRON_HOST_GID:-1000}"
     networks:
       - homelab-monitor-net
     ports:
-      - "127.0.0.1:${HOMELAB_MONITOR_PORT:-9090}:9090"
+      - "${HOMELAB_MONITOR_BIND_HOST:-127.0.0.1}:${HOMELAB_MONITOR_PORT:-9090}:9090"
     environment:
       HOMELAB_MONITOR_DB_URL: ${HOMELAB_MONITOR_DB_URL:-sqlite+aiosqlite:////data/homelab-monitor.db}
       HOMELAB_MONITOR_MASTER_KEY: ${HOMELAB_MONITOR_MASTER_KEY}
@@ -23,7 +24,11 @@ services:
       HOMELAB_MONITOR_AUTO_MIGRATE: "1"
       HOMELAB_MONITOR_VM_DATA_DIR: /var/vm-data
       HOMELAB_MONITOR_VL_DATA_DIR: /var/vl-data
+      HOMELAB_MONITOR_UI_DIR: /app/ui
       HOMELAB_MONITOR_BACKUP_ROOT: /storage/backup/homelab-monitor
+      HM_CRON_HOST_ROOT: /host
+      HM_CRON_DISCOVERY_INTERVAL_SECONDS: ${HM_CRON_DISCOVERY_INTERVAL_SECONDS:-300}
+      HM_HOST_HOSTNAME: ${HM_HOST_HOSTNAME:-}
     volumes:
       - data_monitor:/data
       - data_vm:/var/vm-data:ro
@@ -31,6 +36,8 @@ services:
       - data_backup:/storage/backup/homelab-monitor
       - ../alertmanager/alertmanager.yml.template:/etc/alertmanager-template/alertmanager.yml.template:ro
       - data_alertmanager_config:/var/alertmanager-config
+      - /etc:/host/etc:ro
+      - /var/spool/cron/crontabs:/host/var/spool/cron/crontabs:ro
     depends_on:
       victoriametrics:
         condition: service_healthy

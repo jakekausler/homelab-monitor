@@ -51,6 +51,7 @@ const sampleCron: CronOut = {
   hidden_at: null,
   source_path: null,
   wrapper_last_seen_at: null,
+  last_discovered_at: null,
 }
 
 describe('CronsTable', () => {

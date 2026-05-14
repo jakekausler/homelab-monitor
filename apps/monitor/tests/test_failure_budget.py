@@ -733,3 +733,35 @@ async def test_load_state_quarantined_with_zero_counter(
     await budget.load_state()
     assert budget.is_quarantined("test_collector")
     assert budget.consecutive_failures("test_collector") == 0
+
+
+@pytest.mark.asyncio
+async def test_clear_all_quarantine_lazy_loads_state_and_returns_zero(
+    repo_with_migrations: SqliteRepository,
+    logger: structlog.stdlib.BoundLogger,
+) -> None:
+    """clear_all_quarantine lazily calls load_state when _loaded=False.
+
+    No quarantined collectors in DB → returns 0.
+    Exercises the ``if not self._loaded: await self.load_state()`` branch.
+    """
+    budget = FailureBudget(repo_with_migrations, logger)
+    # Do NOT call load_state() first — exercises line 446 (lazy load).
+    count = await budget.clear_all_quarantine()
+    assert count == 0
+
+
+@pytest.mark.asyncio
+async def test_clear_all_quarantine_skips_load_when_already_loaded(
+    repo_with_migrations: SqliteRepository,
+    logger: structlog.stdlib.BoundLogger,
+) -> None:
+    """clear_all_quarantine skips load_state when _loaded=True.
+
+    No quarantined collectors → returns 0.
+    Exercises the ``445→448`` branch (skip load_state when already loaded).
+    """
+    budget = FailureBudget(repo_with_migrations, logger)
+    await budget.load_state()  # _loaded is now True
+    count = await budget.clear_all_quarantine()
+    assert count == 0

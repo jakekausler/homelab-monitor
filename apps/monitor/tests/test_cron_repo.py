@@ -53,9 +53,9 @@ async def _seed_cron(  # noqa: PLR0913
             "INSERT INTO crons (fingerprint, name, host, command, schedule, "
             "schedule_canonical, cadence_seconds, expected_grace_seconds, "
             "enabled, last_seen_state, created_at, updated_at, hidden_at, "
-            "source_path, wrapper_last_seen_at) VALUES ("
+            "source_path, wrapper_last_seen_at, last_discovered_at) VALUES ("
             ":fp, :name, :host, :command, :schedule, :sched_canon, :cad, "
-            ":grace, :enabled, :state, :created, :updated, :hidden, :sp, :wlsa)"
+            ":grace, :enabled, :state, :created, :updated, :hidden, :sp, :wlsa, :ldis)"
         ),
         {
             "fp": fp,
@@ -73,6 +73,7 @@ async def _seed_cron(  # noqa: PLR0913
             "hidden": hidden_at,
             "sp": source_path,
             "wlsa": None,
+            "ldis": None,
         },
     )
     return fp

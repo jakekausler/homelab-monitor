@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react'
-import { Search } from 'lucide-react'
+import { RefreshCw, Search } from 'lucide-react'
+import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { titleCase } from './badges'
 
 export interface ToolbarFilters {
@@ -16,11 +18,19 @@ export interface CronsToolbarProps {
   filters: ToolbarFilters
   knownHosts: string[]
   onFiltersChange: (next: ToolbarFilters) => void
+  onDiscoverNow?: () => void
+  isDiscovering?: boolean
 }
 
 const SEARCH_DEBOUNCE_MS = 250
 
-export function CronsToolbar({ filters, knownHosts, onFiltersChange }: CronsToolbarProps) {
+export function CronsToolbar({
+  filters,
+  knownHosts,
+  onFiltersChange,
+  onDiscoverNow,
+  isDiscovering = false,
+}: CronsToolbarProps) {
   const [searchInput, setSearchInput] = useState(filters.q ?? '')
 
   useEffect(() => {
@@ -44,6 +54,24 @@ export function CronsToolbar({ filters, knownHosts, onFiltersChange }: CronsTool
 
   return (
     <div className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-card p-3">
+      {onDiscoverNow !== undefined && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label="Discover now"
+              onClick={onDiscoverNow}
+              disabled={isDiscovering}
+            >
+              <RefreshCw className={isDiscovering ? 'size-4 animate-spin' : 'size-4'} />
+              <span className="sr-only">Discover now</span>
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">Discover now</TooltipContent>
+        </Tooltip>
+      )}
+
       <div className="relative grow min-w-[180px]">
         <Search className="absolute left-2 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
         <Input

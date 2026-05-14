@@ -17,14 +17,33 @@ afterEach(cleanup)
 
 vi.mock('@/api/crons', () => ({
   useListCrons: vi.fn(),
+  useDiscoverNow: vi.fn(),
   usePreviewExpr: vi.fn(() => ({ isLoading: false, error: null, data: null })),
   cronQueryKeys: { all: ['crons'] },
 }))
 
-import { useListCrons } from '@/api/crons'
+vi.mock('sonner', () => ({
+  toast: {
+    success: vi.fn(),
+    error: vi.fn(),
+  },
+}))
+
+import { useListCrons, useDiscoverNow } from '@/api/crons'
 import type { components } from '@/api/schema'
+import { toast } from 'sonner'
+import { beforeEach } from 'vitest'
+import { ApiError } from '@/api/client'
+import { TooltipProvider } from '@/components/ui/tooltip'
 
 type CronOut = components['schemas']['CronOut']
+
+beforeEach(() => {
+  vi.mocked(useDiscoverNow).mockReturnValue({
+    mutateAsync: vi.fn(),
+    isPending: false,
+  } as unknown as ReturnType<typeof useDiscoverNow>)
+})
 
 const sampleCron: CronOut = {
   fingerprint: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
@@ -42,6 +61,7 @@ const sampleCron: CronOut = {
   hidden_at: null,
   source_path: null,
   wrapper_last_seen_at: null,
+  last_discovered_at: null,
 }
 
 function renderPage(search = '') {
@@ -94,9 +114,11 @@ function renderPage(search = '') {
   })
   const qc = new QueryClient()
   return render(
-    <QueryClientProvider client={qc}>
-      <RouterProvider router={router} />
-    </QueryClientProvider>,
+    <TooltipProvider>
+      <QueryClientProvider client={qc}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>
+    </TooltipProvider>,
   )
 }
 
@@ -219,5 +241,111 @@ describe('CronsListPage', () => {
     const prev = await screen.findByRole('button', { name: /Previous/i })
     await userEvent.setup().click(prev)
     expect(await screen.findByText(/Page 1 of 10/i)).toBeInTheDocument()
+  })
+
+  it('Discover now button is present and enabled initially', async () => {
+    vi.mocked(useListCrons).mockReturnValue({
+      isLoading: false,
+      error: null,
+      data: { items: [sampleCron], total: 1 },
+    } as unknown as ReturnType<typeof useListCrons>)
+    vi.mocked(useDiscoverNow).mockReturnValue({
+      mutateAsync: vi.fn().mockResolvedValue({ found_count: 5, error_count: 0 }),
+      isPending: false,
+    } as unknown as ReturnType<typeof useDiscoverNow>)
+    renderPage()
+    const button = await screen.findByRole('button', { name: /Discover now/i })
+    expect(button).toBeEnabled()
+  })
+
+  it('Discover now button shows success toast with found and error counts', async () => {
+    vi.mocked(useListCrons).mockReturnValue({
+      isLoading: false,
+      error: null,
+      data: { items: [sampleCron], total: 1 },
+    } as unknown as ReturnType<typeof useListCrons>)
+    const mutateAsync = vi.fn().mockResolvedValue({ found_count: 5, error_count: 2 })
+    vi.mocked(useDiscoverNow).mockReturnValue({
+      mutateAsync,
+      isPending: false,
+    } as unknown as ReturnType<typeof useDiscoverNow>)
+    renderPage()
+    const button = await screen.findByRole('button', { name: /Discover now/i })
+    await userEvent.setup().click(button)
+    expect(mutateAsync).toHaveBeenCalledTimes(1)
+    expect(toast.success).toHaveBeenCalledWith('Discovery scan complete. 5 crons found — 2 errors.')
+  })
+
+  it('Discover now button shows success toast without error count when error_count is 0', async () => {
+    vi.mocked(useListCrons).mockReturnValue({
+      isLoading: false,
+      error: null,
+      data: { items: [sampleCron], total: 1 },
+    } as unknown as ReturnType<typeof useListCrons>)
+    const mutateAsync = vi.fn().mockResolvedValue({ found_count: 3, error_count: 0 })
+    vi.mocked(useDiscoverNow).mockReturnValue({
+      mutateAsync,
+      isPending: false,
+    } as unknown as ReturnType<typeof useDiscoverNow>)
+    renderPage()
+    const button = await screen.findByRole('button', { name: /Discover now/i })
+    await userEvent.setup().click(button)
+    expect(toast.success).toHaveBeenCalledWith('Discovery scan complete. 3 crons found.')
+  })
+
+  it('Discover now button shows 429 throttle toast when response status is 429', async () => {
+    vi.mocked(useListCrons).mockReturnValue({
+      isLoading: false,
+      error: null,
+      data: { items: [sampleCron], total: 1 },
+    } as unknown as ReturnType<typeof useListCrons>)
+    const mockError = new ApiError({
+      status: 429,
+      code: 'discover_now_throttled',
+      message: 'throttled',
+      retryAfterSeconds: 30,
+      details: null,
+    })
+    const mutateAsync = vi.fn().mockRejectedValue(mockError)
+    vi.mocked(useDiscoverNow).mockReturnValue({
+      mutateAsync,
+      isPending: false,
+    } as unknown as ReturnType<typeof useDiscoverNow>)
+    renderPage()
+    const button = await screen.findByRole('button', { name: /Discover now/i })
+    await userEvent.setup().click(button)
+    expect(toast.error).toHaveBeenCalledWith('Discovery scan recently triggered. Retry in 30s.')
+  })
+
+  it('Discover now button shows generic error toast on other errors', async () => {
+    vi.mocked(useListCrons).mockReturnValue({
+      isLoading: false,
+      error: null,
+      data: { items: [sampleCron], total: 1 },
+    } as unknown as ReturnType<typeof useListCrons>)
+    const mutateAsync = vi.fn().mockRejectedValue(new Error('Server error'))
+    vi.mocked(useDiscoverNow).mockReturnValue({
+      mutateAsync,
+      isPending: false,
+    } as unknown as ReturnType<typeof useDiscoverNow>)
+    renderPage()
+    const button = await screen.findByRole('button', { name: /Discover now/i })
+    await userEvent.setup().click(button)
+    expect(toast.error).toHaveBeenCalledWith('Discovery scan failed.')
+  })
+
+  it('Discover now button is disabled while mutation is pending', async () => {
+    vi.mocked(useListCrons).mockReturnValue({
+      isLoading: false,
+      error: null,
+      data: { items: [sampleCron], total: 1 },
+    } as unknown as ReturnType<typeof useListCrons>)
+    vi.mocked(useDiscoverNow).mockReturnValue({
+      mutateAsync: vi.fn(),
+      isPending: true,
+    } as unknown as ReturnType<typeof useDiscoverNow>)
+    renderPage()
+    const button = await screen.findByRole('button', { name: /Discover now/i })
+    expect(button).toBeDisabled()
   })
 })

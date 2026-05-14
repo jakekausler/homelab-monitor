@@ -76,6 +76,7 @@ const baseCron = {
   hidden_at: null as string | null,
   source_path: null as string | null,
   wrapper_last_seen_at: null,
+  last_discovered_at: null as string | null,
 }
 
 const baseState = null
@@ -310,5 +311,29 @@ describe('CronDetail', () => {
     renderInRouter(<CronDetail fingerprint={FP} />)
     await userEvent.setup().click(await screen.findByRole('button', { name: /Unhide/i }))
     expect(toast.error).toHaveBeenCalledWith('Restore failed')
+  })
+
+  // 18. Last discovered field renders when last_discovered_at is non-null
+  it('Last discovered field renders when last_discovered_at is non-null', async () => {
+    vi.mocked(useGetCron).mockReturnValue(
+      makeGetCronResult({ last_discovered_at: '2026-05-10T12:00:00Z' }) as unknown as ReturnType<
+        typeof useGetCron
+      >,
+    )
+    renderInRouter(<CronDetail fingerprint={FP} />)
+    await screen.findByText('daily-backup')
+    expect(screen.getByText(/rel:2026-05-10T12:00:00Z/)).toBeInTheDocument()
+  })
+
+  // 19. Last discovered field shows em dash when last_discovered_at is null
+  it('Last discovered field shows em dash when last_discovered_at is null', async () => {
+    renderInRouter(<CronDetail fingerprint={FP} />)
+    await screen.findByText('daily-backup')
+    // The Row component renders the "Last discovered" label and the em dash in the value span
+    const rows = screen.getAllByText(/Last discovered/)
+    expect(rows.length).toBeGreaterThan(0)
+    // Check that somewhere in the document there's an em dash near the label
+    const contentArea = rows[0]!.parentElement!
+    expect(contentArea).toHaveTextContent('—')
   })
 })

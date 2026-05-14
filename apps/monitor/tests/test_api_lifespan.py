@@ -7,8 +7,12 @@ from pathlib import Path
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import text
 
 from homelab_monitor.kernel.api.app import create_app
+from homelab_monitor.kernel.db.engine import get_engine
+from homelab_monitor.kernel.db.migrations import run_migrations
+from homelab_monitor.kernel.db.repository import SqliteRepository
 
 
 @pytest.fixture
@@ -203,6 +207,54 @@ async def test_lifespan_enabled_true_with_healthz_up(
 
 
 @pytest.mark.asyncio
+async def test_lifespan_wires_cron_discoverer_to_app_state(
+    db_url: str,
+    master_key: bytes,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """After lifespan startup, app.state.cron_discoverer is wired with cron_repo.
+
+    Regression guard for STAGE-002-007: the wiring loop used ``for c in collectors``
+    where ``c`` was a ``LoadedCollector`` wrapper, causing ``isinstance(c, CronDiscoverer)``
+    to silently fail and leave ``app.state.cron_discoverer`` unset.  The fix unwraps via
+    ``lc.collector``.  This test ensures that branch cannot regress.
+    """
+    from homelab_monitor.plugins.discoverers.cron_discoverer import CronDiscoverer  # noqa: PLC0415
+
+    monkeypatch.setenv("HOMELAB_MONITOR_DB_URL", db_url)
+    monkeypatch.setenv("HOMELAB_MONITOR_MASTER_KEY", base64.b64encode(master_key).decode())
+
+    app = create_app(lifespan_enabled=True)
+
+    async with app.router.lifespan_context(app):
+        assert hasattr(app.state, "cron_discoverer"), (
+            "app.state.cron_discoverer should be set by lifespan startup"
+        )
+        discoverer = app.state.cron_discoverer
+        assert isinstance(discoverer, CronDiscoverer), (
+            f"expected CronDiscoverer, got {type(discoverer)!r}"
+        )
+        assert discoverer.cron_repo is not None, "cron_repo must be wired during lifespan startup"
+
+
+def test_create_app_mounts_ui_when_directory_exists(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When HOMELAB_MONITOR_UI_DIR points to a real dir with index.html, app mounts it at /."""
+    ui_dir = tmp_path / "ui"
+    ui_dir.mkdir()
+    (ui_dir / "index.html").write_text("<!doctype html><html><body>test</body></html>")
+
+    monkeypatch.setenv("HOMELAB_MONITOR_UI_DIR", str(ui_dir))
+
+    app = create_app(lifespan_enabled=False)
+
+    mount_routes = [r for r in app.routes if getattr(r, "name", None) == "ui"]
+    assert len(mount_routes) == 1, "Expected exactly one route named 'ui' after mounting"
+
+
+@pytest.mark.asyncio
 async def test_lifespan_plugins_dir_not_found_skipped(
     db_url: str, master_key: bytes, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -218,3 +270,74 @@ async def test_lifespan_plugins_dir_not_found_skipped(
         # Should succeed with scheduler running despite no plugins
         assert app.state.scheduler is not None
         assert app.state.scheduler.running
+
+
+@pytest.mark.asyncio
+async def test_lifespan_clears_all_quarantine_on_startup(
+    db_url: str,
+    master_key: bytes,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Lifespan startup clears all quarantined collectors from persistent state.
+
+    This prevents stale quarantine from blocking redeploys with new code.
+    Regression guard for Bug A: quarantine state survives container restarts.
+    """
+    monkeypatch.setenv("HOMELAB_MONITOR_DB_URL", db_url)
+    monkeypatch.setenv("HOMELAB_MONITOR_MASTER_KEY", base64.b64encode(master_key).decode())
+
+    # Run migrations to set up schema
+    engine = get_engine(url=db_url)
+    await run_migrations(engine)
+    repo = SqliteRepository(engine)
+
+    # Pre-seed a quarantined collector in the DB.
+    async with repo.transaction() as conn:
+        # Ensure collector row exists (id is required; SQLite will auto-generate from rowid)
+        await conn.execute(
+            text(
+                "INSERT OR IGNORE INTO collectors (id, name, created_at) "
+                "VALUES ('test-collector-id', 'test-collector', '2026-01-01T00:00:00Z')"
+            )
+        )
+        # Mark it as quarantined
+        await conn.execute(
+            text(
+                "UPDATE collectors "
+                "SET consecutive_failures = 5, "
+                "    quarantined_at = '2026-01-01T00:00:00Z', "
+                "    quarantine_reason = 'test quarantine' "
+                "WHERE name = 'test-collector'"
+            )
+        )
+
+    # Verify it's quarantined before startup
+    async with repo.transaction() as conn:
+        result = await conn.execute(
+            text("SELECT quarantined_at FROM collectors WHERE name = 'test-collector'")
+        )
+        row = result.fetchone()
+        assert row is not None
+        assert row[0] is not None, "Collector should be quarantined before lifespan startup"
+
+    # Create app and enter lifespan context
+    app = create_app(lifespan_enabled=True)
+
+    async with app.router.lifespan_context(app):
+        # After startup, quarantine should be cleared
+        assert app.state.failure_budget is not None
+        assert not app.state.failure_budget.is_quarantined("test-collector")
+
+    # Verify the DB was actually updated
+    async with repo.transaction() as conn:
+        result = await conn.execute(
+            text(
+                "SELECT consecutive_failures, quarantined_at, quarantine_reason "
+                "FROM collectors WHERE name = 'test-collector'"
+            )
+        )
+        row = result.fetchone()
+        assert row is not None
+        assert row[0] == 0, "consecutive_failures should be 0 after clear"
+        assert row[1] is None, "quarantined_at should be NULL after clear"
+        assert row[2] is None, "quarantine_reason should be NULL after clear"

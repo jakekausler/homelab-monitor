@@ -28,7 +28,11 @@ Each stage goes through 4 phases, each typically in a separate session:
 
 1. **DESIGN** — Present approach options, user picks, confirm seed data and acceptance test
 2. **BUILD** — Implement to make verify pass; add seed data and placeholders
-3. **REFINEMENT** — Dual sign-off (Desktop AND Mobile, plus any cross-cutting concerns)
+3. **REFINEMENT** — Dual sign-off (Desktop AND Mobile, plus any cross-cutting concerns). For backend stages with host-integration concerns (bind-mounts, host file paths, container-vs-host UIDs, host setup scripts, real cron files, network probes, etc.), Refinement is TWO sub-phases:
+   - **3a. Dev rig refinement** — Validate against `make dev` / manual-fallback host backend with synthetic / fake / empty data. Fast iteration. UI manual test (if applicable) happens here.
+   - **3b. Prod rig refinement** — Validate against full `docker compose up -d` production stack with REAL host data (real /etc/crontab, real /var/spool/cron/crontabs/*, real network probes). Includes any host setup scripts (e.g., `scripts/host-setup.sh`). Confirms the deployment surface actually works against this host's reality.
+   - Backend-only stages without host-integration concerns can skip 3b (no real-data delta to validate). Backend stages WITH host-integration concerns MUST do both 3a and 3b before Refinement is complete.
+   - Frontend-only stages typically only need 3a (no host-integration delta in 3b).
 4. **FINALIZE** — Tests, code review, docs, commit (all via subagents)
 
 ## Commands
@@ -68,8 +72,31 @@ Login defaults: `admin` / `admin-dev-password` (override via `HM_DEV_ADMIN_*` in
 
 Full operator guide: `docs/dev/local-environment.md` (port map, troubleshooting, sidecar visibility, master-key rotation).
 
+### Port Map (dev vs prod)
+
+Dev and prod published host ports differ so both can coexist on the same host.
+All host bindings are `127.0.0.1`-only (isolated to localhost).
+
+| Service              | Dev host (1xxxx) | Prod host (2xxxx) | Container | Notes |
+| -------------------- | ---------------- | ----------------- | --------- | ----- |
+| monitor backend      | 19090            | 29090             | 9090      | Host :9090 is bound by an unrelated process. Bind host configurable via `HOMELAB_MONITOR_BIND_HOST` (default `127.0.0.1`). Set to `0.0.0.0` for LAN access in trusted homelab networks. |
+| UI dev server (Vite) | 5180             | n/a               | n/a       | Prod serves built UI from the monitor container. |
+| VictoriaMetrics      | 18428            | container-internal | 8428    | Dev publishes for hybrid-mode backend. Prod reaches it via `victoriametrics:8428`. |
+| VictoriaLogs         | 19428            | container-internal | 9428    | |
+| vmagent              | 18429            | container-internal | 8429    | |
+| vector               | 18686            | container-internal | 8686    | |
+| Alertmanager         | 19093            | container-internal | 9093    | |
+| Karma                | 18080            | container-internal | 8080    | Host :8080 is bound by pihole-unbound. Never publish Karma to :8080. |
+| vmalert (metrics)    | 18880            | container-internal | 8880    | |
+| vmalert (logs)       | 18881            | container-internal | 8880    | Two containers, distinct host ports, same container port. |
+| Grafana              | 13000            | container-internal | 3000    | Host :3000 is collision-magnet. Never publish Grafana to :3000. |
+
+**Invariant:** Dev published ports start with `1xxxx`. Prod publishes only the monitor backend on `2xxxx` (29090). All other sidecars are container-internal in prod and proxied via the monitor's `/api/<sidecar>/` endpoints.
+
+`make dev-prod` (full prod compose stack on this dev host) uses the same `2xxxx` mappings as production.
+
 **Common gotchas (still relevant when debugging):**
-- Port 9090 is bound on this host; the dev rig uses 19090 for the host backend (configurable via `HM_DEV_BACKEND_PORT` in `dev.env`).
+- Host port 9090 is bound by an unrelated process. The dev rig uses 19090 (`HM_DEV_BACKEND_PORT` in `dev.env`); the prod compose stack uses 29090 (`HOMELAB_MONITOR_PORT` in `deploy/compose/.env`). Never use 9090 on this host.
 - Vite proxy env var is `VITE_API_PROXY_TARGET`, NOT `API_PROXY_TARGET`. Wrong var → API calls return HTML (vite SPA fallback) → React error #31 ("object with keys {code, message, details}"). The dev-up script sets this correctly.
 - `hm user create` requires interactive password input. Pipe via `printf 'pw\npw\n' | uv run hm user create <name>`. Min password length: 12 chars. `dev-up.sh` handles this automatically.
 - `deploy/dev/dev.env` contains the master key. The script enforces `chmod 600` on every run; the file is gitignored.
@@ -141,6 +168,14 @@ epics/EPIC-XXX-name/STAGE-XXX-YYY.md
   - Never `cd` deeper than the repo root for a duration spanning multiple bash calls. The cwd you leave behind persists, and the next call may find itself in the wrong place.
 - **Long-running or large-output commands MUST tee output to a log file.** Any command whose output you might need to inspect later — `make verify`, `make integration`, `pytest`, `pnpm test`, `pnpm build`, `bash scripts/run-integration.sh`, `docker compose up`, build commands, log tails, etc. — MUST be run as `<command> 2>&1 | tee /tmp/<descriptive-name>-$(date +%s).log`. Then any subsequent `grep`/`tail`/inspection works against the log file instead of forcing a re-run. Subagents (verifier, tester, e2e-tester, etc.) MUST follow this convention. Rationale: re-running `make verify` to grep for one detail wastes 1-2 minutes per re-run; integration runs waste 5-10 minutes. Naming convention: `/tmp/<command>-<context>-<timestamp>.log` (e.g. `/tmp/make-verify-stage021-1715432100.log`, `/tmp/run-integration-stage021-1715432100.log`).
 - **Inspecting log/command output MUST go through a subagent.** When the main agent needs to read, grep, tail, or filter the contents of a tee'd log file (or any large output), it MUST dispatch a subagent (Explore for read-only structured analysis, or general-purpose for more complex extraction) and have the subagent return a condensed report. Direct `cat`/`grep`/`sed`/`awk` from the main agent on large outputs pollutes context with raw text and forces re-reads. Subagents condense findings to ~10-30 lines. Rationale: a 40 KB CI log read directly into main context costs ~10K tokens and forces re-reads on follow-up questions; a subagent extracts the 10 facts you actually need.
+  - **Log-inspection subagents are STRICTLY READ-ONLY** with strict scope limits:
+    - **Read only. NEVER re-run the source command.** If the log file is missing, truncated, or doesn't contain the expected data, REPORT that as the finding and STOP. The main agent decides whether to re-run.
+    - **Report only — no diagnosis, no fix.** If the log shows a failure, quote the failure verbatim and stop. Do NOT investigate root cause, propose code changes, or search the codebase. Diagnosis is a separate phase; conflating report+diagnosis+fix wastes 5-10x the time.
+    - **One log, one report.** Read ONE log file (or the specified list), extract the requested facts, return. Do NOT inspect adjacent logs (cycle N-1, N+1) unless explicitly told.
+    - **Allowed tools:** Read, Bash (`ls`/`cat`/`grep`/`tail` on log files ONLY).
+    - **Forbidden tools:** Bash for re-running source commands (`make verify`, `pytest`, `docker compose`, `npm test`), Edit, Write.
+    - **Main agent prompt pattern:** "Read the log at `<path>` and extract VERBATIM: [facts]. If the log is missing or incomplete, report that and stop — do NOT regenerate."
+    - **If log is missing:** Log-inspection subagent reports the fact → main agent dispatches SEPARATE bash call to re-run command with tee → separate dispatch to inspect new log. Never bundled.
 
 ## Code Review Graph (CRG)
 

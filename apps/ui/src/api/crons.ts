@@ -20,6 +20,7 @@ export interface CronListQuery {
   page_size?: number
   host?: string
   state?: 'unknown' | 'running' | 'ok' | 'failed' | 'late'
+  wrapper_installed?: boolean
   q?: string
   include_hidden?: boolean
 }
@@ -133,5 +134,23 @@ export function usePreviewExpr(
     },
     enabled: enabled && expr.trim().length > 0,
     retry: false,
+  })
+}
+
+export interface DiscoverResponse {
+  found_count: number
+  error_count: number
+}
+
+export function useDiscoverNow(): UseMutationResult<DiscoverResponse, ApiError, void> {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async () => {
+      const result = await apiClient.POST('/api/crons/discover-now', {})
+      return unwrap<DiscoverResponse>(result as never)
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: cronQueryKeys.all })
+    },
   })
 }

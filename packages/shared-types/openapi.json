@@ -608,6 +608,17 @@
             "title": "Host",
             "type": "string"
           },
+          "last_discovered_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Discovered At"
+          },
           "last_seen_state": {
             "enum": [
               "unknown",
@@ -687,7 +698,8 @@
           "updated_at",
           "hidden_at",
           "source_path",
-          "wrapper_last_seen_at"
+          "wrapper_last_seen_at",
+          "last_discovered_at"
         ],
         "title": "CronOut",
         "type": "object"
@@ -2216,6 +2228,30 @@
           }
         },
         "summary": "List Crons",
+        "tags": [
+          "crons"
+        ]
+      }
+    },
+    "/api/crons/discover-now": {
+      "post": {
+        "description": "Trigger an ad-hoc cron discovery scan. Throttled to once per 10s.\n\nAdmin-only via session auth. 429 with Retry-After when called within\nthe throttle window. 202 Accepted on success, with a JSON summary of\nthe scan result.",
+        "operationId": "discover_now_api_crons_discover_now_post",
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Discover Now Api Crons Discover Now Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Discover Now",
         "tags": [
           "crons"
         ]

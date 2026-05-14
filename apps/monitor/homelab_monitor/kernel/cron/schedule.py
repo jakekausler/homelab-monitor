@@ -38,6 +38,11 @@ def canonicalize_schedule(expr: str) -> str:
         canonicalize_schedule("@hourly")     # -> "0 * * * *"
         canonicalize_schedule("*/5 * * * *") # -> "*/5 * * * *"
         canonicalize_schedule("17 4 * * 1-5")# -> "17 4 * * 1-5"
+        canonicalize_schedule("@reboot")     # -> "@reboot"
+
+    Special case: ``@reboot`` is preserved literally (croniter cannot iterate
+    over it; lateness for @reboot crons is computed against host boot time
+    in STAGE-002-010, not via cadence).
 
     Raises:
         InvalidCronExpression: if croniter rejects the expression.
@@ -45,6 +50,8 @@ def canonicalize_schedule(expr: str) -> str:
     if not expr.strip():
         msg = "schedule must be a non-empty string"
         raise InvalidCronExpression(msg)
+    if expr.strip() == "@reboot":
+        return "@reboot"
     if not croniter.is_valid(expr):
         msg = f"invalid cron expression: {expr!r}"
         raise InvalidCronExpression(msg)
@@ -105,9 +112,14 @@ def compute_average_interval_seconds(expr: str, *, base: datetime | None = None)
     average the 10 deltas. Handles non-uniform schedules better than
     ``next - prev``.
 
+    Special case: ``@reboot`` returns 0 (the sentinel value the heartbeat
+    receiver already guards on — see kernel/heartbeat/repository.py:132 region).
+
     Raises:
         InvalidCronExpression: if ``expr`` is not a valid cron expression.
     """
+    if expr.strip() == "@reboot":
+        return 0
     if not croniter.is_valid(expr):
         msg = f"invalid cron expression: {expr!r}"
         raise InvalidCronExpression(msg)

@@ -9,6 +9,8 @@ from collections.abc import Sequence
 from homelab_monitor import __version__
 from homelab_monitor.cli import api_token as api_token_cli
 from homelab_monitor.cli import backup as backup_cli
+from homelab_monitor.cli import collector as collector_cli
+from homelab_monitor.cli import cron as cron_cli
 from homelab_monitor.cli import migrate as migrate_cli
 from homelab_monitor.cli import secrets as secrets_cli
 from homelab_monitor.cli import user as user_cli
@@ -28,6 +30,8 @@ def _build_parser() -> argparse.ArgumentParser:
     user_cli.add_subparser(subparsers)
     api_token_cli.add_subparser(subparsers)
     backup_cli.add_subparser(subparsers)
+    cron_cli.add_subparser(subparsers)
+    collector_cli.add_subparser(subparsers)
     return parser
 
 

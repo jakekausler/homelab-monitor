@@ -30,7 +30,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 
 
 def compute_fingerprint(host: str, source_path: str | None, schedule: str, command: str) -> str:
@@ -61,20 +60,69 @@ def compute_fingerprint(host: str, source_path: str | None, schedule: str, comma
     return hashlib.sha256(payload).hexdigest()
 
 
+# Shell wrappers, operators, and builtins commonly used in cron commands
+# before the actual identifying binary/script. Skipped during name derivation
+# so that e.g. `test -x /usr/sbin/anacron || run-parts ...` derives `anacron`
+# instead of `test`.
+_SHELL_WRAPPERS: frozenset[str] = frozenset(
+    {
+        "bash",
+        "sh",
+        "zsh",
+        "ksh",
+        "dash",
+        "fish",
+        "cd",
+        "test",
+        "[",
+        "[[",
+        "command",
+        "if",
+        "then",
+        "else",
+        "elif",
+        "fi",
+        "nohup",
+        "sudo",
+        "env",
+        "exec",
+        "time",
+        "&&",
+        "||",
+        ";",
+        "|",
+        "&",
+    }
+)
+
+
 def derive_name(command: str) -> str:
     """Return the default ``name`` value for a cron with the given command.
 
-    Algorithm: basename of the first whitespace-delimited token, or
-    ``"cron"`` if the command is empty or contains only whitespace. This
-    yields useful names for the common case (``/opt/backup.sh`` → ``backup.sh``)
-    and a placeholder name for interpreter-prefixed commands
-    (``python3 /opt/sync.py`` → ``python3``) which the user will edit.
+    Algorithm: scan whitespace-delimited tokens left-to-right; skip shell
+    wrappers (`bash`, `test`, `cd`, `[`, `command`, etc.), operators
+    (`&&`, `||`), and flag-like tokens (starting with `-`). Return the
+    basename of the first remaining token. This handles conditional guards
+    like `test -x /usr/bin/foo && /usr/bin/foo` (returns `foo`) and shell
+    wrappers like `bash /opt/script.sh` (returns `script.sh`). Empty or
+    all-skipped commands return ``"cron"``.
     """
-    stripped = command.strip()
-    if not stripped:
+    if not command.strip():
         return "cron"
-    first_token = stripped.split(maxsplit=1)[0]
-    return os.path.basename(first_token) or "cron"
+
+    for token in command.split():
+        candidate = token.rsplit("/", 1)[-1]
+        if candidate in _SHELL_WRAPPERS:
+            continue
+        if candidate.startswith("-"):
+            continue
+        if "=" in candidate:  # skip env-var assignments like FOO=bar
+            continue
+        if not candidate or candidate in (".", ".."):
+            continue
+        return candidate
+
+    return "cron"
 
 
 __all__ = ["compute_fingerprint", "derive_name"]
