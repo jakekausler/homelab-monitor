@@ -102,3 +102,15 @@ When making changes to the cron inventory UI, re-verify:
 14. **sonner Toaster** mounted at app root (top-right, richColors).
 15. **sonner Toaster mount:** verify `<Toaster position="top-right" richColors />` is mounted in `apps/ui/src/routes/__root.tsx` inside the TooltipProvider, before the main `<Outlet />`. Toasts appear top-right and use richColors styling.
 16. **`wrapper_installed` URL search param round-trips through bookmarks:** opening `/inventory/crons?wrapper_installed=true` filters the list to crons with `wrapper_last_seen_at !== null` AND the toolbar dropdown reflects "Wrapper installed". Setting/clearing the toolbar updates the URL. Bookmarking + reopening the URL restores the filter state.
+
+## STAGE-002-007 (Cron auto-discovery) regression items
+
+- [ ] Verify discoverer plugin runs on every container restart without quarantine block (Bug A regression check).
+- [ ] Verify `upsert_discovered` overwrites `command` + `name` when stored values differ from current scan (Bug B regression check).
+- [ ] Verify secret-scrub for `mysqldump -pPASS` still scrubs to `-p<redacted>` AND `cd / && run-parts --report /etc/cron.hourly` is NOT corrupted (regex regression).
+- [ ] Verify container serves UI at `/` (200 + HTML).
+- [ ] Verify `POST /api/crons/discover-now` returns 202 with scan-result body when authenticated.
+- [ ] Verify `hm collector unquarantine` CLI works inside container.
+- [ ] Verify ACLs on `/var/spool/cron/crontabs/*` persist after rerunning `scripts/host-setup.sh`.
+- [ ] Verify `HOMELAB_MONITOR_BIND_HOST=0.0.0.0` exposes monitor on LAN; default `127.0.0.1` keeps localhost-only.
+- [ ] Verify dev rig (19090) and prod compose stack (29090) can coexist without port conflicts.
