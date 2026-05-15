@@ -69,10 +69,11 @@ strip_lines_matching = [
   "^\\s*$",
 ]
 
-# NOTE: `match_output` is intentionally NOT used. In RTK it SHORT-CIRCUITS —
-# replacing the entire output with the message and discarding all detail. That
-# would strip the very error signal this filter must preserve. All failure
-# detail is kept by leaving error/FAILED/traceback lines out of the strip set.
+# NOTE: this filter only drops lines (strip_lines_matching). It deliberately
+# does NOT use RTK's output-rewriting features, which can short-circuit and
+# discard all detail — that would strip the very error signal this filter must
+# preserve. Failure detail is kept by leaving error/FAILED/traceback lines out
+# of the strip set.
 
 [[tests.make]]
 name = "clean pytest run collapses to summary"
