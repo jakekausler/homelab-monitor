@@ -1,0 +1,164 @@
+schema_version = 1
+
+# ---------------------------------------------------------------------------
+# homelab-monitor — project-specialized `make` filter for RTK.
+#
+# RTK dispatches by filter NAME: this overrides the built-in `make` filter for
+# the commands listed in `match_command`. The block below strips deterministic
+# NOISE from clean `make verify` / `make test*` / `make ui-verify` / `make uv`
+# runs (progress dots, 100%-coverage rows, jsdom spam, make/pnpm chatter)
+# while preserving 100% of error / failure / warning signal.
+#
+# SAFETY: when in doubt the line is KEPT. No `max_lines` / `tail_lines` so the
+# final pytest / pyright / vitest summary banners always survive.
+# ---------------------------------------------------------------------------
+[filters.make]
+description = "homelab-monitor make verify/test output — strip clean-run noise, keep all error signal"
+match_command = "^make\\s+(verify|verify-ci|test|test-fast|test-nocov|ui-verify|uv)\\b"
+strip_ansi = true
+filter_stderr = true
+on_empty = "make: ok (no errors)"
+
+strip_lines_matching = [
+  # --- pytest progress dots / spinner -------------------------------------
+  # Lines that are only dots / 's' (skips) / 'x' / 'X' plus a `[ NN%]` marker.
+  "^[.sxXfE]+\\s+\\[\\s*\\d+%\\]\\s*$",
+
+  # --- pytest session preamble (pure noise on clean runs) -----------------
+  "^platform linux ",
+  "^rootdir:\\s",
+  "^configfile:\\s",
+  "^testpaths:\\s",
+  "^plugins:\\s",
+  "^asyncio:\\s",
+  "^created:\\s+\\d+/\\d+\\s+workers\\s*$",
+  "^\\d+\\s+workers\\s+\\[\\d+\\s+items\\]\\s*$",
+
+  # --- pytest / vitest 100%-coverage rows (term-missing & v8) -------------
+  # pytest term-missing: "Name  Stmts  Miss  Cover  Missing" — Miss 0 / 100% /
+  # no Missing column. Optional `[backend] ` prefix from the parallel make run.
+  "^(\\[backend\\] )?\\S+\\s+\\d+\\s+0\\s+100%\\s*$",
+  # vitest v8 pipe-table rows where every numeric column is exactly 100 and the
+  # Uncovered-lines column is empty.
+  "^(\\[ui\\] )?\\s*\\S[^|]*\\|\\s*100\\s*\\|\\s*100\\s*\\|\\s*100\\s*\\|\\s*100\\s*\\|\\s*$",
+  # vitest v8 table separator rules ("-----|-----|...").
+  "^(\\[ui\\] )?-{3,}\\|",
+
+  # --- vitest jsdom spam --------------------------------------------------
+  "^(\\[ui\\] )?Not implemented: Window's scrollTo\\(\\) method\\s*$",
+
+  # --- pnpm script-echo preamble ------------------------------------------
+  # "> @homelab-monitor/ui@0.0.0 <script> <path>" and the chained `&&` body.
+  "^(\\[ui\\] )?> @homelab-monitor/ui@",
+  "^(\\[ui\\] )?> (eslint|vitest|tsc|openapi-typescript|pnpm|prettier|vite)\\b",
+
+  # --- generate-types emoji banner ----------------------------------------
+  "^(\\[ui\\] )?(🚀|✨) ",
+
+  # --- make directory chatter ---------------------------------------------
+  "^(\\[ui\\] |\\[backend\\] )?make\\[\\d+\\]: (Entering|Leaving) directory",
+  "^(\\[ui\\] |\\[backend\\] )?Running backend tests and UI verify in parallel",
+
+  # --- ruff clean lines ---------------------------------------------------
+  "^(\\[backend\\] )?All checks passed!\\s*$",
+  "^(\\[backend\\] )?\\d+ files? already formatted\\s*$",
+
+  # --- empty prefix-only lines & blanks -----------------------------------
+  "^\\[ui\\] \\s*$",
+  "^\\[backend\\] \\s*$",
+  "^\\s*$",
+]
+
+# NOTE: `match_output` is intentionally NOT used. In RTK it SHORT-CIRCUITS —
+# replacing the entire output with the message and discarding all detail. That
+# would strip the very error signal this filter must preserve. All failure
+# detail is kept by leaving error/FAILED/traceback lines out of the strip set.
+
+[[tests.make]]
+name = "clean pytest run collapses to summary"
+input = '''
+uv run --directory apps/monitor pytest --cov=homelab_monitor --cov-report=term-missing
+============================= test session starts ==============================
+platform linux -- Python 3.12.8, pytest-9.0.3, pluggy-1.6.0
+rootdir: /storage/programs/homelab-monitor/apps/monitor
+configfile: pyproject.toml
+testpaths: tests
+plugins: asyncio-1.3.0, httpx-0.36.2, xdist-3.8.0, cov-7.1.0, anyio-4.13.0
+asyncio: mode=Mode.AUTO, debug=False
+created: 8/8 workers
+8 workers [1435 items]
+........................................................................ [  5%]
+...................................................................      [100%]
+============================= 1435 passed in 42.10s =============================
+'''
+expected = '''
+uv run --directory apps/monitor pytest --cov=homelab_monitor --cov-report=term-missing
+============================= test session starts ==============================
+============================= 1435 passed in 42.10s =============================
+'''
+
+[[tests.make]]
+name = "FAILED line and failure banner survive"
+input = '''
+........................................................................ [  5%]
+FAILED tests/test_cron_repo.py::test_fingerprint_stable - AssertionError: mismatch
+=========================== 1 failed, 1434 passed in 44.0s ===========================
+'''
+expected = '''
+FAILED tests/test_cron_repo.py::test_fingerprint_stable - AssertionError: mismatch
+=========================== 1 failed, 1434 passed in 44.0s ===========================
+'''
+
+[[tests.make]]
+name = "under-100% coverage row survives, 100% rows stripped"
+input = '''
+homelab_monitor/kernel/api/app.py        120     0   100%
+homelab_monitor/kernel/cron/schedule.py   88    12    86%   40-51
+[backend] homelab_monitor/cli/main.py      45     0   100%
+'''
+expected = '''
+homelab_monitor/kernel/cron/schedule.py   88    12    86%   40-51
+'''
+
+[[tests.make]]
+name = "vitest jsdom scrollTo spam stripped, summary kept"
+input = '''
+[ui] Not implemented: Window's scrollTo() method
+[ui] Not implemented: Window's scrollTo() method
+[ui]  Test Files  26 passed (26)
+[ui]       Tests  195 passed (195)
+'''
+expected = '''
+[ui]  Test Files  26 passed (26)
+[ui]       Tests  195 passed (195)
+'''
+
+[[tests.make]]
+name = "python traceback survives"
+input = '''
+8 workers [1435 items]
+Traceback (most recent call last):
+  File "/storage/programs/homelab-monitor/apps/monitor/tests/test_x.py", line 12, in test_x
+    raise RuntimeError("boom")
+RuntimeError: boom
+'''
+expected = '''
+Traceback (most recent call last):
+  File "/storage/programs/homelab-monitor/apps/monitor/tests/test_x.py", line 12, in test_x
+    raise RuntimeError("boom")
+RuntimeError: boom
+'''
+
+[[tests.make]]
+name = "pyright error line survives and is flagged"
+input = '''
+uv run pyright
+All checks passed!
+  /storage/programs/homelab-monitor/apps/monitor/x.py:10:5 - error: Argument missing
+3 errors, 0 warnings, 0 informations
+'''
+expected = '''
+uv run pyright
+  /storage/programs/homelab-monitor/apps/monitor/x.py:10:5 - error: Argument missing
+3 errors, 0 warnings, 0 informations
+'''

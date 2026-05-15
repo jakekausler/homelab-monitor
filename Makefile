@@ -1,4 +1,4 @@
-.PHONY: setup verify verify-ci lint format format-check typecheck test test-fast test-nocov dev dev-clean dev-prod dev-down backend-dev openapi-export clean crg-init ui-verify ui-dev ui-build ui-test _verify-parallel compose-up compose-down compose-build compose-logs integration
+.PHONY: setup verify verify-ci lint format format-check typecheck test test-fast test-nocov dev dev-clean dev-prod dev-down backend-dev openapi-export clean crg-init ui-verify ui-dev ui-build ui-test _verify-parallel compose-up compose-down compose-build compose-logs integration uv
 
 .DEFAULT_GOAL := verify
 
@@ -59,6 +59,12 @@ backend-dev:
 
 openapi-export:
 	bash scripts/export-openapi.sh
+
+# Passthrough to `uv run` so ad-hoc invocations route through make (RTK rewrite).
+# ARGS holds everything that comes AFTER `uv run`, e.g.:
+#   make uv ARGS="--directory apps/monitor pytest tests/test_db_migrations.py"
+uv:
+	uv run $(ARGS)
 
 # ---------------------------------------------------------------------------
 # Compose / container helpers (STAGE-001-015).
