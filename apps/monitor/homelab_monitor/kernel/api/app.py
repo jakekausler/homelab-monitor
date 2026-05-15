@@ -6,7 +6,8 @@ import logging
 import os
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
+from starlette.responses import FileResponse
 from starlette.staticfiles import StaticFiles
 
 from homelab_monitor import __version__
@@ -89,18 +90,36 @@ def create_app(*, lifespan_enabled: bool = True) -> FastAPI:
     app.include_router(crons.router, prefix="/api")
     app.include_router(observability.router)  # mounted at root: /metrics
 
-    # Mount the built UI as static files with SPA fallback.
+    # Serve the built UI with true SPA fallback.
     # In production (docker), HOMELAB_MONITOR_UI_DIR defaults to /app/ui (where the built UI lives).
-    # In dev (local), the UI is served separately by Vite, so this mount is skipped.
+    # In dev (local), the UI is served separately by Vite, so this block is skipped.
     ui_dir = Path(os.getenv("HOMELAB_MONITOR_UI_DIR", "/app/ui"))
     index_html = ui_dir / "index.html"
     if ui_dir.is_dir() and index_html.is_file():
-        # Starlette's StaticFiles with html=True enables SPA mode:
-        # - Serves files (JS, CSS, etc.) as-is when they match.
-        # - For non-existent paths (client-side router routes), falls back to index.html.
-        # - API routes (already handled by FastAPI routers above) are not affected.
+        # SPA catch-all. Registered BEFORE the StaticFiles mount because a
+        # mount at "/" is greedy and shadows any route added after it.
+        # Registered AFTER all include_router() calls so /api/* is never shadowed.
+        # Behavior: for a GET that is not an API/observability path and does not
+        # map to a real file on disk, return index.html (200) so the client-side
+        # router can take over. Real files fall through to the StaticFiles mount.
+        # pyright sees the decorator-registered nested function as unused;
+        # FastAPI registers it via the @app.get decorator, so it IS used.
+        @app.get("/{spa_path:path}", include_in_schema=False)
+        async def spa_fallback(  # pyright: ignore[reportUnusedFunction]
+            spa_path: str,
+        ) -> FileResponse:
+            if spa_path.startswith(("api/", "metrics")):
+                raise HTTPException(status_code=404)
+            candidate = (ui_dir / spa_path).resolve()
+            if spa_path and candidate.is_file() and candidate.is_relative_to(ui_dir.resolve()):
+                return FileResponse(candidate)
+            return FileResponse(index_html)
+
+        # StaticFiles mount handles "/" and real asset paths. Must be the LAST
+        # route registered so it does not shadow the API routers above; the SPA
+        # catch-all above is registered first so it is reachable for misses.
         app.mount("/", StaticFiles(directory=ui_dir, html=True), name="ui")
-        logger.info(f"UI mounted at / from {ui_dir}")
+        logger.info(f"UI mounted at / from {ui_dir} (with SPA fallback)")
     else:
         logger.debug(
             f"UI directory not found or incomplete: {ui_dir} (expected {index_html}). "

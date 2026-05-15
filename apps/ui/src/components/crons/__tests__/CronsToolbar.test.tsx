@@ -6,7 +6,7 @@ import { CronsToolbar, type ToolbarFilters } from '@/components/crons/CronsToolb
 
 afterEach(cleanup)
 
-const defaultFilters: ToolbarFilters = { include_hidden: false }
+const defaultFilters: ToolbarFilters = { include_hidden: false, include_soft_deleted: false }
 
 describe('CronsToolbar', () => {
   it('renders search input, selects, and filter controls', () => {
@@ -49,8 +49,21 @@ describe('CronsToolbar', () => {
     render(
       <CronsToolbar filters={defaultFilters} knownHosts={[]} onFiltersChange={onFiltersChange} />,
     )
-    await userEvent.setup().click(screen.getByRole('checkbox'))
+    const checkboxes = screen.getAllByRole('checkbox')
+    await userEvent.setup().click(checkboxes[0]!)
     expect(onFiltersChange).toHaveBeenCalledWith(expect.objectContaining({ include_hidden: true }))
+  })
+
+  it('calls onFiltersChange with include_soft_deleted when soft-deleted checkbox toggled', async () => {
+    const onFiltersChange = vi.fn()
+    render(
+      <CronsToolbar filters={defaultFilters} knownHosts={[]} onFiltersChange={onFiltersChange} />,
+    )
+    const checkboxes = screen.getAllByRole('checkbox')
+    await userEvent.setup().click(checkboxes[1]!)
+    expect(onFiltersChange).toHaveBeenCalledWith(
+      expect.objectContaining({ include_soft_deleted: true }),
+    )
   })
 
   it('calls onFiltersChange when state select changes', async () => {

@@ -49,6 +49,7 @@ const sampleCron: CronOut = {
   created_at: '2026-05-01T00:00:00Z',
   updated_at: '2026-05-01T00:00:00Z',
   hidden_at: null,
+  soft_deleted_at: null,
   source_path: null,
   wrapper_last_seen_at: null,
   last_discovered_at: null,
@@ -119,6 +120,27 @@ describe('CronsTable', () => {
     const hidden: CronOut = { ...sampleCron, hidden_at: '2026-05-10T00:00:00Z' }
     renderInRouter(<CronsTable items={[hidden]} isLoading={false} />)
     expect(await screen.findByRole('cell', { name: 'Hidden' })).toBeInTheDocument()
+  })
+
+  it('renders Soft-deleted badge when soft_deleted_at is set', async () => {
+    const softDeleted: CronOut = { ...sampleCron, soft_deleted_at: '2026-05-12T00:00:00Z' }
+    renderInRouter(<CronsTable items={[softDeleted]} isLoading={false} />)
+    expect(await screen.findByTestId('soft-deleted-badge')).toBeInTheDocument()
+  })
+
+  it('does not render Soft-deleted badge when soft_deleted_at is null', async () => {
+    renderInRouter(<CronsTable items={[sampleCron]} isLoading={false} />)
+    expect(await screen.findByText('daily-backup')).toBeInTheDocument()
+    expect(screen.queryByTestId('soft-deleted-badge')).toBeNull()
+  })
+
+  it('applies opacity-60 class to soft-deleted rows', async () => {
+    const softDeleted: CronOut = { ...sampleCron, soft_deleted_at: '2026-05-12T00:00:00Z' }
+    renderInRouter(<CronsTable items={[softDeleted]} isLoading={false} />)
+    const badge = await screen.findByTestId('soft-deleted-badge')
+    // The <tr> is the closest row ancestor
+    const row = badge.closest('tr')
+    expect(row).toHaveClass('opacity-60')
   })
 
   it('renders updated empty state copy', async () => {

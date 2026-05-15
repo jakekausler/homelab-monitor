@@ -1,0 +1,8 @@
+[Unit]
+Description=Re-apply homelab-monitor read ACLs on host crontab spool
+Documentation=https://github.com/jakekausler/homelab-monitor/blob/main/docs/deploy/host-prerequisites.md
+After=cron.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/refresh-crontab-acl.sh

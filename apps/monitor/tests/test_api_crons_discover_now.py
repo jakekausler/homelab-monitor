@@ -165,3 +165,66 @@ async def test_discover_now_returns_partial_with_errors(
     assert len(body["errors"]) == 1
     assert body["errors"][0]["host_source_path"] == "/etc/cron.d/malformed"
     assert body["errors"][0]["error"] == "Invalid syntax"
+
+
+@pytest.mark.asyncio
+async def test_discover_now_returns_503_when_cron_repo_unavailable(
+    authenticated_client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """POST /api/crons/discover-now returns 503 if cron_repo not on app.state."""
+    import homelab_monitor.kernel.api.routers.crons as _crons_mod  # noqa: PLC0415
+
+    monkeypatch.setattr(_crons_mod, "_discover_now_last_call", 0.0)
+
+    # Set cron_discoverer so the first guard passes, remove cron_repo so the second fires.
+    mock_discoverer = AsyncMock()
+    authenticated_client._transport.app.state.cron_discoverer = mock_discoverer  # type: ignore[reportPrivateUsage,reportAttributeAccessIssue,reportUnknownMemberType]
+    if hasattr(authenticated_client._transport.app.state, "cron_repo"):  # type: ignore[reportPrivateUsage,reportAttributeAccessIssue,reportUnknownMemberType]
+        delattr(authenticated_client._transport.app.state, "cron_repo")  # type: ignore[reportPrivateUsage,reportAttributeAccessIssue,reportUnknownMemberType]
+
+    resp = await authenticated_client.post(
+        "/api/crons/discover-now",
+        headers=_csrf(authenticated_client),
+    )
+    assert resp.status_code == 503  # noqa: PLR2004
+    body = resp.json()
+    assert body["error"]["code"] == "cron_repo_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_discover_now_reconcile_failed_returns_202_with_zero_counts(
+    authenticated_client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reconcile raising still yields a 202 with zero soft_deleted/restored counts."""
+    import homelab_monitor.kernel.api.routers.crons as _crons_mod  # noqa: PLC0415
+
+    monkeypatch.setattr(_crons_mod, "_discover_now_last_call", 0.0)
+
+    mock_result = CronScanResult(
+        found_fingerprints=frozenset(["fp1"]),
+        inserted_count=1,
+        updated_count=0,
+        bump_only_count=0,
+        partial=False,
+        errors=[],
+    )
+    mock_discoverer = AsyncMock()
+    mock_discoverer.scan = AsyncMock(return_value=mock_result)
+    authenticated_client._transport.app.state.cron_discoverer = mock_discoverer  # type: ignore[reportPrivateUsage,reportAttributeAccessIssue,reportUnknownMemberType]
+
+    # Make cron_repo.reconcile_soft_deletes raise
+    mock_cron_repo = AsyncMock()
+    mock_cron_repo.reconcile_soft_deletes = AsyncMock(side_effect=RuntimeError("db locked"))
+    authenticated_client._transport.app.state.cron_repo = mock_cron_repo  # type: ignore[reportPrivateUsage,reportAttributeAccessIssue,reportUnknownMemberType]
+
+    resp = await authenticated_client.post(
+        "/api/crons/discover-now",
+        headers=_csrf(authenticated_client),
+    )
+    assert resp.status_code == 202  # noqa: PLR2004
+    body = resp.json()
+    assert body["soft_deleted_count"] == 0
+    assert body["restored_count"] == 0
+    assert body["inserted_count"] == 1

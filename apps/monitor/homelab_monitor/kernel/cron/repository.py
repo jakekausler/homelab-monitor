@@ -16,6 +16,7 @@ the existing record is returned unchanged.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -60,6 +61,7 @@ def _cron_to_audit_after(record: CronRecord) -> dict[str, Any]:
         "source_path": record.source_path,
         "wrapper_last_seen_at": record.wrapper_last_seen_at,
         "last_discovered_at": record.last_discovered_at,
+        "soft_deleted_at": record.soft_deleted_at,
     }
 
 
@@ -88,6 +90,7 @@ class CronRecord:
     source_path: str | None
     wrapper_last_seen_at: str | None
     last_discovered_at: str | None
+    soft_deleted_at: str | None
 
 
 @dataclass(slots=True, frozen=True)
@@ -154,6 +157,7 @@ def _row_to_cron(row: Row[Any]) -> CronRecord:
         last_discovered_at=(
             None if row.last_discovered_at is None else str(row.last_discovered_at)
         ),
+        soft_deleted_at=(None if row.soft_deleted_at is None else str(row.soft_deleted_at)),
     )
 
 
@@ -182,7 +186,7 @@ _CRON_COLS = (
     "fingerprint, name, host, command, schedule, schedule_canonical, "
     "cadence_seconds, expected_grace_seconds, enabled, last_seen_state, "
     "created_at, updated_at, hidden_at, source_path, wrapper_last_seen_at, "
-    "last_discovered_at"
+    "last_discovered_at, soft_deleted_at"
 )
 
 _SELECT_BY_FINGERPRINT_SQL = text(
@@ -194,12 +198,12 @@ _INSERT_CRON_SQL = text(
     "  fingerprint, name, host, command, schedule, schedule_canonical, "
     "  cadence_seconds, expected_grace_seconds, enabled, last_seen_state, "
     "  created_at, updated_at, hidden_at, source_path, wrapper_last_seen_at, "
-    "  last_discovered_at"
+    "  last_discovered_at, soft_deleted_at"
     ") VALUES ("
     "  :fingerprint, :name, :host, :command, :schedule, :schedule_canonical, "
     "  :cadence_seconds, :expected_grace_seconds, :enabled, :last_seen_state, "
     "  :created_at, :updated_at, :hidden_at, :source_path, :wrapper_last_seen_at, "
-    "  :last_discovered_at"
+    "  :last_discovered_at, :soft_deleted_at"
     ")"
 )
 
@@ -243,6 +247,7 @@ class CronRepo:
         state: str | None,
         q: str | None,
         include_hidden: bool,
+        include_soft_deleted: bool = False,
         wrapper_installed: bool | None = None,
     ) -> CronListPage:
         """List crons with combinatorial filters + offset/limit pagination.
@@ -255,6 +260,8 @@ class CronRepo:
 
         if not include_hidden:
             where_clauses.append("hidden_at IS NULL")
+        if not include_soft_deleted:
+            where_clauses.append("soft_deleted_at IS NULL")
         if host is not None:
             where_clauses.append("host = :host")
             params["host"] = host
@@ -298,6 +305,10 @@ class CronRepo:
 
         When ``include_hidden=False`` (the default), a hidden row is
         treated as not-found. When ``True``, the row is returned regardless.
+
+        Soft-deleted rows (``soft_deleted_at IS NOT NULL``) are ALWAYS
+        returned by this method — direct fetch is unfiltered for soft-delete
+        (STAGE-002-007A). Only ``hidden_at`` gates this method.
         """
         row = await self._db.fetch_one(_SELECT_BY_FINGERPRINT_SQL, {"fingerprint": fingerprint})
         if row is None:
@@ -313,7 +324,12 @@ class CronRepo:
         self, fingerprint: str, *, include_hidden: bool = False
     ) -> CronRecord | None:
         """Return the bare cron record (no heartbeat join). Used by routers
-        that need the cron only, e.g. ``GET /api/crons/{fingerprint}/preview-runs``."""
+        that need the cron only, e.g. ``GET /api/crons/{fingerprint}/preview-runs``.
+
+        Soft-deleted rows (``soft_deleted_at IS NOT NULL``) are ALWAYS
+        returned by this method — direct fetch is unfiltered for soft-delete
+        (STAGE-002-007A). Only ``hidden_at`` gates this method.
+        """
         row = await self._db.fetch_one(_SELECT_BY_FINGERPRINT_SQL, {"fingerprint": fingerprint})
         if row is None:
             return None
@@ -516,6 +532,7 @@ class CronRepo:
                     "source_path": payload.source_path,
                     "wrapper_last_seen_at": now if payload.wrapper else None,
                     "last_discovered_at": None,
+                    "soft_deleted_at": None,
                 }
                 await conn.execute(_INSERT_CRON_SQL, new_record_params)
 
@@ -544,8 +561,43 @@ class CronRepo:
             # ---- 200 path: exists ----
             existing = _row_to_cron(existing_row)
 
+            # D5: if this fingerprint was auto-soft-deleted, /register restores
+            # it. Write the crons.restore audit row FIRST (before any
+            # crons.register row), in this same transaction.
+            was_soft_deleted = existing.soft_deleted_at is not None
+            if was_soft_deleted:
+                await conn.execute(
+                    text(
+                        "UPDATE crons SET soft_deleted_at = NULL, updated_at = :now "
+                        "WHERE fingerprint = :fingerprint"
+                    ),
+                    {"now": now, "fingerprint": url_fingerprint},
+                )
+                await insert_audit(
+                    conn,
+                    who=who,
+                    what="crons.restore",
+                    before={
+                        "fingerprint": url_fingerprint,
+                        "soft_deleted_at": existing.soft_deleted_at,
+                    },
+                    after={"fingerprint": url_fingerprint, "soft_deleted_at": None},
+                    ip=ip,
+                    when=now,
+                )
+
             if not payload.wrapper:
-                # True no-op: return existing row unchanged, no audit.
+                # No wrapper refresh. If we restored above, re-hydrate and
+                # return the updated row; otherwise true no-op.
+                if was_soft_deleted:
+                    restored_row = (
+                        await conn.execute(
+                            _SELECT_BY_FINGERPRINT_SQL,
+                            {"fingerprint": url_fingerprint},
+                        )
+                    ).first()
+                    assert restored_row is not None
+                    return _row_to_cron(restored_row), False
                 return existing, False
 
             # wrapper=True on existing row → refresh wrapper_last_seen_at.
@@ -647,6 +699,7 @@ class CronRepo:
                     "source_path": source_path,
                     "wrapper_last_seen_at": None,
                     "last_discovered_at": now,
+                    "soft_deleted_at": None,
                 }
                 await conn.execute(_INSERT_CRON_SQL, params)
                 inserted_row = (
@@ -736,6 +789,119 @@ class CronRepo:
             ).first()
             assert refreshed_row is not None
             return _row_to_cron(refreshed_row), False, updated_non_bump
+
+    async def list_source_paths_for_host(self, host: str) -> frozenset[str]:
+        """Return the distinct non-NULL source_paths registered for ``host``.
+
+        Used by the cron-discoverer to find known-but-absent source files
+        (operator-deleted /etc/cron.d/* files) so reconciliation can soft-delete
+        their rows. Rows with ``source_path IS NULL`` are excluded.
+        """
+        rows = await self._db.fetch_all(
+            text(
+                "SELECT DISTINCT source_path FROM crons "
+                "WHERE host = :host AND source_path IS NOT NULL"
+            ),
+            {"host": host},
+        )
+        paths: list[str] = [str(r.source_path) for r in rows]
+        return frozenset(paths)
+
+    async def reconcile_soft_deletes(
+        self,
+        *,
+        host: str,
+        clean_paths: frozenset[str],
+        found_by_path: Mapping[str, frozenset[str]],
+        now: str,
+    ) -> tuple[int, int]:
+        """Reconcile soft-delete state for cleanly-scanned source files.
+
+        For every source path in ``clean_paths``, compare the DB rows for
+        ``host=host AND source_path=path`` against the fingerprints the scan
+        found for that path (``found_by_path.get(path, frozenset())``).
+
+        Transitions (one-field ``soft_deleted_at`` flips, per D4):
+        - Row IN DB, fingerprint NOT in scan, ``soft_deleted_at IS NULL``
+          -> SET ``soft_deleted_at = now``; audit verb ``crons.soft_delete``.
+        - Row IN DB, fingerprint IN scan, ``soft_deleted_at IS NOT NULL``
+          -> SET ``soft_deleted_at = NULL``; audit verb ``crons.restore``.
+        - Any other combination -> no-op, no audit row.
+
+        Returns ``(soft_deleted_count, restored_count)``.
+
+        Invariants:
+        - Per-host filter is mandatory: only rows with this exact ``host`` are
+          touched. Cross-host-registered rows are never affected.
+        - ``source_path IS NULL`` rows are excluded automatically because
+          ``clean_paths`` only ever contains real path strings.
+        - This method NEVER writes ``last_discovered_at`` — that is the upsert
+          path's job. It writes only ``soft_deleted_at`` and ``updated_at``.
+        - All writes for one call happen in ONE transaction.
+        - ``who="system"`` for all audit rows written here (discovery-driven).
+        """
+        if not clean_paths:
+            return 0, 0
+
+        soft_deleted_count = 0
+        restored_count = 0
+
+        select_rows_sql = text(
+            "SELECT fingerprint, soft_deleted_at FROM crons "
+            "WHERE host = :host AND source_path = :source_path"
+        )
+        set_soft_deleted_sql = text(
+            "UPDATE crons SET soft_deleted_at = :sda, updated_at = :now "
+            "WHERE fingerprint = :fingerprint"
+        )
+
+        async with self._db.transaction() as conn:
+            for path in sorted(clean_paths):
+                found = found_by_path.get(path, frozenset())
+                rows = (
+                    await conn.execute(select_rows_sql, {"host": host, "source_path": path})
+                ).fetchall()
+                for row in rows:
+                    fp = str(row.fingerprint)
+                    currently_soft_deleted = row.soft_deleted_at is not None
+                    in_scan = fp in found
+
+                    if not in_scan and not currently_soft_deleted:
+                        # absent from a clean scan -> soft-delete
+                        await conn.execute(
+                            set_soft_deleted_sql,
+                            {"sda": now, "now": now, "fingerprint": fp},
+                        )
+                        await insert_audit(
+                            conn,
+                            who="system",
+                            what="crons.soft_delete",
+                            before={"fingerprint": fp, "soft_deleted_at": None},
+                            after={"fingerprint": fp, "soft_deleted_at": now},
+                            ip=None,
+                            when=now,
+                        )
+                        soft_deleted_count += 1
+                    elif in_scan and currently_soft_deleted:
+                        # found again -> restore
+                        prev = str(row.soft_deleted_at)
+                        await conn.execute(
+                            set_soft_deleted_sql,
+                            {"sda": None, "now": now, "fingerprint": fp},
+                        )
+                        await insert_audit(
+                            conn,
+                            who="system",
+                            what="crons.restore",
+                            before={"fingerprint": fp, "soft_deleted_at": prev},
+                            after={"fingerprint": fp, "soft_deleted_at": None},
+                            ip=None,
+                            when=now,
+                        )
+                        restored_count += 1
+                    # else: no-op (present+active OR absent+already-soft-deleted)
+
+        return soft_deleted_count, restored_count
 
 
 # Re-export AsyncConnection so static-analyzer-driven imports stay tidy.

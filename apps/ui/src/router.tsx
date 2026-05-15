@@ -105,6 +105,7 @@ const inventoryIndexRoute = createRoute({
         state: undefined,
         q: undefined,
         include_hidden: false,
+        include_soft_deleted: false,
       },
     })
   },
@@ -124,6 +125,7 @@ const cronsListRoute = createRoute({
     q?: string | undefined
     wrapper_installed?: boolean | undefined
     include_hidden: boolean
+    include_soft_deleted: boolean
   } => ({
     page: typeof search.page === 'number' ? search.page : 1,
     page_size: typeof search.page_size === 'number' ? search.page_size : 100,
@@ -140,6 +142,8 @@ const cronsListRoute = createRoute({
     wrapper_installed:
       typeof search.wrapper_installed === 'boolean' ? search.wrapper_installed : undefined,
     include_hidden: typeof search.include_hidden === 'boolean' ? search.include_hidden : false,
+    include_soft_deleted:
+      typeof search.include_soft_deleted === 'boolean' ? search.include_soft_deleted : false,
   }),
 })
 

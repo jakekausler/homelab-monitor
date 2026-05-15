@@ -1,0 +1,10 @@
+[Unit]
+Description=Watch host crontab spool for changes (homelab-monitor ACL refresh)
+Documentation=https://github.com/jakekausler/homelab-monitor/blob/main/docs/deploy/host-prerequisites.md
+
+[Path]
+PathChanged=/var/spool/cron/crontabs
+Unit=homelab-monitor-crontab-acl.service
+
+[Install]
+WantedBy=paths.target

@@ -18,6 +18,7 @@ export function CronDetailPage() {
           state: undefined,
           q: undefined,
           include_hidden: false,
+          include_soft_deleted: false,
         }}
         className="inline-flex items-center text-sm text-muted-foreground hover:text-foreground"
       >

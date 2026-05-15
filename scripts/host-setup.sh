@@ -9,6 +9,14 @@
 # parts: directory traversal (rx), per-existing-file (r), and default for new
 # files (r).
 #
+# STAGE-002-007A Fix B: `crontab -e` writes a temp file and rename()s it into
+# the spool directory, producing a fresh 0600 file that does NOT inherit the
+# directory's default ACL — so the container loses read access on every edit.
+# To fix this permanently, this script also installs a systemd `.path` unit
+# that watches /var/spool/cron/crontabs and re-applies the read ACLs on every
+# change. Because of that watcher, this script only needs to be run ONCE per
+# machine, ever — subsequent `crontab -e` edits are handled automatically.
+#
 # This script is intentionally minimal and idempotent: running it twice is
 # a no-op. Future stages (systemd discovery, NAS mount perms) will extend it
 # with additional capabilities — the structure is designed to accommodate.
@@ -23,6 +31,19 @@ set -euo pipefail
 
 readonly USERNAME="homelab-monitor"
 readonly CRONTAB_DIR="/var/spool/cron/crontabs"
+
+# Repo paths — host-setup.sh is run as `sudo bash scripts/host-setup.sh` from
+# the repo root, but resolve our own location so it works from anywhere.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly SCRIPT_DIR
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+readonly REPO_ROOT
+readonly SYSTEMD_SRC_DIR="$REPO_ROOT/deploy/systemd"
+readonly REFRESH_SCRIPT_SRC="$SCRIPT_DIR/refresh-crontab-acl.sh"
+readonly REFRESH_SCRIPT_DEST="/usr/local/sbin/refresh-crontab-acl.sh"
+readonly SYSTEMD_DEST_DIR="/etc/systemd/system"
+readonly PATH_UNIT="homelab-monitor-crontab-acl.path"
+readonly SERVICE_UNIT="homelab-monitor-crontab-acl.service"
 
 CHECK_ONLY=0
 WRITE_ENV_FILE=""
@@ -152,7 +173,65 @@ else
     log "WARN: $CRONTAB_DIR not found; user crontabs cannot be discovered until cron is installed"
 fi
 
-# --- 4. Print UID/GID for dev.env / production env ---
+# --- 4. Install systemd path unit that auto-refreshes the ACL ---
+# `crontab -e` rename()s a new 0600 file into CRONTAB_DIR; that file does NOT
+# inherit the directory's default ACL, so the container loses read access on
+# every edit. The .path unit below watches CRONTAB_DIR and re-applies the ACL
+# on every change, making this whole script a one-time-per-machine operation.
+if ! command -v systemctl >/dev/null 2>&1; then
+    log "WARN: systemctl not found; non-systemd host. Skipping ACL-watcher install."
+    log "WARN: re-run host-setup.sh manually after each 'crontab -e' on this host."
+else
+    # 4a. Install the refresh script to a stable absolute path.
+    if [[ -f "$REFRESH_SCRIPT_DEST" ]] \
+        && cmp -s "$REFRESH_SCRIPT_SRC" "$REFRESH_SCRIPT_DEST"; then
+        log "OK: $REFRESH_SCRIPT_DEST already up to date"
+    else
+        do_or_check "install -m 0755 '$REFRESH_SCRIPT_SRC' '$REFRESH_SCRIPT_DEST'"
+    fi
+
+    # 4b. Install the two unit files.
+    for unit in "$SERVICE_UNIT" "$PATH_UNIT"; do
+        src="$SYSTEMD_SRC_DIR/$unit"
+        dest="$SYSTEMD_DEST_DIR/$unit"
+        if [[ ! -f "$src" ]]; then
+            log "ERROR: unit file not found in repo: $src"
+            exit 1
+        fi
+        if [[ -f "$dest" ]] && cmp -s "$src" "$dest"; then
+            log "OK: $dest already up to date"
+        else
+            do_or_check "install -m 0644 '$src' '$dest'"
+        fi
+    done
+
+    # 4c. Reload systemd so it sees the (possibly new/changed) units.
+    do_or_check "systemctl daemon-reload"
+
+    # 4d. Enable + start the .path unit (idempotent — enable --now is safe to
+    #     re-run; it just ensures the symlink exists and the watcher is active).
+    #     Skip if CRONTAB_DIR does not exist yet — the unit would immediately
+    #     error because PathChanged= targets a non-existent directory. Install
+    #     cron(d) first, then re-run host-setup.sh to activate the watcher.
+    if [[ ! -d "$CRONTAB_DIR" ]]; then
+        log "WARN: $PATH_UNIT not enabled — $CRONTAB_DIR does not exist (install cron(d) first, then re-run host-setup.sh)"
+    elif systemctl is-enabled "$PATH_UNIT" >/dev/null 2>&1 \
+        && systemctl is-active "$PATH_UNIT" >/dev/null 2>&1; then
+        log "OK: $PATH_UNIT already enabled and active"
+    else
+        do_or_check "systemctl enable --now '$PATH_UNIT'"
+    fi
+
+    # 4e. Initial ACL apply so existing files are covered immediately (the
+    #     watcher only fires on FUTURE changes). Section 3 above already
+    #     applied ACLs to existing files; this re-runs the installed refresh
+    #     script for parity with what the watcher will do on every change.
+    if [[ -x "$REFRESH_SCRIPT_DEST" ]]; then
+        do_or_check "'$REFRESH_SCRIPT_DEST'"
+    fi
+fi
+
+# --- 5. Print UID/GID for dev.env / production env ---
 UID_VAL=$(id -u "$USERNAME" 2>/dev/null || echo "<not-created>")
 GID_VAL=$(id -g "$USERNAME" 2>/dev/null || echo "<not-created>")
 HOSTNAME_VAL=$(hostname -f 2>/dev/null || hostname 2>/dev/null || echo "<unable-to-determine>")

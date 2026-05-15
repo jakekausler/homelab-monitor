@@ -517,7 +517,7 @@ async def test_migration_0007_round_trip(db_url: str) -> None:
         await engine.dispose()
 
 
-async def test_migration_0008_crons_columns_present(db_engine: AsyncEngine) -> None:
+async def test_crons_columns_present_at_head(db_engine: AsyncEngine) -> None:
     """After head, ``crons`` has the redesigned column set (fingerprint PK,
     hidden_at, source_path, wrapper_installed_at; NO integration_mode, NO
     archived_at, NO id)."""
@@ -538,6 +538,7 @@ async def test_migration_0008_crons_columns_present(db_engine: AsyncEngine) -> N
         "source_path",
         "wrapper_last_seen_at",
         "last_discovered_at",
+        "soft_deleted_at",
     }
     forbidden = {"id", "integration_mode", "archived_at"}
 

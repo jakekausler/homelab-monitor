@@ -23,6 +23,7 @@ import asyncio
 import time as _time
 from typing import Annotated
 
+import structlog
 from fastapi import APIRouter, Depends, Request
 from starlette.responses import Response as _FastApiResponse
 
@@ -50,6 +51,7 @@ from homelab_monitor.kernel.cron.schemas import (
     PreviewRunsResponse,
     cron_record_to_out,
 )
+from homelab_monitor.kernel.db.time import utc_now_iso
 from homelab_monitor.kernel.heartbeat.schemas import query_model
 
 router = APIRouter(prefix="/crons", tags=["crons"])
@@ -105,6 +107,7 @@ async def list_crons(
         state=query.state,
         q=query.q,
         include_hidden=query.include_hidden,
+        include_soft_deleted=query.include_soft_deleted,
         wrapper_installed=query.wrapper_installed,
     )
     return CronListResponse(
@@ -178,7 +181,8 @@ async def get_cron(
     """Return a single cron + its joined heartbeat state.
 
     By default hidden crons return 404; pass ``?include_hidden=true``
-    for admin recovery flows.
+    for admin recovery flows. Soft-deleted crons are ALWAYS returned by this
+    endpoint (direct fetch is unfiltered for soft-delete; STAGE-002-007A).
     """
     joined = await repo.get_cron_with_state(fingerprint, include_hidden=include_hidden)
     if joined is None:
@@ -249,17 +253,33 @@ async def discover_now(
                 code="cron_discoverer_unavailable",
                 message="cron-discoverer plugin not registered",
             )
-        cron_repo = request.app.state.cron_repo
+        cron_repo = getattr(request.app.state, "cron_repo", None)
+        if cron_repo is None:
+            raise DependencyUnavailableProblem(
+                code="cron_repo_unavailable",
+                message="cron-repo not registered",
+            )
         # use the lifespan logger instead — fetch from app.state if available
-        import structlog  # noqa: PLC0415
 
         bound_log = structlog.stdlib.get_logger().bind(component="discover-now", who=user.username)
         result: CronScanResult = await discoverer.scan(cron_repo, log=bound_log)
+        try:
+            soft_deleted, restored = await cron_repo.reconcile_soft_deletes(
+                host=result.host,
+                clean_paths=result.clean_source_paths,
+                found_by_path=result.found_by_source_path,
+                now=utc_now_iso(),
+            )
+        except Exception as exc:
+            soft_deleted, restored = 0, 0
+            bound_log.warning("discover_now.reconcile_failed", error=str(exc))
         return {
             "found_count": len(result.found_fingerprints),
             "inserted_count": result.inserted_count,
             "updated_count": result.updated_count,
             "bump_only_count": result.bump_only_count,
+            "soft_deleted_count": soft_deleted,
+            "restored_count": restored,
             "partial": result.partial,
             "error_count": len(result.errors),
             "errors": [

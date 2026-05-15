@@ -100,6 +100,25 @@ class CronDiscoverer(BaseCollector):
                 duration_seconds=time.monotonic() - start,
             )
         scan_result = await self.scan(self.cron_repo, log=ctx.log)
+        try:
+            soft_deleted, restored = await self.cron_repo.reconcile_soft_deletes(
+                host=scan_result.host,
+                clean_paths=scan_result.clean_source_paths,
+                found_by_path=scan_result.found_by_source_path,
+                now=utc_now_iso(),
+            )
+        except Exception as exc:
+            soft_deleted, restored = 0, 0
+            if hasattr(ctx.log, "warning"):
+                ctx.log.warning(  # type: ignore[attr-defined]
+                    "cron_discoverer.reconcile_failed", error=str(exc)
+                )
+        if hasattr(ctx.log, "info"):
+            ctx.log.info(  # type: ignore[attr-defined]
+                "cron_discoverer.reconcile_complete",
+                soft_deleted=soft_deleted,
+                restored=restored,
+            )
         return CollectorResult(
             ok=not scan_result.partial,
             metrics_emitted=0,
@@ -112,7 +131,10 @@ class CronDiscoverer(BaseCollector):
         """Perform one discovery scan. Idempotent; called by both the scheduler
         tick and POST /api/crons/discover-now.
 
-        Returns CronScanResult — consumed by STAGE-002-007A for soft-delete reconciliation.
+        Returns CronScanResult — consumed by STAGE-002-007A for soft-delete
+        reconciliation. The caller (run() or the discover-now endpoint) is
+        responsible for invoking cron_repo.reconcile_soft_deletes() with the
+        per-source-file fields on the result.
         """
         host_root = _resolve_host_root()
         hostname = _resolve_hostname(log)
@@ -121,8 +143,18 @@ class CronDiscoverer(BaseCollector):
         all_entries: list[ParsedCronEntry] = []
         all_errors: list[CronScanError] = []
         partial = False
+        clean_source_paths: set[str] = set()
+        unreachable_prefixes: set[str] = set()
+        # Paths that did NOT cleanly inspect this scan — whether the file-level
+        # read failed (PermissionError / OSError) OR the file had a per-line
+        # parse error. DISTINCT from unreachable_prefixes (whole-directory
+        # iterdir failures). Such a path must NEVER be in clean_source_paths;
+        # if it were, reconciliation would soft-delete its DB rows on an
+        # incomplete observation (STAGE-002-007A data-corruption bugfix).
+        unreadable_paths: set[str] = set()
 
-        # 1. /host/etc/crontab (single file)
+        # 1. /host/etc/crontab (single file). The host path is always "known":
+        #    if the file is absent it is still a clean (empty) inspection.
         crontab_path = host_root / "etc" / "crontab"
         entries, errors, file_partial = self._scan_one_file(
             container_path=crontab_path,
@@ -133,6 +165,10 @@ class CronDiscoverer(BaseCollector):
         all_entries.extend(entries)
         all_errors.extend(errors)
         partial = partial or file_partial
+        if not errors:
+            clean_source_paths.add("/etc/crontab")
+        else:
+            unreadable_paths.add("/etc/crontab")
 
         # 2. /host/etc/cron.d/* (glob; skip dotfiles)
         cron_d = host_root / "etc" / "cron.d"
@@ -143,18 +179,24 @@ class CronDiscoverer(BaseCollector):
                         continue
                     if not child.is_file():
                         continue
+                    host_path = f"/etc/cron.d/{child.name}"
                     entries, errors, file_partial = self._scan_one_file(
                         container_path=child,
-                        host_source_path=f"/etc/cron.d/{child.name}",
+                        host_source_path=host_path,
                         source_kind=CronSourceKind.SYSTEM_WITH_USER_FIELD,
                         host=hostname,
                     )
                     all_entries.extend(entries)
                     all_errors.extend(errors)
                     partial = partial or file_partial
+                    if not errors:
+                        clean_source_paths.add(host_path)
+                    else:
+                        unreadable_paths.add(host_path)
             except OSError as exc:
                 all_errors.append(CronScanError(host_source_path="/etc/cron.d", error=str(exc)))
                 partial = True
+                unreachable_prefixes.add("/etc/cron.d")
 
         # 3. /host/var/spool/cron/crontabs/* (filename = user)
         spool = host_root / "var" / "spool" / "cron" / "crontabs"
@@ -166,23 +208,31 @@ class CronDiscoverer(BaseCollector):
                     if not child.is_file():
                         continue
                     user = child.name
+                    host_path = f"crontab:{user}"
                     entries, errors, file_partial = self._scan_one_file(
                         container_path=child,
-                        host_source_path=f"crontab:{user}",
+                        host_source_path=host_path,
                         source_kind=CronSourceKind.USER_CRONTAB,
                         host=hostname,
                     )
                     all_entries.extend(entries)
                     all_errors.extend(errors)
                     partial = partial or file_partial
+                    if not errors:
+                        clean_source_paths.add(host_path)
+                    else:
+                        unreadable_paths.add(host_path)
             except OSError as exc:
                 all_errors.append(
                     CronScanError(host_source_path="/var/spool/cron/crontabs", error=str(exc))
                 )
                 partial = True
+                unreachable_prefixes.add("/var/spool/cron/crontabs")
 
-        # 4. Upsert each parsed entry.
+        # 4. Upsert each parsed entry. (MUST run before reconciliation — the
+        #    caller reconciles AFTER scan() returns.)
         found_fingerprints: set[str] = set()
+        found_by_source_path: dict[str, set[str]] = {}
         inserted_count = 0
         updated_count = 0
         bump_only_count = 0
@@ -196,6 +246,9 @@ class CronDiscoverer(BaseCollector):
                     now=now,
                 )
                 found_fingerprints.add(record.fingerprint)
+                found_by_source_path.setdefault(entry.host_source_path, set()).add(
+                    record.fingerprint
+                )
                 if inserted:
                     inserted_count += 1
                 elif updated_non_bump:
@@ -205,10 +258,15 @@ class CronDiscoverer(BaseCollector):
             except Exception as exc:
                 all_errors.append(
                     CronScanError(
-                        host_source_path=entry.host_source_path, error=f"upsert failed: {exc}"
+                        host_source_path=entry.host_source_path,
+                        error=f"upsert failed: {exc}",
                     )
                 )
                 partial = True
+                # An upsert failure means we did NOT cleanly process this file's
+                # contents — drop it from clean_source_paths so reconciliation
+                # does not soft-delete its sibling rows on a half-applied scan.
+                clean_source_paths.discard(entry.host_source_path)
 
         if hasattr(log, "info"):
             log.info(  # type: ignore[attr-defined]
@@ -218,7 +276,46 @@ class CronDiscoverer(BaseCollector):
                 bump_only=bump_only_count,
                 errors=len(all_errors),
                 partial=partial,
+                clean_paths=len(clean_source_paths),
+                unreadable_paths=len(unreadable_paths),
             )
+
+        # D3: a known cron.d / spool file the operator deleted is absent from
+        # iterdir, so it is not yet in clean_source_paths. Pull in every
+        # source_path the DB has for this host that lives under a cleanly
+        # iterated prefix — those rows are soft-delete candidates this cycle.
+        known_db_paths: frozenset[str]
+        try:
+            known_db_paths = await cron_repo.list_source_paths_for_host(hostname)
+        except Exception as exc:
+            # D3 augmentation (re-adding operator-deleted cron.d/spool files) is
+            # skipped this cycle; the next successful scan catches up.
+            known_db_paths = frozenset()
+            all_errors.append(CronScanError(host_source_path="<reconcile-prep>", error=str(exc)))
+            partial = True
+        for db_path in known_db_paths:
+            if db_path == "/etc/crontab":
+                continue  # already handled by the single-file branch
+            if db_path in unreadable_paths:
+                # The file exists on disk but could not be read this scan
+                # (e.g. 0600 perms vs the container UID). Re-adding it here
+                # would let reconcile soft-delete every row under it against
+                # an empty found-set. NEVER reconcile an unreadable path
+                # (STAGE-002-007A data-corruption bugfix).
+                continue
+            # Any other prefix: scanner does not own it -> never reconcile.
+            if (
+                db_path.startswith("/etc/cron.d/") and "/etc/cron.d" not in unreachable_prefixes
+            ) or (
+                db_path.startswith("crontab:")
+                and "/var/spool/cron/crontabs" not in unreachable_prefixes
+            ):
+                clean_source_paths.add(db_path)
+
+        # Final guard: an unreadable path must NEVER reach reconciliation,
+        # regardless of how it entered clean_source_paths above. Subtracting
+        # here makes the invariant total (STAGE-002-007A data-corruption bugfix).
+        clean_source_paths -= unreadable_paths
 
         return CronScanResult(
             found_fingerprints=frozenset(found_fingerprints),
@@ -227,6 +324,11 @@ class CronDiscoverer(BaseCollector):
             inserted_count=inserted_count,
             updated_count=updated_count,
             bump_only_count=bump_only_count,
+            host=hostname,
+            clean_source_paths=frozenset(clean_source_paths),
+            unreachable_source_path_prefixes=frozenset(unreachable_prefixes),
+            unreadable_source_paths=frozenset(unreadable_paths),
+            found_by_source_path={k: frozenset(v) for k, v in found_by_source_path.items()},
         )
 
     def _scan_one_file(

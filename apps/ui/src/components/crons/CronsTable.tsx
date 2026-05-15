@@ -59,7 +59,12 @@ export function CronsTable({ items, isLoading, emptyHint }: CronsTableProps) {
         </thead>
         <tbody className="divide-y divide-border">
           {items.map((c) => (
-            <tr key={c.fingerprint} className="hover:bg-accent/30">
+            <tr
+              key={c.fingerprint}
+              className={
+                c.soft_deleted_at !== null ? 'opacity-60 hover:bg-accent/30' : 'hover:bg-accent/30'
+              }
+            >
               <td className="px-3 py-2">
                 <Link
                   to="/inventory/crons/$fingerprint"
@@ -86,6 +91,16 @@ export function CronsTable({ items, isLoading, emptyHint }: CronsTableProps) {
               </td>
               <td className="px-3 py-2">
                 <StateBadge state={c.last_seen_state} />
+                {c.soft_deleted_at !== null && (
+                  <Badge
+                    variant="muted"
+                    className="ml-2 border-amber-500/40 bg-amber-500/15 text-amber-700 dark:text-amber-300"
+                    aria-label="Soft-deleted (no longer found on disk)"
+                    data-testid="soft-deleted-badge"
+                  >
+                    Soft-deleted
+                  </Badge>
+                )}
               </td>
               <td className="px-3 py-2 text-xs text-muted-foreground">—</td>
               <td className="px-3 py-2 text-xs" data-testid="wrapper-cell">

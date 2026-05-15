@@ -12,6 +12,7 @@ export interface ToolbarFilters {
   wrapper_installed?: boolean
   q?: string
   include_hidden: boolean
+  include_soft_deleted: boolean
 }
 
 export interface CronsToolbarProps {
@@ -157,6 +158,15 @@ export function CronsToolbar({
           onChange={(e) => update({ ...filters, include_hidden: e.target.checked })}
         />
         Show hidden
+      </label>
+
+      <label className="flex items-center gap-2 text-sm">
+        <input
+          type="checkbox"
+          checked={filters.include_soft_deleted}
+          onChange={(e) => update({ ...filters, include_soft_deleted: e.target.checked })}
+        />
+        Show soft-deleted
       </label>
     </div>
   )

@@ -33,6 +33,7 @@ async def _seed_cron(  # noqa: PLR0913 -- seed helpers benefit from explicit kwa
     source_path: str | None = "/etc/crontab",
     last_seen_state: str = "unknown",
     hidden_at: str | None = None,
+    soft_deleted_at: str | None = None,
     fingerprint: str | None = None,
 ) -> str:
     """Insert a cron with a computed fingerprint (or the caller-supplied one).
@@ -50,9 +51,9 @@ async def _seed_cron(  # noqa: PLR0913 -- seed helpers benefit from explicit kwa
                 "INSERT INTO crons (fingerprint, name, host, command, schedule, "
                 "schedule_canonical, cadence_seconds, expected_grace_seconds, "
                 "enabled, last_seen_state, created_at, updated_at, hidden_at, "
-                "source_path, wrapper_last_seen_at) VALUES ("
+                "source_path, wrapper_last_seen_at, soft_deleted_at) VALUES ("
                 ":fp, :name, :host, :command, :schedule, :sched_canon, :cad, "
-                ":grace, :enabled, :state, :created, :updated, :hidden, :sp, :wia)"
+                ":grace, :enabled, :state, :created, :updated, :hidden, :sp, :wia, :sda)"
             ),
             {
                 "fp": fp,
@@ -70,6 +71,7 @@ async def _seed_cron(  # noqa: PLR0913 -- seed helpers benefit from explicit kwa
                 "hidden": hidden_at,
                 "sp": source_path,
                 "wia": None,
+                "sda": soft_deleted_at,
             },
         )
     return fp
@@ -674,3 +676,75 @@ async def test_list_crons_no_wrapper_filter_returns_all(
     assert resp.status_code == 200  # noqa: PLR2004
     body = resp.json()
     assert body["total"] == 4  # noqa: PLR2004
+
+
+# ---------------------------------------------------------------------------
+# SOFT DELETE FILTERING (Wave 3)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_list_crons_filters_soft_deleted_by_default(
+    authenticated_client: AsyncClient, repo: SqliteRepository
+) -> None:
+    """By default, soft-deleted crons are excluded from the list."""
+    now = utc_now_iso()
+    fp1 = await _seed_cron(repo, name="active")
+    fp2 = await _seed_cron(repo, name="soft-deleted", soft_deleted_at=now)
+    resp = await authenticated_client.get("/api/crons")
+    assert resp.status_code == 200  # noqa: PLR2004
+    body = resp.json()
+    assert body["total"] == 1
+    assert len(body["items"]) == 1
+    assert body["items"][0]["fingerprint"] == fp1
+    assert fp2 not in [item["fingerprint"] for item in body["items"]]
+
+
+@pytest.mark.asyncio
+async def test_list_crons_include_soft_deleted_true(
+    authenticated_client: AsyncClient, repo: SqliteRepository
+) -> None:
+    """With include_soft_deleted=true, soft-deleted crons are included."""
+    now = utc_now_iso()
+    fp1 = await _seed_cron(repo, name="active")
+    fp2 = await _seed_cron(repo, name="soft-deleted", soft_deleted_at=now)
+    resp = await authenticated_client.get("/api/crons?include_soft_deleted=true")
+    assert resp.status_code == 200  # noqa: PLR2004
+    body = resp.json()
+    assert body["total"] == 2  # noqa: PLR2004
+    assert len(body["items"]) == 2  # noqa: PLR2004
+    fingerprints = [item["fingerprint"] for item in body["items"]]
+    assert fp1 in fingerprints
+    assert fp2 in fingerprints
+    # Verify the soft-deleted item has the field set
+    soft_deleted_item = next((item for item in body["items"] if item["fingerprint"] == fp2), None)
+    assert soft_deleted_item is not None
+    assert soft_deleted_item["soft_deleted_at"] == now
+
+
+@pytest.mark.asyncio
+async def test_get_cron_returns_soft_deleted_row(
+    authenticated_client: AsyncClient, repo: SqliteRepository
+) -> None:
+    """Direct fetch via GET /api/crons/{fp} returns soft-deleted crons."""
+    now = utc_now_iso()
+    fp = await _seed_cron(repo, name="soft-deleted", soft_deleted_at=now)
+    resp = await authenticated_client.get(f"/api/crons/{fp}")
+    assert resp.status_code == 200  # noqa: PLR2004
+    body = resp.json()
+    assert body["cron"]["fingerprint"] == fp
+    assert body["cron"]["soft_deleted_at"] == now
+
+
+@pytest.mark.asyncio
+async def test_cron_out_includes_soft_deleted_at_field(
+    authenticated_client: AsyncClient, repo: SqliteRepository
+) -> None:
+    """CronOut schema includes soft_deleted_at field."""
+    fp = await _seed_cron(repo, name="active")
+    resp = await authenticated_client.get(f"/api/crons/{fp}")
+    assert resp.status_code == 200  # noqa: PLR2004
+    body = resp.json()
+    cron = body["cron"]
+    assert "soft_deleted_at" in cron
+    assert cron["soft_deleted_at"] is None

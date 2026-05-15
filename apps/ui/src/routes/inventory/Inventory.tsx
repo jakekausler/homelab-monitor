@@ -14,6 +14,7 @@ const TABS = [
       state: undefined,
       q: undefined,
       include_hidden: false,
+      include_soft_deleted: false,
     },
   },
 ] as const

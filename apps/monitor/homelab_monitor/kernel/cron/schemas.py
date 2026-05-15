@@ -50,6 +50,7 @@ class CronListQuery(BaseModel):
     state: LastSeenState | None = None
     q: str | None = Field(default=None, max_length=200)
     include_hidden: bool = False
+    include_soft_deleted: bool = False
     wrapper_installed: bool | None = None
 
 
@@ -171,6 +172,7 @@ class CronOut(BaseModel):
     source_path: str | None
     wrapper_last_seen_at: str | None
     last_discovered_at: str | None
+    soft_deleted_at: str | None
 
 
 class CronListResponse(BaseModel):
@@ -226,4 +228,5 @@ def cron_record_to_out(rec: CronRecord) -> CronOut:
         source_path=rec.source_path,
         wrapper_last_seen_at=rec.wrapper_last_seen_at,
         last_discovered_at=rec.last_discovered_at,
+        soft_deleted_at=rec.soft_deleted_at,
     )

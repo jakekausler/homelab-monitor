@@ -10,6 +10,7 @@ from sqlalchemy import text
 
 from homelab_monitor.kernel.cron.repository import CronRepo
 from homelab_monitor.kernel.db.repository import SqliteRepository
+from homelab_monitor.kernel.db.time import utc_now_iso
 from homelab_monitor.plugins.discoverers.cron_discoverer import (
     CronDiscoverer,
     _resolve_hostname,  # pyright: ignore[reportPrivateUsage]
@@ -46,6 +47,24 @@ class _NullLog:
 
     def info(self, *a: object, **kw: object) -> None:
         pass
+
+
+def _patch_read_text_permission_error(monkeypatch: pytest.MonkeyPatch, *, deny_suffix: str) -> None:
+    """Monkeypatch Path.read_text to raise PermissionError for any path whose
+    string ends with `deny_suffix`, and behave normally for all others.
+
+    Used to simulate a 0600 crontab the container UID cannot read WITHOUT
+    relying on chmod 0o000 (the test runner may be root, for which chmod is
+    a no-op).
+    """
+    original_read_text = Path.read_text
+
+    def patched(self: Path, *args: object, **kwargs: object) -> str:
+        if str(self).endswith(deny_suffix):
+            raise PermissionError(f"simulated permission denied: {self}")
+        return original_read_text(self, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Path, "read_text", patched)
 
 
 @pytest.mark.asyncio
@@ -610,3 +629,474 @@ def test_hostname_fallback_warning_fires_once(monkeypatch: pytest.MonkeyPatch) -
     hostname2 = _resolve_hostname(log)
     assert log.warning_count == 1  # still 1, not 2
     assert hostname2 == socket.gethostname()
+
+
+# Wave 2 extensions: test new scan() result fields
+
+
+@pytest.mark.asyncio
+async def test_scan_populates_clean_source_paths(
+    repo: SqliteRepository, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Test that scan() populates clean_source_paths with successfully scanned paths."""
+    _make_host_tree(
+        tmp_path,
+        crontab="0 * * * * echo system\n",
+        cron_d_files={"backup": "10 4 * * * root /storage/scripts/cron/backup.sh\n"},
+    )
+    monkeypatch.setenv("HM_CRON_HOST_ROOT", str(tmp_path))
+    monkeypatch.setenv("HM_HOST_HOSTNAME", "test-host")
+    discoverer = CronDiscoverer()
+    cron_repo = CronRepo(repo)
+
+    result = await discoverer.scan(cron_repo, log=_NullLog())
+
+    assert "/etc/crontab" in result.clean_source_paths
+    assert "/etc/cron.d/backup" in result.clean_source_paths
+    assert result.host == "test-host"
+
+
+@pytest.mark.asyncio
+async def test_scan_found_by_source_path_grouping(
+    repo: SqliteRepository, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Test that found_by_source_path groups fingerprints by source path."""
+    _make_host_tree(
+        tmp_path,
+        cron_d_files={"backup": "10 4 * * * root /storage/scripts/cron/backup.sh\n"},
+    )
+    monkeypatch.setenv("HM_CRON_HOST_ROOT", str(tmp_path))
+    monkeypatch.setenv("HM_HOST_HOSTNAME", "test-host")
+    discoverer = CronDiscoverer()
+    cron_repo = CronRepo(repo)
+
+    result = await discoverer.scan(cron_repo, log=_NullLog())
+
+    assert "/etc/cron.d/backup" in result.found_by_source_path
+    found_fps = result.found_by_source_path["/etc/cron.d/backup"]
+    assert len(found_fps) == 1
+    assert found_fps == result.found_fingerprints
+
+
+@pytest.mark.asyncio
+async def test_scan_cron_d_iterdir_oserror_excludes_from_clean(
+    repo: SqliteRepository, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Test that iterdir failure on cron.d excludes it from clean_source_paths."""
+    _make_host_tree(tmp_path, crontab="0 * * * * echo system\n")
+    (tmp_path / "etc" / "cron.d").mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("HM_CRON_HOST_ROOT", str(tmp_path))
+    monkeypatch.setenv("HM_HOST_HOSTNAME", "test-host")
+
+    # Mock iterdir to fail on cron.d
+    def mock_iterdir(self: Path) -> Iterator[Path]:
+        if self.name == "cron.d":
+            raise OSError("permission denied")
+        return object.__getattribute__(self, "_real_iterdir")()
+
+    original_iterdir = Path.iterdir
+    Path._real_iterdir = original_iterdir  # type: ignore[attr-defined]
+    monkeypatch.setattr(Path, "iterdir", mock_iterdir)
+
+    discoverer = CronDiscoverer()
+    cron_repo = CronRepo(repo)
+
+    result = await discoverer.scan(cron_repo, log=_NullLog())
+
+    assert "/etc/cron.d" in result.unreachable_source_path_prefixes
+    assert not any(p.startswith("/etc/cron.d") for p in result.clean_source_paths)
+    assert result.partial is True
+
+
+@pytest.mark.asyncio
+async def test_scan_parse_error_excludes_file_from_clean(
+    repo: SqliteRepository, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Test that a file with parse errors is excluded from clean_source_paths."""
+    _make_host_tree(
+        tmp_path,
+        cron_d_files={"bad": "*/X * * * * root /bin/false\n"},  # Invalid schedule
+    )
+    monkeypatch.setenv("HM_CRON_HOST_ROOT", str(tmp_path))
+    monkeypatch.setenv("HM_HOST_HOSTNAME", "test-host")
+
+    discoverer = CronDiscoverer()
+    cron_repo = CronRepo(repo)
+
+    result = await discoverer.scan(cron_repo, log=_NullLog())
+
+    assert "/etc/cron.d/bad" not in result.clean_source_paths
+    assert result.partial is True
+
+
+@pytest.mark.asyncio
+async def test_run_reconcile_soft_deletes_raises_returns_ok(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """run() continues and returns CollectorResult when reconcile_soft_deletes raises."""
+    _make_host_tree(
+        tmp_path,
+        cron_d_files={"backup": "10 4 * * * root /storage/scripts/cron/backup.sh\n"},
+    )
+    monkeypatch.setenv("HM_CRON_HOST_ROOT", str(tmp_path))
+    monkeypatch.setenv("HM_HOST_HOSTNAME", "test-host")
+
+    # Create a mock cron_repo whose reconcile_soft_deletes raises
+    mock_repo = AsyncMock()
+    mock_repo.reconcile_soft_deletes = AsyncMock(side_effect=RuntimeError("db error"))
+    # scan() calls register_cron for each entry; mock it to return a plausible value
+    from homelab_monitor.kernel.cron.repository import CronRecord  # noqa: PLC0415
+
+    fake_record = MagicMock(spec=CronRecord)
+    mock_repo.register_cron = AsyncMock(return_value=(fake_record, True))
+    mock_repo.list_source_paths_for_host = AsyncMock(return_value=frozenset())
+
+    discoverer = CronDiscoverer()
+    discoverer.cron_repo = mock_repo
+    ctx = MagicMock()
+    ctx.log = _NullLog()
+
+    result = await discoverer.run(ctx)
+    assert result is not None
+    assert result.metrics_emitted == 0
+
+
+@pytest.mark.asyncio
+async def test_run_reconcile_raises_log_without_warning_attr(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """run() skips ctx.log.warning when reconcile raises and log lacks .warning (113->117)."""
+    _make_host_tree(tmp_path)
+    monkeypatch.setenv("HM_CRON_HOST_ROOT", str(tmp_path))
+    monkeypatch.setenv("HM_HOST_HOSTNAME", "test-host")
+
+    mock_repo = AsyncMock()
+    mock_repo.reconcile_soft_deletes = AsyncMock(side_effect=RuntimeError("fail"))
+    mock_repo.register_cron = AsyncMock(return_value=(MagicMock(), False))
+    mock_repo.list_source_paths_for_host = AsyncMock(return_value=frozenset())
+
+    class _NoWarningLog:
+        """Log without .warning — triggers hasattr(ctx.log, 'warning') to be False."""
+
+        def info(self, *a: object, **kw: object) -> None:
+            pass
+
+    discoverer = CronDiscoverer()
+    discoverer.cron_repo = mock_repo
+    ctx = MagicMock()
+    ctx.log = _NoWarningLog()
+
+    result = await discoverer.run(ctx)
+    assert result is not None
+
+
+@pytest.mark.asyncio
+async def test_run_reconcile_ok_log_without_info_attr(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """run() skips ctx.log.info call when log object lacks .info (117->123 branch)."""
+    _make_host_tree(tmp_path)
+    monkeypatch.setenv("HM_CRON_HOST_ROOT", str(tmp_path))
+    monkeypatch.setenv("HM_HOST_HOSTNAME", "test-host")
+
+    mock_repo = AsyncMock()
+    mock_repo.reconcile_soft_deletes = AsyncMock(return_value=(0, 0))
+    mock_repo.register_cron = AsyncMock(return_value=(MagicMock(), False))
+    mock_repo.list_source_paths_for_host = AsyncMock(return_value=frozenset())
+
+    class _NoInfoLog:
+        """Log without .info — triggers hasattr check at line 117 to be False."""
+
+        def warning(self, *a: object, **kw: object) -> None:
+            pass
+
+    discoverer = CronDiscoverer()
+    discoverer.cron_repo = mock_repo
+    ctx = MagicMock()
+    ctx.log = _NoInfoLog()
+
+    result = await discoverer.run(ctx)
+    assert result is not None
+
+
+@pytest.mark.asyncio
+async def test_scan_crontab_errors_excluded_from_clean_source_paths(
+    repo: SqliteRepository, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A parse error in /etc/crontab keeps it out of clean_source_paths (162->166)."""
+    (tmp_path / "etc").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "etc" / "crontab").write_text("*/X * * * * root /bin/false\n")
+    monkeypatch.setenv("HM_CRON_HOST_ROOT", str(tmp_path))
+    monkeypatch.setenv("HM_HOST_HOSTNAME", "test-host")
+
+    result = await CronDiscoverer().scan(CronRepo(repo), log=_NullLog())
+
+    assert "/etc/crontab" not in result.clean_source_paths
+
+
+@pytest.mark.asyncio
+async def test_scan_spool_errors_excluded_from_clean_source_paths(
+    repo: SqliteRepository, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A parse error in a user crontab keeps it out of clean_source_paths (211->195)."""
+    spool = tmp_path / "var" / "spool" / "cron" / "crontabs"
+    spool.mkdir(parents=True, exist_ok=True)
+    (spool / "alice").write_text("*/X * * * * /bin/false\n")
+    monkeypatch.setenv("HM_CRON_HOST_ROOT", str(tmp_path))
+    monkeypatch.setenv("HM_HOST_HOSTNAME", "test-host")
+
+    result = await CronDiscoverer().scan(CronRepo(repo), log=_NullLog())
+
+    assert "crontab:alice" not in result.clean_source_paths
+
+
+@pytest.mark.asyncio
+async def test_scan_known_db_path_not_owned_by_scanner_skipped(
+    repo: SqliteRepository, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A DB path outside /etc/cron.d/ or crontab: is not added to clean_source_paths.
+
+    This covers the 285->281 branch (the if-condition at 285-290 is False).
+    """
+    _make_host_tree(tmp_path)
+    monkeypatch.setenv("HM_CRON_HOST_ROOT", str(tmp_path))
+    monkeypatch.setenv("HM_HOST_HOSTNAME", "test-host")
+
+    from homelab_monitor.kernel.cron import repository as _repo_mod  # noqa: PLC0415
+
+    async def _fake_list(self: object, host: str) -> frozenset[str]:
+        return frozenset(["/some/unknown/path"])
+
+    monkeypatch.setattr(_repo_mod.CronRepo, "list_source_paths_for_host", _fake_list)
+
+    cron_repo = CronRepo(repo)
+    result = await CronDiscoverer().scan(cron_repo, log=_NullLog())
+
+    assert "/some/unknown/path" not in result.clean_source_paths
+
+
+# ---------------------------------------------------------------------------
+# STAGE-002-007A bugfix: unreadable paths must NOT be soft-deleted
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_unreadable_user_crontab_not_soft_deleted(
+    repo: SqliteRepository, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """STAGE-002-007A bugfix: a user crontab that becomes unreadable mid-life
+    must NOT have its registered crons soft-deleted.
+
+    Scan 1: file is readable -> cron is discovered + registered.
+    Scan 2: file is unreadable (PermissionError) -> the cron's row must NOT
+    be soft-deleted, and reconcile must report 0 soft-deleted / 0 restored
+    for it.
+    """
+    _make_host_tree(
+        tmp_path,
+        user_crontabs={"jakekausler": "*/5 * * * * /opt/sync.sh\n"},
+    )
+    monkeypatch.setenv("HM_CRON_HOST_ROOT", str(tmp_path))
+    monkeypatch.setenv("HM_HOST_HOSTNAME", "test-host")
+    cron_repo = CronRepo(repo)
+    discoverer = CronDiscoverer()
+
+    # Scan 1 — readable: discovers the cron.
+    result1 = await discoverer.scan(cron_repo, log=_NullLog())
+    assert result1.inserted_count == 1
+    assert "crontab:jakekausler" in result1.clean_source_paths
+    (fp,) = tuple(result1.found_fingerprints)
+
+    # Scan 2 — the file is now unreadable.
+    _patch_read_text_permission_error(monkeypatch, deny_suffix="/crontabs/jakekausler")
+    result2 = await discoverer.scan(cron_repo, log=_NullLog())
+
+    # The unreadable path must be tracked and excluded from clean_source_paths.
+    assert "crontab:jakekausler" in result2.unreadable_source_paths
+    assert "crontab:jakekausler" not in result2.clean_source_paths
+    assert result2.partial is True
+
+    # Reconcile with the scan-2 result must NOT soft-delete the cron.
+    soft_deleted, restored = await cron_repo.reconcile_soft_deletes(
+        host=result2.host,
+        clean_paths=result2.clean_source_paths,
+        found_by_path=result2.found_by_source_path,
+        now=utc_now_iso(),
+    )
+    assert soft_deleted == 0
+    assert restored == 0
+
+    # The row's soft_deleted_at must still be NULL.
+    row = await repo.fetch_one(
+        text("SELECT soft_deleted_at FROM crons WHERE fingerprint = :fp"),
+        {"fp": fp},
+    )
+    assert row is not None
+    assert row.soft_deleted_at is None
+
+
+@pytest.mark.asyncio
+async def test_unreadable_cron_d_file_not_soft_deleted(
+    repo: SqliteRepository, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """STAGE-002-007A bugfix: an /etc/cron.d/<file> that becomes unreadable
+    must NOT have its registered crons soft-deleted."""
+    _make_host_tree(
+        tmp_path,
+        cron_d_files={"backup": "10 4 * * * root /storage/scripts/backup.sh\n"},
+    )
+    monkeypatch.setenv("HM_CRON_HOST_ROOT", str(tmp_path))
+    monkeypatch.setenv("HM_HOST_HOSTNAME", "test-host")
+    cron_repo = CronRepo(repo)
+    discoverer = CronDiscoverer()
+
+    result1 = await discoverer.scan(cron_repo, log=_NullLog())
+    assert result1.inserted_count == 1
+    (fp,) = tuple(result1.found_fingerprints)
+
+    _patch_read_text_permission_error(monkeypatch, deny_suffix="/cron.d/backup")
+    result2 = await discoverer.scan(cron_repo, log=_NullLog())
+
+    assert "/etc/cron.d/backup" in result2.unreadable_source_paths
+    assert "/etc/cron.d/backup" not in result2.clean_source_paths
+    assert result2.partial is True
+
+    soft_deleted, restored = await cron_repo.reconcile_soft_deletes(
+        host=result2.host,
+        clean_paths=result2.clean_source_paths,
+        found_by_path=result2.found_by_source_path,
+        now=utc_now_iso(),
+    )
+    assert soft_deleted == 0
+    assert restored == 0
+
+    row = await repo.fetch_one(
+        text("SELECT soft_deleted_at FROM crons WHERE fingerprint = :fp"),
+        {"fp": fp},
+    )
+    assert row is not None
+    assert row.soft_deleted_at is None
+
+
+@pytest.mark.asyncio
+async def test_unreadable_etc_crontab_not_soft_deleted(
+    repo: SqliteRepository, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """STAGE-002-007A bugfix: an unreadable /etc/crontab must NOT have its
+    registered crons soft-deleted."""
+    _make_host_tree(tmp_path, crontab="0 3 * * * root /storage/scripts/nightly.sh\n")
+    monkeypatch.setenv("HM_CRON_HOST_ROOT", str(tmp_path))
+    monkeypatch.setenv("HM_HOST_HOSTNAME", "test-host")
+    cron_repo = CronRepo(repo)
+    discoverer = CronDiscoverer()
+
+    result1 = await discoverer.scan(cron_repo, log=_NullLog())
+    assert result1.inserted_count == 1
+    assert "/etc/crontab" in result1.clean_source_paths
+    (fp,) = tuple(result1.found_fingerprints)
+
+    _patch_read_text_permission_error(monkeypatch, deny_suffix="/etc/crontab")
+    result2 = await discoverer.scan(cron_repo, log=_NullLog())
+
+    assert "/etc/crontab" in result2.unreadable_source_paths
+    assert "/etc/crontab" not in result2.clean_source_paths
+    assert result2.partial is True
+
+    soft_deleted, restored = await cron_repo.reconcile_soft_deletes(
+        host=result2.host,
+        clean_paths=result2.clean_source_paths,
+        found_by_path=result2.found_by_source_path,
+        now=utc_now_iso(),
+    )
+    assert soft_deleted == 0
+    assert restored == 0
+
+    row = await repo.fetch_one(
+        text("SELECT soft_deleted_at FROM crons WHERE fingerprint = :fp"),
+        {"fp": fp},
+    )
+    assert row is not None
+    assert row.soft_deleted_at is None
+
+
+@pytest.mark.asyncio
+async def test_emptied_readable_file_still_soft_deletes(
+    repo: SqliteRepository, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Control: a source file that is READABLE but has had all its cron lines
+    removed MUST still soft-delete its registered crons. Proves the
+    STAGE-002-007A bugfix did not disable legitimate soft-delete."""
+    cron_d_dir = tmp_path / "etc" / "cron.d"
+    _make_host_tree(
+        tmp_path,
+        cron_d_files={"backup": "10 4 * * * root /storage/scripts/backup.sh\n"},
+    )
+    monkeypatch.setenv("HM_CRON_HOST_ROOT", str(tmp_path))
+    monkeypatch.setenv("HM_HOST_HOSTNAME", "test-host")
+    cron_repo = CronRepo(repo)
+    discoverer = CronDiscoverer()
+
+    result1 = await discoverer.scan(cron_repo, log=_NullLog())
+    assert result1.inserted_count == 1
+    (fp,) = tuple(result1.found_fingerprints)
+
+    # Empty the file (still readable, just no cron lines — a comment remains).
+    (cron_d_dir / "backup").write_text("# all jobs removed\n")
+
+    result2 = await discoverer.scan(cron_repo, log=_NullLog())
+    # Emptied-but-readable file has NO errors -> it IS clean, NOT unreadable.
+    assert "/etc/cron.d/backup" not in result2.unreadable_source_paths
+    assert "/etc/cron.d/backup" in result2.clean_source_paths
+
+    soft_deleted, restored = await cron_repo.reconcile_soft_deletes(
+        host=result2.host,
+        clean_paths=result2.clean_source_paths,
+        found_by_path=result2.found_by_source_path,
+        now=utc_now_iso(),
+    )
+    # The cron is genuinely gone -> it MUST be soft-deleted.
+    assert soft_deleted == 1
+    assert restored == 0
+
+    row = await repo.fetch_one(
+        text("SELECT soft_deleted_at FROM crons WHERE fingerprint = :fp"),
+        {"fp": fp},
+    )
+    assert row is not None
+    assert row.soft_deleted_at is not None
+
+
+@pytest.mark.asyncio
+async def test_scan_result_unreadable_source_paths_field(
+    repo: SqliteRepository, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """STAGE-002-007A bugfix: unreadable_source_paths is populated for each
+    per-file read failure and is fully disjoint from clean_source_paths."""
+    _make_host_tree(
+        tmp_path,
+        crontab="0 3 * * * root /storage/scripts/nightly.sh\n",
+        cron_d_files={
+            "readable": "10 4 * * * root /storage/scripts/ok.sh\n",
+            "denied": "20 5 * * * root /storage/scripts/blocked.sh\n",
+        },
+    )
+    monkeypatch.setenv("HM_CRON_HOST_ROOT", str(tmp_path))
+    monkeypatch.setenv("HM_HOST_HOSTNAME", "test-host")
+    cron_repo = CronRepo(repo)
+    discoverer = CronDiscoverer()
+
+    # First scan readable so all three paths land in the DB.
+    await discoverer.scan(cron_repo, log=_NullLog())
+
+    # Now deny the cron.d/denied file only.
+    _patch_read_text_permission_error(monkeypatch, deny_suffix="/cron.d/denied")
+    result = await discoverer.scan(cron_repo, log=_NullLog())
+
+    # Exactly the denied file is unreadable.
+    assert result.unreadable_source_paths == frozenset({"/etc/cron.d/denied"})
+    # The readable paths are still clean.
+    assert "/etc/cron.d/readable" in result.clean_source_paths
+    assert "/etc/crontab" in result.clean_source_paths
+    # Invariant: clean and unreadable are disjoint.
+    assert result.clean_source_paths.isdisjoint(result.unreadable_source_paths)
+    assert result.partial is True

@@ -1,6 +1,6 @@
 # Inventory → Crons (operator guide)
 
-> Last updated: 2026-05-13 (STAGE-002-006).
+> Last updated: 2026-05-15 (STAGE-002-007A — cron soft-delete / restore).
 
 ## What this tab does
 
@@ -12,6 +12,8 @@ There is **no manual "Add cron" flow.** Crons enter the registry one of two ways
 2. **Disk auto-discovery** *(deferred to STAGE-002-007)* — the monitor will eventually scrape user/system crontabs on hosts it can reach and create rows directly.
 
 From this tab you can browse, filter, edit, hide, or unhide cron entries. **Hide** is a display-and-notification suppression (per STAGE-002-005 D5) — `hidden_at IS NOT NULL` removes the cron from default views and silences its alert routing, but data capture (heartbeats, `/register` handshakes, future discovery, log-scrape, metrics) continues unchanged. Toggling **Show hidden** in the toolbar reveals hidden rows.
+
+A second, *system-controlled* lifecycle flag — **soft-delete** — is distinct from hide. When a discovery scan no longer finds a cron's fingerprint in a cleanly-scanned source file, that row's `soft_deleted_at` is set automatically; when the fingerprint reappears (or the cron re-registers), it is auto-restored. Soft-deleted rows are hidden from the default list and surface a `Soft-deleted` badge when **Show soft-deleted** is toggled on. See the "Soft-delete semantics" section below and `docs/architecture/cron-identity.md` for the full lifecycle. `hidden_at` (operator choice) and `soft_deleted_at` (system observation) are independent; a row can carry both.
 
 All routes require an authenticated session. Mutating endpoints (PATCH / DELETE) additionally require the CSRF token enforced by `require_session()`.
 
@@ -36,6 +38,7 @@ URL search params persist filter state across navigations. Any filter change res
 | `wrapper_installed` | boolean | — | `true` → only rows where `wrapper_last_seen_at` is set; `false` → only rows where it is null |
 | `q` | string | — | Case-insensitive substring match on `name` OR `command` |
 | `include_hidden` | boolean | `false` | When `true`, hidden rows appear with a `Hidden` badge |
+| `include_soft_deleted` | boolean | `false` | When `true`, soft-deleted rows appear dimmed with a `Soft-deleted` badge |
 
 > **Removed in STAGE-002-004 / STAGE-002-005.** `include_archived` and `integration_mode` no longer exist anywhere in the URL surface or the API. Any external bookmark using them will be ignored by the validator.
 
@@ -52,6 +55,7 @@ All filters are ANDed. Changing any filter resets `page` to 1.
 | State select | `Unknown` / `Running` / `Ok` / `Failed` / `Late` or "All states" |
 | Wrapper select | "Any wrapper" / "Wrapper installed" / "No wrapper" — maps to the `wrapper_installed` query param |
 | Show hidden checkbox | Toggles `include_hidden`; when checked, hidden rows are included in the list |
+| Show soft-deleted checkbox | Toggles `include_soft_deleted`; when checked, soft-deleted rows are included in the list. Off by default. |
 
 There is **no "+ Add cron" button.** The legacy `AddCronModal` and the create-mode of `CronForm` were removed in STAGE-002-004 (commit `9ff564f`).
 
@@ -72,6 +76,7 @@ When the list is empty:
 | Last OK | — | Placeholder `—`; populated in a future stage (log-scrape / heartbeat indexing) |
 | Wrapper | `wrapper_last_seen_at` | `✓` when set, `—` when null. `data-testid="wrapper-cell"` for tests. |
 | Hidden | `hidden_at` | Empty when null; renders a `Hidden` badge when set (only visible when "Show hidden" is checked) |
+| State | `soft_deleted_at` | When set, an amber `Soft-deleted` badge renders inline next to the `StateBadge` in the State cell, and the whole row is dimmed (`opacity-60`). Only visible when "Show soft-deleted" is checked. |
 
 The state and wrapper Select dropdown values are the lowercase enum strings on the wire (`ok`, `running`, etc.). The UI displays them as title-case via `titleCase()` in `badges.tsx`.
 
@@ -82,13 +87,14 @@ The detail page loads `GET /api/crons/{fingerprint}?include_hidden=true` so hidd
 ### Header
 
 ```
-[h1] {cron.name}   [StateBadge]  [Remote]  [Hidden]
+[h1] {cron.name}   [StateBadge]  [Remote]  [Hidden]  [Soft-deleted]
 {cron.host} · {cron.command}
 ```
 
 - **State badge** uses `last_seen_state` from the cron row (same component as the list).
 - **Remote badge** (secondary variant) appears when `source_path` is `null`.
 - **Hidden badge** (muted variant) appears when `hidden_at` is non-null.
+- **Soft-deleted badge** (amber variant) appears when `soft_deleted_at` is non-null.
 
 ### Layout — 2×2 grid
 
@@ -138,14 +144,14 @@ Sourced entirely from the cron row.
 | Source path | `cron.source_path` (monospace) or `—` when null |
 | Schedule | `cron.schedule ?? "every {cadence_seconds}s"` (monospace). When `cron.schedule_canonical` is set, it appears as a `title` attribute tooltip on the schedule value. |
 | Command | `cron.command` (monospace, breaks on long lines) |
+| Last discovered | `formatRelative(cron.last_discovered_at)` (absolute UTC tooltip) when set; `—` when null (typical for wrapper-only / remote crons never seen by disk discovery) |
+| Soft-deleted | `formatRelative(cron.soft_deleted_at)` rendered in amber (absolute UTC tooltip) when set; `—` when null |
 
 When `cron.source_path` is `null`, a blue info banner renders at the top of the panel (`data-testid="remote-banner"`):
 
 > Remote cron on `{host}`. The monitor doesn't have direct file access to this host. Wrapper-based heartbeats are the only signal.
 
 When `source_path` is set, the banner is omitted.
-
-A "Last discovered" row will be added once STAGE-002-007 ships disk discovery and populates `last_discovered_at`.
 
 ### Panel 3 — Monitoring policy (editable)
 
@@ -197,8 +203,8 @@ All endpoints require session authentication. PATCH / DELETE additionally enforc
 
 | Method | Path | Purpose | Notes |
 | --- | --- | --- | --- |
-| GET | `/api/crons` | Paginated list with filters | Filters: `host`, `state`, `enabled`, `wrapper_installed`, `q`, `include_hidden`, `page`, `page_size` |
-| GET | `/api/crons/{fingerprint}` | Detail + joined heartbeat state | `?include_hidden=true` reaches hidden crons; 404 otherwise |
+| GET | `/api/crons` | Paginated list with filters | Filters: `host`, `state`, `enabled`, `wrapper_installed`, `q`, `include_hidden`, `include_soft_deleted`, `page`, `page_size`. Excludes hidden AND soft-deleted rows unless the respective flag is `true`. |
+| GET | `/api/crons/{fingerprint}` | Detail + joined heartbeat state | `?include_hidden=true` reaches hidden crons; 404 otherwise. Soft-deleted crons are ALWAYS returned (direct fetch is unfiltered for soft-delete). |
 | PATCH | `/api/crons/{fingerprint}` | Partial update | Body: `name`, `expected_grace_seconds`, `enabled`, `hidden_at`. Empty diff returns 200 with no audit row. `hidden_at: null` triggers `crons.unhide`. |
 | DELETE | `/api/crons/{fingerprint}` | Soft-delete (hide) | Sets `hidden_at`. 404 if missing OR already hidden. Emits `crons.hide`. |
 | GET | `/api/crons/{fingerprint}/preview-runs` | Next N runs for a saved cron | `?count=N` (1–10, default 3); 404 if cadence-only |
@@ -217,9 +223,34 @@ All endpoints require session authentication. PATCH / DELETE additionally enforc
 
 The "Show hidden" checkbox on the toolbar is the only way to bring hidden rows back into the list view.
 
+## Soft-delete semantics (STAGE-002-007A)
+
+`soft_deleted_at IS NOT NULL` is a **system-set** flag meaning *the cron's
+fingerprint was no longer found on disk during a clean discovery scan*. It is
+independent of `hidden_at` (operator-set) — a row can carry both, neither, or
+either one.
+
+- Soft-deleted crons are **excluded** from `GET /api/crons` by default; pass
+  `include_soft_deleted=true` (the "Show soft-deleted" toggle) to include them.
+- Soft-deleted crons remain reachable by direct URL — `GET /api/crons/{fingerprint}`
+  always returns them, no query flag needed. The detail page therefore loads
+  fine for a soft-deleted cron.
+- The flag is set and cleared automatically by discovery reconciliation: it is
+  set when a fingerprint vanishes from a cleanly-scanned source file, and
+  cleared (auto-restore) when the fingerprint reappears. Re-registering a
+  soft-deleted cron via `/register` also auto-restores it.
+- There is **no UI button** to soft-delete or restore a cron — unlike Hide /
+  Unhide, this lifecycle is entirely system-driven. The operator's only
+  control is the "Show soft-deleted" visibility toggle.
+- Heartbeats are unaffected: a soft-deleted cron still receives `/start`,
+  `/ok`, `/fail`.
+
+The full lifecycle, reconciliation rules (per-host, per-source-file,
+unreadable-file safety), and audit verbs (`crons.soft_delete` /
+`crons.restore`) are documented in `docs/architecture/cron-identity.md`.
+
 ## Known limitations / pending
 
-- **"Last discovered" field** on the Disk source panel — deferred to STAGE-002-007 (disk discovery).
 - **Wrapper-health badge** in the Actions panel — deferred to STAGE-002-010 (vmalert / Alertmanager wiring).
 - **"Install heartbeat wrapper"** button — currently disabled. Local-host installation lands in STAGE-002-009; remote installation requires cross-host transport from EPIC-015 / EPIC-017.
 - **Remote-cron banner copy** will be updated (or the panel restructured) when cross-host file discovery ships in EPIC-015 / EPIC-017.
@@ -238,6 +269,7 @@ The "Show hidden" checkbox on the toolbar is the only way to bring hidden rows b
 
 ## History
 
+- **STAGE-002-007A** — Cron soft-delete / restore: `soft_deleted_at` column, "Show soft-deleted" toolbar toggle, `Soft-deleted` badge + dimmed row in the list, header badge + "Soft-deleted" and "Last discovered" rows on the detail page's Disk source panel. `include_soft_deleted` query param added to `GET /api/crons`.
 - **STAGE-002-006** (this rewrite) — 4-panel detail layout, sonner toasts, wrapper-installed list filter, Remote badge, Wrapper column. Removed during Refinement: per-cron audit panel and supporting `/api/crons/{fp}/audit` endpoint (mental-model mismatch with fingerprint-based identity; schedule/command changes manifest as new cron rows, not updates).
 - **STAGE-002-005** — Derived-state model: `archived_at` → `hidden_at` with display-and-notification-suppression semantics; `wrapper_last_seen_at` added.
 - **STAGE-002-004** — API removal: `POST /api/crons` deleted; `AddCronModal` + create-mode of `CronForm` + `ConfirmDeleteModal` removed; audit verbs `crons.create` / `crons.delete` / `crons.restore` retired.

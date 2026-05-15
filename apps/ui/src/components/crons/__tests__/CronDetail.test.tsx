@@ -74,6 +74,7 @@ const baseCron = {
   created_at: '2026-05-01T00:00:00Z',
   updated_at: '2026-05-01T00:00:00Z',
   hidden_at: null as string | null,
+  soft_deleted_at: null as string | null,
   source_path: null as string | null,
   wrapper_last_seen_at: null,
   last_discovered_at: null as string | null,
@@ -189,6 +190,37 @@ describe('CronDetail', () => {
     renderInRouter(<CronDetail fingerprint={FP} />)
     await screen.findByText('daily-backup')
     expect(screen.queryByText('Hidden')).toBeNull()
+  })
+
+  // 6b. Shows Soft-deleted badge in header when soft_deleted_at is set
+  it('shows Soft-deleted badge in header when soft_deleted_at is set', async () => {
+    vi.mocked(useGetCron).mockReturnValue(
+      makeGetCronResult({ soft_deleted_at: '2026-05-12T00:00:00Z' }) as unknown as ReturnType<
+        typeof useGetCron
+      >,
+    )
+    renderInRouter(<CronDetail fingerprint={FP} />)
+    await screen.findByText('daily-backup')
+    expect(screen.getByTestId('soft-deleted-badge')).toBeInTheDocument()
+  })
+
+  // 6c. Hides Soft-deleted badge when soft_deleted_at is null
+  it('hides Soft-deleted badge when soft_deleted_at is null', async () => {
+    renderInRouter(<CronDetail fingerprint={FP} />)
+    await screen.findByText('daily-backup')
+    expect(screen.queryByTestId('soft-deleted-badge')).toBeNull()
+  })
+
+  // 6d. Disk source panel Soft-deleted row shows relative time when set
+  it('Soft-deleted row in Disk source panel shows relative time when soft_deleted_at is set', async () => {
+    vi.mocked(useGetCron).mockReturnValue(
+      makeGetCronResult({ soft_deleted_at: '2026-05-12T00:00:00Z' }) as unknown as ReturnType<
+        typeof useGetCron
+      >,
+    )
+    renderInRouter(<CronDetail fingerprint={FP} />)
+    await screen.findByText('daily-backup')
+    expect(screen.getByText('rel:2026-05-12T00:00:00Z')).toBeInTheDocument()
   })
 
   // 7. Shows remote banner inside Disk source panel when source_path === null

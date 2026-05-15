@@ -23,6 +23,7 @@ export interface CronListQuery {
   wrapper_installed?: boolean
   q?: string
   include_hidden?: boolean
+  include_soft_deleted?: boolean
 }
 
 export const cronQueryKeys = {
@@ -140,6 +141,8 @@ export function usePreviewExpr(
 export interface DiscoverResponse {
   found_count: number
   error_count: number
+  soft_deleted_count?: number
+  restored_count?: number
 }
 
 export function useDiscoverNow(): UseMutationResult<DiscoverResponse, ApiError, void> {

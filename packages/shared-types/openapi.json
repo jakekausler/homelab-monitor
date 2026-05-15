@@ -656,6 +656,17 @@
             ],
             "title": "Schedule Canonical"
           },
+          "soft_deleted_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Soft Deleted At"
+          },
           "source_path": {
             "anyOf": [
               {
@@ -699,7 +710,8 @@
           "hidden_at",
           "source_path",
           "wrapper_last_seen_at",
-          "last_discovered_at"
+          "last_discovered_at",
+          "soft_deleted_at"
         ],
         "title": "CronOut",
         "type": "object"
@@ -2190,6 +2202,16 @@
           },
           {
             "in": "query",
+            "name": "include_soft_deleted",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Include Soft Deleted",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
             "name": "wrapper_installed",
             "required": false,
             "schema": {
@@ -2353,7 +2375,7 @@
         ]
       },
       "get": {
-        "description": "Return a single cron + its joined heartbeat state.\n\nBy default hidden crons return 404; pass ``?include_hidden=true``\nfor admin recovery flows.",
+        "description": "Return a single cron + its joined heartbeat state.\n\nBy default hidden crons return 404; pass ``?include_hidden=true``\nfor admin recovery flows. Soft-deleted crons are ALWAYS returned by this\nendpoint (direct fetch is unfiltered for soft-delete; STAGE-002-007A).",
         "operationId": "get_cron_api_crons__fingerprint__get",
         "parameters": [
           {

@@ -3,7 +3,7 @@
 This document lists the one-time host-side setup required before
 `docker compose up monitor` will succeed in production.
 
-## Cron discovery (STAGE-002-007)
+## Cron discovery (STAGE-002-007, STAGE-002-007A)
 
 The cron-discoverer plugin reads the host's crontab files via read-only
 bind-mounts. To grant the container access without making it root:
@@ -37,6 +37,18 @@ The script:
 - Sets read ACLs on `/var/spool/cron/crontabs/`: directory traversal (rx),
   per-existing-file (r), AND default ACL (r) for new files. Requires
   `setfacl` (Debian/Ubuntu: `apt install acl`).
+- Installs and enables a systemd `.path` unit
+  (`homelab-monitor-crontab-acl.path`) that watches
+  `/var/spool/cron/crontabs/` and re-applies the read ACLs on every change.
+  Requires `systemctl` (any systemd host).
+
+**Run this script ONCE per machine.** `crontab -e` does not edit a crontab in
+place — it `rename()`s a new `0600` file into the spool directory, and a moved
+file does NOT inherit the directory's default ACL. The installed `.path` unit
+catches every such change and re-runs `/usr/local/sbin/refresh-crontab-acl.sh`,
+so the container never loses read access. No operator action is needed after
+the initial run. (On a host without `systemd`, the watcher cannot be
+installed — re-run `host-setup.sh` manually after each `crontab -e`.)
 
 ### 2. Update your env
 
@@ -102,6 +114,33 @@ with wrapper installers (see `docs/architecture/cron-identity.md`).
 - Crontab secrets (if any operator stores secrets in cron commands) become
   readable by the monitor process. Use environment variables in cron jobs
   instead — best practice anyway.
+
+### Crontab ACL watcher (systemd)
+
+`host-setup.sh` installs three host-side artifacts so per-user crontab ACLs
+survive `crontab -e`:
+
+| Artifact | Installed to | Purpose |
+|---|---|---|
+| `refresh-crontab-acl.sh` | `/usr/local/sbin/refresh-crontab-acl.sh` | Re-applies `homelab-monitor` read ACLs on the spool dir and every file in it. Idempotent. |
+| `homelab-monitor-crontab-acl.service` | `/etc/systemd/system/` | `Type=oneshot` unit that runs the refresh script. |
+| `homelab-monitor-crontab-acl.path` | `/etc/systemd/system/` | `PathChanged=` watcher on `/var/spool/cron/crontabs`; triggers the service on every change. |
+
+The repo source for these lives in `deploy/systemd/` (units) and
+`scripts/refresh-crontab-acl.sh`.
+
+Inspect the watcher:
+
+```bash
+systemctl status homelab-monitor-crontab-acl.path
+journalctl -u homelab-monitor-crontab-acl.service   # see each ACL refresh
+```
+
+To re-apply ACLs by hand at any time:
+
+```bash
+sudo /usr/local/sbin/refresh-crontab-acl.sh
+```
 
 ### Disabling discovery
 

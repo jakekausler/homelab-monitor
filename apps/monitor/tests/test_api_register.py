@@ -63,6 +63,7 @@ async def _insert_cron(  # noqa: PLR0913
     expected_grace_seconds: int = 300,
     enabled: int = 1,
     hidden_at: str | None = None,
+    soft_deleted_at: str | None = None,
     wrapper_last_seen_at: str | None = None,
 ) -> str:
     """Insert a cron row directly via raw SQL. Returns the fingerprint."""
@@ -76,9 +77,9 @@ async def _insert_cron(  # noqa: PLR0913
                 "INSERT INTO crons (fingerprint, name, host, command, schedule, "
                 "schedule_canonical, cadence_seconds, expected_grace_seconds, "
                 "enabled, last_seen_state, created_at, updated_at, hidden_at, "
-                "source_path, wrapper_last_seen_at) VALUES ("
+                "source_path, wrapper_last_seen_at, soft_deleted_at) VALUES ("
                 ":fp, :name, :host, :command, :schedule, :sched_canon, :cadence, "
-                ":grace, :enabled, :last_seen, :created, :updated, :hidden, :sp, :wlsa)"
+                ":grace, :enabled, :last_seen, :created, :updated, :hidden, :sp, :wlsa, :sda)"
             ),
             {
                 "fp": fp,
@@ -96,6 +97,7 @@ async def _insert_cron(  # noqa: PLR0913
                 "hidden": hidden_at,
                 "sp": source_path,
                 "wlsa": wrapper_last_seen_at,
+                "sda": soft_deleted_at,
             },
         )
     return fp
@@ -670,3 +672,117 @@ async def test_register_with_source_path_none_succeeds(
     )
     assert db_row is not None
     assert db_row[0] is None
+
+
+# ---------------------------------------------------------------------------
+# AUTO-RESTORE TESTS (Wave 3)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_register_auto_restores_soft_deleted_cron(
+    api_token_client: AsyncClient, repo: SqliteRepository
+) -> None:
+    """POST /register auto-restores a soft-deleted cron (wrapper=False)."""
+    now = utc_now_iso()
+    await _insert_cron(repo, soft_deleted_at=now)
+
+    resp = await api_token_client.post(
+        f"/api/hb/{_VALID_FP}/register",
+        json={**_VALID_BODY, "wrapper": False},
+    )
+    assert resp.status_code == 200  # noqa: PLR2004
+    body = resp.json()
+    assert body["soft_deleted_at"] is None
+
+    # Verify in DB that soft_deleted_at is NULL
+    db_row = await repo.fetch_one(
+        text("SELECT soft_deleted_at FROM crons WHERE fingerprint = :fp"),
+        {"fp": _VALID_FP},
+    )
+    assert db_row is not None
+    assert db_row[0] is None
+
+    # Verify exactly one crons.restore audit row exists with correct username
+    audit_row = await repo.fetch_one(
+        text("SELECT who FROM audit_log WHERE what = 'crons.restore'"),
+    )
+    assert audit_row is not None
+    # The authenticated client should have a username (from conftest)
+    assert audit_row[0] is not None
+
+
+@pytest.mark.asyncio
+async def test_register_restore_audit_ordering(
+    api_token_client: AsyncClient, repo: SqliteRepository
+) -> None:
+    """POST /register writes crons.restore BEFORE crons.register (D5)."""
+    now = utc_now_iso()
+    await _insert_cron(repo, soft_deleted_at=now)
+
+    resp = await api_token_client.post(
+        f"/api/hb/{_VALID_FP}/register",
+        json={**_VALID_BODY, "wrapper": True},
+    )
+    assert resp.status_code == 200  # noqa: PLR2004
+
+    # Query both audit rows ordered by id
+    rows = await repo.fetch_all(
+        text(
+            "SELECT id, what FROM audit_log "
+            "WHERE what IN ('crons.restore', 'crons.register') "
+            "ORDER BY id"
+        ),
+    )
+    assert len(rows) == 2  # noqa: PLR2004
+    assert rows[0][1] == "crons.restore"
+    assert rows[1][1] == "crons.register"
+
+
+@pytest.mark.asyncio
+async def test_register_active_cron_no_restore_audit(
+    api_token_client: AsyncClient, repo: SqliteRepository
+) -> None:
+    """POST /register on ACTIVE cron (soft_deleted_at=NULL) does not write crons.restore."""
+    await _insert_cron(repo, soft_deleted_at=None)
+
+    resp = await api_token_client.post(
+        f"/api/hb/{_VALID_FP}/register",
+        json={**_VALID_BODY, "wrapper": False},
+    )
+    assert resp.status_code == 200  # noqa: PLR2004
+
+    # Verify NO crons.restore audit row exists
+    restore_row = await repo.fetch_one(
+        text("SELECT COUNT(*) FROM audit_log WHERE what = 'crons.restore'"),
+    )
+    assert restore_row is not None
+    assert int(restore_row[0]) == 0
+
+
+@pytest.mark.asyncio
+async def test_register_restore_minimal_diff(
+    api_token_client: AsyncClient, repo: SqliteRepository
+) -> None:
+    """POST /register writes minimal-diff crons.restore audit (D4)."""
+    soft_deleted_ts = utc_now_iso()
+    await _insert_cron(repo, soft_deleted_at=soft_deleted_ts)
+
+    resp = await api_token_client.post(
+        f"/api/hb/{_VALID_FP}/register",
+        json={**_VALID_BODY, "wrapper": False},
+    )
+    assert resp.status_code == 200  # noqa: PLR2004
+
+    # Fetch the crons.restore audit row
+    audit_row = await repo.fetch_one(
+        text("SELECT before_json, after_json FROM audit_log WHERE what = 'crons.restore'"),
+    )
+    assert audit_row is not None
+
+    before = json.loads(audit_row[0])
+    after = json.loads(audit_row[1])
+
+    # Verify minimal diff: only fingerprint and soft_deleted_at
+    assert before == {"fingerprint": _VALID_FP, "soft_deleted_at": soft_deleted_ts}
+    assert after == {"fingerprint": _VALID_FP, "soft_deleted_at": None}

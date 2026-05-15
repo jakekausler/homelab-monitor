@@ -40,6 +40,7 @@ export function CronDetail({ fingerprint }: CronDetailProps) {
   const state = detail.data.state
   const isHidden = cron.hidden_at !== null
   const isRemote = cron.source_path === null
+  const isSoftDeleted = cron.soft_deleted_at !== null
 
   const handleSave = async (body: CronUpdate) => {
     try {
@@ -79,6 +80,15 @@ export function CronDetail({ fingerprint }: CronDetailProps) {
           <StateBadge state={cron.last_seen_state} />
           {isRemote && <Badge variant="secondary">Remote</Badge>}
           {isHidden && <Badge variant="muted">Hidden</Badge>}
+          {isSoftDeleted && (
+            <Badge
+              variant="muted"
+              className="border-amber-500/40 bg-amber-500/15 text-amber-700 dark:text-amber-300"
+              data-testid="soft-deleted-badge"
+            >
+              Soft-deleted
+            </Badge>
+          )}
         </div>
         <p className="mt-1 text-sm text-muted-foreground">
           {cron.host} · <span className="font-mono">{cron.command}</span>
@@ -194,6 +204,18 @@ function DiskSourcePanel({ cron, isRemote }: { cron: Schema<'CronOut'>; isRemote
           {cron.last_discovered_at !== null ? (
             <span title={formatAbsolute(cron.last_discovered_at)}>
               {formatRelative(cron.last_discovered_at)}
+            </span>
+          ) : (
+            <span className="text-muted-foreground">—</span>
+          )}
+        </Row>
+        <Row label="Soft-deleted">
+          {cron.soft_deleted_at !== null ? (
+            <span
+              className="text-amber-700 dark:text-amber-300"
+              title={formatAbsolute(cron.soft_deleted_at)}
+            >
+              {formatRelative(cron.soft_deleted_at)}
             </span>
           ) : (
             <span className="text-muted-foreground">—</span>

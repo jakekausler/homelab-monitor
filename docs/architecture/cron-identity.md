@@ -1,6 +1,6 @@
 # Cron identity (operator + architecture guide)
 
-> Last updated: 2026-05-12 (STAGE-002-005). Reflects shipped state at commit [TBD].
+> Last updated: 2026-05-15 (STAGE-002-007A — cron soft-delete / restore).
 
 ## TL;DR
 
@@ -155,6 +155,14 @@ notification suppression only** — it does NOT block data capture. `/register`
 This was a deliberate shift from STAGE-002-001's interpretation; see D5 in
 `epics/EPIC-002-heartbeat-cron/STAGE-002-005.md`.
 
+**`/register` auto-restore (STAGE-002-007A).** If the fingerprint being
+registered already exists AND has `soft_deleted_at` set, `register_cron`
+clears `soft_deleted_at` back to NULL and writes a `crons.restore` audit row
+(in the same transaction, *before* any `crons.register` row). This applies
+on both the `wrapper: true` and `wrapper: false` re-register paths — a
+`wrapper: false` re-register that is otherwise a no-op still restores a
+soft-deleted row. The status code stays **200** (the row already existed).
+
 For remote-only crons (hosts the monitor cannot scan locally), `/register`
 is the only creation path until cross-host discovery ships (EPIC-015/017).
 These rows have `source_path IS NULL` and show a "Remote cron — disk source
@@ -178,7 +186,7 @@ without changing its identity. Any other field in the PATCH body is rejected
 with HTTP 422 (`extra_forbidden`). Audit verb: `crons.update` (for any
 whitelist-field change that is not a `hidden_at` transition).
 
-### Hide (soft-delete)
+### Hide (operator-controlled suppression)
 
 Setting `hidden_at` to a non-NULL value flags the row as hidden — a UI
 display + notification suppression flag, NOT a soft-delete. The heartbeat
@@ -190,8 +198,66 @@ gate notifications on `hidden_at IS NULL`. The row remains in the DB and
 can be restored via `PATCH {hidden_at: null}`. Audit verbs: `crons.hide`
 (set) / `crons.unhide` (clear).
 
-`DELETE /api/crons/{fingerprint}` is a soft-delete — it sets `hidden_at`,
-it does not remove the row.
+`DELETE /api/crons/{fingerprint}` sets `hidden_at` (it does not remove the
+row). `hidden_at` is operator-controlled — it changes only via PATCH/DELETE.
+
+### Soft-delete / restore (system-controlled, STAGE-002-007A)
+
+`soft_deleted_at` is a second nullable timestamp column, distinct from
+`hidden_at`. Where `hidden_at` records an *operator decision* to suppress a
+cron, `soft_deleted_at` records a *system observation* that the cron's
+fingerprint is no longer present on disk. The two are independent and a row
+can carry both at once (e.g., an operator hid a cron, then later deleted its
+crontab line).
+
+| Column | Set/cleared by | Meaning |
+|---|---|---|
+| `hidden_at` | Operator (PATCH / DELETE) | Display + notification suppression. The operator chose to silence this cron. |
+| `soft_deleted_at` | System (discovery reconciliation, `/register`) | The cron's fingerprint disappeared from its source file on a clean scan. |
+
+**Auto-soft-delete.** After each discovery scan, the discoverer calls
+`CronRepo.reconcile_soft_deletes()`. For every source file that was *cleanly*
+inspected this scan, it compares the DB rows for that `(host, source_path)`
+against the fingerprints the scan actually found in that file. A row whose
+fingerprint is **absent from a clean scan** and whose `soft_deleted_at` is
+currently NULL gets `soft_deleted_at = now` (UTC ISO-8601) and an audit row
+with verb `crons.soft_delete`.
+
+**Auto-restore.** When a soft-deleted cron's fingerprint **reappears** on a
+later clean scan of the same file, reconciliation clears `soft_deleted_at`
+back to NULL and writes a `crons.restore` audit row. The same restore also
+fires when a soft-deleted cron is re-registered via
+`POST /api/hb/{fingerprint}/register` — see "`/register` auto-restore" below.
+
+**Reconciliation scope (the rules that prevent false soft-deletes):**
+
+- **Per-host.** Only rows whose `host` matches the local hostname the
+  discoverer ran for are reconciled. Crons registered from other hosts are
+  never touched.
+- **Per-source-file.** Reconciliation is keyed on `(host, source_path)`. A
+  cron is a soft-delete candidate only against the exact file it was
+  discovered from; the absence of fingerprint X from file A says nothing
+  about file B.
+- **Recognized `source_path` only.** Remote-only crons with
+  `source_path IS NULL` (registered via `/register` from a host the monitor
+  cannot scan) are **never** auto-soft-deleted — they have no disk source to
+  reconcile against. `reconcile_soft_deletes` only ever sees real path
+  strings.
+- **Clean scan required.** A source file is reconciled only if it was
+  *cleanly* inspected this scan. An **unreadable** file — for example a
+  `0600` user crontab the container's UID cannot read, or a file with a
+  per-line parse error — is **never** treated as a clean empty scan. Its rows
+  are left untouched. An empty-but-readable file *is* a clean scan: every DB
+  row for it becomes a soft-delete candidate.
+
+A cron whose crontab line is edited (schedule/command change) produces a new
+fingerprint; the old fingerprint vanishes from the next clean scan and is
+soft-deleted within one cycle, while the edited line is inserted as a fresh
+row. This is the expected churn for the edit-via-crontab case.
+
+`GET /api/crons` hides soft-deleted rows by default — see "API surface"
+below. Heartbeats and `/register` are unaffected by `soft_deleted_at`: a
+soft-deleted cron still receives `/start`, `/ok`, `/fail` normally.
 
 ### Implicit identity change: edit-via-crontab
 
@@ -216,15 +282,16 @@ Operator action after intentional crontab edits: hide the stale row.
 | `enabled` | Runtime monitoring policy |
 | `cadence_seconds` | Derived from `schedule` by the backend; not a primary input |
 | `hidden_at` | Lifecycle state |
+| `soft_deleted_at` | Lifecycle state (system-set absence marker) |
 | `last_seen_state` | Observational state |
-| `created_at`, `updated_at`, `wrapper_last_seen_at` | Observational / lifecycle timestamps |
+| `created_at`, `updated_at`, `wrapper_last_seen_at`, `last_discovered_at` | Observational / lifecycle timestamps |
 
 ## API surface using fingerprints
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/api/crons` | List (excludes hidden by default; `?include_hidden=1` includes them) |
-| GET | `/api/crons/{fingerprint}` | Detail (404 if hidden, unless `?include_hidden=1`) |
+| GET | `/api/crons` | List (excludes hidden AND soft-deleted by default; `?include_hidden=1` / `?include_soft_deleted=1` surface them) |
+| GET | `/api/crons/{fingerprint}` | Detail (404 if hidden, unless `?include_hidden=1`; soft-deleted rows are ALWAYS returned) |
 | POST | `/api/crons` | Create — compute fingerprint server-side, 409 on duplicate. **REMOVED in STAGE-002-004.** |
 | PATCH | `/api/crons/{fingerprint}` | Update whitelisted fields only: `name`, `expected_grace_seconds`, `enabled`, `hidden_at` |
 | DELETE | `/api/crons/{fingerprint}` | Soft-delete (sets `hidden_at`) |
@@ -268,8 +335,9 @@ fingerprint. NULL means the discoverer has never seen this cron — typical
 for wrapper-only crons registered via `/api/hb/{fp}/register` from a remote
 host.
 
-This column DOES NOT signal "stale" or "deleted" on its own. STAGE-002-007A
-introduces `soft_deleted_at` for that purpose.
+This column DOES NOT signal "stale" or "deleted" on its own. The
+`soft_deleted_at` column (STAGE-002-007A) is the absence marker — see
+"Soft-delete / restore" above.
 
 ### Audit verbs
 
@@ -280,6 +348,10 @@ introduces `soft_deleted_at` for that purpose.
   only when canonicalization rules or `derive_name` logic changes.
 - Bump-only path (just `last_discovered_at` updated) emits NO audit row.
   Audit volume in steady state is ~0 rows/day from discovery.
+- `crons.soft_delete` / `crons.restore` — written by the per-source-file
+  soft-delete reconciliation that runs after every scan (STAGE-002-007A).
+  See "Soft-delete / restore" above. Steady-state volume is ~0 rows/day;
+  a burst occurs only when a crontab line is added, removed, or edited.
 
 ### Fingerprint stability & churn
 
@@ -335,11 +407,18 @@ to load).
   "inserted_count": 0,
   "updated_count": 0,
   "bump_only_count": 17,
+  "soft_deleted_count": 0,
+  "restored_count": 0,
   "partial": false,
   "error_count": 0,
   "errors": []
 }
 ```
+
+`soft_deleted_count` / `restored_count` (STAGE-002-007A) report the
+soft-delete reconciliation outcome for this scan. If reconciliation itself
+raises, both are reported as `0` and the failure is logged — the scan
+summary still returns 202.
 
 `errors[]` entries (only present when `partial: true` and individual
 files produced errors) carry `{"host_source_path": "...", "error": "..."}`.
@@ -373,6 +452,13 @@ shelved the discoverer after repeated tick failures.
 - `crons.update` — PATCH to any whitelisted field other than `hidden_at` transitions.
 - `crons.hide` — PATCH sets `hidden_at` to a non-NULL value.
 - `crons.unhide` — PATCH sets `hidden_at` to NULL (restore from hidden).
+- `crons.soft_delete` — Discovery reconciliation sets `soft_deleted_at` on a
+  row whose fingerprint vanished from a cleanly-scanned source file
+  (STAGE-002-007A). `who="system"`.
+- `crons.restore` — `soft_deleted_at` cleared back to NULL: either discovery
+  reconciliation re-finding the fingerprint on a clean scan (`who="system"`),
+  or `/register` re-registering a soft-deleted cron (`who=token name`)
+  (STAGE-002-007A).
 - `heartbeat.start` / `heartbeat.ok` / `heartbeat.fail` — Receiver state
   transitions; `after_json` carries `cron_fingerprint`.
 

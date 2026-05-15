@@ -661,3 +661,88 @@ async def test_register_cron_first_wrapper_install_on_existing_emits_audit(
     after = json.loads(audit_row[1])
     assert before["wrapper_last_seen_at"] is None
     assert after["wrapper_last_seen_at"] == record.wrapper_last_seen_at
+
+
+@pytest.mark.asyncio
+async def test_register_cron_restores_soft_deleted_no_wrapper(repo: SqliteRepository) -> None:
+    """D5: register_cron on a soft-deleted fingerprint with wrapper=False restores it.
+
+    Verifies that:
+    - soft_deleted_at is cleared (NULL) in the DB.
+    - A crons.restore audit row is written.
+    - Returns (CronRecord, False) — not a new creation.
+    - soft_deleted_at on the returned record is None.
+    """
+    crepo = CronRepo(repo)
+    now = utc_now_iso()
+
+    body = RegisterCronBody(
+        host="restore-host",
+        source_path="/etc/crontab",
+        schedule="0 2 * * *",
+        command="/usr/bin/restorable.sh",
+        wrapper=False,
+    )
+    fp = compute_fingerprint(
+        host="restore-host",
+        source_path="/etc/crontab",
+        schedule="0 2 * * *",
+        command="/usr/bin/restorable.sh",
+    )
+
+    # Pre-insert the cron in soft-deleted state via raw SQL
+    await repo.execute(
+        text(
+            "INSERT INTO crons ("
+            "  fingerprint, name, host, command, schedule, schedule_canonical, "
+            "  cadence_seconds, expected_grace_seconds, enabled, last_seen_state, "
+            "  created_at, updated_at, hidden_at, source_path, wrapper_last_seen_at, "
+            "  last_discovered_at, soft_deleted_at"
+            ") VALUES ("
+            "  :fp, :name, :host, :cmd, :sched, :sched_canon, :cad, :grace, :enabled, "
+            "  :state, :created, :updated, :hidden, :source, :wrapper, :discovered, :sda"
+            ")"
+        ),
+        {
+            "fp": fp,
+            "name": "restorable-cron",
+            "host": "restore-host",
+            "cmd": "/usr/bin/restorable.sh",
+            "sched": "0 2 * * *",
+            "sched_canon": "0 2 * * *",
+            "cad": 86400,
+            "grace": 300,
+            "enabled": 1,
+            "state": "unknown",
+            "created": now,
+            "updated": now,
+            "hidden": None,
+            "source": "/etc/crontab",
+            "wrapper": None,
+            "discovered": now,
+            "sda": now,  # soft-deleted
+        },
+    )
+
+    # register_cron should restore it
+    record, created = await crepo.register_cron(
+        body, url_fingerprint=fp, who="testactor", ip="1.2.3.4"
+    )
+
+    assert created is False
+    assert record.soft_deleted_at is None
+
+    # DB row should have soft_deleted_at cleared
+    db_row = await repo.fetch_one(
+        text("SELECT soft_deleted_at FROM crons WHERE fingerprint = :fp"),
+        {"fp": fp},
+    )
+    assert db_row is not None
+    assert db_row[0] is None
+
+    # A crons.restore audit row must exist
+    restore_row = await repo.fetch_one(
+        text("SELECT who FROM audit_log WHERE what = 'crons.restore'")
+    )
+    assert restore_row is not None
+    assert restore_row[0] == "testactor"

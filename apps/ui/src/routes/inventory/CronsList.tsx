@@ -21,6 +21,7 @@ export function CronsListPage() {
     }),
     ...(search.q !== undefined && { q: search.q }),
     include_hidden: search.include_hidden ?? false,
+    include_soft_deleted: search.include_soft_deleted ?? false,
   }
 
   const list = useListCrons({
@@ -33,6 +34,7 @@ export function CronsListPage() {
     }),
     ...(filters.q !== undefined && { q: filters.q }),
     include_hidden: filters.include_hidden,
+    include_soft_deleted: filters.include_soft_deleted,
   })
 
   const handleDiscoverNow = async () => {
@@ -72,6 +74,7 @@ export function CronsListPage() {
         ...(next.wrapper_installed !== undefined && { wrapper_installed: next.wrapper_installed }),
         ...(next.q !== undefined && { q: next.q }),
         include_hidden: next.include_hidden,
+        include_soft_deleted: next.include_soft_deleted,
       },
     })
   }
@@ -115,6 +118,7 @@ export function CronsListPage() {
                 }),
                 ...(search.q !== undefined && { q: search.q }),
                 include_hidden: search.include_hidden ?? false,
+                include_soft_deleted: search.include_soft_deleted ?? false,
               },
             })
           }

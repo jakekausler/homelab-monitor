@@ -8,6 +8,9 @@ name: homelab-monitor
 services:
   monitor:
     image: ghcr.io/${GITHUB_REPOSITORY:-jakekausler/homelab-monitor}:${IMAGE_TAG:-latest}
+    build:
+      context: ../../
+      dockerfile: apps/monitor/Dockerfile
     container_name: homelab-monitor
     restart: unless-stopped
     user: "${HM_CRON_HOST_UID:-1000}:${HM_CRON_HOST_GID:-1000}"

@@ -62,6 +62,7 @@ const sampleCron: CronOut = {
   source_path: null,
   wrapper_last_seen_at: null,
   last_discovered_at: null,
+  soft_deleted_at: null,
 }
 
 function renderPage(search = '') {
