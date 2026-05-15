@@ -114,3 +114,13 @@ When making changes to the cron inventory UI, re-verify:
 - [ ] Verify ACLs on `/var/spool/cron/crontabs/*` persist after rerunning `scripts/host-setup.sh`.
 - [ ] Verify `HOMELAB_MONITOR_BIND_HOST=0.0.0.0` exposes monitor on LAN; default `127.0.0.1` keeps localhost-only.
 - [ ] Verify dev rig (19090) and prod compose stack (29090) can coexist without port conflicts.
+
+## STAGE-002-007A (Auto-soft-delete crons) regression items
+
+- [ ] Soft-delete reconciliation: after a discovery scan that no longer finds a cron's fingerprint in a cleanly-scanned source file, that cron is soft-deleted (`soft_deleted_at` set, `crons.soft_delete` audit row). When it reappears on a later clean scan, it auto-restores.
+- [ ] An UNREADABLE source file (PermissionError) must NEVER cause its crons to be soft-deleted — verify by making a user crontab unreadable and confirming its crons are untouched.
+- [ ] `GET /api/crons` hides soft-deleted rows by default; `?include_soft_deleted=true` includes them; `GET /api/crons/{fingerprint}` always returns soft-deleted rows (field at nested `cron.soft_deleted_at`).
+- [ ] `POST /api/hb/{fp}/register` on a soft-deleted cron auto-restores it (two audit rows: `crons.restore` before `crons.register`).
+- [ ] Heartbeat endpoints (`/start`,`/ok`,`/fail`) still work on a soft-deleted cron.
+- [ ] UI: "Show soft-deleted" toolbar toggle, soft-deleted badge + dimmed row, CronDetail header badge + Disk-source field.
+- [ ] Prod deploy: `make dev-prod` rebuilds the monitor image from the local Dockerfile; SPA deep-links (refresh on `/overview` etc.) return the app, not a 404.
