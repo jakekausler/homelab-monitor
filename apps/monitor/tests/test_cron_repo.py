@@ -663,6 +663,208 @@ async def test_register_cron_first_wrapper_install_on_existing_emits_audit(
     assert after["wrapper_last_seen_at"] == record.wrapper_last_seen_at
 
 
+# ---------------------------------------------------------------------------
+# MATCH_BY_LOG_KEY
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_match_by_log_key_returns_matching_crons(repo: SqliteRepository) -> None:
+    """match_by_log_key returns crons with the given (host, log_match_key)."""
+    cron_repo = CronRepo(repo)
+    key = "/usr/bin/backup.sh"
+    await repo.execute(
+        text(
+            "INSERT INTO crons (fingerprint, name, host, command, schedule, "
+            "schedule_canonical, cadence_seconds, expected_grace_seconds, "
+            "enabled, last_seen_state, created_at, updated_at, hidden_at, "
+            "source_path, wrapper_last_seen_at, last_discovered_at, log_match_key) VALUES ("
+            ":fp, :name, :host, :cmd, :sched, :sched_canon, :cad, :grace, "
+            ":enabled, :state, :created, :updated, :hidden, :sp, :wlsa, :ldis, :lmk)"
+        ),
+        {
+            "fp": "fp-lmk-match",
+            "name": "backup",
+            "host": "h1",
+            "cmd": "/usr/bin/backup.sh",
+            "sched": "0 4 * * *",
+            "sched_canon": "0 4 * * *",
+            "cad": 86400,
+            "grace": 300,
+            "enabled": 1,
+            "state": "unknown",
+            "created": utc_now_iso(),
+            "updated": utc_now_iso(),
+            "hidden": None,
+            "sp": "/etc/crontab",
+            "wlsa": None,
+            "ldis": None,
+            "lmk": key,
+        },
+    )
+    results = await cron_repo.match_by_log_key("h1", key)
+    assert len(results) == 1
+    assert results[0].fingerprint == "fp-lmk-match"
+    assert results[0].log_match_key == key
+
+
+@pytest.mark.asyncio
+async def test_match_by_log_key_excludes_soft_deleted(repo: SqliteRepository) -> None:
+    """match_by_log_key does NOT return soft-deleted crons."""
+    cron_repo = CronRepo(repo)
+    key = "/usr/bin/soft-deleted.sh"
+    now = utc_now_iso()
+    await repo.execute(
+        text(
+            "INSERT INTO crons (fingerprint, name, host, command, schedule, "
+            "schedule_canonical, cadence_seconds, expected_grace_seconds, "
+            "enabled, last_seen_state, created_at, updated_at, hidden_at, "
+            "source_path, wrapper_last_seen_at, last_discovered_at, "
+            "soft_deleted_at, log_match_key) VALUES ("
+            ":fp, :name, :host, :cmd, :sched, :sched_canon, :cad, :grace, "
+            ":enabled, :state, :created, :updated, :hidden, :sp, :wlsa, :ldis, "
+            ":sda, :lmk)"
+        ),
+        {
+            "fp": "fp-lmk-softdel",
+            "name": "soft-deleted",
+            "host": "h1",
+            "cmd": "/usr/bin/soft-deleted.sh",
+            "sched": "0 5 * * *",
+            "sched_canon": "0 5 * * *",
+            "cad": 86400,
+            "grace": 300,
+            "enabled": 1,
+            "state": "unknown",
+            "created": now,
+            "updated": now,
+            "hidden": None,
+            "sp": "/etc/crontab",
+            "wlsa": None,
+            "ldis": None,
+            "sda": now,
+            "lmk": key,
+        },
+    )
+    results = await cron_repo.match_by_log_key("h1", key)
+    assert results == []
+
+
+@pytest.mark.asyncio
+async def test_match_by_log_key_includes_hidden(repo: SqliteRepository) -> None:
+    """match_by_log_key includes hidden crons (hidden = display suppression only)."""
+    cron_repo = CronRepo(repo)
+    key = "/usr/bin/hidden.sh"
+    now = utc_now_iso()
+    await repo.execute(
+        text(
+            "INSERT INTO crons (fingerprint, name, host, command, schedule, "
+            "schedule_canonical, cadence_seconds, expected_grace_seconds, "
+            "enabled, last_seen_state, created_at, updated_at, hidden_at, "
+            "source_path, wrapper_last_seen_at, last_discovered_at, log_match_key) VALUES ("
+            ":fp, :name, :host, :cmd, :sched, :sched_canon, :cad, :grace, "
+            ":enabled, :state, :created, :updated, :hidden, :sp, :wlsa, :ldis, :lmk)"
+        ),
+        {
+            "fp": "fp-lmk-hidden",
+            "name": "hidden",
+            "host": "h1",
+            "cmd": "/usr/bin/hidden.sh",
+            "sched": "0 6 * * *",
+            "sched_canon": "0 6 * * *",
+            "cad": 86400,
+            "grace": 300,
+            "enabled": 1,
+            "state": "unknown",
+            "created": now,
+            "updated": now,
+            "hidden": now,
+            "sp": "/etc/crontab",
+            "wlsa": None,
+            "ldis": None,
+            "lmk": key,
+        },
+    )
+    results = await cron_repo.match_by_log_key("h1", key)
+    assert len(results) == 1
+    assert results[0].fingerprint == "fp-lmk-hidden"
+    assert results[0].hidden_at is not None
+
+
+@pytest.mark.asyncio
+async def test_match_by_log_key_no_match_returns_empty(repo: SqliteRepository) -> None:
+    """match_by_log_key returns an empty list when no cron matches."""
+    cron_repo = CronRepo(repo)
+    results = await cron_repo.match_by_log_key("h1", "/nonexistent/command.sh")
+    assert results == []
+
+
+@pytest.mark.asyncio
+async def test_match_by_log_key_empty_key_returns_empty(repo: SqliteRepository) -> None:
+    """match_by_log_key returns [] immediately for empty / whitespace-only keys."""
+    cron_repo = CronRepo(repo)
+    key = "/usr/bin/guard-check.sh"
+    # Seed a real cron so the guard is proven to short-circuit rather than
+    # simply finding no rows.
+    await repo.execute(
+        text(
+            "INSERT INTO crons (fingerprint, name, host, command, schedule, "
+            "schedule_canonical, cadence_seconds, expected_grace_seconds, "
+            "enabled, last_seen_state, created_at, updated_at, hidden_at, "
+            "source_path, wrapper_last_seen_at, last_discovered_at, log_match_key) VALUES ("
+            ":fp, :name, :host, :cmd, :sched, :sched_canon, :cad, :grace, "
+            ":enabled, :state, :created, :updated, :hidden, :sp, :wlsa, :ldis, :lmk)"
+        ),
+        {
+            "fp": "fp-lmk-guard",
+            "name": "guard-check",
+            "host": "h1",
+            "cmd": key,
+            "sched": "0 7 * * *",
+            "sched_canon": "0 7 * * *",
+            "cad": 86400,
+            "grace": 300,
+            "enabled": 1,
+            "state": "unknown",
+            "created": utc_now_iso(),
+            "updated": utc_now_iso(),
+            "hidden": None,
+            "sp": "/etc/crontab",
+            "wlsa": None,
+            "ldis": None,
+            "lmk": key,
+        },
+    )
+    # Empty string — early-return guard fires.
+    assert await cron_repo.match_by_log_key("h1", "") == []
+    # Whitespace-only — .strip() branch is exercised.
+    assert await cron_repo.match_by_log_key("h1", "   ") == []
+
+
+# ---------------------------------------------------------------------------
+# TRY_CLAIM_CURSOR
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_try_claim_cursor_first_claim_returns_true(repo: SqliteRepository) -> None:
+    """try_claim_cursor returns True when the cursor is newly claimed."""
+    cron_repo = CronRepo(repo)
+    result = await cron_repo.try_claim_cursor("cursor-abc-001", utc_now_iso())
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_try_claim_cursor_replay_returns_false(repo: SqliteRepository) -> None:
+    """try_claim_cursor returns False when the cursor was already claimed (replay)."""
+    cron_repo = CronRepo(repo)
+    now = utc_now_iso()
+    first = await cron_repo.try_claim_cursor("cursor-abc-002", now)
+    assert first is True
+    second = await cron_repo.try_claim_cursor("cursor-abc-002", now)
+    assert second is False
+
+
 @pytest.mark.asyncio
 async def test_register_cron_restores_soft_deleted_no_wrapper(repo: SqliteRepository) -> None:
     """D5: register_cron on a soft-deleted fingerprint with wrapper=False restores it.

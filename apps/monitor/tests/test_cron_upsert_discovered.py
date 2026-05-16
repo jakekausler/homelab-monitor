@@ -282,3 +282,58 @@ async def test_upsert_discovered_name_change_writes_audit(
         text("SELECT what FROM audit_log WHERE what = 'crons.discover.update'")
     )
     assert audit is not None
+
+
+# ---------------------------------------------------------------------------
+# log_match_key change triggers non-bump update + audit (repository.py:818-820)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_upsert_discovered_log_match_key_change_writes_audit(
+    repo: SqliteRepository,
+) -> None:
+    """When log_match_key drifts (stored command corrupted), updated_non_bump=True.
+
+    Covers repository.py lines 818-820: the log_match_key drift-detection branch.
+    """
+    from homelab_monitor.kernel.cron.log_match import canonical_log_key  # noqa: PLC0415
+
+    cron_repo = CronRepo(repo)
+    t1 = "2026-05-14T10:00:00+00:00"
+    t2 = "2026-05-14T10:05:00+00:00"
+
+    await cron_repo.upsert_discovered(
+        host="h1",
+        source_path="/etc/cron.d/lmk-test",
+        schedule="* * * * *",
+        command="/bin/alpha.sh",
+        now=t1,
+    )
+
+    # Corrupt only the stored log_match_key so it no longer matches the value
+    # that canonical_log_key("/bin/alpha.sh") produces.  The fingerprint stays
+    # the same (it's computed from host+source_path+schedule+command by the
+    # caller, not from log_match_key), so the second discover hits the UPDATE
+    # path and sees the drift on line 817.
+    async with repo.transaction() as conn:
+        await conn.execute(text("UPDATE crons SET log_match_key = 'stale-key' WHERE host = 'h1'"))
+
+    # Re-discover with the same command; stored log_match_key differs → drift.
+    record, inserted, updated_non_bump = await cron_repo.upsert_discovered(
+        host="h1",
+        source_path="/etc/cron.d/lmk-test",
+        schedule="* * * * *",
+        command="/bin/alpha.sh",
+        now=t2,
+    )
+
+    assert inserted is False
+    assert updated_non_bump is True
+    assert record.log_match_key == canonical_log_key("/bin/alpha.sh")
+
+    # Audit row written for the drift update.
+    audit = await repo.fetch_one(
+        text("SELECT what FROM audit_log WHERE what = 'crons.discover.update'")
+    )
+    assert audit is not None

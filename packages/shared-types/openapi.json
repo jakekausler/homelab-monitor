@@ -532,6 +532,102 @@
         "title": "CommentBody",
         "type": "object"
       },
+      "CronEventItem": {
+        "additionalProperties": false,
+        "description": "One structured cron event in the ingest batch.",
+        "properties": {
+          "command": {
+            "title": "Command",
+            "type": "string"
+          },
+          "exit_code": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exit Code"
+          },
+          "host": {
+            "title": "Host",
+            "type": "string"
+          },
+          "journal_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Journal Cursor"
+          },
+          "timestamp": {
+            "title": "Timestamp",
+            "type": "string"
+          },
+          "user": {
+            "default": "",
+            "title": "User",
+            "type": "string"
+          }
+        },
+        "required": [
+          "host",
+          "command",
+          "timestamp"
+        ],
+        "title": "CronEventItem",
+        "type": "object"
+      },
+      "CronEventsIngestResponse": {
+        "description": "202 response summary.",
+        "properties": {
+          "ambiguous": {
+            "title": "Ambiguous",
+            "type": "integer"
+          },
+          "no_match": {
+            "title": "No Match",
+            "type": "integer"
+          },
+          "observed_runs": {
+            "title": "Observed Runs",
+            "type": "integer"
+          },
+          "received": {
+            "title": "Received",
+            "type": "integer"
+          },
+          "replay_skipped": {
+            "title": "Replay Skipped",
+            "type": "integer"
+          },
+          "state_fail": {
+            "title": "State Fail",
+            "type": "integer"
+          },
+          "state_ok": {
+            "title": "State Ok",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "received",
+          "observed_runs",
+          "state_ok",
+          "state_fail",
+          "replay_skipped",
+          "no_match",
+          "ambiguous"
+        ],
+        "title": "CronEventsIngestResponse",
+        "type": "object"
+      },
       "CronListResponse": {
         "additionalProperties": false,
         "description": "Paginated list payload for ``GET /api/crons``.",
@@ -2801,6 +2897,52 @@
           }
         },
         "summary": "Healthz"
+      }
+    },
+    "/api/internal/cron-events": {
+      "post": {
+        "description": "Ingest a batch of structured cron log events from Vector.",
+        "operationId": "ingest_cron_events_api_internal_cron_events_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "items": {
+                  "$ref": "#/components/schemas/CronEventItem"
+                },
+                "title": "Events",
+                "type": "array"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CronEventsIngestResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Ingest Cron Events",
+        "tags": [
+          "internal"
+        ]
       }
     },
     "/api/logs/query": {

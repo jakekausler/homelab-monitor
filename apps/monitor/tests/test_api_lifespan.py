@@ -13,6 +13,7 @@ from homelab_monitor.kernel.api.app import create_app
 from homelab_monitor.kernel.db.engine import get_engine
 from homelab_monitor.kernel.db.migrations import run_migrations
 from homelab_monitor.kernel.db.repository import SqliteRepository
+from homelab_monitor.kernel.secrets.repository import AsyncSecretsRepository
 
 
 @pytest.fixture
@@ -237,6 +238,34 @@ async def test_lifespan_wires_cron_discoverer_to_app_state(
         assert discoverer.cron_repo is not None, "cron_repo must be wired during lifespan startup"
 
 
+@pytest.mark.asyncio
+async def test_cron_events_token_minted_at_boot(
+    db_url: str,
+    master_key: bytes,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Lifespan mints the cron-events ingest token and wires it to app.state."""
+    monkeypatch.setenv("HOMELAB_MONITOR_DB_URL", db_url)
+    monkeypatch.setenv("HOMELAB_MONITOR_MASTER_KEY", base64.b64encode(master_key).decode())
+
+    app = create_app(lifespan_enabled=True)
+
+    async with app.router.lifespan_context(app):
+        # Token string is available on app.state
+        assert hasattr(app.state, "cron_events_token")
+        token = app.state.cron_events_token
+        assert isinstance(token, str)
+        assert len(token) > 0
+
+        # An api_tokens row named 'cron-events-ingest' must exist in the DB
+        repo = SqliteRepository(engine=get_engine(url=db_url))
+        row = await repo.fetch_one(
+            text("SELECT name FROM api_tokens WHERE name = 'cron-events-ingest'"),
+            {},
+        )
+        assert row is not None, "api_tokens row 'cron-events-ingest' not found"
+
+
 def test_create_app_mounts_ui_when_directory_exists(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -341,3 +370,168 @@ async def test_lifespan_clears_all_quarantine_on_startup(
         assert row[0] == 0, "consecutive_failures should be 0 after clear"
         assert row[1] is None, "quarantined_at should be NULL after clear"
         assert row[2] is None, "quarantine_reason should be NULL after clear"
+
+
+@pytest.mark.asyncio
+async def test_cron_events_token_reused_on_second_boot(
+    db_url: str,
+    master_key: bytes,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Lifespan second boot reuses existing cron-events token (idempotency).
+
+    Covers log_ingest_token.py line 37-38: the already-exists fast-path
+    (existing_token is not None AND existing_secret is not None).
+    """
+    monkeypatch.setenv("HOMELAB_MONITOR_DB_URL", db_url)
+    monkeypatch.setenv("HOMELAB_MONITOR_MASTER_KEY", base64.b64encode(master_key).decode())
+
+    app = create_app(lifespan_enabled=True)
+
+    # First boot mints the token.
+    async with app.router.lifespan_context(app):
+        token_first = app.state.cron_events_token
+        count1 = await app.state.repo.fetch_one(
+            text("SELECT COUNT(*) FROM api_tokens WHERE name = 'cron-events-ingest'"),
+            {},
+        )
+        assert count1 is not None
+        assert count1[0] == 1
+
+    # Second boot must reuse, not re-mint.
+    async with app.router.lifespan_context(app):
+        token_second = app.state.cron_events_token
+        count2 = await app.state.repo.fetch_one(
+            text("SELECT COUNT(*) FROM api_tokens WHERE name = 'cron-events-ingest'"),
+            {},
+        )
+        assert count2 is not None
+        assert count2[0] == 1  # still only 1 row
+        assert token_second == token_first  # same plaintext reused
+
+
+@pytest.mark.asyncio
+async def test_ensure_cron_events_token_half_pair_token_only(
+    repo: SqliteRepository,
+    secrets_repo: AsyncSecretsRepository,
+) -> None:
+    """Half-pair: token row exists but secret missing → deletes token, mints fresh.
+
+    Covers log_ingest_token.py line 41: ``await auth_repo.delete_api_token_by_name``.
+    """
+    import structlog  # noqa: PLC0415
+
+    from homelab_monitor.kernel.auth.api_tokens import make_api_token  # noqa: PLC0415
+    from homelab_monitor.kernel.auth.repository import AuthRepository  # noqa: PLC0415
+    from homelab_monitor.kernel.auth.scopes import Scope  # noqa: PLC0415
+    from homelab_monitor.kernel.cron.log_ingest_token import (  # noqa: PLC0415
+        SECRET_NAME,
+        TOKEN_NAME,
+        ensure_cron_events_token,
+    )
+
+    auth_repo = AuthRepository(repo)
+    log = structlog.get_logger()
+
+    # Seed a token row without the corresponding secret (half-pair).
+    plaintext, _ = make_api_token()
+    await auth_repo.create_api_token(
+        name=TOKEN_NAME,
+        scopes={Scope.CRON_EVENTS_INGEST_WRITE},
+        plaintext_token=plaintext,
+    )
+    # Confirm secret is absent.
+    assert await secrets_repo.get(SECRET_NAME) is None
+
+    # Call ensure — must delete stale token row and mint fresh pair.
+    fresh_token = await ensure_cron_events_token(auth_repo, secrets_repo, log=log)
+
+    assert isinstance(fresh_token, str)
+    assert len(fresh_token) > 0
+    # Secret now present.
+    stored_secret = await secrets_repo.get(SECRET_NAME)
+    assert stored_secret == fresh_token
+    # Token row count is exactly 1 (no duplicate).
+    row = await repo.fetch_one(
+        text("SELECT COUNT(*) FROM api_tokens WHERE name = :n"),
+        {"n": TOKEN_NAME},
+    )
+    assert row is not None
+    assert row[0] == 1
+
+
+@pytest.mark.asyncio
+async def test_ensure_cron_events_token_half_pair_secret_only(
+    repo: SqliteRepository,
+    secrets_repo: AsyncSecretsRepository,
+) -> None:
+    """Half-pair: secret exists but token row missing → deletes secret, mints fresh.
+
+    Covers log_ingest_token.py line 43: ``await secrets_repo.delete``.
+    """
+    import structlog  # noqa: PLC0415
+
+    from homelab_monitor.kernel.auth.repository import AuthRepository  # noqa: PLC0415
+    from homelab_monitor.kernel.cron.log_ingest_token import (  # noqa: PLC0415
+        BOOTSTRAP_WHO,
+        SECRET_NAME,
+        TOKEN_NAME,
+        ensure_cron_events_token,
+    )
+
+    auth_repo = AuthRepository(repo)
+    log = structlog.get_logger()
+
+    # Seed a secret without the corresponding token row.
+    await secrets_repo.set(SECRET_NAME, "stale-plaintext", who=BOOTSTRAP_WHO)
+    # Confirm token row is absent.
+    assert await auth_repo.get_api_token_by_name(TOKEN_NAME) is None
+
+    # Call ensure — must delete stale secret and mint fresh pair.
+    fresh_token = await ensure_cron_events_token(auth_repo, secrets_repo, log=log)
+
+    assert isinstance(fresh_token, str)
+    assert len(fresh_token) > 0
+    # The fresh token is different from the stale one we seeded.
+    assert fresh_token != "stale-plaintext"
+    # Secret now contains the fresh value.
+    stored_secret = await secrets_repo.get(SECRET_NAME)
+    assert stored_secret == fresh_token
+    # Token row exists.
+    row = await repo.fetch_one(
+        text("SELECT COUNT(*) FROM api_tokens WHERE name = :n"),
+        {"n": TOKEN_NAME},
+    )
+    assert row is not None
+    assert row[0] == 1
+
+
+@pytest.mark.asyncio
+async def test_cron_events_token_mint_failure_swallowed(
+    db_url: str,
+    master_key: bytes,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ensure_cron_events_token raising → lifespan swallows it and continues.
+
+    Covers lifespan.py lines 419-420: the except branch of the cron-events
+    token-mint try/except.
+    """
+    monkeypatch.setenv("HOMELAB_MONITOR_DB_URL", db_url)
+    monkeypatch.setenv("HOMELAB_MONITOR_MASTER_KEY", base64.b64encode(master_key).decode())
+
+    import homelab_monitor.kernel.cron.render as render_mod  # noqa: PLC0415
+
+    async def _raise(*args: object, **kwargs: object) -> str:
+        raise RuntimeError("simulated mint failure")
+
+    monkeypatch.setattr(render_mod, "ensure_cron_events_token", _raise)
+
+    app = create_app(lifespan_enabled=True)
+
+    # Lifespan must complete without raising; cron_events_token is absent from state.
+    async with app.router.lifespan_context(app):
+        assert not hasattr(app.state, "cron_events_token"), (
+            "cron_events_token should not be set when mint fails"
+        )
+        assert app.state.scheduler is not None

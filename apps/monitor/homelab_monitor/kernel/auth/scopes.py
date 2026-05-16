@@ -10,6 +10,7 @@ class Scope(StrEnum):
 
     HEARTBEAT_WRITE = "heartbeat:write"
     ALERTS_INGEST_WRITE = "alerts:ingest:write"
+    CRON_EVENTS_INGEST_WRITE = "cron:events:ingest:write"
     READ_STATUS = "read:status"
     ADMIN_BACKUP_WRITE = "admin:backup:write"
 

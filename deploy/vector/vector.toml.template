@@ -1,0 +1,204 @@
+# Vector log shipper config TEMPLATE for homelab-monitor.
+#
+# Rendered at FastAPI lifespan startup — `${CRON_EVENTS_INGEST_TOKEN}` is
+# replaced with the cron-events API token plaintext minted via
+# `system:cron-events-bootstrap`.
+#
+# DO NOT manually edit the rendered output at /etc/vector/vector.toml — it is
+# overwritten on every monitor boot. Edit this template instead.
+#
+# v1 behavior:
+# - docker_logs source: scrapes ALL containers visible via the docker socket.
+#   Future stage will add per-container filtering when the homelab-overrides
+#   repo is wired up.
+# - journald source: enabled unconditionally. Errors quietly if /var/log/journal
+#   is not mounted (vector continues running other sources).
+#
+# Per-stream throttle (50 lines/sec/service) is enforced by the throttle transform.
+
+[sources.docker_logs]
+type = "docker_logs"
+include_containers = []
+exclude_containers = []
+auto_partial_merge = true
+
+[sources.journald]
+type = "journald"
+include_units = []
+current_boot_only = true
+
+[transforms.add_labels]
+type = "remap"
+inputs = ["docker_logs", "journald"]
+source = '''
+.host = get_hostname!()
+if !exists(.service) || is_null(.service) {
+  .service = .container_name || ._SYSTEMD_UNIT || "unknown"
+}
+if !exists(.severity) || is_null(.severity) {
+  .severity = .level || .PRIORITY || "info"
+}
+'''
+
+[transforms.parse_json]
+type = "remap"
+inputs = ["add_labels"]
+source = '''
+parsed, err = parse_json(.message)
+if err == null && is_object(parsed) {
+  trusted_host = .host
+  trusted_service = .service
+  trusted_severity = .severity
+  . = merge(., parsed) ?? .
+  .host = trusted_host
+  .service = trusted_service
+  .severity = trusted_severity
+}
+'''
+
+[transforms.drop_noise]
+type = "filter"
+inputs = ["parse_json"]
+condition = '''
+.message != null && .message != ""
+'''
+
+[transforms.throttle]
+type = "throttle"
+inputs = ["drop_noise"]
+threshold = 50
+window_secs = 1
+key_field = "service"
+
+[sinks.vl]
+type = "http"
+inputs = ["throttle"]
+uri = "http://victorialogs:9428/insert/jsonline"
+encoding.codec = "json"
+framing.method = "newline_delimited"
+
+[sinks.vl.request]
+retry_attempts = 3
+timeout_secs = 10
+headers."Content-Type" = "application/x-ndjson"
+
+[sinks.vl.buffer]
+type = "memory"
+max_events = 10000
+when_full = "drop_newest"
+
+# CRON LOG SCRAPE PIPELINE
+# ========================
+# Parse cron log lines from journald into structured events for the
+# /api/internal/cron-events ingest endpoint.
+
+[transforms.cron_journald_filter]
+type = "filter"
+inputs = ["journald"]
+condition = '''
+.SYSLOG_IDENTIFIER == "CRON" || .SYSLOG_IDENTIFIER == "crond" || includes(["cron.service", "crond.service"], ._SYSTEMD_UNIT)
+'''
+
+[transforms.cron_parsed]
+type = "remap"
+inputs = ["cron_journald_filter"]
+source = '''
+matched, err = parse_regex(.message, r'^\((?P<user>[^)]+)\) CMD \((?P<command>.+)\)$')
+if err != null || matched == null {
+  .cron_parse_ok = false
+} else {
+  .cron_parse_ok = true
+  .user = matched.user
+  cmd = matched.command
+  exit_match, exit_err = parse_regex(cmd, r'^(?P<base>.+) exit=(?P<code>\d+)$')
+  if exit_err == null && exit_match != null {
+    .command = exit_match.base
+    .exit_code = to_int(exit_match.code) ?? null
+  } else {
+    .command = cmd
+    .exit_code = null
+  }
+  # Vector's journald source normalizes journald's `_HOSTNAME` into the
+  # top-level `.host` field automatically (= the SOURCE host, e.g. "intelnuc").
+  # Do NOT overwrite it: there is no `._HOSTNAME` field on a Vector journald
+  # event, so `.host = ._HOSTNAME` would set host=null -> endpoint 422.
+  # Vector's journald source also does NOT emit `__CURSOR` as event data (it
+  # consumes the cursor internally for checkpointing), so `.journal_cursor`
+  # stays null; the /api/internal/cron-events endpoint synthesizes a cursor
+  # from (host, command, timestamp) when journal_cursor is absent.
+  .journal_cursor = .__CURSOR
+  ts = .timestamp || ._SOURCE_REALTIME_TIMESTAMP
+  .event_timestamp = to_string(ts) ?? ""
+}
+'''
+
+[transforms.cron_parsed_ok]
+type = "filter"
+inputs = ["cron_parsed"]
+condition = '''
+.cron_parse_ok == true
+'''
+
+[transforms.cron_event_shape]
+type = "remap"
+inputs = ["cron_parsed_ok"]
+source = '''
+. = {
+  "host": .host,
+  "command": .command,
+  "user": .user,
+  "timestamp": .event_timestamp,
+  "exit_code": .exit_code,
+  "journal_cursor": .journal_cursor
+}
+'''
+
+[sinks.cron_events]
+type = "http"
+inputs = ["cron_event_shape"]
+uri = "http://monitor:9090/api/internal/cron-events"
+method = "post"
+# The endpoint accepts `list[CronEventItem]` (a bare JSON array). Vector's
+# http sink produces a JSON array request body ONLY for this exact combo:
+# encoding.codec="json" + framing.method="character_delimited" + delimiter=",".
+# Vector's http-sink encoder hardcodes the surrounding [ ] brackets for that
+# combination -> [{...},{...},{...}]. (There is no "json_array" codec in
+# Vector 0.41; plain "json" alone sends one bare object -> 422.)
+encoding.codec = "json"
+framing.method = "character_delimited"
+framing.character_delimited.delimiter = ","
+
+[sinks.cron_events.auth]
+strategy = "bearer"
+token = "${CRON_EVENTS_INGEST_TOKEN}"
+
+[sinks.cron_events.request]
+retry_attempts = 10
+timeout_secs = 15
+headers."Content-Type" = "application/json"
+
+[sinks.cron_events.batch]
+max_events = 100
+timeout_secs = 5
+
+[sinks.cron_events.buffer]
+type = "disk"
+max_size = 268435488
+when_full = "block"
+
+[sinks.cron_events.acknowledgements]
+enabled = true
+
+# NON-SYSTEMD FALLBACK: cron_syslog source
+# ==========================================
+# MUTUALLY EXCLUSIVE with cron_journald_filter. Uncomment ONLY on non-systemd
+# hosts. Remove the cron_journald_filter (or create a conditional) when using
+# this. Both sources feeding the same pipeline causes double-ingest.
+#
+# [sources.cron_syslog]
+# type = "file"
+# include = ["/var/log/cron", "/var/log/syslog"]
+# read_from = "beginning"
+#
+# Then update cron_journald_filter to take input from cron_syslog instead of journald,
+# or create a new filter branch for syslog.

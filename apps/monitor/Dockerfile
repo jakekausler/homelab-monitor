@@ -63,11 +63,32 @@ COPY --from=builder /app/apps/monitor /app/apps/monitor
 # UI bundle (built in CI before docker build runs).
 COPY apps/ui/dist /app/ui
 
-# Pre-create /data as the homelab user. When docker mounts a named volume here,
-# the volume inherits the directory's ownership (uid 1000) so SQLite writes
-# succeed. Without this, fresh-volume mounts land as root:root and the app
-# crashes on first write.
-RUN mkdir -p /data && chown -R homelab:homelab /data
+# Pre-create volume mount points. When docker mounts a named volume onto an
+# existing image directory, the fresh volume inherits that directory's
+# ownership + mode. The monitor container runs as an arbitrary host-specific
+# UID/GID (compose `user: ${HM_CRON_HOST_UID}:${HM_CRON_HOST_GID}` — required
+# so the container process UID matches the host `homelab-monitor` user that
+# host-setup.sh grants crontab read ACLs to). That runtime UID does NOT match
+# the image build-time UID 1000, so owner- or group-based perms cannot be
+# pre-baked. These dirs are therefore made world-writable + sticky (1777, same
+# semantics as /tmp): any UID the container is pinned to can write, and the
+# sticky bit keeps delete semantics sane. They are single-tenant private
+# volumes inside one container — no other principal can reach them.
+#
+# /data                    — SQLite database volume (data_monitor); monitor writes.
+# /var/alertmanager-config  — Alertmanager render-on-boot output (data_alertmanager_config); monitor writes.
+# /var/vector-config        — Vector cron-events render-on-boot output (data_vector_config); monitor writes.
+# /storage/backup/...       — backup output (data_backup); monitor writes. Must be
+#                             pre-created here or the named volume inherits docker's
+#                             default root:root 0755 mountpoint and the monitor cannot write.
+# The render dirs keep the setgid bit + amconfig group so files created inside
+# inherit gid 2000 — the vector/alertmanager sidecars join that group via
+# compose `group_add` to READ the 0640 rendered configs (3777 = setgid+sticky+rwx-all).
+RUN mkdir -p /data /var/alertmanager-config /var/vector-config /storage/backup/homelab-monitor \
+ && chown -R homelab:homelab /data /storage/backup/homelab-monitor \
+ && chown homelab:amconfig /var/alertmanager-config /var/vector-config \
+ && chmod 1777 /data /storage/backup/homelab-monitor \
+ && chmod 3777 /var/alertmanager-config /var/vector-config
 
 USER homelab
 

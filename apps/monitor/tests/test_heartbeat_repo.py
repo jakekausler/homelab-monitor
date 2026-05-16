@@ -316,3 +316,123 @@ async def test_get_heartbeat_state_returns_record_after_ok(
     assert state.current_state == "ok"
     assert state.last_ok_at is not None
     assert state.current_streak == 1
+
+
+@pytest.mark.asyncio
+async def test_record_observed_run_first_time_creates_neutral_row(
+    repo: SqliteRepository,
+) -> None:
+    """Observed run on a cron with no prior state creates a neutral state row."""
+    fp = await _seed_cron(repo, fingerprint="cron-obs-1", name="obs1", host="h1")
+    hbr = HeartbeatRepo(repo)
+    now = utc_now_iso()
+    state = await hbr.record_observed_run(fp, observed_at=now, who="test", ip=None)
+    assert state.cron_fingerprint == fp
+    assert state.observed_runs_total == 1
+    assert state.last_observed_run_at == now
+    assert state.current_state == "unknown"
+    assert state.last_ok_at is None
+    assert state.last_fail_at is None
+    assert state.current_streak == 0
+    assert state.last_exit_code is None
+
+
+@pytest.mark.asyncio
+async def test_record_observed_run_increments_existing(repo: SqliteRepository) -> None:
+    """Observed run preserves state fields (D1 invariant)."""
+    fp = await _seed_cron(repo, fingerprint="cron-obs-2", name="obs2", host="h1")
+    hbr = HeartbeatRepo(repo)
+    now = utc_now_iso()
+    # First record an OK to set up state
+    await hbr.record_ok(fp, duration_seconds=10.5, who="test", ip=None)
+    ok_state = await hbr.get_heartbeat_state(fp)
+    assert ok_state is not None
+    assert ok_state.current_state == "ok"
+    assert ok_state.current_streak == 1
+    ok_at = ok_state.last_ok_at
+    # Now record an observed run
+    state = await hbr.record_observed_run(fp, observed_at=now, who="test", ip=None)
+    assert state.observed_runs_total == 1  # first observed run
+    assert state.last_observed_run_at == now
+    # State fields UNCHANGED
+    assert state.current_state == "ok"  # not changed to unknown
+    assert state.current_streak == 1  # not reset
+    assert state.last_ok_at == ok_at  # not changed
+
+
+@pytest.mark.asyncio
+async def test_record_observed_run_twice_increments_to_two(
+    repo: SqliteRepository,
+) -> None:
+    """Two consecutive observed runs increment the counter."""
+    fp = await _seed_cron(repo, fingerprint="cron-obs-3", name="obs3", host="h1")
+    hbr = HeartbeatRepo(repo)
+    now1 = utc_now_iso()
+    state1 = await hbr.record_observed_run(fp, observed_at=now1, who="test", ip=None)
+    assert state1.observed_runs_total == 1
+    now2 = utc_now_iso()
+    state2 = await hbr.record_observed_run(fp, observed_at=now2, who="test", ip=None)
+    assert state2.observed_runs_total == 2  # noqa: PLR2004
+
+
+@pytest.mark.asyncio
+async def test_record_observed_run_writes_audit_row(repo: SqliteRepository) -> None:
+    """Observed run writes an audit row with what=cron.observed_run."""
+    fp = await _seed_cron(repo, fingerprint="cron-obs-4", name="obs4", host="h1")
+    hbr = HeartbeatRepo(repo)
+    now = utc_now_iso()
+    await hbr.record_observed_run(fp, observed_at=now, who="audit-test", ip="1.2.3.4")
+    # Query audit log
+    async with repo.engine.begin() as conn:
+        rows = (
+            await conn.execute(
+                text(
+                    "SELECT what, who, after_json FROM audit_log "
+                    "WHERE what = :what AND "
+                    "json_extract(after_json, '$.cron_fingerprint') = :fp "
+                    'ORDER BY "when" DESC'
+                ),
+                {"what": "cron.observed_run", "fp": fp},
+            )
+        ).fetchall()
+    assert len(rows) >= 1
+    audit_row = rows[0]
+    assert audit_row.who == "audit-test"
+    assert "observed_runs_total" in audit_row.after_json
+
+
+@pytest.mark.asyncio
+async def test_record_observed_run_does_not_mirror_crons_last_seen_state(
+    repo: SqliteRepository,
+) -> None:
+    """Observed run does not update crons.last_seen_state (D1: no mirror)."""
+    fp = await _seed_cron(repo, fingerprint="cron-obs-5", name="obs5", host="h1")
+    hbr = HeartbeatRepo(repo)
+    # Verify initial cron state
+    cron = await hbr.get_cron(fp)
+    assert cron is not None
+    assert cron.last_seen_state == "unknown"
+    # Record observed run
+    now = utc_now_iso()
+    await hbr.record_observed_run(fp, observed_at=now, who="test", ip=None)
+    # Re-fetch cron; last_seen_state should NOT change
+    cron_after = await hbr.get_cron(fp)
+    assert cron_after is not None
+    assert cron_after.last_seen_state == "unknown"
+
+
+@pytest.mark.asyncio
+async def test_record_ok_preserves_observed_runs_total(repo: SqliteRepository) -> None:
+    """record_ok carries observed_runs_total through (_record_state_transition)."""
+    fp = await _seed_cron(repo, fingerprint="cron-obs-6", name="obs6", host="h1")
+    hbr = HeartbeatRepo(repo)
+    now = utc_now_iso()
+    # Record an observed run first
+    await hbr.record_observed_run(fp, observed_at=now, who="test", ip=None)
+    state_after_obs = await hbr.get_heartbeat_state(fp)
+    assert state_after_obs is not None
+    assert state_after_obs.observed_runs_total == 1
+    # Now record an OK
+    state_after_ok = await hbr.record_ok(fp, duration_seconds=5.0, who="test", ip=None)
+    # observed_runs_total should be preserved
+    assert state_after_ok.observed_runs_total == 1

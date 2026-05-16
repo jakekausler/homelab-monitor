@@ -115,12 +115,13 @@ def render_config(
     rendered = template.replace(TEMPLATE_PLACEHOLDER, token)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     # Atomic replace: write to .tmp in same dir, then os.replace.
-    fd, tmp_name = tempfile.mkstemp(
-        prefix=output_path.name + ".",
-        suffix=".tmp",
-        dir=str(output_path.parent),
-    )
+    tmp_name: str | None = None
     try:
+        fd, tmp_name = tempfile.mkstemp(
+            prefix=output_path.name + ".",
+            suffix=".tmp",
+            dir=str(output_path.parent),
+        )
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(rendered)
         os.replace(tmp_name, output_path)
@@ -153,8 +154,9 @@ def render_config(
             output_path=str(output_path),
         )
         # Best-effort cleanup of the temp file; ignore secondary errors.
-        with suppress(OSError):  # pragma: no cover -- defensive
-            os.unlink(tmp_name)
+        if tmp_name is not None:
+            with suppress(OSError):  # pragma: no cover -- defensive
+                os.unlink(tmp_name)
         raise
     log.info(
         "alertmanager.render.success",

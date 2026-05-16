@@ -39,17 +39,58 @@ services:
       - data_backup:/storage/backup/homelab-monitor
       - ../alertmanager/alertmanager.yml.template:/etc/alertmanager-template/alertmanager.yml.template:ro
       - data_alertmanager_config:/var/alertmanager-config
+      - ../vector/vector.toml.template:/etc/vector-template/vector.toml.template:ro
+      - data_vector_config:/var/vector-config
       - /etc:/host/etc:ro
       - /var/spool/cron/crontabs:/host/var/spool/cron/crontabs:ro
     depends_on:
       victoriametrics:
         condition: service_healthy
+      config-init:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9090/api/healthz').read()"]
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 30s
+
+  # One-shot: fix the MODE of the render-config volumes BEFORE the monitor and
+  # the vector/alertmanager sidecars start. A fresh named volume mounted by a
+  # sidecar is seeded from that sidecar image's non-empty stock config dir
+  # (root:root 0755), which the non-root monitor (user: ${HM_CRON_HOST_UID})
+  # cannot write. This root one-shot chmods both volumes to 3777
+  # (setgid+sticky+rwx-all) so the monitor can create the rendered config
+  # files, then exits. depends_on gates the monitor and the vector/alertmanager
+  # sidecars on its successful completion.
+  #
+  # NON-DESTRUCTIVE BY DESIGN: this container only chmods. It MUST NOT delete
+  # anything. The monitor's render-on-boot is the only writer of vector.toml /
+  # alertmanager.yml, and it runs on the MONITOR's lifecycle, not this one.
+  # compose re-runs this init whenever vector/alertmanager are recreated
+  # (depends_on: service_completed_successfully) WITHOUT recreating the
+  # monitor — so a destructive op here would wipe the rendered config and the
+  # sidecar would crash-loop. chmod is idempotent and safe to re-run forever.
+  # Stray stock seed files (timberio's vector.yaml, prom's alertmanager.yml)
+  # are harmless: vector --config and alertmanager --config.file each name ONE
+  # explicit file; neither scans the directory.
+  config-init:
+    image: busybox:1.36
+    container_name: homelab-config-init
+    user: "0:0"
+    command:
+      - sh
+      - -c
+      - >
+        chown 0:2000 /var/vector-config /var/alertmanager-config &&
+        chmod 3777 /var/vector-config /var/alertmanager-config &&
+        echo "config-init: render-config volumes set to root:amconfig 3777"
+    volumes:
+      - data_vector_config:/var/vector-config
+      - data_alertmanager_config:/var/alertmanager-config
+    restart: "no"
+    networks:
+      - homelab-monitor-net
 
   victoriametrics:
     image: victoriametrics/victoria-metrics:v1.107.0
@@ -115,13 +156,37 @@ services:
     restart: unless-stopped
     networks:
       - homelab-monitor-net
+    # group_add 2000 (amconfig) so Vector can read the 0640 rendered
+    # /etc/vector/vector.toml — the monitor chowns the rendered config to
+    # GID 2000 at boot (mirrors the alertmanager render-on-boot mechanism).
+    group_add:
+      - "2000"
+    environment:
+      VECTOR_DATA_DIR: /var/lib/vector
+    # The monitor renders vector.toml (with the cron-events ingest token
+    # substituted) into data_vector_config at boot. Vector --configs the
+    # rendered file. A named volume cannot overlay a single file path, so the
+    # volume is mounted as a DIRECTORY and --config points at <dir>/vector.toml
+    # (same pattern as alertmanager's config-dir mount).
+    command: ["--config", "/etc/vector/vector.toml"]
     volumes:
-      - ../vector/vector.toml:/etc/vector/vector.toml:ro
+      - data_vector_config:/etc/vector:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - /var/log/journal:/var/log/journal:ro
+      # journalctl's default journal discovery is machine-id-scoped: it looks
+      # in /var/log/journal/<machine-id>/. The vector image bakes its own
+      # /etc/machine-id, which never matches the host's, so journalctl finds
+      # "No journal files" and the journald source reads zero entries. Mount
+      # the host machine-id so discovery resolves to the host's journal dir.
+      - /etc/machine-id:/etc/machine-id:ro
+      - data_vector:/var/lib/vector
     depends_on:
       victorialogs:
         condition: service_healthy
+      monitor:
+        condition: service_healthy
+      config-init:
+        condition: service_completed_successfully
 
   alertmanager:
     image: prom/alertmanager:v0.27.0
@@ -142,6 +207,8 @@ services:
     depends_on:
       monitor:
         condition: service_healthy
+      config-init:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1:9093/-/healthy"]
       interval: 30s
@@ -302,6 +369,8 @@ volumes:
   data_vm:
   data_vmagent:
   data_vl:
+  data_vector:
+  data_vector_config:
   data_backup:
   data_alertmanager_config:
   data_grafana:

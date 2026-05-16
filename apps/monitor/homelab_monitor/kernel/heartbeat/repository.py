@@ -61,6 +61,7 @@ def _row_to_cron(row: Row[Any]) -> CronRecord:
             None if row.last_discovered_at is None else str(row.last_discovered_at)
         ),
         soft_deleted_at=(None if row.soft_deleted_at is None else str(row.soft_deleted_at)),
+        log_match_key=(None if row.log_match_key is None else str(row.log_match_key)),
     )
 
 
@@ -78,6 +79,10 @@ def _row_to_state(row: Row[Any]) -> HeartbeatStateRecord:
         ),
         last_exit_code=None if row.last_exit_code is None else int(row.last_exit_code),
         updated_at=str(row.updated_at),
+        observed_runs_total=int(row.observed_runs_total),
+        last_observed_run_at=(
+            None if row.last_observed_run_at is None else str(row.last_observed_run_at)
+        ),
     )
 
 
@@ -85,14 +90,14 @@ _SELECT_CRON_SQL = text(
     "SELECT fingerprint, name, host, command, schedule, schedule_canonical, "
     "cadence_seconds, expected_grace_seconds, enabled, last_seen_state, "
     "created_at, updated_at, hidden_at, source_path, wrapper_last_seen_at, "
-    "last_discovered_at, soft_deleted_at "
+    "last_discovered_at, soft_deleted_at, log_match_key "
     "FROM crons WHERE fingerprint = :fingerprint"
 )
 
 _SELECT_STATE_SQL = text(
     "SELECT cron_fingerprint, current_state, last_start_at, last_ok_at, "
     "last_fail_at, current_streak, expected_next_at, last_duration_seconds, "
-    "last_exit_code, updated_at FROM heartbeats_state "
+    "last_exit_code, updated_at, observed_runs_total, last_observed_run_at FROM heartbeats_state "
     "WHERE cron_fingerprint = :cron_fingerprint"
 )
 
@@ -100,11 +105,12 @@ _UPSERT_STATE_SQL = text(
     "INSERT INTO heartbeats_state ("
     "  cron_fingerprint, current_state, last_start_at, last_ok_at, last_fail_at, "
     "  current_streak, expected_next_at, last_duration_seconds, "
-    "  last_exit_code, updated_at"
+    "  last_exit_code, updated_at, observed_runs_total, last_observed_run_at"
     ") VALUES ("
     "  :cron_fingerprint, :current_state, :last_start_at, :last_ok_at, "
     "  :last_fail_at, :current_streak, :expected_next_at, "
-    "  :last_duration_seconds, :last_exit_code, :updated_at"
+    "  :last_duration_seconds, :last_exit_code, :updated_at, "
+    "  :observed_runs_total, :last_observed_run_at"
     ") "
     "ON CONFLICT(cron_fingerprint) DO UPDATE SET "
     "  current_state = excluded.current_state, "
@@ -121,6 +127,21 @@ _UPSERT_STATE_SQL = text(
 _UPDATE_CRONS_LAST_SEEN_SQL = text(
     "UPDATE crons SET last_seen_state = :state, updated_at = :updated_at "
     "WHERE fingerprint = :fingerprint"
+)
+
+_UPSERT_OBSERVED_RUN_SQL = text(
+    "INSERT INTO heartbeats_state ("
+    "  cron_fingerprint, current_state, last_start_at, last_ok_at, last_fail_at, "
+    "  current_streak, expected_next_at, last_duration_seconds, last_exit_code, "
+    "  updated_at, observed_runs_total, last_observed_run_at"
+    ") VALUES ("
+    "  :cron_fingerprint, 'unknown', NULL, NULL, NULL, 0, NULL, NULL, NULL, "
+    "  :now, 1, :observed_at"
+    ") "
+    "ON CONFLICT(cron_fingerprint) DO UPDATE SET "
+    "  observed_runs_total = heartbeats_state.observed_runs_total + 1, "
+    "  last_observed_run_at = excluded.last_observed_run_at, "
+    "  updated_at = excluded.updated_at"
 )
 
 
@@ -184,7 +205,7 @@ class HeartbeatRepo:
                 "SELECT fingerprint, name, host, command, schedule, schedule_canonical, "
                 "cadence_seconds, expected_grace_seconds, enabled, last_seen_state, "
                 "created_at, updated_at, hidden_at, source_path, wrapper_last_seen_at, "
-                "last_discovered_at, soft_deleted_at "
+                "last_discovered_at, soft_deleted_at, log_match_key "
                 "FROM crons ORDER BY name, fingerprint"
             )
         )
@@ -263,6 +284,64 @@ class HeartbeatRepo:
             ip=ip,
             audit_what="heartbeat.fail",
         )
+
+    async def record_observed_run(
+        self,
+        fingerprint: str,
+        *,
+        observed_at: str,
+        who: str,
+        ip: str | None,
+    ) -> HeartbeatStateRecord:
+        """Record a NEUTRAL observed run from B-mode log evidence (D1).
+
+        A vanilla cron dispatch line proves "cron fired the job", not "the job
+        succeeded". So this increments ``observed_runs_total``, sets
+        ``last_observed_run_at`` + ``updated_at``, and DOES NOT touch
+        ``current_state``, ``last_ok_at``, ``last_fail_at``, ``current_streak``,
+        ``last_exit_code``, or ``expected_next_at``. It does NOT mirror to
+        ``crons.last_seen_state``.
+
+        Writes an ``audit_log`` row with ``what="cron.observed_run"`` in the SAME
+        transaction. Caller MUST have verified ``fingerprint`` exists.
+        """
+        async with self._db.engine.begin() as conn:
+            cron = await self._fetch_cron_in_conn(conn, fingerprint)
+            if cron is None:  # pragma: no cover -- caller already verified
+                msg = f"cron not found: {fingerprint}"
+                raise LookupError(msg)
+            previous = await self._fetch_state_in_conn(conn, fingerprint)
+            await conn.execute(
+                _UPSERT_OBSERVED_RUN_SQL,
+                {
+                    "cron_fingerprint": fingerprint,
+                    "now": observed_at,
+                    "observed_at": observed_at,
+                },
+            )
+            new_row = await self._fetch_state_in_conn(conn, fingerprint)
+            assert new_row is not None
+            await insert_audit(
+                conn,
+                who=who,
+                what="cron.observed_run",
+                before=(
+                    None
+                    if previous is None
+                    else {
+                        "cron_fingerprint": fingerprint,
+                        "observed_runs_total": previous.observed_runs_total,
+                    }
+                ),
+                after={
+                    "cron_fingerprint": fingerprint,
+                    "observed_runs_total": new_row.observed_runs_total,
+                    "host": cron.host,
+                },
+                ip=ip,
+                when=observed_at,
+            )
+            return new_row
 
     # ----- single chokepoint for state writes -----
 
@@ -343,6 +422,12 @@ class HeartbeatRepo:
                     "last_duration_seconds": new_duration,
                     "last_exit_code": new_exit_code,
                     "updated_at": now,
+                    "observed_runs_total": (
+                        0 if previous is None else previous.observed_runs_total
+                    ),
+                    "last_observed_run_at": (
+                        None if previous is None else previous.last_observed_run_at
+                    ),
                 },
             )
             await conn.execute(

@@ -25,6 +25,7 @@ from sqlalchemy.engine import Row
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from homelab_monitor.kernel.cron.fingerprint import derive_name
+from homelab_monitor.kernel.cron.log_match import canonical_log_key
 from homelab_monitor.kernel.cron.schedule import (
     canonicalize_schedule,
     compute_average_interval_seconds,
@@ -37,6 +38,16 @@ from homelab_monitor.kernel.db.time import utc_now_iso
 # ---------------------------------------------------------------------------
 # Module-private helpers
 # ---------------------------------------------------------------------------
+
+
+def _log_match_key_or_none(command: str) -> str | None:
+    """Return the canonical log-match key, or ``None`` if it canonicalizes empty.
+
+    Stored as NULL rather than "" so empty-key rows never collide on the
+    ``(host, log_match_key)`` equality join used by ``match_by_log_key``.
+    """
+    key = canonical_log_key(command)
+    return key if key.strip() else None
 
 
 def _cron_to_audit_after(record: CronRecord) -> dict[str, Any]:
@@ -62,6 +73,7 @@ def _cron_to_audit_after(record: CronRecord) -> dict[str, Any]:
         "wrapper_last_seen_at": record.wrapper_last_seen_at,
         "last_discovered_at": record.last_discovered_at,
         "soft_deleted_at": record.soft_deleted_at,
+        "log_match_key": record.log_match_key,
     }
 
 
@@ -91,6 +103,7 @@ class CronRecord:
     wrapper_last_seen_at: str | None
     last_discovered_at: str | None
     soft_deleted_at: str | None
+    log_match_key: str | None
 
 
 @dataclass(slots=True, frozen=True)
@@ -108,6 +121,8 @@ class HeartbeatStateRecord:
     last_duration_seconds: float | None
     last_exit_code: int | None
     updated_at: str
+    observed_runs_total: int
+    last_observed_run_at: str | None
 
 
 @dataclass(slots=True, frozen=True)
@@ -158,6 +173,7 @@ def _row_to_cron(row: Row[Any]) -> CronRecord:
             None if row.last_discovered_at is None else str(row.last_discovered_at)
         ),
         soft_deleted_at=(None if row.soft_deleted_at is None else str(row.soft_deleted_at)),
+        log_match_key=(None if row.log_match_key is None else str(row.log_match_key)),
     )
 
 
@@ -175,6 +191,10 @@ def _row_to_state(row: Row[Any]) -> HeartbeatStateRecord:
         ),
         last_exit_code=None if row.last_exit_code is None else int(row.last_exit_code),
         updated_at=str(row.updated_at),
+        observed_runs_total=int(row.observed_runs_total),
+        last_observed_run_at=(
+            None if row.last_observed_run_at is None else str(row.last_observed_run_at)
+        ),
     )
 
 
@@ -186,7 +206,7 @@ _CRON_COLS = (
     "fingerprint, name, host, command, schedule, schedule_canonical, "
     "cadence_seconds, expected_grace_seconds, enabled, last_seen_state, "
     "created_at, updated_at, hidden_at, source_path, wrapper_last_seen_at, "
-    "last_discovered_at, soft_deleted_at"
+    "last_discovered_at, soft_deleted_at, log_match_key"
 )
 
 _SELECT_BY_FINGERPRINT_SQL = text(
@@ -198,12 +218,12 @@ _INSERT_CRON_SQL = text(
     "  fingerprint, name, host, command, schedule, schedule_canonical, "
     "  cadence_seconds, expected_grace_seconds, enabled, last_seen_state, "
     "  created_at, updated_at, hidden_at, source_path, wrapper_last_seen_at, "
-    "  last_discovered_at, soft_deleted_at"
+    "  last_discovered_at, soft_deleted_at, log_match_key"
     ") VALUES ("
     "  :fingerprint, :name, :host, :command, :schedule, :schedule_canonical, "
     "  :cadence_seconds, :expected_grace_seconds, :enabled, :last_seen_state, "
     "  :created_at, :updated_at, :hidden_at, :source_path, :wrapper_last_seen_at, "
-    "  :last_discovered_at, :soft_deleted_at"
+    "  :last_discovered_at, :soft_deleted_at, :log_match_key"
     ")"
 )
 
@@ -215,7 +235,7 @@ _UPDATE_WRAPPER_LAST_SEEN_SQL = text(
 _SELECT_STATE_SQL = text(
     "SELECT cron_fingerprint, current_state, last_start_at, last_ok_at, "
     "last_fail_at, current_streak, expected_next_at, last_duration_seconds, "
-    "last_exit_code, updated_at FROM heartbeats_state "
+    "last_exit_code, updated_at, observed_runs_total, last_observed_run_at FROM heartbeats_state "
     "WHERE cron_fingerprint = :cron_fingerprint"
 )
 
@@ -337,6 +357,62 @@ class CronRepo:
         if not include_hidden and cron.hidden_at is not None:
             return None
         return cron
+
+    async def match_by_log_key(self, host: str, log_match_key: str) -> list[CronRecord]:
+        """Return all active (non-soft-deleted) crons matching (host, log_match_key).
+
+        Used by the cron-events ingest endpoint to resolve a log event to a
+        fingerprint. Hidden crons ARE included (hidden = display suppression,
+        not data-capture suppression — see cron-identity.md). Soft-deleted rows
+        are EXCLUDED: a cron deleted from disk should not absorb log evidence.
+
+        An empty / whitespace-only ``log_match_key`` matches NOTHING: a command
+        canonicalizing to "" cannot identify a cron, and an equality join would
+        otherwise match every empty-key row at once (spurious AMBIGUOUS). Such
+        keys are never stored — discovery writes NULL for an empty canonical key
+        — so this guard is defence-in-depth for legacy / hand-written rows.
+        """
+        if not log_match_key.strip():
+            return []
+        rows = await self._db.fetch_all(
+            text(
+                f"SELECT {_CRON_COLS} FROM crons "
+                "WHERE host = :host AND log_match_key = :key "
+                "AND soft_deleted_at IS NULL"
+            ),
+            {"host": host, "key": log_match_key},
+        )
+        return [_row_to_cron(r) for r in rows]
+
+    async def try_claim_cursor(self, journal_cursor: str, now: str) -> bool:
+        """Attempt to claim a journald cursor. Returns True if newly claimed,
+        False if it was already processed (replay).
+
+        Uses INSERT OR IGNORE on cron_log_cursors(journal_cursor PRIMARY KEY).
+        Single-host single-writer: no compound key needed.
+
+        At-most-once delivery (KNOWN LIMITATION): the cursor is committed in
+        THIS transaction, while the subsequent ``record_observed_run`` /
+        ``record_ok`` / ``record_fail`` state write runs in its OWN separate
+        transaction (see ``cron_events._process_one``). A process crash in the
+        window between the two commits leaves the cursor claimed but the run
+        unrecorded; the re-POSTed event is then treated as a replay and the run
+        is permanently dropped. This is an accepted trade-off: cron observed-run
+        evidence is advisory (it never gates alerting decisions on its own), the
+        window is sub-millisecond on a single-writer SQLite, and threading one
+        connection through the ``HeartbeatRepo`` mutators would require changing
+        their public signatures and every heartbeat-receiver caller. Documented
+        in docs/architecture/cron-logscrape.md.
+        """
+        async with self._db.transaction() as conn:
+            result = await conn.execute(
+                text(
+                    "INSERT OR IGNORE INTO cron_log_cursors "
+                    "(journal_cursor, processed_at) VALUES (:c, :now)"
+                ),
+                {"c": journal_cursor, "now": now},
+            )
+            return result.rowcount == 1
 
     # ----- writes -----
 
@@ -533,6 +609,7 @@ class CronRepo:
                     "wrapper_last_seen_at": now if payload.wrapper else None,
                     "last_discovered_at": None,
                     "soft_deleted_at": None,
+                    "log_match_key": _log_match_key_or_none(payload.command),
                 }
                 await conn.execute(_INSERT_CRON_SQL, new_record_params)
 
@@ -700,6 +777,7 @@ class CronRepo:
                     "wrapper_last_seen_at": None,
                     "last_discovered_at": now,
                     "soft_deleted_at": None,
+                    "log_match_key": _log_match_key_or_none(command),
                 }
                 await conn.execute(_INSERT_CRON_SQL, params)
                 inserted_row = (
@@ -759,6 +837,12 @@ class CronRepo:
                 diff_before["cadence_seconds"] = existing.cadence_seconds
                 diff_after["cadence_seconds"] = cadence_seconds
                 updates["cadence_seconds"] = cadence_seconds
+
+            new_log_match_key = _log_match_key_or_none(command)
+            if existing.log_match_key != new_log_match_key:
+                diff_before["log_match_key"] = existing.log_match_key
+                diff_after["log_match_key"] = new_log_match_key
+                updates["log_match_key"] = new_log_match_key
 
             # ALWAYS bump last_discovered_at + updated_at on the existing row.
             updates["last_discovered_at"] = now

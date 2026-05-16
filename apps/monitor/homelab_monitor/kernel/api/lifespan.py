@@ -407,6 +407,37 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
         log=log,
     )
 
+    # 8c. Cron-events Vector config render-on-boot (idempotent: reuses token
+    # if present). Mirrors the # 8b Alertmanager block MINUS the reload step —
+    # Vector reads the rendered config at container start. Failures here are
+    # logged and swallowed inside render_on_boot; lifespan continues.
+    vector_template_path = Path(
+        os.environ.get(
+            "HOMELAB_MONITOR_VECTOR_TEMPLATE",
+            "/etc/vector-template/vector.toml.template",
+        )
+    )
+    vector_output_path = Path(
+        os.environ.get(
+            "HOMELAB_MONITOR_VECTOR_OUTPUT",
+            "/var/vector-config/vector.toml",
+        )
+    )
+
+    from homelab_monitor.kernel.cron.render import (  # noqa: PLC0415
+        render_on_boot as render_vector_on_boot,
+    )
+
+    cron_events_token = await render_vector_on_boot(
+        auth_repo=auth_repo,
+        secrets_repo=secrets_repo,
+        template_path=vector_template_path,
+        output_path=vector_output_path,
+        log=log,
+    )
+    if cron_events_token is not None:
+        app.state.cron_events_token = cron_events_token
+
     app.state.started_at = utc_now_iso()
 
     try:

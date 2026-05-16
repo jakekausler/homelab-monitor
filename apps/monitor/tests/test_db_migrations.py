@@ -42,6 +42,7 @@ EXPECTED_TABLES = {
     "maintenance_windows",
     "suggestions",
     "tool_scorecards",
+    "cron_log_cursors",
 }
 
 
@@ -539,6 +540,7 @@ async def test_crons_columns_present_at_head(db_engine: AsyncEngine) -> None:
         "wrapper_last_seen_at",
         "last_discovered_at",
         "soft_deleted_at",
+        "log_match_key",
     }
     forbidden = {"id", "integration_mode", "archived_at"}
 

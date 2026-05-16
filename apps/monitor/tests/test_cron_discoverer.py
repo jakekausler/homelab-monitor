@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from sqlalchemy import text
 
+from homelab_monitor.kernel.cron.log_match import canonical_log_key
 from homelab_monitor.kernel.cron.repository import CronRepo
 from homelab_monitor.kernel.db.repository import SqliteRepository
 from homelab_monitor.kernel.db.time import utc_now_iso
@@ -1100,3 +1101,24 @@ async def test_scan_result_unreadable_source_paths_field(
     # Invariant: clean and unreadable are disjoint.
     assert result.clean_source_paths.isdisjoint(result.unreadable_source_paths)
     assert result.partial is True
+
+
+@pytest.mark.asyncio
+async def test_discovered_cron_has_log_match_key(
+    repo: SqliteRepository, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Discovered cron row has a non-NULL log_match_key equal to canonical_log_key(command)."""
+    command = "/storage/scripts/cron/backup.sh"
+    _make_host_tree(
+        tmp_path,
+        cron_d_files={"backup": f"10 4 * * * root {command}\n"},
+    )
+    monkeypatch.setenv("HM_CRON_HOST_ROOT", str(tmp_path))
+    monkeypatch.setenv("HM_HOST_HOSTNAME", "test-host")
+    cron_repo = CronRepo(repo)
+    result = await CronDiscoverer().scan(cron_repo, log=_NullLog())
+    assert result.inserted_count == 1
+    row = await repo.fetch_one(text("SELECT log_match_key, command FROM crons LIMIT 1"))
+    assert row is not None
+    assert row.log_match_key is not None
+    assert row.log_match_key == canonical_log_key(row.command)

@@ -1,6 +1,6 @@
 # Cron identity (operator + architecture guide)
 
-> Last updated: 2026-05-15 (STAGE-002-007A — cron soft-delete / restore).
+> Last updated: 2026-05-16 (STAGE-002-008 — B-mode log-scrape).
 
 ## TL;DR
 
@@ -459,6 +459,10 @@ shelved the discoverer after repeated tick failures.
   reconciliation re-finding the fingerprint on a clean scan (`who="system"`),
   or `/register` re-registering a soft-deleted cron (`who=token name`)
   (STAGE-002-007A).
+- `cron.observed_run` — B-mode log-scrape recorded a NEUTRAL observed run
+  (vanilla cron dispatch line, no exit code). `who="system:log-scrape"`.
+  Bumps `heartbeats_state.observed_runs_total`; does NOT change `current_state`
+  (STAGE-002-008).
 - `heartbeat.start` / `heartbeat.ok` / `heartbeat.fail` — Receiver state
   transitions; `after_json` carries `cron_fingerprint`.
 
