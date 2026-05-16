@@ -124,3 +124,13 @@ When making changes to the cron inventory UI, re-verify:
 - [ ] Heartbeat endpoints (`/start`,`/ok`,`/fail`) still work on a soft-deleted cron.
 - [ ] UI: "Show soft-deleted" toolbar toggle, soft-deleted badge + dimmed row, CronDetail header badge + Disk-source field.
 - [ ] Prod deploy: `make dev-prod` rebuilds the monitor image from the local Dockerfile; SPA deep-links (refresh on `/overview` etc.) return the app, not a 404.
+
+## STAGE-002-008 (B-mode log-scrape) regression items
+
+- [ ] B-mode log-scrape: a real cron firing on the host results in that cron's `observed_runs_total` incrementing and a `cron.observed_run` audit row, within ~1 min, with `current_state` staying `unknown` (NOT `ok`).
+- [ ] Idempotency: replaying the same journald cron event (same `__CURSOR`) does not double-count.
+- [ ] A wrapper-tagged log line carrying `exit=0`/`exit=N` drives `record_ok`/`record_fail` (state change); a bare CMD line is a neutral observed run.
+- [ ] Ambiguous match (one event matching 2+ cron fingerprints) is skipped + counted, not fanned out.
+- [ ] A secret-bearing cron command (stored scrubbed) still matches its raw log line via `canonical_log_key`.
+- [ ] Deploy: `docker compose up -d` (full or partial, fresh or existing volumes) brings the stack up with Vector authenticating to `/api/internal/cron-events` and rendering `vector.toml` — no manual token step; `config-init` is idempotent and non-destructive.
+- [ ] Vector journald source reads the host journal (host `/etc/machine-id` bind-mounted); cron events POST as a JSON array and return 202.
