@@ -134,3 +134,10 @@ When making changes to the cron inventory UI, re-verify:
 - [ ] A secret-bearing cron command (stored scrubbed) still matches its raw log line via `canonical_log_key`.
 - [ ] Deploy: `docker compose up -d` (full or partial, fresh or existing volumes) brings the stack up with Vector authenticating to `/api/internal/cron-events` and rendering `vector.toml` — no manual token step; `config-init` is idempotent and non-destructive.
 - [ ] Vector journald source reads the host journal (host `/etc/machine-id` bind-mounted); cron events POST as a JSON array and return 202.
+
+## STAGE-002-009 (Wrapper helpers — install + host-side executor + crontab-snapshot) regression items
+
+- [D][M] The cron detail page "Install heartbeat wrapper" button: enabled for local crons, disabled with EPIC-017 tooltip for remote crons.
+- [D][M] The InstallHeartbeatModal: opens with a dry-run preview (crontab diff + wrapper script), the modal is width-constrained to the viewport (mobile + desktop) with only the code blocks scrolling horizontally, the confirm checkbox gates the Install button.
+- [ ] Backend: after a host re-runs `host-setup.sh`, the cron-apply executor units + crontab-snapshot units are installed and the old `crontab-acl` units are retired; user crontab files stay `0600` with no ACL (no vixie-cron INSECURE MODE).
+- [ ] Backend: a wrapper install on a local user-crontab cron writes the wrapper script (`/usr/local/bin/cron-with-heartbeat.sh` 0755), the token (`/etc/homelab-monitor/heartbeat.token` 0644), rewrites the crontab line via the host-side executor, sets `wrapper_last_seen_at`, and the host cron daemon runs the wrapped line producing a `/start`+`/ok` heartbeat.
