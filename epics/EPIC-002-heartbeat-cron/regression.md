@@ -156,3 +156,12 @@ When making changes to the cron inventory UI, re-verify:
 - [ ] Rollback on uninstall failure: if the uninstall operation fails partway through (e.g., crontab write fails), the original wrapped crontab line is restored via the executor's snapshot+rollback machinery; no half-reverted state is left behind.
 - [ ] CLI uninstall: `hm cron uninstall-wrapper <fingerprint>` mirrors the UI button with the same dry-run-then-confirm flow; works on the local host only.
 - [ ] Standalone remote CLI uninstall: the `install_wrapper_remote.py` script gains an `--uninstall` mode that scans local crontabs for wrapped lines, lets the user pick one, reverses the wrap (same atomic snapshot+rollback pattern), and restores the original crontab line.
+
+## STAGE-002-010 (vmalert rules — wrapper-health alert + monitoring-health channel) regression items
+
+- [ ] The monitor's `/metrics` endpoint emits the 6 homelab_heartbeat_* metric families per non-hidden, non-soft-deleted cron; a cron that becomes hidden or soft-deleted has its series dropped on the next collector tick (via replace_family atomic swap).
+- [ ] vmalert evaluates `deploy/vmalert/metrics/heartbeats.yaml` rules: HeartbeatStale_Warning/Error/Critical, HeartbeatFailed, HeartbeatFlapping, WrapperPossiblyStale; recording rules homelab:heartbeat_overdue_count, homelab:heartbeat_fail_count, homelab:heartbeat_runtime_p95_seconds, homelab:wrapper_stale_count.
+- [ ] WrapperPossiblyStale carries `routing_channel=monitoring-health` and routes to the monitoring-health-channel Alertmanager receiver, distinct from cron-health.
+- [ ] The full alert loop (monitor `/metrics` → vmagent → VictoriaMetrics → vmalert → Alertmanager → POST `/api/alerts/ingest` → GET `/api/alerts`) delivers alerts with correct routing; Alertmanager webhook URL uses the compose service name `monitor`, not hostname.
+- [ ] The cron-detail API response carries a wrapper_health enum (ok/stale/unknown); the CronDetail wrapper-health badge renders it only when wrapper_installed is true; the heartbeat-state panel labels expected_next_at as "Overdue after".
+- [ ] vmalert-metrics requires `-remoteWrite.url` (base URL, no `/api/v1/write` suffix) for recording rules; both vmalert healthchecks use `/-/healthy` endpoint.

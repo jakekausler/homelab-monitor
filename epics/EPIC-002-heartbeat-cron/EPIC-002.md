@@ -1,6 +1,6 @@
 # EPIC-002: Heartbeat receiver + cron registry + cron auto-discovery
 
-## Status: Not Started
+## Status: Complete
 
 ## Overview
 
@@ -48,10 +48,10 @@ After EPIC-002 is complete, EPIC-003+ can rely on: an authoritative cron registr
 | STAGE-002-008 | B-mode log-scrape — REWORKED to match logs by fingerprint heuristic, runs always (was 004) | Complete |
 | STAGE-002-009 | Wrapper helpers — REWORKED to embed fingerprint at install time, call /register first, "Install heartbeat" UI button local-host only (was 005) | Complete |
 | STAGE-002-009A | Wrapper removal helpers — uninstall wrapper, restore original crontab line; Install/Remove UI toggle | Complete |
-| STAGE-002-010 | vmalert rules — REWORKED to include wrapper-health alert via separate monitoring-health channel (was 006) | Not Started |
+| STAGE-002-010 | vmalert rules — REWORKED to include wrapper-health alert via separate monitoring-health channel (was 006) | Complete |
 
-## Current Stage: STAGE-002-010
-## Current Phase: Design
+## Current Stage: — (EPIC-002 complete — all 12 stages done)
+## Current Phase: — (EPIC-002 complete)
 
 ## Cross-stage acceptance criteria
 
