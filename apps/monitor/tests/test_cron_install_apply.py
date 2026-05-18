@@ -38,6 +38,7 @@ from homelab_monitor.kernel.cron.install import (
     CronLineNotFoundError,
     CrontabWriteError,
     RemoteHostError,
+    WrapperInstallError,
     install_wrapper_local,
 )
 from homelab_monitor.kernel.cron.repository import CronRecord
@@ -83,6 +84,7 @@ def _make_cron_record(  # noqa: PLR0913 -- test factory mirrors every CronRecord
     last_discovered_at: str | None = None,
     soft_deleted_at: str | None = None,
     log_match_key: str | None = None,
+    wrapper_installed: bool = False,
 ) -> CronRecord:
     return CronRecord(
         fingerprint=fingerprint,
@@ -103,6 +105,7 @@ def _make_cron_record(  # noqa: PLR0913 -- test factory mirrors every CronRecord
         last_discovered_at=last_discovered_at,
         soft_deleted_at=soft_deleted_at,
         log_match_key=log_match_key,
+        wrapper_installed=wrapper_installed,
     )
 
 
@@ -717,6 +720,352 @@ async def test_cron_disappears_after_install_raises(tmp_path: Path) -> None:
             secrets_repo=secrets_repo,
             host_root=tmp_path,
             public_url=_PUBLIC_URL,
+            local_hostname=_HOST,
+            who="test",
+            ip=None,
+            log=_null_log(),
+        )
+
+
+# ===========================================================================
+# STAGE-002-009A: build_uninstall_kit + uninstall_wrapper_local tests
+# ===========================================================================
+
+from homelab_monitor.kernel.cron.cron_apply_ipc import (  # noqa: E402
+    UnwrapCrontabOp,
+)
+from homelab_monitor.kernel.cron.install import (  # noqa: E402
+    NotWrappedError,
+    WrapperUninstallKit,
+    build_uninstall_kit,
+    uninstall_wrapper_local,
+)
+
+
+def _make_wrapped_crontab(tmp_path: Path) -> Path:
+    """Write /etc/crontab with a WRAPPED job line."""
+    etc = tmp_path / "etc"
+    etc.mkdir(exist_ok=True)
+    ct = etc / "crontab"
+    wrapped_cmd = WRAPPER_INVOCATION_PREFIX + _COMMAND
+    ct.write_text(f"# header\n{_SCHEDULE} root {wrapped_cmd}\n", encoding="utf-8")
+    return ct
+
+
+def _make_uninstall_cron_repo(
+    cron_record: Any,  # noqa: ANN401
+    updated_record: Any | None = None,  # noqa: ANN401
+) -> Any:  # noqa: ANN401
+    cron_repo = MagicMock()
+    cron_repo.get_cron = AsyncMock(side_effect=[cron_record, updated_record or cron_record])
+    cron_repo.upsert_discovered = AsyncMock(return_value=None)
+    cron_repo.record_wrapper_uninstalled = AsyncMock(return_value=None)
+    return cron_repo
+
+
+def _uninstall_ok_result() -> CronApplyResult:
+    return CronApplyResult(
+        id="test-id", status="ok", error_code=None, message="applied 1 operation"
+    )
+
+
+# ---------------------------------------------------------------------------
+# build_uninstall_kit
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_build_uninstall_kit_dry_run_produces_unwrap_diff(tmp_path: Path) -> None:
+    """build_uninstall_kit on a wrapped line returns WrapperUninstallKit with correct diff."""
+    _make_wrapped_crontab(tmp_path)
+    cron = _make_cron_record()
+
+    kit = await build_uninstall_kit(cron, host_root=tmp_path)
+
+    assert isinstance(kit, WrapperUninstallKit)
+    assert kit.fingerprint == _FINGERPRINT
+    # old_line is the wrapped form
+    assert WRAPPER_INVOCATION_PREFIX in kit.crontab_diff.old_line
+    # new_line is the bare command — wrapper prefix stripped
+    assert WRAPPER_INVOCATION_PREFIX not in kit.crontab_diff.new_line
+    assert _COMMAND in kit.crontab_diff.new_line
+
+
+@pytest.mark.asyncio
+async def test_build_uninstall_kit_raises_not_wrapped_error(tmp_path: Path) -> None:
+    """build_uninstall_kit on a non-wrapped line raises NotWrappedError."""
+    _make_crontab(tmp_path)  # uses the bare (unwrapped) command
+    cron = _make_cron_record()
+
+    with pytest.raises(NotWrappedError):
+        await build_uninstall_kit(cron, host_root=tmp_path)
+
+
+@pytest.mark.asyncio
+async def test_build_uninstall_kit_remote_host_raises(tmp_path: Path) -> None:
+    """build_uninstall_kit on a cron with source_path=None raises WrapperInstallError."""
+    cron = _make_cron_record(source_path=None)
+
+    with pytest.raises(WrapperInstallError):
+        await build_uninstall_kit(cron, host_root=tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# uninstall_wrapper_local
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_uninstall_calls_submit_and_wait_with_one_unwrap_op(tmp_path: Path) -> None:
+    """uninstall_wrapper_local submits exactly 1 UnwrapCrontabOp."""
+    _make_wrapped_crontab(tmp_path)
+    cron = _make_cron_record()
+    cron_repo = _make_uninstall_cron_repo(cron)
+
+    mock_submit = AsyncMock(return_value=_uninstall_ok_result())
+
+    with patch("homelab_monitor.kernel.cron.install.submit_and_wait", mock_submit):
+        await uninstall_wrapper_local(
+            _FINGERPRINT,
+            cron_repo=cron_repo,
+            host_root=tmp_path,
+            local_hostname=_HOST,
+            who="test",
+            ip=None,
+            log=_null_log(),
+        )
+
+    mock_submit.assert_awaited_once()
+    _, kwargs = mock_submit.call_args
+    ops = kwargs["operations"]
+    assert len(ops) == 1
+    assert isinstance(ops[0], UnwrapCrontabOp)
+
+
+@pytest.mark.asyncio
+async def test_uninstall_calls_record_wrapper_uninstalled(tmp_path: Path) -> None:
+    """uninstall_wrapper_local calls record_wrapper_uninstalled with correct args."""
+    _make_wrapped_crontab(tmp_path)
+    cron = _make_cron_record()
+    cron_repo = _make_uninstall_cron_repo(cron)
+
+    with patch(
+        "homelab_monitor.kernel.cron.install.submit_and_wait",
+        AsyncMock(return_value=_uninstall_ok_result()),
+    ):
+        await uninstall_wrapper_local(
+            _FINGERPRINT,
+            cron_repo=cron_repo,
+            host_root=tmp_path,
+            local_hostname=_HOST,
+            who="cli-test",
+            ip="10.0.0.1",
+            log=_null_log(),
+        )
+
+    cron_repo.record_wrapper_uninstalled.assert_awaited_once_with(
+        _FINGERPRINT, who="cli-test", ip="10.0.0.1"
+    )
+
+
+@pytest.mark.asyncio
+async def test_uninstall_remote_host_raises(tmp_path: Path) -> None:
+    """Cron on a different host → RemoteHostError; submit_and_wait NOT called."""
+    _make_wrapped_crontab(tmp_path)
+    cron = _make_cron_record(host="other-host")
+    cron_repo = _make_uninstall_cron_repo(cron)
+
+    mock_submit = AsyncMock(return_value=_uninstall_ok_result())
+
+    with (
+        patch("homelab_monitor.kernel.cron.install.submit_and_wait", mock_submit),
+        pytest.raises(RemoteHostError),
+    ):
+        await uninstall_wrapper_local(
+            _FINGERPRINT,
+            cron_repo=cron_repo,
+            host_root=tmp_path,
+            local_hostname=_HOST,
+            who="test",
+            ip=None,
+            log=_null_log(),
+        )
+
+    mock_submit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_uninstall_executor_unavailable_raises(tmp_path: Path) -> None:
+    """IpcUnavailableError from submit_and_wait → CronApplyUnavailableError."""
+    _make_wrapped_crontab(tmp_path)
+    cron = _make_cron_record()
+    cron_repo = _make_uninstall_cron_repo(cron)
+
+    with (
+        patch(
+            "homelab_monitor.kernel.cron.install.submit_and_wait",
+            AsyncMock(side_effect=IpcUnavailableError("not running")),
+        ),
+        pytest.raises(CronApplyUnavailableError),
+    ):
+        await uninstall_wrapper_local(
+            _FINGERPRINT,
+            cron_repo=cron_repo,
+            host_root=tmp_path,
+            local_hostname=_HOST,
+            who="test",
+            ip=None,
+            log=_null_log(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_uninstall_executor_not_wrapped_translates(tmp_path: Path) -> None:
+    """error_code=not_wrapped from executor → NotWrappedError."""
+    _make_wrapped_crontab(tmp_path)
+    cron = _make_cron_record()
+    cron_repo = _make_uninstall_cron_repo(cron)
+
+    with (
+        patch(
+            "homelab_monitor.kernel.cron.install.submit_and_wait",
+            AsyncMock(side_effect=CronApplyRejectedError("not wrapped", error_code="not_wrapped")),
+        ),
+        pytest.raises(NotWrappedError),
+    ):
+        await uninstall_wrapper_local(
+            _FINGERPRINT,
+            cron_repo=cron_repo,
+            host_root=tmp_path,
+            local_hostname=_HOST,
+            who="test",
+            ip=None,
+            log=_null_log(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_build_uninstall_kit_missing_crontab_file_raises(tmp_path: Path) -> None:
+    """build_uninstall_kit when the crontab file does not exist raises CronLineNotFoundError.
+
+    Covers install.py line 322.
+    """
+    # Do NOT create the crontab file under tmp_path/etc/crontab
+    cron = _make_cron_record()
+
+    with pytest.raises(CronLineNotFoundError, match="crontab file not found"):
+        await build_uninstall_kit(cron, host_root=tmp_path)
+
+
+@pytest.mark.asyncio
+async def test_uninstall_wrapper_local_cron_not_found_raises(tmp_path: Path) -> None:
+    """uninstall_wrapper_local with unknown fingerprint raises CronLineNotFoundError.
+
+    Covers install.py line 501.
+    """
+    cron_repo = MagicMock()
+    cron_repo.get_cron = AsyncMock(return_value=None)
+
+    with pytest.raises(CronLineNotFoundError, match="cron not found"):
+        await uninstall_wrapper_local(
+            _FINGERPRINT,
+            cron_repo=cron_repo,
+            host_root=tmp_path,
+            local_hostname=_HOST,
+            who="test",
+            ip=None,
+            log=_null_log(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_uninstall_executor_rejected_other_code_raises_cron_line_not_found(
+    tmp_path: Path,
+) -> None:
+    """CronApplyRejectedError with error_code other than 'not_wrapped' → CronLineNotFoundError.
+
+    Covers install.py lines 533-535 (bad_path, line_not_found, crontab_missing, bad_request).
+    """
+    _make_wrapped_crontab(tmp_path)
+    cron = _make_cron_record()
+    cron_repo = _make_uninstall_cron_repo(cron)
+
+    with (
+        patch(
+            "homelab_monitor.kernel.cron.install.submit_and_wait",
+            AsyncMock(
+                side_effect=CronApplyRejectedError("line not found", error_code="line_not_found")
+            ),
+        ),
+        pytest.raises(CronLineNotFoundError),
+    ):
+        await uninstall_wrapper_local(
+            _FINGERPRINT,
+            cron_repo=cron_repo,
+            host_root=tmp_path,
+            local_hostname=_HOST,
+            who="test",
+            ip=None,
+            log=_null_log(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_uninstall_executor_generic_exception_raises_crontab_write_error(
+    tmp_path: Path,
+) -> None:
+    """Generic exception from submit_and_wait → CrontabWriteError.
+
+    Covers install.py line 535 (the bare except branch).
+    """
+    _make_wrapped_crontab(tmp_path)
+    cron = _make_cron_record()
+    cron_repo = _make_uninstall_cron_repo(cron)
+
+    with (
+        patch(
+            "homelab_monitor.kernel.cron.install.submit_and_wait",
+            AsyncMock(side_effect=RuntimeError("unexpected network error")),
+        ),
+        pytest.raises(CrontabWriteError, match="IPC error"),
+    ):
+        await uninstall_wrapper_local(
+            _FINGERPRINT,
+            cron_repo=cron_repo,
+            host_root=tmp_path,
+            local_hostname=_HOST,
+            who="test",
+            ip=None,
+            log=_null_log(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_uninstall_cron_disappeared_after_uninstall_raises(tmp_path: Path) -> None:
+    """If cron vanishes from DB after successful uninstall, CrontabWriteError is raised.
+
+    Covers install.py line 552.
+    """
+    _make_wrapped_crontab(tmp_path)
+    cron = _make_cron_record()
+
+    cron_repo = MagicMock()
+    # First call (fetch): returns the cron. Second call (after uninstall): returns None.
+    cron_repo.get_cron = AsyncMock(side_effect=[cron, None])
+    cron_repo.upsert_discovered = AsyncMock(return_value=None)
+    cron_repo.record_wrapper_uninstalled = AsyncMock(return_value=None)
+
+    with (
+        patch(
+            "homelab_monitor.kernel.cron.install.submit_and_wait",
+            AsyncMock(return_value=_uninstall_ok_result()),
+        ),
+        pytest.raises(CrontabWriteError, match="disappeared"),
+    ):
+        await uninstall_wrapper_local(
+            _FINGERPRINT,
+            cron_repo=cron_repo,
+            host_root=tmp_path,
             local_hostname=_HOST,
             who="test",
             ip=None,

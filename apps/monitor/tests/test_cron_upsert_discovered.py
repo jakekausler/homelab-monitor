@@ -18,6 +18,7 @@ async def test_upsert_discovered_insert(repo: SqliteRepository) -> None:
         source_path="/etc/crontab",
         schedule="10 4 * * *",
         command="/opt/backup.sh",
+        is_wrapped=False,
         now=utc_now_iso(),
     )
     assert inserted is True
@@ -38,6 +39,7 @@ async def test_upsert_discovered_second_call_bump_only(repo: SqliteRepository) -
         source_path="/etc/crontab",
         schedule="10 4 * * *",
         command="/opt/backup.sh",
+        is_wrapped=False,
         now=t1,
     )
     row = await repo.fetch_one(
@@ -51,6 +53,7 @@ async def test_upsert_discovered_second_call_bump_only(repo: SqliteRepository) -
         source_path="/etc/crontab",
         schedule="10 4 * * *",
         command="/opt/backup.sh",
+        is_wrapped=False,
         now=t2,
     )
     assert inserted is False
@@ -111,6 +114,7 @@ async def test_upsert_discovered_schedule_canonical_change_writes_audit(
         source_path="/etc/crontab",
         schedule="10 4 * * *",
         command="/opt/backup.sh",
+        is_wrapped=False,
         now=t1,
     )
 
@@ -126,6 +130,7 @@ async def test_upsert_discovered_schedule_canonical_change_writes_audit(
         source_path="/etc/crontab",
         schedule="10 4 * * *",
         command="/opt/backup.sh",
+        is_wrapped=False,
         now=t2,
     )
     monkeypatch.setattr(schedule_mod, "canonicalize_schedule", original_canonicalize)
@@ -162,6 +167,7 @@ async def test_upsert_discovered_cadence_seconds_change_writes_audit(
         source_path="/etc/crontab",
         schedule="10 4 * * *",
         command="/opt/backup.sh",
+        is_wrapped=False,
         now=t1,
     )
 
@@ -176,6 +182,7 @@ async def test_upsert_discovered_cadence_seconds_change_writes_audit(
         source_path="/etc/crontab",
         schedule="10 4 * * *",
         command="/opt/backup.sh",
+        is_wrapped=False,
         now=t2,
     )
     monkeypatch.setattr(schedule_mod, "compute_average_interval_seconds", original_compute)
@@ -210,6 +217,7 @@ async def test_upsert_discovered_command_change_writes_audit(
         source_path="/etc/cron.d/test",
         schedule="* * * * *",
         command="/bin/echo hello",
+        is_wrapped=False,
         now=t1,
     )
 
@@ -225,6 +233,7 @@ async def test_upsert_discovered_command_change_writes_audit(
         source_path="/etc/cron.d/test",
         schedule="* * * * *",
         command="/bin/echo hello",
+        is_wrapped=False,
         now=t2,
     )
 
@@ -258,6 +267,7 @@ async def test_upsert_discovered_name_change_writes_audit(
         source_path="/etc/cron.d/test",
         schedule="* * * * *",
         command="/bin/echo hello",
+        is_wrapped=False,
         now=t1,
     )
 
@@ -270,6 +280,7 @@ async def test_upsert_discovered_name_change_writes_audit(
         source_path="/etc/cron.d/test",
         schedule="* * * * *",
         command="/bin/echo hello",
+        is_wrapped=False,
         now=t2,
     )
 
@@ -308,6 +319,7 @@ async def test_upsert_discovered_log_match_key_change_writes_audit(
         source_path="/etc/cron.d/lmk-test",
         schedule="* * * * *",
         command="/bin/alpha.sh",
+        is_wrapped=False,
         now=t1,
     )
 
@@ -325,6 +337,7 @@ async def test_upsert_discovered_log_match_key_change_writes_audit(
         source_path="/etc/cron.d/lmk-test",
         schedule="* * * * *",
         command="/bin/alpha.sh",
+        is_wrapped=False,
         now=t2,
     )
 

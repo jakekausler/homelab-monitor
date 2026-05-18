@@ -2,7 +2,7 @@ import React, { useState } from 'react'
 import { toast } from 'sonner'
 
 import { ApiError } from '@/api/client'
-import { useInstallWrapper } from '@/api/crons'
+import { useUninstallWrapper, type UninstallWrapperResponse } from '@/api/crons'
 import type { Schema } from '@/api/types'
 import { CrontabLineDiff } from '@/components/crons/CrontabLineDiff'
 import { Button } from '@/components/ui/button'
@@ -17,31 +17,27 @@ import {
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 
-interface InstallHeartbeatModalProps {
+interface RemoveHeartbeatModalProps {
   fingerprint: string
   open: boolean
   onOpenChange: (open: boolean) => void
 }
 
-type InstallResponse = Schema<'InstallWrapperPreview'> | Schema<'InstallWrapperResult'>
-
-function isPreview(data: InstallResponse): data is Schema<'InstallWrapperPreview'> {
-  return 'wrapper_content' in data && 'crontab_diff' in data
+function isPreview(data: UninstallWrapperResponse): data is Schema<'UninstallWrapperPreview'> {
+  return 'crontab_diff' in data
 }
 
-export function InstallHeartbeatModal({
+export function RemoveHeartbeatModal({
   fingerprint,
   open,
   onOpenChange,
-}: InstallHeartbeatModalProps) {
+}: RemoveHeartbeatModalProps) {
   const [isConfirmed, setIsConfirmed] = useState(false)
-  const mutation = useInstallWrapper(fingerprint)
+  const mutation = useUninstallWrapper(fingerprint)
 
-  // Fire dry-run on open
-  const [previewData, setPreviewData] = useState<InstallResponse | null>(null)
+  const [previewData, setPreviewData] = useState<UninstallWrapperResponse | null>(null)
   const [hasLoadedPreview, setHasLoadedPreview] = useState(false)
 
-  // Reset modal state when it opens, so a re-open starts fresh.
   React.useEffect(() => {
     if (open) {
       // eslint-disable-next-line react-hooks/set-state-in-effect, @eslint-react/set-state-in-effect
@@ -62,25 +58,23 @@ export function InstallHeartbeatModal({
           setHasLoadedPreview(true)
         })
         .catch(() => {
-          // Mark the preview load as attempted so the effect does not loop.
-          // The mutation's own error state drives the visible error message.
           setHasLoadedPreview(true)
         })
     }
   }, [open, hasLoadedPreview, previewData, mutation])
 
-  const handleInstall = async () => {
+  const handleRemove = async () => {
     try {
       await mutation.mutateAsync({ confirm: true })
-      toast.success('Heartbeat wrapper installed')
+      toast.success('Heartbeat wrapper removed')
       onOpenChange(false)
     } catch (err) {
-      const msg = err instanceof ApiError ? err.message : 'Install failed'
+      const msg = err instanceof ApiError ? err.message : 'Remove failed'
       if (err instanceof ApiError) {
         if (err.status === 409) {
-          toast.error('Line not found or already wrapped')
+          toast.error('Line not found or not wrapped')
         } else if (err.status === 400) {
-          toast.error('Cannot install on remote host')
+          toast.error('Cannot remove on remote host')
         } else {
           toast.error(msg)
         }
@@ -98,9 +92,10 @@ export function InstallHeartbeatModal({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[90vh] w-[95vw] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>Install heartbeat wrapper</DialogTitle>
+          <DialogTitle>Remove heartbeat wrapper</DialogTitle>
           <DialogDescription>
-            Replace ad-hoc heartbeats with a managed wrapper script on the host.
+            Strip the managed wrapper from this cron's crontab line. The shared wrapper script and
+            token file are left in place.
           </DialogDescription>
         </DialogHeader>
 
@@ -114,7 +109,7 @@ export function InstallHeartbeatModal({
             >
               {error instanceof ApiError
                 ? error.message
-                : 'Failed to load the install preview. Please try again.'}
+                : 'Failed to load the removal preview. Please try again.'}
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => onOpenChange(false)}>
@@ -126,7 +121,6 @@ export function InstallHeartbeatModal({
 
         {previewData && isPreview(previewData) && (
           <div className="min-w-0 space-y-4">
-            {/* Error banner if present */}
             {error && (
               <div
                 role="alert"
@@ -136,45 +130,35 @@ export function InstallHeartbeatModal({
               </div>
             )}
 
-            {/* Crontab diff */}
             <CrontabLineDiff
               sourcePath={previewData.crontab_diff.source_path}
               oldLine={previewData.crontab_diff.old_line}
               newLine={previewData.crontab_diff.new_line}
             />
 
-            {/* Wrapper script preview */}
-            <div className="min-w-0">
-              <h3 className="mb-2 text-sm font-medium">Wrapper script</h3>
-              <pre className="max-h-48 min-w-0 max-w-full overflow-auto rounded-md bg-muted p-3 text-xs">
-                <code>{previewData.wrapper_content}</code>
-              </pre>
-            </div>
-
-            {/* Confirmation checkbox */}
             <div className="flex items-center gap-2">
               <Input
-                id="confirm-wrapper"
+                id="confirm-unwrap"
                 type="checkbox"
                 checked={isConfirmed}
                 onChange={(e) => setIsConfirmed(e.currentTarget.checked)}
                 className="h-4 w-4"
               />
-              <Label htmlFor="confirm-wrapper" className="text-sm text-muted-foreground">
+              <Label htmlFor="confirm-unwrap" className="text-sm text-muted-foreground">
                 I understand this will modify my crontab on the host.
               </Label>
             </div>
 
-            {/* Action buttons */}
             <DialogFooter className="gap-2 sm:gap-0">
               <Button variant="outline" onClick={() => onOpenChange(false)}>
                 Cancel
               </Button>
               <Button
-                onClick={() => void handleInstall()}
+                variant="destructive"
+                onClick={() => void handleRemove()}
                 disabled={!isConfirmed || mutation.isPending}
               >
-                {isConfirmLoading ? 'Installing…' : 'Install'}
+                {isConfirmLoading ? 'Removing…' : 'Remove'}
               </Button>
             </DialogFooter>
           </div>

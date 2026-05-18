@@ -27,9 +27,12 @@ RestrictSUIDSGID=yes
 # ProtectSystem=strict makes the WHOLE filesystem (incl. /etc, /usr) read-only.
 # The executor MUST be able to write: the crontab spool, /etc/crontab,
 # /etc/cron.d, the wrapper script under /usr/local/bin, the token under
-# /etc/homelab-monitor, and the IPC dir — list every writable path here.
+# /etc/homelab-monitor, the IPC dir, and the world-readable crontab snapshot
+# dir (refresh_user_snapshot writes it inline after a wrap/unwrap so the
+# dry-run gate sees fresh state without waiting for the 300s snapshot timer —
+# STAGE-002-009A) — list every writable path here.
 # /etc/crontab is a FILE; naming it (and the dirs) in ReadWritePaths is
 # correct and sufficient. /etc/homelab-monitor may not yet exist — naming a
 # not-yet-existing path in ReadWritePaths is permitted (systemd creates the
 # mount point); the executor's `mkdir -p` then creates the real directory.
-ReadWritePaths=/var/spool/cron/crontabs /etc/crontab /etc/cron.d /etc/homelab-monitor /usr/local/bin /var/lib/homelab-monitor/cron-apply
+ReadWritePaths=/var/spool/cron/crontabs /etc/crontab /etc/cron.d /etc/homelab-monitor /usr/local/bin /var/lib/homelab-monitor/cron-apply /var/lib/homelab-monitor/crontab-snapshot

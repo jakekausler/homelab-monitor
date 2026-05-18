@@ -22,6 +22,7 @@ from typing import Literal
 from structlog.stdlib import BoundLogger
 
 from homelab_monitor.kernel.cron.cron_apply_constants import (
+    OP_UNWRAP_CRONTAB,
     OP_WRAP_CRONTAB,
     OP_WRITE_TOKEN,
     OP_WRITE_WRAPPER_SCRIPT,
@@ -66,6 +67,30 @@ class WrapCrontabOp:
 
 
 @dataclass(frozen=True, slots=True)
+class UnwrapCrontabOp:
+    """An unwrap-crontab operation: strip the wrapper prefix from a crontab line.
+
+    Mirror of WrapCrontabOp but with NO `command` field — the executor
+    re-derives new_line by STRIPPING the wrapper prefix from old_line (the
+    security property). The supplied `new_line` is only a cross-check — the
+    executor rejects the request (bad_request) if its re-derived line disagrees.
+    The executor REFUSES if old_line is NOT wrapped (error_code "not_wrapped").
+    """
+
+    target_crontab: str
+    old_line: str
+    new_line: str
+
+    def to_payload(self) -> dict[str, object]:
+        return {
+            "operation": OP_UNWRAP_CRONTAB,
+            "target_crontab": self.target_crontab,
+            "old_line": self.old_line,
+            "new_line": self.new_line,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class WriteWrapperScriptOp:
     """A write-wrapper-script operation: the executor writes a FIXED path."""
 
@@ -85,7 +110,7 @@ class WriteTokenOp:
         return {"operation": OP_WRITE_TOKEN, "content": self.content}
 
 
-CronApplyOp = WrapCrontabOp | WriteWrapperScriptOp | WriteTokenOp
+CronApplyOp = WrapCrontabOp | UnwrapCrontabOp | WriteWrapperScriptOp | WriteTokenOp
 
 
 class CronApplyError(Exception):
@@ -148,7 +173,9 @@ async def submit_and_wait(
 
     # Defensive pre-check: never submit a syntactically invalid crontab target.
     for op in operations:
-        if isinstance(op, WrapCrontabOp) and not is_valid_target_crontab(op.target_crontab):
+        if isinstance(op, (WrapCrontabOp, UnwrapCrontabOp)) and not is_valid_target_crontab(
+            op.target_crontab
+        ):
             raise CronApplyRejectedError(
                 f"invalid target_crontab: {op.target_crontab!r}",
                 error_code="bad_path",
@@ -251,6 +278,7 @@ __all__ = [
     "CronApplyRejectedError",
     "CronApplyResult",
     "CronApplyUnavailableError",
+    "UnwrapCrontabOp",
     "WrapCrontabOp",
     "WriteTokenOp",
     "WriteWrapperScriptOp",

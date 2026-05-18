@@ -1531,3 +1531,257 @@ def test_token_file_written_0644(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     assert fake_token.exists()
     token_mode = stat.S_IMODE(fake_token.stat().st_mode)
     assert token_mode == 0o644  # noqa: PLR2004
+
+
+# ===========================================================================
+# STAGE-002-009A: _run_uninstall tests
+# ===========================================================================
+
+from homelab_monitor.cli.install_wrapper_remote import (  # noqa: E402
+    _run_uninstall,  # pyright: ignore[reportPrivateUsage]
+    unwrap_command,
+)
+
+_WRAPPER_PREFIX = iwr.WRAPPER_INVOCATION_PREFIX
+
+
+# ---------------------------------------------------------------------------
+# unwrap_command module-level helper
+# ---------------------------------------------------------------------------
+
+
+def test_unwrap_command_strips_prefix() -> None:
+    """unwrap_command strips the wrapper prefix and returns the bare command."""
+    bare = "/usr/bin/myjob.sh --arg"
+    wrapped = _WRAPPER_PREFIX + bare
+    assert unwrap_command(wrapped) == bare
+
+
+def test_unwrap_command_passthrough_when_not_wrapped() -> None:
+    """unwrap_command is a no-op when the command has no wrapper prefix."""
+    bare = "/usr/bin/other.sh"
+    assert unwrap_command(bare) == bare
+
+
+# ---------------------------------------------------------------------------
+# _run_uninstall dry-run
+# ---------------------------------------------------------------------------
+
+
+def test_run_uninstall_dry_run_prints_diff(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """--uninstall dry-run prints the old→new crontab diff; returns 0."""
+    ct = tmp_path / "crontab"
+    bare_cmd = "/usr/bin/cleanup.sh"
+    schedule = "0 3 * * *"
+    old_line = f"{schedule} {_WRAPPER_PREFIX}{bare_cmd}"
+    ct.write_text(old_line + "\n", encoding="utf-8")
+
+    rc = _run_uninstall(
+        monitor_url="http://monitor.example.com",
+        token="tok",
+        host="testhost",
+        crontab_spec="/etc/crontab",
+        crontab_file=ct,
+        crontab_content=ct.read_text(encoding="utf-8"),
+        line_index=0,
+        old_line=old_line,
+        schedule=schedule,
+        command=f"{_WRAPPER_PREFIX}{bare_cmd}",  # the full wrapped command
+        confirm=False,
+    )
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "Crontab diff" in out
+    assert old_line in out
+    # Crontab unchanged
+    assert ct.read_text(encoding="utf-8") == old_line + "\n"
+
+
+def test_run_uninstall_non_wrapped_line_returns_error(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """--uninstall on a non-wrapped line prints an error and returns 1."""
+    ct = tmp_path / "crontab"
+    bare_cmd = "/usr/bin/task.sh"
+    schedule = "*/5 * * * *"
+    old_line = f"{schedule} {bare_cmd}"  # NOT wrapped
+    ct.write_text(old_line + "\n", encoding="utf-8")
+
+    rc = _run_uninstall(
+        monitor_url="http://monitor.example.com",
+        token="tok",
+        host="testhost",
+        crontab_spec="/etc/crontab",
+        crontab_file=ct,
+        crontab_content=ct.read_text(encoding="utf-8"),
+        line_index=0,
+        old_line=old_line,
+        schedule=schedule,
+        command=bare_cmd,
+        confirm=False,
+    )
+
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "not wrapped" in err.lower()
+
+
+# ---------------------------------------------------------------------------
+# _run_uninstall confirm (actual rewrite)
+# ---------------------------------------------------------------------------
+
+
+def test_run_uninstall_confirm_rewrites_crontab(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """--uninstall confirm rewrites the crontab to the bare command."""
+    ct = tmp_path / "crontab"
+    bare_cmd = "/usr/bin/myjob.sh"
+    schedule = "*/10 * * * *"
+    old_line = f"{schedule} {_WRAPPER_PREFIX}{bare_cmd}"
+    ct.write_text(old_line + "\n", encoding="utf-8")
+
+    mock_resp = MagicMock()
+
+    def _mock_enter(s: MagicMock) -> MagicMock:
+        return s
+
+    mock_resp.__enter__ = _mock_enter
+    mock_resp.__exit__ = MagicMock(return_value=False)
+    mock_resp.status = 200
+
+    with patch("homelab_monitor.cli.install_wrapper_remote.urlopen", return_value=mock_resp):
+        rc = _run_uninstall(
+            monitor_url="http://monitor.example.com",
+            token="tok",
+            host="testhost",
+            crontab_spec="/etc/crontab",
+            crontab_file=ct,
+            crontab_content=ct.read_text(encoding="utf-8"),
+            line_index=0,
+            old_line=old_line,
+            schedule=schedule,
+            command=f"{_WRAPPER_PREFIX}{bare_cmd}",
+            confirm=True,
+        )
+
+    assert rc == 0
+    new_content = ct.read_text(encoding="utf-8")
+    assert _WRAPPER_PREFIX not in new_content
+    assert bare_cmd in new_content
+
+
+def test_run_uninstall_confirm_rollback_on_write_failure(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """--uninstall confirm with write failure → rollback restores original content."""
+    ct = tmp_path / "crontab"
+    bare_cmd = "/usr/bin/job.sh"
+    schedule = "0 2 * * *"
+    old_line = f"{schedule} {_WRAPPER_PREFIX}{bare_cmd}"
+    original_content = old_line + "\n"
+    ct.write_text(original_content, encoding="utf-8")
+
+    with patch(
+        "homelab_monitor.cli.install_wrapper_remote._atomic_write_text",
+        side_effect=OSError("disk full"),
+    ):
+        rc = _run_uninstall(
+            monitor_url="http://monitor.example.com",
+            token="tok",
+            host="testhost",
+            crontab_spec="/etc/crontab",
+            crontab_file=ct,
+            crontab_content=original_content,
+            line_index=0,
+            old_line=old_line,
+            schedule=schedule,
+            command=f"{_WRAPPER_PREFIX}{bare_cmd}",
+            confirm=True,
+        )
+
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "ERROR" in err
+
+
+def test_run_uninstall_confirm_no_trailing_newline(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """_run_uninstall confirm on crontab WITHOUT trailing newline does not append one.
+
+    Covers install_wrapper_remote.py line 400->402 False branch.
+    """
+    ct = tmp_path / "crontab_no_nl"
+    bare_cmd = "/usr/bin/job2.sh"
+    schedule = "*/30 * * * *"
+    old_line = f"{schedule} {_WRAPPER_PREFIX}{bare_cmd}"
+    # Content WITHOUT trailing newline
+    original_content = old_line  # no "\n"
+    ct.write_text(original_content, encoding="utf-8")
+
+    mock_resp = MagicMock()
+    mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+    mock_resp.__exit__ = MagicMock(return_value=False)
+    mock_resp.status = 200
+
+    with patch("homelab_monitor.cli.install_wrapper_remote.urlopen", return_value=mock_resp):
+        rc = _run_uninstall(
+            monitor_url="http://monitor.example.com",
+            token="tok",
+            host="testhost",
+            crontab_spec="/etc/crontab",
+            crontab_file=ct,
+            crontab_content=original_content,
+            line_index=0,
+            old_line=old_line,
+            schedule=schedule,
+            command=f"{_WRAPPER_PREFIX}{bare_cmd}",
+            confirm=True,
+        )
+
+    assert rc == 0
+    new_content = ct.read_text(encoding="utf-8")
+    # No trailing newline added
+    assert not new_content.endswith("\n")
+    assert _WRAPPER_PREFIX not in new_content
+    assert bare_cmd in new_content
+
+
+def test_main_uninstall_flag_routes_to_run_uninstall(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """main() with --uninstall routes to _run_uninstall (dry-run).
+
+    Covers install_wrapper_remote.py line 485 (if args.uninstall: branch).
+    """
+    bare_cmd = "/usr/bin/cleanup.sh"
+    schedule = "0 3 * * *"
+    old_line = f"{schedule} {_WRAPPER_PREFIX}{bare_cmd}"
+    ct = tmp_path / "test.crontab"
+    ct.write_text(old_line + "\n", encoding="utf-8")
+
+    argv = [
+        "--monitor-url",
+        "http://monitor.example.com",
+        "--token",
+        "tok",
+        "--host",
+        "testhost",
+        "--crontab",
+        str(ct),
+        "--line",
+        "1",
+        "--uninstall",
+        # no --confirm → dry-run
+    ]
+    with patch("sys.argv", ["prog", *argv]):
+        rc = main()
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "Crontab diff" in out
+    assert old_line in out

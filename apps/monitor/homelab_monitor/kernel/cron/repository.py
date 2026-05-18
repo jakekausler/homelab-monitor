@@ -74,6 +74,7 @@ def _cron_to_audit_after(record: CronRecord) -> dict[str, Any]:
         "last_discovered_at": record.last_discovered_at,
         "soft_deleted_at": record.soft_deleted_at,
         "log_match_key": record.log_match_key,
+        "wrapper_installed": record.wrapper_installed,
     }
 
 
@@ -104,6 +105,7 @@ class CronRecord:
     last_discovered_at: str | None
     soft_deleted_at: str | None
     log_match_key: str | None
+    wrapper_installed: bool
 
 
 @dataclass(slots=True, frozen=True)
@@ -174,6 +176,7 @@ def _row_to_cron(row: Row[Any]) -> CronRecord:
         ),
         soft_deleted_at=(None if row.soft_deleted_at is None else str(row.soft_deleted_at)),
         log_match_key=(None if row.log_match_key is None else str(row.log_match_key)),
+        wrapper_installed=bool(row.wrapper_installed),
     )
 
 
@@ -206,7 +209,7 @@ _CRON_COLS = (
     "fingerprint, name, host, command, schedule, schedule_canonical, "
     "cadence_seconds, expected_grace_seconds, enabled, last_seen_state, "
     "created_at, updated_at, hidden_at, source_path, wrapper_last_seen_at, "
-    "last_discovered_at, soft_deleted_at, log_match_key"
+    "last_discovered_at, soft_deleted_at, log_match_key, wrapper_installed"
 )
 
 _SELECT_BY_FINGERPRINT_SQL = text(
@@ -218,17 +221,22 @@ _INSERT_CRON_SQL = text(
     "  fingerprint, name, host, command, schedule, schedule_canonical, "
     "  cadence_seconds, expected_grace_seconds, enabled, last_seen_state, "
     "  created_at, updated_at, hidden_at, source_path, wrapper_last_seen_at, "
-    "  last_discovered_at, soft_deleted_at, log_match_key"
+    "  last_discovered_at, soft_deleted_at, log_match_key, wrapper_installed"
     ") VALUES ("
     "  :fingerprint, :name, :host, :command, :schedule, :schedule_canonical, "
     "  :cadence_seconds, :expected_grace_seconds, :enabled, :last_seen_state, "
     "  :created_at, :updated_at, :hidden_at, :source_path, :wrapper_last_seen_at, "
-    "  :last_discovered_at, :soft_deleted_at, :log_match_key"
+    "  :last_discovered_at, :soft_deleted_at, :log_match_key, :wrapper_installed"
     ")"
 )
 
 _UPDATE_WRAPPER_LAST_SEEN_SQL = text(
     "UPDATE crons SET wrapper_last_seen_at = :wlsa, updated_at = :now "
+    "WHERE fingerprint = :fingerprint"
+)
+
+_CLEAR_WRAPPER_LAST_SEEN_SQL = text(
+    "UPDATE crons SET wrapper_last_seen_at = NULL, updated_at = :now "
     "WHERE fingerprint = :fingerprint"
 )
 
@@ -610,6 +618,12 @@ class CronRepo:
                     "last_discovered_at": None,
                     "soft_deleted_at": None,
                     "log_match_key": _log_match_key_or_none(payload.command),
+                    # Seed wrapper_installed from the heartbeat client's wrapper flag — a
+                    # best-effort initial guess for a cron that registers via the wrapper
+                    # before discovery's first scan. Discovery (upsert_discovered) re-derives
+                    # this from the actual crontab line on the next tick and is the
+                    # authoritative owner.
+                    "wrapper_installed": 1 if payload.wrapper else 0,
                 }
                 await conn.execute(_INSERT_CRON_SQL, new_record_params)
 
@@ -678,6 +692,9 @@ class CronRepo:
                 return existing, False
 
             # wrapper=True on existing row → refresh wrapper_last_seen_at.
+            # wrapper_installed is intentionally NOT updated here — it reflects the on-disk
+            # crontab state (owned by discovery/install/uninstall); /register only refreshes
+            # the heartbeat-liveness signal.
             prev_ts = existing.wrapper_last_seen_at
             await conn.execute(
                 _UPDATE_WRAPPER_LAST_SEEN_SQL,
@@ -735,13 +752,62 @@ class CronRepo:
                 when=now,
             )
 
-    async def upsert_discovered(  # noqa: PLR0915
+    async def record_wrapper_uninstalled(
+        self,
+        fingerprint: str,
+        *,
+        who: str,
+        ip: str | None,
+    ) -> None:
+        """Write a crons.wrapper_uninstalled audit row AND clear wrapper_last_seen_at.
+
+        Used by the uninstall endpoint after a successful wrapper removal.
+
+        Unlike record_wrapper_installed (which does NOT touch the column — a real
+        heartbeat populates it), uninstall MUST clear wrapper_last_seen_at to NULL
+        directly (D3): once the crontab line is unwrapped, no heartbeat will ever
+        arrive to clear it naturally, so a stale non-null value would falsely
+        report a healthy wrapper. The column-clear and the audit row are written
+        in ONE transaction (audit-log atomicity discipline).
+        """
+        from homelab_monitor.kernel.cron.wrapper_constants import WRAPPER_PATH  # noqa: PLC0415
+
+        now = utc_now_iso()
+        async with self._db.transaction() as conn:
+            # Read the prior value so the audit `before` is accurate.
+            existing_row = (
+                await conn.execute(_SELECT_BY_FINGERPRINT_SQL, {"fingerprint": fingerprint})
+            ).first()
+            prev_wlsa = None if existing_row is None else existing_row.wrapper_last_seen_at
+            await conn.execute(
+                _CLEAR_WRAPPER_LAST_SEEN_SQL,
+                {"now": now, "fingerprint": fingerprint},
+            )
+            await insert_audit(
+                conn,
+                who=who,
+                what="crons.wrapper_uninstalled",
+                before={
+                    "fingerprint": fingerprint,
+                    "wrapper_path": WRAPPER_PATH,
+                    "wrapper_last_seen_at": prev_wlsa,
+                },
+                after={
+                    "fingerprint": fingerprint,
+                    "wrapper_last_seen_at": None,
+                },
+                ip=ip,
+                when=now,
+            )
+
+    async def upsert_discovered(  # noqa: PLR0915, PLR0913
         self,
         *,
         host: str,
         source_path: str,
         schedule: str,
         command: str,
+        is_wrapped: bool,
         now: str,
     ) -> tuple[CronRecord, bool, bool]:
         """Upsert a discovered cron row.
@@ -811,6 +877,7 @@ class CronRepo:
                     "last_discovered_at": now,
                     "soft_deleted_at": None,
                     "log_match_key": _log_match_key_or_none(command),
+                    "wrapper_installed": 1 if is_wrapped else 0,
                 }
                 await conn.execute(_INSERT_CRON_SQL, params)
                 inserted_row = (
@@ -876,6 +943,11 @@ class CronRepo:
                 diff_before["log_match_key"] = existing.log_match_key
                 diff_after["log_match_key"] = new_log_match_key
                 updates["log_match_key"] = new_log_match_key
+
+            if existing.wrapper_installed != is_wrapped:
+                diff_before["wrapper_installed"] = existing.wrapper_installed
+                diff_after["wrapper_installed"] = is_wrapped
+                updates["wrapper_installed"] = 1 if is_wrapped else 0
 
             # ALWAYS bump last_discovered_at + updated_at on the existing row.
             updates["last_discovered_at"] = now

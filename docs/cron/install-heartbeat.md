@@ -1,6 +1,6 @@
 # Installing the cron heartbeat wrapper (local host)
 
-> Last updated: 2026-05-18 (STAGE-002-009 — host-side-executor wrapper install)
+> Last updated: 2026-05-18 (STAGE-002-009A — host-side-executor wrapper install + removal)
 
 ## Overview
 
@@ -228,6 +228,20 @@ succeeded.
    records a `crons.wrapper_installed` audit row. The wrapper is now active;
    the next cron execution POSTs heartbeats.
 
+### Wrapper state (`wrapper_installed`)
+
+Each cron carries a `wrapper_installed` boolean field. It is **derived state**
+— discovery sets it from the actual crontab line's wrapped/unwrapped form on
+every scan, so it reflects on-disk reality, not an operator intent flag. The
+Actions-panel Install/Remove toggle keys directly on this field: `false` shows
+"Install heartbeat wrapper", `true` shows "Remove heartbeat wrapper".
+
+Because `wrapper_installed` is discovery-derived, it converges within seconds
+of a restart — the monitor runs a one-shot cron-discovery pass on startup — and
+within one discovery cycle (default 300s) of any crontab edit. The executor's
+inline snapshot refresh (see "Removing the heartbeat wrapper" below) also keeps
+the install/uninstall dry-run gate consistent immediately after a wrap/unwrap.
+
 ### CLI path
 
 The same install is available without the UI via
@@ -252,21 +266,136 @@ goes through the **same** host-side executor and IPC path as the UI button.
 The executor takes a crontab snapshot and rolls back automatically on any
 install failure — a failed install leaves the host byte-for-byte unchanged.
 
-To remove a *successfully installed* wrapper, edit the crontab line back to its
-original (unwrapped) form. The next discovery scan re-fingerprints the
-unwrapped line; because the discoverer unwraps a wrapped command before
-fingerprinting (see `docs/architecture/cron-identity.md`), the fingerprint is
-stable and the same registry row is retained.
+To remove a *successfully installed* wrapper, use the managed removal flow —
+see "Removing the heartbeat wrapper" below. The monitor's UI toggle and the
+`hm cron uninstall-wrapper` CLI both route the un-wrap through the same
+host-side executor, with the same snapshot + rollback guarantee. Hand-editing
+the crontab line still works (the next discovery scan re-converges the row),
+but the managed flow gives you a dry-run preview and an audit trail.
 
-```bash
-# On the host, as the crontab's owner:
-crontab -e        # for a user crontab
-# or edit /etc/crontab / the /etc/cron.d/ file directly as root
-# Delete the "/usr/local/bin/cron-with-heartbeat.sh -- " prefix; save.
+---
+
+## Removing the heartbeat wrapper
+
+Removal (uninstall) is the exact inverse of install. It reverts a wrapped
+crontab line —
+
+```
+<schedule> /usr/local/bin/cron-with-heartbeat.sh -- <original command>
 ```
 
-The wrapper script and token file are shared across all wrapped crons — leave
-them in place even after un-wrapping one cron.
+— back to its original, byte-exact form:
+
+```
+<schedule> <original command>
+```
+
+Removal is a **pure crontab-line edit**. It strips exactly the
+`/usr/local/bin/cron-with-heartbeat.sh -- ` prefix and writes nothing else.
+
+### What removal does NOT touch
+
+The shared wrapper script `/usr/local/bin/cron-with-heartbeat.sh` and the
+shared token file `/etc/homelab-monitor/heartbeat.token` are **never deleted**
+by a per-cron uninstall. Both are shared across every wrapped cron on the host
+— another wrapped cron may still reference them. A per-cron removal is keyed to
+the *operations list*: install submits three operations (write-wrapper-script,
+write-token, wrap-crontab); uninstall submits exactly **one** (`unwrap-crontab`).
+
+### Fingerprint is unchanged across install → uninstall
+
+Wrapping a crontab line changes its on-disk `command`, and un-wrapping changes
+it back. Neither changes the cron's identity. Both the discovery parser and the
+installer's line matcher strip the wrapper prefix before computing the
+fingerprint (see `docs/architecture/cron-identity.md`), so the fingerprint —
+and therefore the registry row — is **stable across install → uninstall →
+re-install**. The same registry row is retained throughout.
+
+### Removal flow (UI)
+
+The cron detail page's **Actions** panel carries a single Install/Remove
+**toggle** for the heartbeat wrapper. The toggle keys on the cron's
+`wrapper_installed` field (see "Wrapper state" below):
+
+- When no wrapper is installed, the button reads **Install heartbeat wrapper**
+  and opens the install modal.
+- When a wrapper *is* installed, the button reads **Remove heartbeat wrapper**
+  (styled destructive) and opens the **RemoveHeartbeatModal**.
+
+The RemoveHeartbeatModal mirrors the install modal:
+
+1. **Dry-run preview**: opening the modal POSTs to
+   `/api/crons/{fingerprint}/uninstall-wrapper` with `confirm: false`. The
+   backend calls `build_uninstall_kit` — it reads the source crontab, finds the
+   line whose fingerprint matches, confirms the line *is* wrapped, and returns
+   the un-wrap crontab diff (`old_line` = the wrapped line, `new_line` = the
+   reverted line). Nothing is written to disk. The dry-run response carries
+   **only** the crontab diff — no wrapper-script content, no token (uninstall
+   builds neither).
+2. **Confirm**: tick the "I understand this will modify my crontab on the host"
+   checkbox, then click **Remove**. The modal re-POSTs the same endpoint with
+   `confirm: true`. The backend builds a 1-operation request (`unwrap-crontab`)
+   and routes it through the host-side cron-apply executor exactly as install
+   does.
+
+Remote crons show the toggle disabled with an EPIC-017 tooltip ("Remote-host
+removal ships in EPIC-017"). Uninstall, like install, only works for crons on
+the monitor's own host.
+
+### Removal flow (CLI)
+
+The same uninstall is available without the UI via
+`hm cron uninstall-wrapper <fingerprint>`:
+
+```bash
+# Dry-run preview (no changes — prints the un-wrap crontab diff):
+make uv ARGS="--directory apps/monitor hm cron uninstall-wrapper <fingerprint>"
+
+# Actually remove:
+make uv ARGS="--directory apps/monitor hm cron uninstall-wrapper <fingerprint> --confirm"
+```
+
+The CLI goes through the **same** host-side executor and IPC path as the UI
+toggle. Unlike `install-wrapper`, `uninstall-wrapper` does **not** require
+`HOMELAB_MONITOR_PUBLIC_URL` — uninstall builds no wrapper content, so the
+callback URL is irrelevant.
+
+### Host-side executor: the `unwrap-crontab` operation
+
+The cron-apply executor (`hm-cron-apply`) gained an `unwrap-crontab` operation
+— the inverse of `wrap-crontab`. Like every executor operation it is narrowly
+validated:
+
+- The target crontab string is checked against the same allow-list as
+  `wrap-crontab` (`/etc/crontab`, `/etc/cron.d/<name>`, `crontab:<user>`).
+- The request's `old_line` MUST exist **verbatim** in the target file.
+- The executor **re-derives** the reverted line itself by stripping the wrapper
+  prefix from `old_line`. The `new_line` the monitor supplies is only a
+  cross-check — a mismatch rejects the request.
+- `unwrap-crontab` **refuses a line that is not wrapped** (the inverse of
+  `wrap-crontab` refusing an already-wrapped line). Attempting to uninstall a
+  non-wrapped cron returns HTTP **409** (`NotWrappedError`).
+
+The executor snapshots the crontab before the write and rolls back on any
+failure — a failed uninstall leaves the host byte-for-byte unchanged. After a
+successful wrap or unwrap, the executor also **refreshes the world-readable
+crontab snapshot inline**, so the next install/uninstall dry-run gate sees the
+freshly-rewritten state immediately instead of waiting up to 300 seconds for
+the snapshot timer.
+
+### After removal
+
+On a successful uninstall the backend:
+
+- re-runs discovery's upsert so the registry row reflects the now-unwrapped
+  line;
+- writes a `crons.wrapper_uninstalled` audit row;
+- clears `wrapper_last_seen_at` back to NULL — once the line is unwrapped no
+  heartbeat will ever arrive to clear it, so a stale value would falsely report
+  a healthy wrapper.
+
+The wrapper stops posting heartbeats on the cron's next run. The cron itself
+continues to run unchanged.
 
 ---
 
@@ -315,6 +444,17 @@ discover-now button) and retry against the new row.
 
 **Cause:** the line already begins with the wrapper prefix. The cron is
 already wrapped — no action needed.
+
+### "crontab line is not wrapped" (HTTP 409)
+
+**Symptom:** removal (Remove heartbeat wrapper, or `hm cron uninstall-wrapper`)
+fails with 409 / `NotWrappedError`.
+
+**Cause:** the crontab line does not contain the wrapper prefix — there is no
+wrapper to remove. This can happen if the line was hand-edited back to its
+unwrapped form, or if discovery has not yet caught up after such an edit.
+Trigger a fresh discovery scan and confirm the cron's `wrapper_installed` state
+before retrying.
 
 ### Cron is wrapped but no heartbeats arrive
 

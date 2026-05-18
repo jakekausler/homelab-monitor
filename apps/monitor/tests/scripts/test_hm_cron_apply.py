@@ -1012,3 +1012,401 @@ def test_temp_sweep_removes_stale_hmtmp_files(tmp_path: Path) -> None:
 
     # The stale hmtmp file must be gone
     assert not stale_hmtmp.exists(), f"stale hmtmp file was not cleaned up: {stale_hmtmp}"
+
+
+# ---------------------------------------------------------------------------
+# STAGE-002-009A: unwrap-crontab operation
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.slow
+def test_unwrap_user_crontab(tmp_path: Path) -> None:
+    """Single unwrap-crontab op on a wrapped user crontab → status=ok, line reverted byte-exact."""
+    ipc, req, res = _make_ipc(tmp_path)
+    root = _make_root(tmp_path)
+
+    spool = root / "var" / "spool" / "cron" / "crontabs"
+    ct = spool / "alice"
+    # The line in its wrapped form
+    bare_cmd = "/usr/bin/task.sh --arg"
+    schedule = "*/10 * * * *"
+    old_line = f"{schedule} {_WRAPPER_PREFIX}{bare_cmd}"
+    # The expected new_line after unwrap: schedule + bare command
+    expected_new_line = f"{schedule} {bare_cmd}"
+    ct.write_text(old_line + "\n", encoding="utf-8")
+    ct.chmod(0o600)
+
+    req_id = _write_request(
+        req,
+        [
+            {
+                "operation": "unwrap-crontab",
+                "target_crontab": "crontab:alice",
+                "old_line": old_line,
+                "new_line": expected_new_line,
+            }
+        ],
+    )
+
+    _run_script(ipc, root)
+
+    result = _read_result(res, req_id)
+    assert result["status"] == "ok", result
+    new_content = ct.read_text(encoding="utf-8")
+    # Wrapper prefix must be gone
+    assert _WRAPPER_PREFIX not in new_content
+    # The bare command must be present
+    assert bare_cmd in new_content
+    # Byte-exact match of the expected new line
+    assert expected_new_line in new_content
+    # Mode preserved
+    assert oct(ct.stat().st_mode & 0o777) == oct(0o600)
+
+
+@pytest.mark.slow
+def test_unwrap_not_wrapped_line_returns_not_wrapped_error(tmp_path: Path) -> None:
+    """unwrap-crontab on a NOT-wrapped line → error_code 'not_wrapped', crontab unchanged."""
+    ipc, req, res = _make_ipc(tmp_path)
+    root = _make_root(tmp_path)
+
+    etc_ct = root / "etc" / "crontab"
+    old_line = "*/5 * * * * root /usr/bin/backup.sh"
+    etc_ct.write_text(old_line + "\n", encoding="utf-8")
+    original_content = etc_ct.read_text(encoding="utf-8")
+
+    req_id = _write_request(
+        req,
+        [
+            {
+                "operation": "unwrap-crontab",
+                "target_crontab": "/etc/crontab",
+                "old_line": old_line,
+                "new_line": old_line,  # whatever
+            }
+        ],
+    )
+
+    _run_script(ipc, root)
+
+    result = _read_result(res, req_id)
+    assert result["status"] == "error"
+    assert result["error_code"] == "not_wrapped"
+    # Crontab must be unchanged
+    assert etc_ct.read_text(encoding="utf-8") == original_content
+
+
+@pytest.mark.slow
+def test_unwrap_wrong_new_line_returns_bad_request(tmp_path: Path) -> None:
+    """unwrap-crontab with wrong supplied new_line → bad_request, crontab unchanged."""
+    ipc, req, res = _make_ipc(tmp_path)
+    root = _make_root(tmp_path)
+
+    spool = root / "var" / "spool" / "cron" / "crontabs"
+    ct = spool / "bob"
+    bare_cmd = "/usr/bin/task.sh"
+    schedule = "*/10 * * * *"
+    old_line = f"{schedule} {_WRAPPER_PREFIX}{bare_cmd}"
+    ct.write_text(old_line + "\n", encoding="utf-8")
+    original_content = ct.read_text(encoding="utf-8")
+
+    # Supply a wrong new_line (disagrees with what the executor re-derives)
+    wrong_new_line = f"{schedule} /WRONG/path/task.sh"
+
+    req_id = _write_request(
+        req,
+        [
+            {
+                "operation": "unwrap-crontab",
+                "target_crontab": "crontab:bob",
+                "old_line": old_line,
+                "new_line": wrong_new_line,
+            }
+        ],
+    )
+
+    _run_script(ipc, root)
+
+    result = _read_result(res, req_id)
+    assert result["status"] == "error"
+    assert result["error_code"] == "bad_request"
+    # Crontab must be unchanged
+    assert ct.read_text(encoding="utf-8") == original_content
+
+
+@pytest.mark.slow
+def test_unwrap_absent_new_line_still_ok(tmp_path: Path) -> None:
+    """unwrap-crontab without new_line field → ok (backward-compat, no cross-check)."""
+    ipc, req, res = _make_ipc(tmp_path)
+    root = _make_root(tmp_path)
+
+    spool = root / "var" / "spool" / "cron" / "crontabs"
+    ct = spool / "carol"
+    bare_cmd = "/usr/bin/cleanup.sh"
+    schedule = "0 3 * * *"
+    old_line = f"{schedule} {_WRAPPER_PREFIX}{bare_cmd}"
+    ct.write_text(old_line + "\n", encoding="utf-8")
+
+    # new_line key is deliberately absent
+    req_id = _write_request(
+        req,
+        [
+            {
+                "operation": "unwrap-crontab",
+                "target_crontab": "crontab:carol",
+                "old_line": old_line,
+                # no "new_line" key
+            }
+        ],
+    )
+
+    _run_script(ipc, root)
+
+    result = _read_result(res, req_id)
+    assert result["status"] == "ok", result
+    new_content = ct.read_text(encoding="utf-8")
+    assert _WRAPPER_PREFIX not in new_content
+    assert bare_cmd in new_content
+
+
+@pytest.mark.slow
+def test_unwrap_rollback_restores_wrapped_line(tmp_path: Path) -> None:
+    """Multi-op: unwrap fails due to a subsequent op → rollback restores the wrapped line."""
+    ipc, req, res = _make_ipc(tmp_path)
+    root = _make_root(tmp_path)
+
+    # Set up a 2-op request: unwrap-crontab succeeds, then wrap-crontab on a
+    # missing line fails → full rollback, unwrap-crontab must be reversed.
+    spool = root / "var" / "spool" / "cron" / "crontabs"
+    ct = spool / "dave"
+    bare_cmd = "/usr/bin/dave-job.sh"
+    schedule = "0 4 * * *"
+    old_line = f"{schedule} {_WRAPPER_PREFIX}{bare_cmd}"
+    ct.write_text(old_line + "\n", encoding="utf-8")
+    original_content = ct.read_text(encoding="utf-8")
+
+    etc_ct = root / "etc" / "crontab"
+    etc_ct.write_text("# empty\n", encoding="utf-8")
+
+    req_id = _write_request(
+        req,
+        [
+            {
+                "operation": "unwrap-crontab",
+                "target_crontab": "crontab:dave",
+                "old_line": old_line,
+                "new_line": f"{schedule} {bare_cmd}",
+            },
+            {
+                "operation": "wrap-crontab",
+                "target_crontab": "/etc/crontab",
+                "old_line": "line-that-does-not-exist",
+                "command": "line-that-does-not-exist",
+            },
+        ],
+    )
+
+    _run_script(ipc, root)
+
+    result = _read_result(res, req_id)
+    assert result["status"] == "error"
+    # The crontab must be back to the wrapped form
+    assert ct.read_text(encoding="utf-8") == original_content
+
+
+# ---------------------------------------------------------------------------
+# STAGE-002-009A: inline snapshot refresh after wrap/unwrap
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.slow
+def test_wrap_refreshes_user_crontab_snapshot(tmp_path: Path) -> None:
+    """After a wrap-crontab op on a user crontab, the snapshot file reflects
+    the newly-wrapped line (STAGE-002-009A inline snapshot refresh)."""
+    ipc, req, res = _make_ipc(tmp_path)
+    root = _make_root(tmp_path)
+
+    spool = root / "var" / "spool" / "cron" / "crontabs"
+    ct = spool / "alice"
+    old_line = "*/10 * * * * /usr/bin/task.sh --arg"
+    ct.write_text(old_line + "\n", encoding="utf-8")
+    ct.chmod(0o600)
+
+    req_id = _write_request(
+        req,
+        [
+            {
+                "operation": "wrap-crontab",
+                "target_crontab": "crontab:alice",
+                "old_line": old_line,
+                "command": "/usr/bin/task.sh --arg",
+            }
+        ],
+    )
+
+    _run_script(ipc, root)
+
+    result = _read_result(res, req_id)
+    assert result["status"] == "ok", result
+
+    snapshot = root / "var" / "lib" / "homelab-monitor" / "crontab-snapshot" / "alice"
+    assert snapshot.exists(), "snapshot file not created by inline refresh"
+    snap_content = snapshot.read_text(encoding="utf-8")
+    assert _WRAPPER_PREFIX + "/usr/bin/task.sh --arg" in snap_content
+    assert snap_content == ct.read_text(encoding="utf-8")
+
+
+@pytest.mark.slow
+def test_unwrap_refreshes_user_crontab_snapshot(tmp_path: Path) -> None:
+    """After an unwrap-crontab op on a user crontab, the snapshot file reflects
+    the unwrapped bare line (STAGE-002-009A inline snapshot refresh)."""
+    ipc, req, res = _make_ipc(tmp_path)
+    root = _make_root(tmp_path)
+
+    spool = root / "var" / "spool" / "cron" / "crontabs"
+    ct = spool / "alice"
+    bare_cmd = "/usr/bin/task.sh --arg"
+    schedule = "*/10 * * * *"
+    old_line = f"{schedule} {_WRAPPER_PREFIX}{bare_cmd}"
+    expected_new_line = f"{schedule} {bare_cmd}"
+    ct.write_text(old_line + "\n", encoding="utf-8")
+    ct.chmod(0o600)
+
+    req_id = _write_request(
+        req,
+        [
+            {
+                "operation": "unwrap-crontab",
+                "target_crontab": "crontab:alice",
+                "old_line": old_line,
+                "new_line": expected_new_line,
+            }
+        ],
+    )
+
+    _run_script(ipc, root)
+
+    result = _read_result(res, req_id)
+    assert result["status"] == "ok", result
+
+    snapshot = root / "var" / "lib" / "homelab-monitor" / "crontab-snapshot" / "alice"
+    assert snapshot.exists(), "snapshot file not created by inline refresh after unwrap"
+    snap_content = snapshot.read_text(encoding="utf-8")
+    assert _WRAPPER_PREFIX not in snap_content
+    assert bare_cmd in snap_content
+    assert snap_content == ct.read_text(encoding="utf-8")
+
+
+@pytest.mark.slow
+def test_snapshot_refresh_reflects_double_toggle(tmp_path: Path) -> None:
+    """Wrap then unwrap in two sequential passes each refresh the snapshot.
+
+    Reproduces the production bug: a second dry-run gate read the stale
+    snapshot instead of the freshly-rewritten spool, causing the toggle to
+    fail. After STAGE-002-009A the snapshot is updated inline after each
+    successful wrap/unwrap so the second pass sees fresh state.
+    """
+    ipc, req, res = _make_ipc(tmp_path)
+    root = _make_root(tmp_path)
+
+    spool = root / "var" / "spool" / "cron" / "crontabs"
+    ct = spool / "alice"
+    bare_cmd = "/usr/bin/task.sh --arg"
+    schedule = "*/10 * * * *"
+    plain_line = f"{schedule} {bare_cmd}"
+    ct.write_text(plain_line + "\n", encoding="utf-8")
+    ct.chmod(0o600)
+
+    snapshot = root / "var" / "lib" / "homelab-monitor" / "crontab-snapshot" / "alice"
+
+    # Pass 1: wrap
+    req_id1 = _write_request(
+        req,
+        [
+            {
+                "operation": "wrap-crontab",
+                "target_crontab": "crontab:alice",
+                "old_line": plain_line,
+                "command": bare_cmd,
+            }
+        ],
+    )
+    _run_script(ipc, root)
+    result1 = _read_result(res, req_id1)
+    assert result1["status"] == "ok", result1
+    assert snapshot.exists(), "snapshot must exist after first wrap"
+    wrapped_line = ct.read_text(encoding="utf-8").strip()
+    assert _WRAPPER_PREFIX + bare_cmd in wrapped_line
+    assert snapshot.read_text(encoding="utf-8") == ct.read_text(encoding="utf-8")
+
+    # Pass 2: unwrap using the now-wrapped line
+    expected_unwrapped_line = f"{schedule} {bare_cmd}"
+    req_id2 = _write_request(
+        req,
+        [
+            {
+                "operation": "unwrap-crontab",
+                "target_crontab": "crontab:alice",
+                "old_line": wrapped_line,
+                "new_line": expected_unwrapped_line,
+            }
+        ],
+    )
+    _run_script(ipc, root)
+    result2 = _read_result(res, req_id2)
+    assert result2["status"] == "ok", result2
+    assert _WRAPPER_PREFIX not in snapshot.read_text(encoding="utf-8")
+    assert bare_cmd in snapshot.read_text(encoding="utf-8")
+    assert snapshot.read_text(encoding="utf-8") == ct.read_text(encoding="utf-8")
+
+
+@pytest.mark.slow
+def test_system_crontab_wrap_does_not_create_snapshot(tmp_path: Path) -> None:
+    """wrap-crontab on a system crontab (/etc/crontab) must NOT create a
+    snapshot file — system crontabs are not mirrored to the snapshot dir."""
+    ipc, req, res = _make_ipc(tmp_path)
+    root = _make_root(tmp_path)
+
+    etc_ct = root / "etc" / "crontab"
+    old_line = "*/5 * * * * root /usr/bin/backup.sh --full"
+    etc_ct.write_text(old_line + "\n", encoding="utf-8")
+
+    req_id = _write_request(
+        req,
+        [
+            {
+                "operation": "wrap-crontab",
+                "target_crontab": "/etc/crontab",
+                "old_line": old_line,
+                "command": "/usr/bin/backup.sh --full",
+            }
+        ],
+    )
+
+    _run_script(ipc, root)
+
+    result = _read_result(res, req_id)
+    assert result["status"] == "ok", result
+
+    snapshot_dir = root / "var" / "lib" / "homelab-monitor" / "crontab-snapshot"
+    if snapshot_dir.exists():
+        assert not any(snapshot_dir.iterdir()), "system crontab wrap must not populate snapshot dir"
+
+
+# ---------------------------------------------------------------------------
+# Contract tests: systemd unit file invariants
+# ---------------------------------------------------------------------------
+
+
+def test_cron_apply_service_grants_snapshot_dir_write() -> None:
+    """The cron-apply systemd unit's ReadWritePaths MUST include the crontab
+    snapshot dir — refresh_user_snapshot writes it inline, and ProtectSystem=
+    strict would otherwise make it read-only (STAGE-002-009A 3b regression)."""
+    repo_root = Path(__file__).parents[4]
+    unit = repo_root / "deploy" / "systemd" / "homelab-monitor-cron-apply.service"
+    assert unit.exists(), f"systemd unit not found at {unit}"
+    text = unit.read_text(encoding="utf-8")
+    rwp_lines = [ln for ln in text.splitlines() if ln.startswith("ReadWritePaths=")]
+    assert len(rwp_lines) == 1, f"expected exactly one ReadWritePaths= line, got {rwp_lines}"
+    assert "/var/lib/homelab-monitor/crontab-snapshot" in rwp_lines[0], (
+        "cron-apply.service ReadWritePaths must include the crontab snapshot dir"
+    )

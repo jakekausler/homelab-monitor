@@ -782,6 +782,10 @@
             "title": "Updated At",
             "type": "string"
           },
+          "wrapper_installed": {
+            "title": "Wrapper Installed",
+            "type": "boolean"
+          },
           "wrapper_last_seen_at": {
             "anyOf": [
               {
@@ -812,7 +816,8 @@
           "wrapper_last_seen_at",
           "last_discovered_at",
           "soft_deleted_at",
-          "is_local"
+          "is_local",
+          "wrapper_installed"
         ],
         "title": "CronOut",
         "type": "object"
@@ -1601,6 +1606,52 @@
         ],
         "title": "Severity",
         "type": "string"
+      },
+      "UninstallWrapperPreview": {
+        "additionalProperties": false,
+        "description": "Dry-run response (confirm=false). Uninstall is a pure crontab-line edit,\nso the preview carries ONLY the crontab diff (no wrapper_content / token).",
+        "properties": {
+          "crontab_diff": {
+            "$ref": "#/components/schemas/CrontabDiffOut"
+          },
+          "fingerprint": {
+            "title": "Fingerprint",
+            "type": "string"
+          }
+        },
+        "required": [
+          "fingerprint",
+          "crontab_diff"
+        ],
+        "title": "UninstallWrapperPreview",
+        "type": "object"
+      },
+      "UninstallWrapperRequest": {
+        "additionalProperties": false,
+        "description": "Body for POST /api/crons/{fingerprint}/uninstall-wrapper.",
+        "properties": {
+          "confirm": {
+            "default": false,
+            "title": "Confirm",
+            "type": "boolean"
+          }
+        },
+        "title": "UninstallWrapperRequest",
+        "type": "object"
+      },
+      "UninstallWrapperResult": {
+        "additionalProperties": false,
+        "description": "confirm=true response.",
+        "properties": {
+          "cron": {
+            "$ref": "#/components/schemas/CronOut"
+          }
+        },
+        "required": [
+          "cron"
+        ],
+        "title": "UninstallWrapperResult",
+        "type": "object"
       },
       "UserResponse": {
         "additionalProperties": false,
@@ -2826,6 +2877,82 @@
           }
         },
         "summary": "Preview Runs Saved",
+        "tags": [
+          "crons"
+        ]
+      }
+    },
+    "/api/crons/{fingerprint}/uninstall-wrapper": {
+      "post": {
+        "description": "Remove (or dry-run preview) the heartbeat wrapper for a local cron.\n\nconfirm=false \u2192 UninstallWrapperPreview (no file modifications).\nconfirm=true  \u2192 performs the uninstall, returns UninstallWrapperResult.\nSession-auth; CSRF enforced automatically by require_session() on POST.\n\nUninstall is a pure crontab-line edit: the shared wrapper script and the\nshared token file are NEVER touched (D1/D2).",
+        "operationId": "uninstall_wrapper_api_crons__fingerprint__uninstall_wrapper_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "fingerprint",
+            "required": true,
+            "schema": {
+              "title": "Fingerprint",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UninstallWrapperRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/UninstallWrapperPreview"
+                    },
+                    {
+                      "$ref": "#/components/schemas/UninstallWrapperResult"
+                    }
+                  ],
+                  "title": "Response Uninstall Wrapper Api Crons  Fingerprint  Uninstall Wrapper Post"
+                }
+              }
+            },
+            "description": "Dry-run preview OR uninstall result"
+          },
+          "400": {
+            "description": "Cron is on a remote host"
+          },
+          "404": {
+            "description": "Cron not found"
+          },
+          "409": {
+            "description": "Crontab line not found, or not wrapped"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "description": "Uninstall failed; rollback performed"
+          },
+          "503": {
+            "description": "Host-side cron-apply executor unavailable"
+          }
+        },
+        "summary": "Uninstall Wrapper",
         "tags": [
           "crons"
         ]

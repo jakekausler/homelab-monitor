@@ -18,6 +18,7 @@ from structlog.stdlib import BoundLogger
 from homelab_monitor.kernel.auth.repository import AuthRepository
 from homelab_monitor.kernel.cron.cron_apply_ipc import (
     CronApplyRejectedError,
+    UnwrapCrontabOp,
     WrapCrontabOp,
     WriteTokenOp,
     WriteWrapperScriptOp,
@@ -62,6 +63,15 @@ class AlreadyWrappedError(WrapperInstallError):
     """The matched crontab line is already wrapper-invoked (→ 409)."""
 
 
+class NotWrappedError(WrapperInstallError):
+    """The matched crontab line is NOT wrapper-invoked — nothing to remove (→ 409).
+
+    The exact mirror of AlreadyWrappedError. Uninstall gates on the discovered
+    crontab line being currently wrapped (the crontab is ground truth, NOT
+    wrapper_last_seen_at).
+    """
+
+
 class CrontabWriteError(WrapperInstallError):
     """A filesystem error during wrapper/token/crontab write; rollback ran (→ 500)."""
 
@@ -93,6 +103,18 @@ class WrapperInstallKit:
     wrapper_path: str  # WRAPPER_PATH — the HOST path (contract: crontab line)
     wrapper_content: str  # fully-substituted wrapper script text
     token_file_path: str  # TOKEN_FILE_PATH — the HOST path (baked into wrapper)
+    crontab_diff: CrontabDiff
+
+
+@dataclass(frozen=True, slots=True)
+class WrapperUninstallKit:
+    """Everything the uninstall would do — returned by dry-run and apply.
+
+    Uninstall is a pure crontab-line edit (D1: never delete the wrapper script;
+    D2: never touch the token). So this kit carries ONLY the crontab diff.
+    """
+
+    fingerprint: str
     crontab_diff: CrontabDiff
 
 
@@ -275,6 +297,64 @@ async def build_install_kit(
     )
 
 
+async def build_uninstall_kit(
+    cron: CronRecord,
+    *,
+    host_root: Path,
+) -> WrapperUninstallKit:
+    """Pure-ish: resolve host paths, read the source crontab, find + match the
+    line, build the unwrap crontab diff. NO writes. Raises
+    CronLineNotFoundError / NotWrappedError / WrapperInstallError.
+    Used by both dry-run and apply.
+
+    No public_url / install_date params — uninstall builds no wrapper content.
+    """
+    source_path = cron.source_path
+    if source_path is None:
+        raise WrapperInstallError(
+            f"cron {cron.fingerprint} has no source_path (remote-only); "
+            "wrapper uninstall requires a local crontab file"
+        )
+
+    container_path = _resolve_container_path(source_path, host_root)
+
+    if not container_path.exists():
+        raise CronLineNotFoundError(f"crontab file not found: {container_path}")
+
+    crontab_content = container_path.read_text(encoding="utf-8", errors="replace")
+
+    line_index, raw_line, _schedule, inner_command = _find_matching_line(
+        content=crontab_content,
+        host=cron.host,
+        source_path=source_path,
+        fingerprint=cron.fingerprint,
+    )
+
+    # D6: gate on the crontab line itself — the crontab is ground truth.
+    if WRAPPER_INVOCATION_PREFIX not in raw_line:
+        raise NotWrappedError(
+            f"crontab line is not wrapped for {cron.fingerprint}; nothing to remove"
+        )
+
+    # Re-derive the unwrapped line: strip the wrapper prefix in-place. The
+    # wrapped form is `<prefix-leading-ws><WRAPPER_INVOCATION_PREFIX><inner_command>`;
+    # removing exactly WRAPPER_INVOCATION_PREFIX restores the original line.
+    idx = raw_line.find(WRAPPER_INVOCATION_PREFIX)
+    new_line = raw_line[:idx] + raw_line[idx + len(WRAPPER_INVOCATION_PREFIX) :]
+
+    return WrapperUninstallKit(
+        fingerprint=cron.fingerprint,
+        crontab_diff=CrontabDiff(
+            source_path=source_path,
+            container_file=str(container_path),
+            old_line=raw_line,
+            new_line=new_line,
+            line_index=line_index,
+            inner_command=inner_command,
+        ),
+    )
+
+
 async def install_wrapper_local(  # noqa: PLR0913 -- explicit DI (repos/log)
     fingerprint: str,
     *,
@@ -370,6 +450,7 @@ async def install_wrapper_local(  # noqa: PLR0913 -- explicit DI (repos/log)
         source_path=kit.crontab_diff.source_path,
         schedule=cron.schedule,
         command=cron.command,
+        is_wrapped=True,
         now=utc_now_iso(),
     )
 
@@ -385,15 +466,108 @@ async def install_wrapper_local(  # noqa: PLR0913 -- explicit DI (repos/log)
     return updated_cron
 
 
+async def uninstall_wrapper_local(  # noqa: PLR0913 -- explicit DI (repos/log)
+    fingerprint: str,
+    *,
+    cron_repo: CronRepo,
+    host_root: Path,
+    local_hostname: str,
+    who: str,
+    ip: str | None,
+    log: BoundLogger,
+    ipc_dir: Path | None = None,
+) -> CronRecord:
+    """Uniform routing uninstall via host-side executor.
+
+    Steps:
+    1. Fetch cron
+    2. Check host
+    3. Build uninstall kit (reads crontab, finds line, builds unwrap diff)
+    4. Build 1-operation request (unwrap-crontab) — NO token, NO wrapper-script
+    5. Submit to executor and wait for result
+    6. Translate executor errors to typed errors
+    7. Bump last_discovered_at (registry freshness)
+    8. record_wrapper_uninstalled — clears wrapper_last_seen_at + audit row
+    9. Return refreshed cron
+
+    No host-side file I/O — the executor performs the single crontab rewrite
+    atomically with rollback. D1: the shared wrapper script is NEVER removed.
+    D2: the shared token file is NEVER touched.
+    """
+    # Step 1: Fetch cron
+    cron = await cron_repo.get_cron(fingerprint, include_hidden=True)
+    if cron is None:
+        raise CronLineNotFoundError(f"cron not found: {fingerprint}")
+
+    # Step 2: Check host
+    if cron.host != local_hostname:
+        raise RemoteHostError(f"cron is on host {cron.host!r}, not local {local_hostname!r}")
+
+    # Step 3: Build uninstall kit
+    kit = await build_uninstall_kit(cron, host_root=host_root)
+
+    # Step 4: Build the single-operation request
+    operations = [
+        UnwrapCrontabOp(
+            target_crontab=kit.crontab_diff.source_path,
+            old_line=kit.crontab_diff.old_line,
+            new_line=kit.crontab_diff.new_line,
+        ),
+    ]
+
+    # Step 5: IPC request to executor
+    try:
+        await submit_and_wait(
+            operations=operations,
+            log=log,
+            ipc_dir=ipc_dir,
+        )
+    except _IpcCronApplyUnavailableError as exc:
+        raise CronApplyUnavailableError(str(exc)) from exc
+    except CronApplyRejectedError as exc:
+        # Executor rejected — translate error_code.
+        if exc.error_code == "not_wrapped":
+            raise NotWrappedError(str(exc)) from exc
+        # bad_path, line_not_found, crontab_missing, bad_request
+        raise CronLineNotFoundError(str(exc)) from exc
+    except Exception as exc:
+        raise CrontabWriteError(f"cron-apply IPC error: {exc}") from exc
+
+    # Step 7: Bump last_discovered_at so registry freshness reflects this touch.
+    await cron_repo.upsert_discovered(
+        host=cron.host,
+        source_path=kit.crontab_diff.source_path,
+        schedule=cron.schedule,
+        command=cron.command,
+        is_wrapped=False,
+        now=utc_now_iso(),
+    )
+
+    # Step 8: Audit verb + clear wrapper_last_seen_at (D3).
+    await cron_repo.record_wrapper_uninstalled(fingerprint, who=who, ip=ip)
+
+    # Step 9: Return refreshed cron
+    updated_cron = await cron_repo.get_cron(fingerprint, include_hidden=True)
+    if updated_cron is None:
+        raise CrontabWriteError("cron disappeared after uninstall")
+
+    log.info("wrapper_uninstalled.success", fingerprint=fingerprint)
+    return updated_cron
+
+
 __all__ = [
     "AlreadyWrappedError",
     "CronApplyUnavailableError",
     "CronLineNotFoundError",
     "CrontabDiff",
     "CrontabWriteError",
+    "NotWrappedError",
     "RemoteHostError",
     "WrapperInstallError",
     "WrapperInstallKit",
+    "WrapperUninstallKit",
     "build_install_kit",
+    "build_uninstall_kit",
     "install_wrapper_local",
+    "uninstall_wrapper_local",
 ]

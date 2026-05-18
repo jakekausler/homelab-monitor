@@ -26,6 +26,7 @@ from homelab_monitor.kernel.db.repository import SqliteRepository
 from homelab_monitor.kernel.db.time import utc_now_iso
 from homelab_monitor.kernel.dispatch.channels.inproc_dashboard import InprocDashboardChannel
 from homelab_monitor.kernel.dispatch.dispatcher import AlertDispatcher
+from homelab_monitor.kernel.events import TriggerContext
 from homelab_monitor.kernel.heartbeat.repository import HeartbeatRepo
 from homelab_monitor.kernel.logging import configure_logging
 from homelab_monitor.kernel.logs.multiplex import MultiplexLogsWriter
@@ -334,6 +335,35 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
         alert_dispatcher=alert_dispatcher,
     )
     await scheduler.start()
+
+    # 7b. One-shot cron-discovery on startup. The scheduler's per-collector
+    # tick loop applies an initial offset, so the first SCHEDULED cron tick
+    # can be up to ~one interval (300s) away. Requesting an immediate run
+    # here makes the `wrapper_installed` column converge within seconds of a
+    # restart/upgrade. Fire-and-forget: request_immediate_run only enqueues
+    # the run and returns; app startup is not blocked on the discovery scan.
+    # Skipped when cron-discoverer failed to register (degraded). Best-effort:
+    # any failure is logged and swallowed so startup always completes.
+    # The startup discovery pass is disabled when
+    # HOMELAB_MONITOR_DISABLE_STARTUP_CRON_DISCOVERY is truthy. The test
+    # fixtures set this to keep the fire-and-forget discovery task from
+    # racing test-seeded cron rows (UNIQUE crons.fingerprint). Production
+    # leaves it unset, so the pass runs normally.
+    _disable_startup_discovery = os.environ.get(
+        "HOMELAB_MONITOR_DISABLE_STARTUP_CRON_DISCOVERY", ""
+    ).strip().lower() in ("1", "true", "yes")
+    if "cron-discoverer" not in degraded and not _disable_startup_discovery:
+        try:
+            await scheduler.request_immediate_run(
+                "cron-discoverer",
+                trigger=TriggerContext(kind="manual", request_id=None),
+            )
+            log.info("lifespan.cron_discovery_startup_run_requested")
+        except Exception as exc:  # pragma: no cover -- defensive; guarded above
+            log.warning(
+                "lifespan.cron_discovery_startup_run_failed",
+                error=str(exc),
+            )
 
     app.state.master_key = master_key
     app.state.auth_repo = auth_repo

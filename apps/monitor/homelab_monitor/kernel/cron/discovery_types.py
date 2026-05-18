@@ -34,6 +34,7 @@ class ParsedCronEntry:
     host_source_path: str  # e.g. "/etc/crontab", "/etc/cron.d/certbot", "crontab:alice"
     schedule: str  # raw expression as it appears on disk (per D7)
     command: str
+    is_wrapped: bool
 
 
 @dataclass(slots=True, frozen=True)

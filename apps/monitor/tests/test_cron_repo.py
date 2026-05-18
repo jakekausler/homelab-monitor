@@ -996,3 +996,176 @@ async def test_record_wrapper_installed_writes_audit_only(
     after_payload = json.loads(audit_row[2])
     assert after_payload["fingerprint"] == fp
     assert "wrapper_path" in after_payload
+
+
+# ---------------------------------------------------------------------------
+# record_wrapper_uninstalled (STAGE-002-009A)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_record_wrapper_uninstalled_clears_column_and_writes_audit(
+    repo: SqliteRepository,
+) -> None:
+    """record_wrapper_uninstalled: clears wrapper_last_seen_at to NULL AND writes audit.
+
+    Both mutations happen in ONE transaction (D3 atomicity discipline).
+    """
+    cron_repo = CronRepo(repo)
+    fp = await _seed_cron(repo, name="unwrap-test")
+
+    # Manually set wrapper_last_seen_at to a non-null value to simulate a
+    # wrapper that has been running.
+    pre_wlsa = "2026-05-10T00:00:00Z"
+    await repo.execute(
+        text("UPDATE crons SET wrapper_last_seen_at = :wlsa WHERE fingerprint = :fp"),
+        {"wlsa": pre_wlsa, "fp": fp},
+    )
+
+    # Verify it's set before the call
+    row_before = await repo.fetch_one(
+        text("SELECT wrapper_last_seen_at FROM crons WHERE fingerprint = :fp"),
+        {"fp": fp},
+    )
+    assert row_before is not None
+    assert row_before[0] == pre_wlsa
+
+    await cron_repo.record_wrapper_uninstalled(fp, who=WHO, ip=IP)
+
+    # wrapper_last_seen_at MUST be NULL after the call
+    row_after = await repo.fetch_one(
+        text("SELECT wrapper_last_seen_at FROM crons WHERE fingerprint = :fp"),
+        {"fp": fp},
+    )
+    assert row_after is not None
+    assert row_after[0] is None
+
+    # audit row with correct verb must exist
+    audit_row = await repo.fetch_one(
+        text(
+            "SELECT who, what, before_json, after_json "
+            "FROM audit_log WHERE what = 'crons.wrapper_uninstalled'"
+        )
+    )
+    assert audit_row is not None
+    assert audit_row[0] == WHO
+    assert audit_row[1] == "crons.wrapper_uninstalled"
+    before_payload = json.loads(audit_row[2])
+    after_payload = json.loads(audit_row[3])
+    assert before_payload["fingerprint"] == fp
+    assert before_payload["wrapper_last_seen_at"] == pre_wlsa
+    assert after_payload["fingerprint"] == fp
+    assert after_payload["wrapper_last_seen_at"] is None
+
+
+# ---------------------------------------------------------------------------
+# upsert_discovered — wrapper_installed diff (STAGE-002-009A)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_upsert_discovered_wrapper_installed_false_to_true(
+    repo: SqliteRepository,
+) -> None:
+    """Re-discovering a cron with is_wrapped flipped False→True updates wrapper_installed
+    and records a non-bump audit diff (lines 939-942 of repository.py).
+    """
+    cron_repo = CronRepo(repo)
+    now = utc_now_iso()
+
+    host = "wrap-diff-host"
+    source_path = "/etc/crontab"
+    schedule = "5 4 * * *"
+    command = "/usr/bin/wrap-diff.sh"
+
+    # First discovery: not wrapped
+    record1, inserted, _updated_non_bump = await cron_repo.upsert_discovered(
+        host=host,
+        source_path=source_path,
+        schedule=schedule,
+        command=command,
+        is_wrapped=False,
+        now=now,
+    )
+    assert inserted is True
+    assert record1.wrapper_installed is False
+
+    # Second discovery: now wrapped — same fingerprint, different is_wrapped
+    record2, inserted2, updated_non_bump2 = await cron_repo.upsert_discovered(
+        host=host,
+        source_path=source_path,
+        schedule=schedule,
+        command=command,
+        is_wrapped=True,
+        now=now,
+    )
+    assert inserted2 is False
+    assert updated_non_bump2 is True  # non-bump field changed
+    assert record2.wrapper_installed is True
+
+    # Audit diff must record wrapper_installed before=False after=True
+    audit_row = await repo.fetch_one(
+        text(
+            "SELECT before_json, after_json FROM audit_log "
+            "WHERE what = 'crons.discover.update' ORDER BY \"when\" DESC LIMIT 1"
+        )
+    )
+    assert audit_row is not None
+    before_diff = json.loads(audit_row[0])
+    after_diff = json.loads(audit_row[1])
+    assert before_diff["wrapper_installed"] is False
+    assert after_diff["wrapper_installed"] is True
+
+
+@pytest.mark.asyncio
+async def test_upsert_discovered_wrapper_installed_true_to_false(
+    repo: SqliteRepository,
+) -> None:
+    """Re-discovering a cron with is_wrapped flipped True→False updates wrapper_installed
+    and records a non-bump audit diff (lines 939-942 of repository.py, reverse direction).
+    """
+    cron_repo = CronRepo(repo)
+    now = utc_now_iso()
+
+    host = "wrap-diff-host-rev"
+    source_path = "/etc/crontab"
+    schedule = "10 3 * * *"
+    command = "/usr/bin/wrap-diff-rev.sh"
+
+    # First discovery: wrapped
+    record1, inserted, _ = await cron_repo.upsert_discovered(
+        host=host,
+        source_path=source_path,
+        schedule=schedule,
+        command=command,
+        is_wrapped=True,
+        now=now,
+    )
+    assert inserted is True
+    assert record1.wrapper_installed is True
+
+    # Second discovery: no longer wrapped
+    record2, inserted2, updated_non_bump2 = await cron_repo.upsert_discovered(
+        host=host,
+        source_path=source_path,
+        schedule=schedule,
+        command=command,
+        is_wrapped=False,
+        now=now,
+    )
+    assert inserted2 is False
+    assert updated_non_bump2 is True
+    assert record2.wrapper_installed is False
+
+    # Audit diff must record wrapper_installed before=True after=False
+    audit_row = await repo.fetch_one(
+        text(
+            "SELECT before_json, after_json FROM audit_log "
+            "WHERE what = 'crons.discover.update' ORDER BY \"when\" DESC LIMIT 1"
+        )
+    )
+    assert audit_row is not None
+    before_diff = json.loads(audit_row[0])
+    after_diff = json.loads(audit_row[1])
+    assert before_diff["wrapper_installed"] is True
+    assert after_diff["wrapper_installed"] is False

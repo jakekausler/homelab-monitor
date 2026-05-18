@@ -15,7 +15,9 @@ from homelab_monitor.kernel.auth.repository import AuthRepository
 from homelab_monitor.kernel.cron.install import (
     WrapperInstallError,
     build_install_kit,
+    build_uninstall_kit,
     install_wrapper_local,
+    uninstall_wrapper_local,
 )
 from homelab_monitor.kernel.cron.repository import CronRepo
 from homelab_monitor.kernel.db.engine import get_engine
@@ -44,6 +46,17 @@ def add_subparser(
     )
     p_install.set_defaults(func=_handle)
 
+    p_uninstall = sub.add_parser(
+        "uninstall-wrapper", help="Remove the heartbeat wrapper from a local cron"
+    )
+    p_uninstall.add_argument("fingerprint")
+    p_uninstall.add_argument(
+        "--confirm",
+        action="store_true",
+        help="Actually modify the crontab (omit for a dry-run preview)",
+    )
+    p_uninstall.set_defaults(func=_handle)
+
     p_tmpl = sub.add_parser(
         "get-wrapper-template", help="Print the wrapper script template to stdout"
     )
@@ -66,9 +79,14 @@ def _handle(args: argparse.Namespace) -> int:
         return asyncio.run(_cmd_discover())
     if sub == "install-wrapper":
         return asyncio.run(_cmd_install_wrapper(args.fingerprint, confirm=args.confirm))
+    if sub == "uninstall-wrapper":
+        return asyncio.run(_cmd_uninstall_wrapper(args.fingerprint, confirm=args.confirm))
     if sub == "get-wrapper-template":
         return _cmd_get_wrapper_template()
-    print("usage: hm cron {discover,install-wrapper,get-wrapper-template}", file=sys.stderr)
+    print(
+        "usage: hm cron {discover,install-wrapper,uninstall-wrapper,get-wrapper-template}",
+        file=sys.stderr,
+    )
     return 2
 
 
@@ -168,6 +186,59 @@ async def _cmd_install_wrapper(fingerprint: str, confirm: bool) -> int:  # noqa:
             log=log,
         )
         print(f"installed wrapper for {fingerprint}")
+        return 0
+
+    except WrapperInstallError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+    except Exception as exc:
+        print(f"ERROR: unexpected error: {exc}", file=sys.stderr)
+        return 1
+
+
+async def _cmd_uninstall_wrapper(fingerprint: str, confirm: bool) -> int:
+    """Remove the heartbeat wrapper from a local cron (or dry-run preview)."""
+    try:
+        engine = get_engine()
+        repo = SqliteRepository(engine)
+        cron_repo = CronRepo(repo)
+
+        host_root = Path(os.environ.get("HM_CRON_HOST_ROOT", "/host"))
+        local_hostname = resolve_hostname()
+
+        cron = await cron_repo.get_cron(fingerprint, include_hidden=True)
+        if cron is None:
+            print(f"ERROR: cron not found: {fingerprint}", file=sys.stderr)
+            return 1
+
+        if cron.host != local_hostname:
+            print(
+                f"ERROR: cron is on host {cron.host!r}, not local {local_hostname!r}",
+                file=sys.stderr,
+            )
+            return 1
+
+        # Dry-run: build uninstall kit and print preview
+        if not confirm:
+            kit = await build_uninstall_kit(cron, host_root=host_root)
+            print("=== Crontab diff ===")
+            print(f"File: {kit.crontab_diff.source_path}")
+            print(f"- {kit.crontab_diff.old_line}")
+            print(f"+ {kit.crontab_diff.new_line}")
+            return 0
+
+        # Confirm: actually uninstall
+        log = get_logger()
+        await uninstall_wrapper_local(
+            fingerprint,
+            cron_repo=cron_repo,
+            host_root=host_root,
+            local_hostname=local_hostname,
+            who="cli",
+            ip=None,
+            log=log,
+        )
+        print(f"removed wrapper for {fingerprint}")
         return 0
 
     except WrapperInstallError as exc:

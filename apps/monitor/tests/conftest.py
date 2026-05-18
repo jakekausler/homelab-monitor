@@ -121,6 +121,7 @@ async def authenticated_client(
     monkeypatch.setenv("HOMELAB_MONITOR_MASTER_KEY", base64.b64encode(master_key).decode())
     monkeypatch.setenv("HOMELAB_MONITOR_HTTPS_ONLY_COOKIES", "false")
     monkeypatch.setenv("HOMELAB_MONITOR_ALERTMANAGER_URL", "disabled")
+    monkeypatch.setenv("HOMELAB_MONITOR_DISABLE_STARTUP_CRON_DISCOVERY", "1")
 
     from homelab_monitor.kernel.api.app import create_app  # noqa: PLC0415
 
@@ -150,6 +151,7 @@ async def api_token_client(
     monkeypatch.setenv("HOMELAB_MONITOR_DB_URL", db_url)
     monkeypatch.setenv("HOMELAB_MONITOR_MASTER_KEY", base64.b64encode(master_key).decode())
     monkeypatch.setenv("HOMELAB_MONITOR_ALERTMANAGER_URL", "disabled")
+    monkeypatch.setenv("HOMELAB_MONITOR_DISABLE_STARTUP_CRON_DISCOVERY", "1")
 
     from homelab_monitor.kernel.api.app import create_app  # noqa: PLC0415
 
@@ -185,6 +187,7 @@ async def unauthenticated_client(
     monkeypatch.setenv("HOMELAB_MONITOR_MASTER_KEY", base64.b64encode(master_key).decode())
     monkeypatch.setenv("HOMELAB_MONITOR_HTTPS_ONLY_COOKIES", "false")
     monkeypatch.setenv("HOMELAB_MONITOR_ALERTMANAGER_URL", "disabled")
+    monkeypatch.setenv("HOMELAB_MONITOR_DISABLE_STARTUP_CRON_DISCOVERY", "1")
 
     from homelab_monitor.kernel.api.app import create_app  # noqa: PLC0415
 

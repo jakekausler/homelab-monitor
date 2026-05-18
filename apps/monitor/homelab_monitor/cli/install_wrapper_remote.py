@@ -1,4 +1,4 @@
-"""Standalone remote CLI for installing the heartbeat wrapper on a foreign host.
+"""Standalone remote CLI for installing/uninstalling the heartbeat wrapper on a foreign host.
 
 This module is distributed as a standalone script (EPIC-019 will PyInstaller it).
 It imports ONLY stdlib — NO homelab_monitor.kernel.* imports — so it runs on any
@@ -9,10 +9,10 @@ with comments pointing to kernel modules as the source of truth.
 
 Usage:
     python3 install_wrapper_remote.py \
-        [--monitor-url URL] [--token TOKEN] [--crontab PATH] [--confirm]
+        [--monitor-url URL] [--token TOKEN] [--crontab PATH] [--confirm] [--uninstall]
     # or via environment variables:
     HM_MONITOR_URL=http://... HM_HEARTBEAT_TOKEN=... \
-        python3 install_wrapper_remote.py [--crontab PATH] [--confirm]
+        python3 install_wrapper_remote.py [--crontab PATH] [--confirm] [--uninstall]
 """
 
 from __future__ import annotations
@@ -44,6 +44,14 @@ _MIN_CRONTAB_FIELDS = 6
 # Inclusive-exclusive bounds of the HTTP 2xx success range.
 _HTTP_OK_MIN = 200
 _HTTP_OK_MAX = 300
+
+
+def unwrap_command(command: str) -> str:
+    """Strip the wrapper prefix if present. Source of truth:
+    kernel/cron/wrapper_constants.py unwrap_command()."""
+    if command.startswith(WRAPPER_INVOCATION_PREFIX):
+        return command[len(WRAPPER_INVOCATION_PREFIX) :]
+    return command
 
 
 def compute_fingerprint(
@@ -151,6 +159,11 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "--confirm",
         action="store_true",
         help="Actually write files (omit for dry-run preview)",
+    )
+    parser.add_argument(
+        "--uninstall",
+        action="store_true",
+        help="Remove the wrapper from the selected line instead of installing it",
     )
     return parser
 
@@ -333,6 +346,74 @@ def _write_files_and_register(  # noqa: PLR0913 -- apply-path: each kwarg is a d
     return 0
 
 
+def _run_uninstall(  # noqa: PLR0913
+    *,
+    monitor_url: str,
+    token: str,
+    host: str,
+    crontab_spec: str,
+    crontab_file: Path,
+    crontab_content: str,
+    line_index: int,
+    old_line: str,
+    schedule: str,
+    command: str,
+    confirm: bool,
+) -> int:
+    """Uninstall path: strip the wrapper prefix from one crontab line.
+
+    Pure crontab-line edit — the shared wrapper script and token file are
+    NEVER touched (D1/D2). Implements its own atomic temp+rename rewrite with
+    rollback (the standalone installer has no host-side executor).
+    """
+    if WRAPPER_INVOCATION_PREFIX not in old_line:
+        print(
+            f"ERROR: crontab line is not wrapped; nothing to remove: {old_line}",
+            file=sys.stderr,
+        )
+        return 1
+
+    idx = old_line.find(WRAPPER_INVOCATION_PREFIX)
+    new_line = old_line[:idx] + old_line[idx + len(WRAPPER_INVOCATION_PREFIX) :]
+    inner_command = unwrap_command(command)
+    fingerprint = compute_fingerprint(host, crontab_spec, schedule, inner_command)
+
+    reg_payload: dict[str, object] = {
+        "host": host,
+        "source_path": crontab_spec,
+        "schedule": schedule,
+        "command": inner_command,
+        "wrapper": False,
+    }
+
+    if not confirm:
+        print("=== Crontab diff ===")
+        print(f"File: {crontab_spec}")
+        print(f"- {old_line}")
+        print(f"+ {new_line}")
+        return 0
+
+    try:
+        lines_list = crontab_content.splitlines(keepends=False)
+        lines_list[line_index] = new_line
+        new_content = "\n".join(lines_list)
+        if crontab_content.endswith("\n"):
+            new_content += "\n"
+        _atomic_write_text(crontab_file, new_content)
+        print(f"Rewrote crontab {crontab_file}")
+    except Exception as exc:
+        print(f"ERROR: uninstall failed: {exc}", file=sys.stderr)
+        # Best-effort restore the original text.
+        with contextlib.suppress(Exception):
+            _atomic_write_text(crontab_file, crontab_content)
+        print("Rollback complete; host left unchanged.", file=sys.stderr)
+        return 1
+
+    _register_with_monitor(monitor_url, fingerprint, token, reg_payload)
+    print(f"Wrapper removed for {fingerprint}")
+    return 0
+
+
 def main() -> int:  # noqa: PLR0911, PLR0912, PLR0915 -- CLI entry point: linear validate-then-act flow; each early return is a distinct user-input error path
     """Main entry point."""
     args = _build_arg_parser().parse_args()
@@ -399,6 +480,21 @@ def main() -> int:  # noqa: PLR0911, PLR0912, PLR0915 -- CLI entry point: linear
         print(f"ERROR: cannot parse crontab line: {old_line}", file=sys.stderr)
         return 1
     schedule, command = parsed
+
+    if args.uninstall:
+        return _run_uninstall(
+            monitor_url=monitor_url,
+            token=token,
+            host=host,
+            crontab_spec=crontab_spec,
+            crontab_file=crontab_file,
+            crontab_content=crontab_content,
+            line_index=line_index,
+            old_line=old_line,
+            schedule=schedule,
+            command=command,
+            confirm=args.confirm,
+        )
 
     # Compute fingerprint and fetch wrapper template
     fingerprint = compute_fingerprint(host, crontab_spec, schedule, command)

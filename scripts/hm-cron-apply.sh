@@ -15,7 +15,7 @@
 #   * wrap-crontab         — rewrite an already-present crontab line.
 #   * write-wrapper-script — write the wrapper script to a FIXED host path.
 #   * write-token          — write the heartbeat token to a FIXED host path.
-#   * unwrap-crontab       — (future, STAGE-002-009A) strip the wrapper prefix.
+#   * unwrap-crontab       — strip the wrapper prefix from an already-wrapped line.
 #
 # LOAD-BEARING SECURITY CONTROL:
 #   * wrap-crontab: the target crontab path MUST be /etc/crontab,
@@ -23,6 +23,10 @@
 #     the request's old_line MUST exist VERBATIM in that file; the replacement
 #     line is RE-DERIVED here from old_line + command — the request carries NO
 #     caller-supplied new_line; wrap refuses an already-wrapped line.
+#   * unwrap-crontab: same path allow-list as wrap-crontab; the request's
+#     old_line MUST exist VERBATIM in the file; the replacement line is
+#     RE-DERIVED here by STRIPPING the wrapper prefix — the request carries NO
+#     command field; unwrap refuses a line that is NOT wrapped.
 #   * write-wrapper-script / write-token: the request carries ONLY the file
 #     CONTENT. The destination is a FIXED constant in this script
 #     (WRAPPER_SCRIPT_PATH / TOKEN_PATH). The script REFUSES any request that
@@ -47,6 +51,12 @@ readonly _ROOT="${APPLY_ROOT%/}"
 readonly SPOOL_DIR="${_ROOT}/var/spool/cron/crontabs"
 readonly SYSTEM_CRONTAB="${_ROOT}/etc/crontab"
 readonly CRON_D_DIR="${_ROOT}/etc/cron.d"
+# World-readable mirror of user crontabs. The non-root monitor container reads
+# this (it CANNOT read the 0600 spool files) for the install/uninstall dry-run
+# gate. hm-crontab-snapshot.sh + its systemd timer also write here; the
+# executor refreshes it INLINE after a wrap/unwrap so the next dry-run gate
+# sees fresh state without waiting for the 300s snapshot timer (STAGE-002-009A).
+readonly SNAPSHOT_DIR="${_ROOT}/var/lib/homelab-monitor/crontab-snapshot"
 # FIXED destinations for the file-write operations. The request NEVER carries
 # a path — these are the only places write-wrapper-script / write-token write.
 readonly WRAPPER_SCRIPT_PATH="${_ROOT}/usr/local/bin/cron-with-heartbeat.sh"
@@ -105,6 +115,52 @@ resolve_target() {
         *)
             printf '' ;;
     esac
+}
+
+# refresh_user_snapshot <target_crontab> — after a wrap/unwrap op succeeds,
+# refresh the world-readable crontab snapshot so the monitor container's NEXT
+# install/uninstall dry-run gate sees the just-written state immediately,
+# instead of waiting up to 300s for the snapshot timer (STAGE-002-009A bug).
+#
+# Only user crontabs (crontab:<user>) have a snapshot: /etc/crontab and
+# /etc/cron.d/* are read directly from the container's /etc bind mount, so for
+# those targets this is a no-op. The snapshot is a verbatim mirror of the spool
+# file (hm-crontab-snapshot.sh writes `crontab -l -u <user>` output, which is
+# byte-identical to the spool file), so a direct copy is equivalent and works
+# identically under the test harness (APPLY_ROOT-rooted paths) and production.
+#
+# BEST-EFFORT: the crontab write has already committed. A snapshot-refresh
+# failure must NOT fail the request or trigger rollback — it only delays the
+# dry-run gate seeing fresh state until the 300s timer reconciles. Log + return.
+refresh_user_snapshot() {
+    local target="$1"
+    local user spool snap
+    case "$target" in
+        crontab:*) user="${target#crontab:}" ;;
+        *) return 0 ;;   # system crontab — no snapshot mirror
+    esac
+    [[ -n "$user" && "$user" != *"/"* && "$user" != *".."* ]] || return 0
+    spool="$SPOOL_DIR/$user"
+    snap="$SNAPSHOT_DIR/$user"
+    [[ -f "$spool" ]] || { log "WARN: snapshot refresh skipped: spool $spool missing"; return 0; }
+    mkdir -p "$SNAPSHOT_DIR" 2>/dev/null \
+        || { log "WARN: snapshot refresh skipped: mkdir $SNAPSHOT_DIR failed"; return 0; }
+    local tmp
+    tmp="$(mktemp "${SNAPSHOT_DIR}/.${user}.snaptmp.XXXXXX" 2>/dev/null)" \
+        || { log "WARN: snapshot refresh skipped: mktemp failed for $user"; return 0; }
+    if ! cp -- "$spool" "$tmp" 2>/dev/null; then
+        rm -f "$tmp"
+        log "WARN: snapshot refresh skipped: copy $spool failed"
+        return 0
+    fi
+    chmod 0644 "$tmp" 2>/dev/null || true
+    if ! mv -f "$tmp" "$snap" 2>/dev/null; then
+        rm -f "$tmp"
+        log "WARN: snapshot refresh skipped: rename to $snap failed"
+        return 0
+    fi
+    log "snapshot refreshed: $user"
+    return 0
 }
 
 # --- Rollback bookkeeping ----------------------------------------------------
@@ -172,6 +228,8 @@ process_request() {
         case "$op_kind" in
             wrap-crontab)
                 apply_wrap_crontab "$op_json" || { err_code="$RC_CODE"; err_msg="$RC_MSG"; break; } ;;
+            unwrap-crontab)
+                apply_unwrap_crontab "$op_json" || { err_code="$RC_CODE"; err_msg="$RC_MSG"; break; } ;;
             write-wrapper-script)
                 apply_write_file "$op_json" "$WRAPPER_SCRIPT_PATH" 0755 || { err_code="$RC_CODE"; err_msg="$RC_MSG"; break; } ;;
             write-token)
@@ -244,6 +302,64 @@ apply_wrap_crontab() {
         _fail "write_failed" "failed to write $file"; return 1
     fi
     ROLLBACK_LOG+=("restore $snap $file -")
+    # Refresh the world-readable snapshot so the next dry-run gate sees the
+    # just-wrapped line immediately (STAGE-002-009A). Best-effort — never fails.
+    refresh_user_snapshot "$target"
+    return 0
+}
+
+# apply_unwrap_crontab <operation-json> — strip the wrapper prefix from one
+# crontab line. The inverse of apply_wrap_crontab: it carries NO `command`
+# field; new_line is RE-DERIVED here by removing WRAPPER_PREFIX from old_line.
+apply_unwrap_crontab() {
+    local op="$1"
+    local target old_line file new_line snap supplied_new_line
+    target="$(jq -r '.target_crontab // empty' <<<"$op")"
+    old_line="$(jq -r '.old_line // empty' <<<"$op")"
+    supplied_new_line="$(jq -r '.new_line // empty' <<<"$op")"
+
+    [[ -n "$old_line" ]] || { _fail "bad_request" "empty old_line"; return 1; }
+
+    file="$(resolve_target "$target")"
+    [[ -n "$file" ]] || { _fail "bad_path" "disallowed target: $target"; return 1; }
+    [[ -f "$file" ]] || { _fail "crontab_missing" "crontab not found: $file"; return 1; }
+
+    # Inverse of the wrap guard: REFUSE a line that is NOT wrapped.
+    case "$old_line" in
+        *"$WRAPPER_PREFIX"*) : ;;  # ok — wrapped
+        *) _fail "not_wrapped" "line is not wrapped"; return 1 ;;
+    esac
+
+    # Re-derive: remove the FIRST (only) occurrence of WRAPPER_PREFIX from
+    # old_line. The wrapper prefix appears exactly once in a single-layer wrap.
+    # This RE-DERIVED value is authoritative — the request's new_line (if any)
+    # is only a cross-check below. Mirrors install.py's byte-exact unwrap_command.
+    new_line="$(replace_first "$old_line" "$WRAPPER_PREFIX" "")" \
+        || { _fail "bad_request" "wrapper prefix not found in old_line"; return 1; }
+
+    # Defense-in-depth cross-check: a supplied new_line MUST equal the
+    # executor's independently re-derived value.
+    if [[ -n "$supplied_new_line" && "$supplied_new_line" != "$new_line" ]]; then
+        _fail "bad_request" "supplied new_line disagrees with re-derived new_line"
+        return 1
+    fi
+
+    # old_line must exist VERBATIM as a full line in the file.
+    grep -qxF -- "$old_line" "$file" \
+        || { _fail "line_not_found" "old_line not present verbatim"; return 1; }
+
+    # Snapshot for rollback BEFORE the write.
+    snap="$(mktemp "${RESULTS_DIR}/.snap.XXXXXX")" || { _fail "write_failed" "mktemp failed"; return 1; }
+    cp -p "$file" "$snap" || { rm -f "$snap"; _fail "write_failed" "snapshot failed"; return 1; }
+
+    if ! apply_line_replace "$file" "$old_line" "$new_line"; then
+        rm -f "$snap"
+        _fail "write_failed" "failed to write $file"; return 1
+    fi
+    ROLLBACK_LOG+=("restore $snap $file -")
+    # Refresh the world-readable snapshot so the next dry-run gate sees the
+    # just-unwrapped line immediately (STAGE-002-009A). Best-effort — never fails.
+    refresh_user_snapshot "$target"
     return 0
 }
 
@@ -293,6 +409,20 @@ replace_last() {
     if (( nlen == 0 )); then printf '' ; return 1; fi
     for (( i=0; i<=hlen-nlen; i++ )); do
         if [[ "${h:i:nlen}" == "$n" ]]; then idx=$i; fi
+    done
+    if (( idx < 0 )); then printf '' ; return 1; fi
+    printf '%s%s%s' "${h:0:idx}" "$r" "${h:idx+nlen}"
+}
+
+# replace_first <haystack> <needle> <replacement> → echo result; non-zero if
+# the needle is absent. Splices the replacement in at the FIRST occurrence of
+# the needle. Used by apply_unwrap_crontab to strip the (single) wrapper prefix.
+replace_first() {
+    local h="$1" n="$2" r="$3" idx=-1 i
+    local hlen=${#h} nlen=${#n}
+    if (( nlen == 0 )); then printf '' ; return 1; fi
+    for (( i=0; i<=hlen-nlen; i++ )); do
+        if [[ "${h:i:nlen}" == "$n" ]]; then idx=$i; break; fi
     done
     if (( idx < 0 )); then printf '' ; return 1; fi
     printf '%s%s%s' "${h:0:idx}" "$r" "${h:idx+nlen}"
@@ -348,7 +478,8 @@ shopt -s nullglob
 for stray in \
     "$RESULTS_DIR"/.snap.* \
     "${WRAPPER_SCRIPT_PATH}".hmtmp.* \
-    "${TOKEN_PATH}".hmtmp.*; do
+    "${TOKEN_PATH}".hmtmp.* \
+    "$SNAPSHOT_DIR"/.*.snaptmp.*; do
     [[ -e "$stray" ]] || continue
     rm -f "$stray" && log "swept stray temp file: $stray"
 done

@@ -271,6 +271,7 @@ class CronDiscoverer(BaseCollector):
                     source_path=entry.host_source_path,
                     schedule=entry.schedule,
                     command=entry.command,
+                    is_wrapped=entry.is_wrapped,
                     now=now,
                 )
                 found_fingerprints.add(record.fingerprint)

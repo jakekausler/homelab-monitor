@@ -69,6 +69,7 @@ def _make_cron_record(  # noqa: PLR0913 -- test factory mirrors every CronRecord
     last_discovered_at: str | None = None,
     soft_deleted_at: str | None = None,
     log_match_key: str | None = None,
+    wrapper_installed: bool = False,
 ) -> CronRecord:
     """Build a minimal CronRecord for testing."""
     return CronRecord(
@@ -90,6 +91,7 @@ def _make_cron_record(  # noqa: PLR0913 -- test factory mirrors every CronRecord
         last_discovered_at=last_discovered_at,
         soft_deleted_at=soft_deleted_at,
         log_match_key=log_match_key,
+        wrapper_installed=wrapper_installed,
     )
 
 

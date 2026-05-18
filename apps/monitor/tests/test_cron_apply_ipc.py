@@ -28,6 +28,7 @@ import pytest
 import structlog
 
 from homelab_monitor.kernel.cron.cron_apply_constants import (
+    OP_UNWRAP_CRONTAB,
     OP_WRAP_CRONTAB,
     OP_WRITE_TOKEN,
     OP_WRITE_WRAPPER_SCRIPT,
@@ -40,6 +41,7 @@ from homelab_monitor.kernel.cron.cron_apply_ipc import (
     CronApplyRejectedError,
     CronApplyResult,
     CronApplyUnavailableError,
+    UnwrapCrontabOp,
     WrapCrontabOp,
     WriteTokenOp,
     WriteWrapperScriptOp,
@@ -711,3 +713,79 @@ async def test_submit_exactly_64kb_content_is_accepted(tmp_path: Path) -> None:
         result = await submit_and_wait(operations=ops, log=_null_log(), ipc_dir=base, timeout=5.0)
 
     assert result.status == "ok"
+
+
+# ---------------------------------------------------------------------------
+# STAGE-002-009A: UnwrapCrontabOp tests
+# ---------------------------------------------------------------------------
+
+
+def test_unwrap_crontab_op_payload() -> None:
+    """UnwrapCrontabOp.to_payload() has correct keys; NO 'command' key."""
+    op = UnwrapCrontabOp(
+        target_crontab="crontab:alice",
+        old_line="*/10 * * * * /usr/local/bin/cron-with-heartbeat.sh -- /usr/bin/task.sh",
+        new_line="*/10 * * * * /usr/bin/task.sh",
+    )
+    p = op.to_payload()
+    assert p["operation"] == OP_UNWRAP_CRONTAB
+    assert p["target_crontab"] == "crontab:alice"
+    assert p["old_line"] == "*/10 * * * * /usr/local/bin/cron-with-heartbeat.sh -- /usr/bin/task.sh"
+    assert p["new_line"] == "*/10 * * * * /usr/bin/task.sh"
+    assert "command" not in p
+
+
+def test_unwrap_crontab_op_no_command_field() -> None:
+    """UnwrapCrontabOp payload must NOT carry a 'command' field (security property)."""
+    op = UnwrapCrontabOp(
+        target_crontab="/etc/crontab",
+        old_line="0 2 * * * root /usr/local/bin/cron-with-heartbeat.sh -- /usr/bin/backup.sh",
+        new_line="0 2 * * * root /usr/bin/backup.sh",
+    )
+    p = op.to_payload()
+    # None of these should be present
+    assert "command" not in p
+    assert "path" not in p
+
+
+@pytest.mark.asyncio
+async def test_submit_and_wait_precheck_accepts_unwrap_op_valid_target(tmp_path: Path) -> None:
+    """UnwrapCrontabOp with valid target_crontab passes pre-check; request submitted."""
+    base, _requests_dir, results_dir = _make_ipc_dirs(tmp_path)
+    fixed_id = "d0d0d0d0-d0d0-d0d0-d0d0-d0d0d0d0d0d0"
+    _write_result(results_dir, fixed_id, status="ok", message="unwrapped 1 operation")
+
+    op = UnwrapCrontabOp(
+        target_crontab="/etc/crontab",
+        old_line="0 1 * * * root /usr/local/bin/cron-with-heartbeat.sh -- /usr/bin/job.sh",
+        new_line="0 1 * * * root /usr/bin/job.sh",
+    )
+
+    with patch(
+        "homelab_monitor.kernel.cron.cron_apply_ipc.uuid.uuid4",
+        return_value=uuid.UUID(fixed_id),
+    ):
+        result = await submit_and_wait(operations=[op], log=_null_log(), ipc_dir=base, timeout=5.0)
+
+    assert result.status == "ok"
+
+
+@pytest.mark.asyncio
+async def test_submit_and_wait_precheck_rejects_unwrap_op_invalid_target(
+    tmp_path: Path,
+) -> None:
+    """UnwrapCrontabOp with invalid target_crontab → CronApplyRejectedError(bad_path)."""
+    base, requests_dir, _results_dir = _make_ipc_dirs(tmp_path)
+
+    op = UnwrapCrontabOp(
+        target_crontab="/etc/passwd",  # disallowed
+        old_line="0 1 * * * root /usr/local/bin/cron-with-heartbeat.sh -- /usr/bin/job.sh",
+        new_line="0 1 * * * root /usr/bin/job.sh",
+    )
+
+    with pytest.raises(CronApplyRejectedError) as exc_info:
+        await submit_and_wait(operations=[op], log=_null_log(), ipc_dir=base)
+
+    assert exc_info.value.error_code == "bad_path"
+    # No request file written
+    assert list(requests_dir.glob("*.json")) == []

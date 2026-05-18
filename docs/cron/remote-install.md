@@ -1,6 +1,6 @@
 # Installing the cron heartbeat wrapper (remote host)
 
-> Last updated: 2026-05-18 (STAGE-002-009 — wrapper install path)
+> Last updated: 2026-05-18 (STAGE-002-009A — wrapper install + uninstall paths)
 
 ## Overview
 
@@ -263,20 +263,11 @@ therefore leaves the host unchanged ("Rollback complete; host left unchanged.").
 The best-effort `/register` call happens after the crontab rewrite and is **not**
 rolled back.
 
-To remove a *successfully installed* wrapper, edit the crontab line back to its
-original (unwrapped) form by hand:
-
-```bash
-# On the target host, as the crontab's owner:
-crontab -e
-# Delete the "/usr/local/bin/cron-with-heartbeat.sh -- " prefix from the line.
-# Save and exit.
-```
-
-The shared wrapper script and token file can stay in place (other wrapped
-crons on the host use them). The discoverer unwraps a wrapped command before
-fingerprinting, so the registry row's identity is unaffected by wrapping or
-un-wrapping.
+To remove a *successfully installed* wrapper, use the CLI's `--uninstall` mode
+(see "Uninstalling the wrapper" below) rather than hand-editing the crontab.
+Hand-editing still works — the discoverer unwraps a wrapped command before
+fingerprinting, so the registry row's identity is unaffected — but `--uninstall`
+gives you a dry-run preview and its own atomic rewrite + rollback.
 
 ---
 
@@ -359,6 +350,81 @@ sudo HM_MONITOR_URL=http://homelab-monitor HM_HEARTBEAT_TOKEN=<token> \
 
 `--line` is the 1-indexed position among the crontab's non-comment job lines.
 Omit `--confirm` to get the dry-run preview for that exact line.
+
+---
+
+## Uninstalling the wrapper (`--uninstall`)
+
+The remote CLI also removes a wrapper. Pass `--uninstall` to revert a wrapped
+crontab line —
+
+```
+<schedule> /usr/local/bin/cron-with-heartbeat.sh -- <original command>
+```
+
+— back to its original, byte-exact form:
+
+```
+<schedule> <original command>
+```
+
+`--uninstall` is a **pure crontab-line edit**: it strips exactly the
+`/usr/local/bin/cron-with-heartbeat.sh -- ` prefix from the selected line. The
+shared wrapper script (`/usr/local/bin/cron-with-heartbeat.sh`) and the shared
+token file (`/etc/homelab-monitor/heartbeat.token`) are **never touched** — they
+may still be in use by other wrapped crons on the host.
+
+### Dry-run, then confirm
+
+`--uninstall` honors the same `--confirm` gate as install:
+
+```bash
+# 1. Dry-run preview (NO changes — omit --confirm). Prints the un-wrap diff:
+HM_MONITOR_URL=http://homelab-monitor-url \
+HM_HEARTBEAT_TOKEN=<token> \
+python3 install_wrapper_remote.py --uninstall
+
+# 2. Same command + --confirm to actually apply:
+HM_MONITOR_URL=http://homelab-monitor-url \
+HM_HEARTBEAT_TOKEN=<token> \
+sudo python3 install_wrapper_remote.py --uninstall --confirm
+```
+
+Crontab / line selection works identically to install — pass `--crontab` and
+`--line`, or omit them for the interactive prompt. The dry-run preview prints
+only the `- old / + new` crontab diff (no wrapper script, no registration
+payload — uninstall builds neither).
+
+If the selected line is **not wrapped** (no wrapper prefix present), the CLI
+reports `crontab line is not wrapped; nothing to remove` and exits non-zero
+without touching the host.
+
+### Snapshot + rollback
+
+`--uninstall` implements its **own** atomic rewrite + rollback, just like the
+install path — it does not use the host-side cron-apply executor (foreign hosts
+do not run it). During `--confirm` the CLI rewrites the crontab via an atomic
+temp-file + rename; if the write fails it best-effort restores the original
+crontab text ("Rollback complete; host left unchanged.").
+
+After a successful removal the CLI makes one best-effort
+`POST /api/hb/{fingerprint}/register` call with `wrapper: false`, so the monitor
+sees the cron's now-unwrapped state. As with install, the fingerprint is
+recomputed from the **inner** (unwrapped) command — it is identical to the
+fingerprint the wrapped cron registered under, so the same registry row is
+retained across install → uninstall.
+
+### Non-interactive uninstall
+
+```bash
+sudo HM_MONITOR_URL=http://homelab-monitor HM_HEARTBEAT_TOKEN=<token> \
+  python3 install_wrapper_remote.py \
+    --uninstall \
+    --crontab crontab:root \
+    --line 1 \
+    --host nas-backup \
+    --confirm
+```
 
 ---
 

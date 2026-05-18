@@ -35,6 +35,11 @@ vi.mock('@/api/crons', () => ({
     isPending: false,
     error: null,
   })),
+  useUninstallWrapper: vi.fn(() => ({
+    mutateAsync: vi.fn().mockReturnValue(new Promise(() => undefined)),
+    isPending: false,
+    error: null,
+  })),
   usePreviewSavedCron: vi.fn(() => ({ isLoading: false, error: null, data: { runs: [] } })),
   usePreviewExpr: vi.fn(() => ({ isLoading: false, error: null, data: null })),
   cronQueryKeys: { all: ['crons'] },
@@ -82,8 +87,9 @@ const baseCron = {
   soft_deleted_at: null as string | null,
   source_path: null as string | null,
   is_local: false as boolean | null,
-  wrapper_last_seen_at: null,
+  wrapper_last_seen_at: null as string | null,
   last_discovered_at: null as string | null,
+  wrapper_installed: false as boolean,
 }
 
 const baseState = null
@@ -417,5 +423,49 @@ describe('CronDetail', () => {
     await screen.findByText('daily-backup')
     // is_local=null → isLocal=null (falsy) → isRemote=true → button disabled
     expect(screen.getByRole('button', { name: 'Install heartbeat wrapper' })).toBeDisabled()
+  })
+
+  // ---------------------------------------------------------------------------
+  // STAGE-002-009A: Install/Remove toggle based on wrapper_last_seen_at
+  // ---------------------------------------------------------------------------
+
+  // 24. Shows "Install heartbeat wrapper" when wrapper_installed is false
+  it('shows Install heartbeat wrapper button when wrapper_installed is false', async () => {
+    vi.mocked(useGetCron).mockReturnValue(
+      makeGetCronResult({ is_local: true, wrapper_installed: false }) as unknown as ReturnType<
+        typeof useGetCron
+      >,
+    )
+    renderInRouter(<CronDetail fingerprint={FP} />)
+    await screen.findByText('daily-backup')
+    expect(screen.getByRole('button', { name: 'Install heartbeat wrapper' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Remove heartbeat wrapper' })).toBeNull()
+  })
+
+  // 25. Shows "Remove heartbeat wrapper" when wrapper_installed is true
+  it('shows Remove heartbeat wrapper button when wrapper_installed is true', async () => {
+    vi.mocked(useGetCron).mockReturnValue(
+      makeGetCronResult({
+        is_local: true,
+        wrapper_installed: true,
+      }) as unknown as ReturnType<typeof useGetCron>,
+    )
+    renderInRouter(<CronDetail fingerprint={FP} />)
+    await screen.findByText('daily-backup')
+    expect(screen.getByRole('button', { name: 'Remove heartbeat wrapper' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Install heartbeat wrapper' })).toBeNull()
+  })
+
+  // 26. Remove button disabled for remote cron (is_local: false, wrapper_installed: true)
+  it('Remove heartbeat wrapper button is disabled for a remote cron', async () => {
+    vi.mocked(useGetCron).mockReturnValue(
+      makeGetCronResult({
+        is_local: false,
+        wrapper_installed: true,
+      }) as unknown as ReturnType<typeof useGetCron>,
+    )
+    renderInRouter(<CronDetail fingerprint={FP} />)
+    await screen.findByText('daily-backup')
+    expect(screen.getByRole('button', { name: 'Remove heartbeat wrapper' })).toBeDisabled()
   })
 })

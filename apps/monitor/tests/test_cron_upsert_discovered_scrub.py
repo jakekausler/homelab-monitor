@@ -23,6 +23,7 @@ async def test_upsert_discovered_scrubs_mysql_password(repo: SqliteRepository) -
         source_path="/etc/cron.d/backup",
         schedule="0 2 * * *",
         command=raw_command,
+        is_wrapped=False,
         now=iso_now,
     )
 
@@ -54,6 +55,7 @@ async def test_upsert_discovered_scrubs_pgpassword_env(repo: SqliteRepository) -
         source_path="/etc/cron.d/db",
         schedule="*/5 * * * *",
         command=raw_command,
+        is_wrapped=False,
         now=iso_now,
     )
 
@@ -82,6 +84,7 @@ async def test_upsert_discovered_fingerprint_based_on_raw_command(
         source_path="/etc/cron.d/backup",
         schedule="0 2 * * *",
         command=raw_command_1,
+        is_wrapped=False,
         now=iso_now,
     )
     assert inserted1 is True
@@ -93,6 +96,7 @@ async def test_upsert_discovered_fingerprint_based_on_raw_command(
         source_path="/etc/cron.d/backup",
         schedule="0 2 * * *",
         command=raw_command_2,
+        is_wrapped=False,
         now=iso_now,
     )
 
@@ -138,6 +142,7 @@ async def test_upsert_discovered_multiple_secrets_in_command(repo: SqliteReposit
         source_path="/etc/cron.d/complex",
         schedule="0 3 * * *",
         command=raw_command,
+        is_wrapped=False,
         now=iso_now,
     )
 
@@ -157,6 +162,7 @@ async def test_upsert_discovered_no_secrets_unchanged(repo: SqliteRepository) ->
         source_path="/etc/cron.d/backup",
         schedule="0 1 * * *",
         command=command,
+        is_wrapped=False,
         now=iso_now,
     )
 

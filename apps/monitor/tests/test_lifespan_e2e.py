@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import logging
 from collections.abc import AsyncIterator
 
 import pytest
@@ -47,26 +46,39 @@ async def app_bootstrapped(
 @pytest.mark.asyncio
 async def test_lifespan_warns_when_https_only_cookies_disabled(
     monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
     db_url: str,
     master_key: bytes,
 ) -> None:
     """When HOMELAB_MONITOR_HTTPS_ONLY_COOKIES is false, lifespan logs a warning."""
+    from structlog.testing import capture_logs  # noqa: PLC0415
+
+    from homelab_monitor.kernel.logging import (  # noqa: PLC0415
+        configure_logging,
+        reset_logging_for_tests,
+    )
+
     monkeypatch.setenv("HOMELAB_MONITOR_HTTPS_ONLY_COOKIES", "false")
     # Set up env so create_app + lifespan can boot
     monkeypatch.setenv("HOMELAB_MONITOR_DB_URL", db_url)
     monkeypatch.setenv("HOMELAB_MONITOR_MASTER_KEY", base64.b64encode(master_key).decode("ascii"))
 
-    caplog.set_level(logging.WARNING)
-    app = create_app(lifespan_enabled=True)
-    async with app.router.lifespan_context(app):
-        pass
+    # Reset logging and pre-configure it to avoid configure_logging() being called
+    # during lifespan (which would reconfigure the logger factory).
+    # capture_logs then intercepts structlog events at the BoundLogger level,
+    # immune to xdist's pytest.caplog handler removal.
+    reset_logging_for_tests()
+    configure_logging()
 
-    # Find the structlog warning in caplog records by the env_var binding
+    app = create_app(lifespan_enabled=True)
+    with capture_logs() as captured:
+        async with app.router.lifespan_context(app):
+            pass
+
     warnings_with_env = [
-        rec
-        for rec in caplog.records
-        if rec.levelno == logging.WARNING and "HTTPS_ONLY_COOKIES" in rec.getMessage()
+        entry
+        for entry in captured
+        if entry.get("log_level") == "warning"
+        and "HTTPS_ONLY_COOKIES" in str(entry.get("event", ""))
     ]
     assert warnings_with_env, "expected HTTPS_ONLY warning when env var is false"
 
@@ -358,3 +370,83 @@ async def test_lifespan_e2e_healthz_auth_exempt(app_bootstrapped: FastAPI) -> No
     ) as client:
         resp = await client.get("/api/healthz")
         assert resp.status_code == 200  # noqa: PLR2004
+
+
+@pytest.mark.asyncio
+async def test_lifespan_requests_cron_discovery_on_startup(
+    db_url: str, master_key: bytes, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """On startup, lifespan requests exactly one immediate run of the cron-discoverer."""
+    from homelab_monitor.kernel.scheduler.scheduler import Scheduler  # noqa: PLC0415
+
+    monkeypatch.setenv("HOMELAB_MONITOR_DB_URL", db_url)
+    monkeypatch.setenv("HOMELAB_MONITOR_MASTER_KEY", base64.b64encode(master_key).decode())
+    monkeypatch.setenv("HOMELAB_MONITOR_HTTPS_ONLY_COOKIES", "false")
+    monkeypatch.setenv("HOMELAB_MONITOR_BCRYPT_COST", "4")
+    monkeypatch.setenv("HOMELAB_MONITOR_AUTO_MIGRATE", "1")
+
+    calls: list[tuple[str, str]] = []
+    real_request = Scheduler.request_immediate_run
+
+    async def spy(self: Scheduler, name: str, trigger: object) -> str:
+        calls.append((name, trigger.kind))  # type: ignore[attr-defined]
+        return await real_request(self, name, trigger)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Scheduler, "request_immediate_run", spy)
+
+    app = create_app(lifespan_enabled=True)
+    async with app.router.lifespan_context(app):
+        pass
+
+    cron_calls = [c for c in calls if c[0] == "cron-discoverer"]
+    assert len(cron_calls) == 1, f"expected one cron-discoverer startup run, got {calls}"
+    assert cron_calls[0][1] == "manual"
+
+
+@pytest.mark.asyncio
+async def test_lifespan_skips_cron_discovery_when_degraded(
+    db_url: str, master_key: bytes, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When cron-discoverer fails to register, lifespan does NOT request a startup run."""
+    from homelab_monitor.kernel.plugins.loader import PluginLoader  # noqa: PLC0415
+    from homelab_monitor.kernel.scheduler.scheduler import Scheduler  # noqa: PLC0415
+
+    monkeypatch.setenv("HOMELAB_MONITOR_DB_URL", db_url)
+    monkeypatch.setenv("HOMELAB_MONITOR_MASTER_KEY", base64.b64encode(master_key).decode())
+    monkeypatch.setenv("HOMELAB_MONITOR_HTTPS_ONLY_COOKIES", "false")
+    monkeypatch.setenv("HOMELAB_MONITOR_BCRYPT_COST", "4")
+    monkeypatch.setenv("HOMELAB_MONITOR_AUTO_MIGRATE", "1")
+
+    real_register = PluginLoader.register
+
+    def failing_register(
+        self: PluginLoader,
+        collector_cls: type,
+        config_overrides: dict[str, object] | None = None,
+    ) -> object:
+        if (config_overrides or {}).get("name") == "cron-discoverer":
+            raise RuntimeError("injected cron-discoverer registration failure")
+        return real_register(self, collector_cls, config_overrides)
+
+    monkeypatch.setattr(PluginLoader, "register", failing_register)
+
+    calls: list[tuple[str, str]] = []
+    real_request = Scheduler.request_immediate_run
+
+    async def spy(self: Scheduler, name: str, trigger: object) -> str:
+        calls.append((name, trigger.kind))  # type: ignore[attr-defined]
+        return await real_request(self, name, trigger)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Scheduler, "request_immediate_run", spy)
+
+    app = create_app(lifespan_enabled=True)
+    async with app.router.lifespan_context(app):
+        degraded = app.state.degraded_collectors
+        assert "cron-discoverer" in degraded, (
+            f"expected cron-discoverer in degraded, got {degraded}"
+        )
+
+    cron_calls = [c for c in calls if c[0] == "cron-discoverer"]
+    assert len(cron_calls) == 0, (
+        f"expected no cron-discoverer startup run when degraded, got {calls}"
+    )

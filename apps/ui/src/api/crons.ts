@@ -14,6 +14,12 @@ type CronWithStateOut = Schema<'CronWithStateOut'>
 type CronOut = Schema<'CronOut'>
 type CronUpdate = Schema<'CronUpdate'>
 type PreviewRunsResponse = Schema<'PreviewRunsResponse'>
+export type InstallWrapperResponse =
+  | Schema<'InstallWrapperPreview'>
+  | Schema<'InstallWrapperResult'>
+export type UninstallWrapperResponse =
+  | Schema<'UninstallWrapperPreview'>
+  | Schema<'UninstallWrapperResult'>
 
 export interface CronListQuery {
   page?: number
@@ -160,15 +166,30 @@ export function useDiscoverNow(): UseMutationResult<DiscoverResponse, ApiError, 
 
 export function useInstallWrapper(
   id: string,
-): UseMutationResult<
-  Schema<'InstallWrapperPreview'> | Schema<'InstallWrapperResult'>,
-  ApiError,
-  { confirm: boolean }
-> {
+): UseMutationResult<InstallWrapperResponse, ApiError, { confirm: boolean }> {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: async ({ confirm }) => {
       const result = await apiClient.POST('/api/crons/{fingerprint}/install-wrapper', {
+        params: { path: { fingerprint: id } },
+        body: { confirm },
+      })
+      return unwrap(result)
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: cronQueryKeys.all })
+      void qc.invalidateQueries({ queryKey: cronQueryKeys.detail(id) })
+    },
+  })
+}
+
+export function useUninstallWrapper(
+  id: string,
+): UseMutationResult<UninstallWrapperResponse, ApiError, { confirm: boolean }> {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ confirm }) => {
+      const result = await apiClient.POST('/api/crons/{fingerprint}/uninstall-wrapper', {
         params: { path: { fingerprint: id } },
         body: { confirm },
       })

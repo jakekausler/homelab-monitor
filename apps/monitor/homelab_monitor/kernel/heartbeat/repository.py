@@ -62,6 +62,7 @@ def _row_to_cron(row: Row[Any]) -> CronRecord:
         ),
         soft_deleted_at=(None if row.soft_deleted_at is None else str(row.soft_deleted_at)),
         log_match_key=(None if row.log_match_key is None else str(row.log_match_key)),
+        wrapper_installed=bool(row.wrapper_installed),
     )
 
 
@@ -90,7 +91,7 @@ _SELECT_CRON_SQL = text(
     "SELECT fingerprint, name, host, command, schedule, schedule_canonical, "
     "cadence_seconds, expected_grace_seconds, enabled, last_seen_state, "
     "created_at, updated_at, hidden_at, source_path, wrapper_last_seen_at, "
-    "last_discovered_at, soft_deleted_at, log_match_key "
+    "last_discovered_at, soft_deleted_at, log_match_key, wrapper_installed "
     "FROM crons WHERE fingerprint = :fingerprint"
 )
 
@@ -205,7 +206,7 @@ class HeartbeatRepo:
                 "SELECT fingerprint, name, host, command, schedule, schedule_canonical, "
                 "cadence_seconds, expected_grace_seconds, enabled, last_seen_state, "
                 "created_at, updated_at, hidden_at, source_path, wrapper_last_seen_at, "
-                "last_discovered_at, soft_deleted_at, log_match_key "
+                "last_discovered_at, soft_deleted_at, log_match_key, wrapper_installed "
                 "FROM crons ORDER BY name, fingerprint"
             )
         )

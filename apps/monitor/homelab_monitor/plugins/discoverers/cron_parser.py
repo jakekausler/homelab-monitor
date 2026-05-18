@@ -31,7 +31,7 @@ from homelab_monitor.kernel.cron.discovery_types import (
     CronSourceKind,
     ParsedCronEntry,
 )
-from homelab_monitor.kernel.cron.wrapper_constants import unwrap_command
+from homelab_monitor.kernel.cron.wrapper_constants import is_wrapped, unwrap_command
 
 # matches KEY=value or KEY = value (cron does NOT support inline comments after =)
 _ENV_VAR_RE = re.compile(r"^[A-Z_][A-Z0-9_]*\s*=")
@@ -112,6 +112,8 @@ def parse_cron_file(
             errors.append(CronScanError(host_source_path=host_source_path, error=str(exc)))
             continue
 
+        # Record whether the disk line was wrapper-invoked BEFORE unwrapping.
+        line_is_wrapped = is_wrapped(command)
         # Unwrap the command if it is a wrapper invocation
         command = unwrap_command(command)
 
@@ -131,6 +133,7 @@ def parse_cron_file(
                 host_source_path=host_source_path,
                 schedule=schedule,
                 command=command,
+                is_wrapped=line_is_wrapped,
             )
         )
 

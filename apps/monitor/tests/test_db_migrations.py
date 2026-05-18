@@ -538,6 +538,7 @@ async def test_crons_columns_present_at_head(db_engine: AsyncEngine) -> None:
         "hidden_at",
         "source_path",
         "wrapper_last_seen_at",
+        "wrapper_installed",
         "last_discovered_at",
         "soft_deleted_at",
         "log_match_key",

@@ -3,7 +3,7 @@
 This document lists the one-time host-side setup required before
 `docker compose up monitor` will succeed in production.
 
-## Cron discovery (STAGE-002-007, STAGE-002-009)
+## Cron discovery (STAGE-002-007, STAGE-002-009, STAGE-002-009A)
 
 The cron-discoverer plugin discovers the host's crontab files via read-only
 bind-mounts. To grant the container read access without ACLs (which break
@@ -180,18 +180,45 @@ units plus a root script.
 | `homelab-monitor-crontab-snapshot.timer` | `/etc/systemd/system/` | Periodic refresh (~300s) as a backstop. |
 
 **Cron-apply executor** — the host-side process that performs every privileged
-write for a heartbeat-wrapper install. The monitor container has no host-write
-capability; it only writes a request JSON into the IPC `requests/` directory,
-and this executor (running as root) applies the wrapper script, the token
-file, and the crontab rewrite atomically with rollback:
+write for a heartbeat-wrapper install **or removal**. The monitor container has
+no host-write capability; it only writes a request JSON into the IPC
+`requests/` directory, and this executor (running as root) applies the wrapper
+script, the token file, and the crontab rewrite atomically with rollback.
+
+The executor supports four operations:
+
+- `write-wrapper-script` — write the wrapper script to its FIXED host path.
+- `write-token` — write the heartbeat token to its FIXED host path.
+- `wrap-crontab` — rewrite a crontab line to its wrapped form.
+- `unwrap-crontab` — strip the wrapper prefix from a wrapped crontab line
+  (STAGE-002-009A; the inverse of `wrap-crontab`). A wrapper *install* request
+  carries all three of the first ops; an *uninstall* request carries only
+  `unwrap-crontab`.
+
+After a successful `wrap-crontab` / `unwrap-crontab`, the executor also
+refreshes the world-readable crontab snapshot (`/var/lib/homelab-monitor/crontab-snapshot/<user>`)
+**inline** — a best-effort copy of the just-written spool file — so the
+monitor's next install/uninstall dry-run gate sees the fresh state immediately
+instead of waiting up to 300s for the snapshot timer (STAGE-002-009A). This
+inline refresh applies only to user crontabs (`crontab:<user>`); `/etc/crontab`
+and `/etc/cron.d/*` are read directly from the container's `/etc` bind mount
+and have no snapshot mirror.
 
 | Artifact | Installed to | Purpose |
 |---|---|---|
-| `hm-cron-apply` | `/usr/local/sbin/hm-cron-apply` | Root executor: reads a request JSON, applies the operations atomically (snapshot + rollback on failure), writes a result JSON. Requires `jq`. |
+| `hm-cron-apply` | `/usr/local/sbin/hm-cron-apply` | Root executor: reads a request JSON, applies the operations atomically (snapshot + rollback on failure), refreshes the crontab snapshot after a wrap/unwrap, writes a result JSON. Requires `jq`. |
 | `homelab-monitor-cron-apply.service` | `/etc/systemd/system/` | `Type=oneshot` unit that runs the executor. Hardened (`ProtectSystem=strict`, explicit `ReadWritePaths`). |
 | `homelab-monitor-cron-apply.path` | `/etc/systemd/system/` | `PathChanged=` watcher on `/var/lib/homelab-monitor/cron-apply/requests`; triggers the executor on each new request. |
 | `homelab-monitor-cron-apply.timer` | `/etc/systemd/system/` | 60-second safety-net sweep — runs the executor even if the `.path` watcher missed a filesystem event. |
 | IPC directory | `/var/lib/homelab-monitor/cron-apply/{requests,results}` | `requests/` owned by the monitor user (container writes); `results/` owned by root (executor writes). |
+
+The executor also writes the crontab-snapshot directory
+(`/var/lib/homelab-monitor/crontab-snapshot`) after a successful wrap/unwrap —
+this is the same directory the `hm-crontab-snapshot` script and its timer
+maintain; both write paths are root-owned and produce byte-identical content.
+Both `/var/lib/homelab-monitor/cron-apply` and
+`/var/lib/homelab-monitor/crontab-snapshot` are therefore in the cron-apply
+service's `ReadWritePaths` allow-list.
 
 The repo source for all six units lives in `deploy/systemd/`; the scripts in
 `scripts/hm-crontab-snapshot.sh` and `scripts/hm-cron-apply.sh`.

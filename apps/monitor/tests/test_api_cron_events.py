@@ -107,6 +107,7 @@ async def cron_events_client(
     monkeypatch.setenv("HOMELAB_MONITOR_DB_URL", db_url)
     monkeypatch.setenv("HOMELAB_MONITOR_MASTER_KEY", base64.b64encode(master_key).decode())
     monkeypatch.setenv("HOMELAB_MONITOR_ALERTMANAGER_URL", "disabled")
+    monkeypatch.setenv("HOMELAB_MONITOR_DISABLE_STARTUP_CRON_DISCOVERY", "1")
 
     from homelab_monitor.kernel.api.app import create_app  # noqa: PLC0415
     from homelab_monitor.kernel.auth.api_tokens import make_api_token  # noqa: PLC0415

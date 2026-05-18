@@ -367,3 +367,205 @@ class TestHandleDispatching:
 
         assert rc == 0
         assert called == [f"{_FINGERPRINT}:True"]
+
+
+# ===========================================================================
+# STAGE-002-009A: hm cron uninstall-wrapper CLI tests
+# ===========================================================================
+
+from homelab_monitor.cli.cron import (  # noqa: E402
+    _cmd_uninstall_wrapper,  # pyright: ignore[reportPrivateUsage]
+)
+from homelab_monitor.kernel.cron.install import (  # noqa: E402
+    NotWrappedError,
+    WrapperUninstallKit,
+)
+
+
+def _make_fake_uninstall_kit(fingerprint: str = _FINGERPRINT) -> MagicMock:
+    kit = MagicMock(spec=WrapperUninstallKit)
+    kit.fingerprint = fingerprint
+    diff = MagicMock()
+    diff.source_path = "/etc/crontab"
+    diff.old_line = "* * * * * root /usr/local/bin/cron-with-heartbeat.sh -- /usr/bin/mytask.sh"
+    diff.new_line = "* * * * * root /usr/bin/mytask.sh"
+    kit.crontab_diff = diff
+    return kit
+
+
+class TestUninstallWrapperDryRun:
+    @pytest.mark.asyncio
+    async def test_dry_run_prints_crontab_diff(
+        self,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Dry-run (confirm=False) prints the crontab diff, returns 0."""
+        kit = _make_fake_uninstall_kit()
+
+        with (
+            patch("homelab_monitor.cli.cron.get_engine"),
+            patch("homelab_monitor.cli.cron.SqliteRepository"),
+            patch("homelab_monitor.cli.cron.CronRepo") as mock_cron_repo_cls,
+            patch("homelab_monitor.cli.cron.resolve_hostname", return_value="local-host"),
+            patch("homelab_monitor.cli.cron.build_uninstall_kit", new=AsyncMock(return_value=kit)),
+        ):
+            mock_cron_repo = mock_cron_repo_cls.return_value
+            mock_cron = MagicMock()
+            mock_cron.host = "local-host"
+            mock_cron_repo.get_cron = AsyncMock(return_value=mock_cron)
+
+            rc = await _cmd_uninstall_wrapper(_FINGERPRINT, confirm=False)
+
+        assert rc == 0
+        captured = capsys.readouterr()
+        assert "Crontab diff" in captured.out
+        assert kit.crontab_diff.old_line in captured.out
+        assert kit.crontab_diff.new_line in captured.out
+
+    @pytest.mark.asyncio
+    async def test_dry_run_cron_not_found_returns_1(
+        self,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Dry-run with unknown fingerprint returns 1 and prints error."""
+        with (
+            patch("homelab_monitor.cli.cron.get_engine"),
+            patch("homelab_monitor.cli.cron.SqliteRepository"),
+            patch("homelab_monitor.cli.cron.CronRepo") as mock_cron_repo_cls,
+            patch("homelab_monitor.cli.cron.resolve_hostname", return_value="local-host"),
+        ):
+            mock_cron_repo = mock_cron_repo_cls.return_value
+            mock_cron_repo.get_cron = AsyncMock(return_value=None)
+
+            rc = await _cmd_uninstall_wrapper("bad-fp", confirm=False)
+
+        assert rc == 1
+        captured = capsys.readouterr()
+        assert "ERROR" in captured.err
+
+
+class TestUninstallWrapperConfirm:
+    @pytest.mark.asyncio
+    async def test_confirm_calls_uninstall_and_prints_success(
+        self,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Confirm path calls uninstall_wrapper_local and prints success message."""
+        with (
+            patch("homelab_monitor.cli.cron.get_engine"),
+            patch("homelab_monitor.cli.cron.SqliteRepository"),
+            patch("homelab_monitor.cli.cron.CronRepo") as mock_cron_repo_cls,
+            patch("homelab_monitor.cli.cron.resolve_hostname", return_value="local-host"),
+            patch(
+                "homelab_monitor.cli.cron.uninstall_wrapper_local",
+                new=AsyncMock(return_value=MagicMock()),
+            ),
+        ):
+            mock_cron_repo = mock_cron_repo_cls.return_value
+            mock_cron = MagicMock()
+            mock_cron.host = "local-host"
+            mock_cron_repo.get_cron = AsyncMock(return_value=mock_cron)
+
+            rc = await _cmd_uninstall_wrapper(_FINGERPRINT, confirm=True)
+
+        assert rc == 0
+        captured = capsys.readouterr()
+        assert "removed" in captured.out.lower()
+
+    @pytest.mark.asyncio
+    async def test_confirm_not_wrapped_returns_1(
+        self,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """NotWrappedError → returns 1 and prints error."""
+        with (
+            patch("homelab_monitor.cli.cron.get_engine"),
+            patch("homelab_monitor.cli.cron.SqliteRepository"),
+            patch("homelab_monitor.cli.cron.CronRepo") as mock_cron_repo_cls,
+            patch("homelab_monitor.cli.cron.resolve_hostname", return_value="local-host"),
+            patch(
+                "homelab_monitor.cli.cron.uninstall_wrapper_local",
+                new=AsyncMock(side_effect=NotWrappedError("not wrapped")),
+            ),
+        ):
+            mock_cron_repo = mock_cron_repo_cls.return_value
+            mock_cron = MagicMock()
+            mock_cron.host = "local-host"
+            mock_cron_repo.get_cron = AsyncMock(return_value=mock_cron)
+
+            rc = await _cmd_uninstall_wrapper(_FINGERPRINT, confirm=True)
+
+        assert rc == 1
+        captured = capsys.readouterr()
+        assert "ERROR" in captured.err
+
+
+class TestUninstallWrapperRemoteHost:
+    @pytest.mark.asyncio
+    async def test_remote_host_cron_returns_1(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """Cron on a remote host → prints error and returns 1.
+
+        Covers cli/cron.py lines 215-219.
+        """
+        with (
+            patch("homelab_monitor.cli.cron.get_engine"),
+            patch("homelab_monitor.cli.cron.SqliteRepository"),
+            patch("homelab_monitor.cli.cron.CronRepo") as mock_cron_repo_cls,
+            patch("homelab_monitor.cli.cron.resolve_hostname", return_value="local-host"),
+        ):
+            mock_cron_repo = mock_cron_repo_cls.return_value
+            mock_cron = MagicMock()
+            mock_cron.host = "other-host"  # different from local-host
+            mock_cron_repo.get_cron = AsyncMock(return_value=mock_cron)
+
+            rc = await _cmd_uninstall_wrapper(_FINGERPRINT, confirm=False)
+
+        assert rc == 1
+        captured = capsys.readouterr()
+        assert "ERROR" in captured.err
+        assert "other-host" in captured.err or "local" in captured.err
+
+    @pytest.mark.asyncio
+    async def test_unexpected_exception_returns_1(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """Unexpected exception in _cmd_uninstall_wrapper → returns 1.
+
+        Covers cli/cron.py lines 247-249.
+        """
+        with (
+            patch("homelab_monitor.cli.cron.get_engine"),
+            patch("homelab_monitor.cli.cron.SqliteRepository"),
+            patch("homelab_monitor.cli.cron.CronRepo") as mock_cron_repo_cls,
+            patch("homelab_monitor.cli.cron.resolve_hostname", return_value="local-host"),
+        ):
+            mock_cron_repo = mock_cron_repo_cls.return_value
+            # Trigger unexpected exception via get_cron raising something unexpected
+            mock_cron_repo.get_cron = AsyncMock(side_effect=RuntimeError("db exploded"))
+
+            rc = await _cmd_uninstall_wrapper(_FINGERPRINT, confirm=False)
+
+        assert rc == 1
+        captured = capsys.readouterr()
+        assert "ERROR" in captured.err
+        assert "unexpected" in captured.err.lower()
+
+
+class TestHandleDispatchingUninstall:
+    def test_dispatches_uninstall_wrapper(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """_handle routes cron_cmd='uninstall-wrapper' via asyncio.run."""
+        called: list[str] = []
+
+        async def fake_uninstall(fp: str, *, confirm: bool) -> int:
+            called.append(f"{fp}:{confirm}")
+            return 0
+
+        with patch("homelab_monitor.cli.cron._cmd_uninstall_wrapper", fake_uninstall):
+            args = argparse.Namespace(
+                cron_cmd="uninstall-wrapper",
+                fingerprint=_FINGERPRINT,
+                confirm=False,
+            )
+            rc = _handle(args)
+
+        assert rc == 0
+        assert called == [f"{_FINGERPRINT}:False"]

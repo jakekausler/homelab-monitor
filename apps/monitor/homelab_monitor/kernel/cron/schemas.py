@@ -174,6 +174,7 @@ class CronOut(BaseModel):
     last_discovered_at: str | None
     soft_deleted_at: str | None
     is_local: bool
+    wrapper_installed: bool
 
 
 class CronListResponse(BaseModel):
@@ -241,6 +242,32 @@ class InstallWrapperResult(BaseModel):
     cron: CronOut
 
 
+# ---------- Uninstall wrapper request/response ----------
+
+
+class UninstallWrapperRequest(BaseModel):
+    """Body for POST /api/crons/{fingerprint}/uninstall-wrapper."""
+
+    model_config = ConfigDict(extra="forbid")
+    confirm: bool = False
+
+
+class UninstallWrapperPreview(BaseModel):
+    """Dry-run response (confirm=false). Uninstall is a pure crontab-line edit,
+    so the preview carries ONLY the crontab diff (no wrapper_content / token)."""
+
+    model_config = ConfigDict(extra="forbid")
+    fingerprint: str
+    crontab_diff: CrontabDiffOut
+
+
+class UninstallWrapperResult(BaseModel):
+    """confirm=true response."""
+
+    model_config = ConfigDict(extra="forbid")
+    cron: CronOut
+
+
 # ---------- Helpers ----------
 
 
@@ -272,4 +299,5 @@ def cron_record_to_out(rec: CronRecord, *, local_hostname: str | None = None) ->
         last_discovered_at=rec.last_discovered_at,
         soft_deleted_at=rec.soft_deleted_at,
         is_local=(local_hostname is not None and rec.host == local_hostname),
+        wrapper_installed=rec.wrapper_installed,
     )

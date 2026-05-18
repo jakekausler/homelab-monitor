@@ -1,6 +1,6 @@
 # Cron identity (operator + architecture guide)
 
-> Last updated: 2026-05-16 (STAGE-002-008 — B-mode log-scrape).
+> Last updated: 2026-05-18 (STAGE-002-009A — wrapper install + uninstall).
 
 ## TL;DR
 
@@ -305,6 +305,8 @@ Operator action after intentional crontab edits: hide the stale row.
 | DELETE | `/api/crons/{fingerprint}` | Soft-delete (sets `hidden_at`) |
 | POST | `/api/hb/{fingerprint}/{start,ok,fail}` | Heartbeat receiver — 404 if fingerprint unknown |
 | POST | `/api/hb/{fingerprint}/register` | Wrapper handshake — upsert row; on `wrapper: true` refresh ``wrapper_last_seen_at`` (STAGE-002-005) |
+| POST | `/api/crons/{fingerprint}/install-wrapper` | Install heartbeat wrapper (or dry-run preview when `confirm: false`); local-host only (STAGE-002-009) |
+| POST | `/api/crons/{fingerprint}/uninstall-wrapper` | Remove heartbeat wrapper (or dry-run preview when `confirm: false`); local-host only; 409 `NotWrappedError` if the line is not wrapped (STAGE-002-009A) |
 
 ## Discovery (STAGE-002-007)
 
@@ -396,14 +398,37 @@ referenced by the installer, the parser, and the wrapper script itself.
 Consequences:
 
 - Wrapping (or later un-wrapping) a crontab line does **not** change the
-  cron's fingerprint — the registry row is retained across install.
-- A discovery scan run before and after an install converges on the same row;
-  the install also performs an explicit `upsert_discovered` so the row's
-  `last_discovered_at` reflects the operator touch immediately.
+  cron's fingerprint — the registry row is retained across install, uninstall,
+  and re-install. The wrapper-uninstall path (STAGE-002-009A) submits an
+  `unwrap-crontab` operation that strips the wrapper prefix; the reverted line
+  is byte-identical to the pre-install original, so it re-fingerprints to the
+  same value.
+- A discovery scan run before and after an install (or uninstall) converges on
+  the same row; both `install_wrapper_local` and `uninstall_wrapper_local`
+  perform an explicit `upsert_discovered` so the row's `last_discovered_at`
+  reflects the operator touch immediately.
 - `install.py:_find_matching_line` can locate the cron's line whether the file
   currently shows the wrapped or the unwrapped form, because it matches on the
   unwrapped fingerprint either way. The installer still refuses to wrap a line
-  that is already wrapped (`AlreadyWrappedError`).
+  that is already wrapped (`AlreadyWrappedError`); the uninstaller refuses to
+  un-wrap a line that is not wrapped (`NotWrappedError`).
+
+### `wrapper_installed` (derived column, STAGE-002-009A)
+
+`wrapper_installed` is a boolean column on the `crons` row that records whether
+the crontab line is currently wrapped. It is **derived state**, not an operator
+intent flag: discovery sets it on every scan from the line's actual
+wrapped/unwrapped form (`upsert_discovered` passes `is_wrapped`, computed from
+whether the raw command begins with the wrapper invocation prefix). It is
+**not** part of the fingerprint tuple — wrapping/un-wrapping a line never
+changes identity, and `wrapper_installed` is precisely the column that *does*
+flip while the fingerprint stays constant.
+
+The `/register` handshake seeds it from the heartbeat client's `wrapper` flag
+on first insert; thereafter discovery is authoritative (re-register does NOT
+update it — `wrapper_installed` reflects on-disk reality, and a heartbeat
+client's claim is not disk truth). The UI's Install/Remove toggle keys directly
+on this field.
 
 ### Cross-stage interfaces
 
@@ -503,6 +528,17 @@ shelved the discoverer after repeated tick failures.
   reconciliation re-finding the fingerprint on a clean scan (`who="system"`),
   or `/register` re-registering a soft-deleted cron (`who=token name`)
   (STAGE-002-007A).
+- `crons.wrapper_installed` — Heartbeat wrapper successfully installed for a
+  cron (STAGE-002-009). Written by `record_wrapper_installed` after the
+  host-side executor applies the wrap. Does NOT touch `wrapper_last_seen_at`
+  (that column is the wrapper-HEALTH signal, populated only by a real
+  heartbeat). `who` = session username or `"cli"`.
+- `crons.wrapper_uninstalled` — Heartbeat wrapper successfully removed from a
+  cron (STAGE-002-009A). Written by `record_wrapper_uninstalled` after the
+  executor applies the `unwrap-crontab` operation. Unlike install, uninstall
+  clears `wrapper_last_seen_at` back to NULL in the SAME transaction — once the
+  line is unwrapped no heartbeat will ever arrive to clear it, so a stale value
+  would falsely report a healthy wrapper. `who` = session username or `"cli"`.
 - `cron.observed_run` — B-mode log-scrape recorded a NEUTRAL observed run
   (vanilla cron dispatch line, no exit code). `who="system:log-scrape"`.
   Bumps `heartbeats_state.observed_runs_total`; does NOT change `current_state`

@@ -338,6 +338,7 @@ async def test_install_wrapper_confirm_success(
         last_discovered_at=None,
         soft_deleted_at=None,
         log_match_key=None,
+        wrapper_installed=True,
     )
 
     with patch(
@@ -812,6 +813,7 @@ async def test_install_wrapper_confirm_result_wrapper_last_seen_at_is_null(
         last_discovered_at=None,
         soft_deleted_at=None,
         log_match_key=None,
+        wrapper_installed=False,
     )
 
     with patch(
@@ -913,3 +915,428 @@ async def test_wrapper_template_route_not_shadowed_by_fingerprint(
     assert resp.status_code == 200  # noqa: PLR2004
     # Content must be the template text, not a JSON error
     assert "{{FINGERPRINT}}" in resp.text
+
+
+# ===========================================================================
+# STAGE-002-009A: POST /api/crons/{fingerprint}/uninstall-wrapper
+# ===========================================================================
+
+
+def _make_fake_wrapped_crontab(
+    tmp_path: Path, schedule: str = _SCHEDULE, command: str = _COMMAND
+) -> Path:
+    """Create /etc/crontab under tmp_path with a WRAPPED job line."""
+    etc = tmp_path / "etc"
+    etc.mkdir(exist_ok=True)
+    ct = etc / "crontab"
+    wrapped_cmd = WRAPPER_INVOCATION_PREFIX + command
+    ct.write_text(f"# header\n{schedule} root {wrapped_cmd}\n")
+    return tmp_path
+
+
+# ---------------------------------------------------------------------------
+# Unauthenticated
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_uninstall_wrapper_unauthenticated(
+    unauthenticated_client: AsyncClient,
+) -> None:
+    """No session → 401."""
+    resp = await unauthenticated_client.post(
+        "/api/crons/some-fp/uninstall-wrapper",
+        json={"confirm": False},
+    )
+    assert resp.status_code == 401  # noqa: PLR2004
+
+
+# ---------------------------------------------------------------------------
+# Cron not found
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_uninstall_wrapper_cron_not_found(
+    authenticated_client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Unknown fingerprint → 404."""
+    monkeypatch.setenv("HM_HOST_HOSTNAME", _HOST)
+
+    resp = await authenticated_client.post(
+        "/api/crons/does-not-exist/uninstall-wrapper",
+        json={"confirm": False},
+        headers=_csrf(authenticated_client),
+    )
+    assert resp.status_code == 404  # noqa: PLR2004
+
+
+# ---------------------------------------------------------------------------
+# Remote host
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_uninstall_wrapper_remote_host(
+    authenticated_client: AsyncClient,
+    repo: SqliteRepository,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cron on a remote host → 400."""
+    monkeypatch.setenv("HM_HOST_HOSTNAME", _HOST)
+    fp = await _seed_cron(repo, host=_REMOTE_HOST)
+
+    resp = await authenticated_client.post(
+        f"/api/crons/{fp}/uninstall-wrapper",
+        json={"confirm": False},
+        headers=_csrf(authenticated_client),
+    )
+    assert resp.status_code == 400  # noqa: PLR2004
+    assert "remote" in resp.text.lower()
+
+
+# ---------------------------------------------------------------------------
+# Dry-run: crontab line not found → 409
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_uninstall_wrapper_dry_run_line_not_found(
+    authenticated_client: AsyncClient,
+    repo: SqliteRepository,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Dry-run where crontab file has no matching line → 409."""
+    monkeypatch.setenv("HM_CRON_HOST_ROOT", str(tmp_path))
+    monkeypatch.setenv("HM_HOST_HOSTNAME", _HOST)
+
+    (tmp_path / "etc").mkdir(exist_ok=True)
+    (tmp_path / "etc" / "crontab").write_text("# only comments\n")
+
+    fp = await _seed_cron(repo, host=_HOST)
+
+    resp = await authenticated_client.post(
+        f"/api/crons/{fp}/uninstall-wrapper",
+        json={"confirm": False},
+        headers=_csrf(authenticated_client),
+    )
+    assert resp.status_code == 409  # noqa: PLR2004
+
+
+# ---------------------------------------------------------------------------
+# Dry-run: not wrapped → 409
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_uninstall_wrapper_dry_run_not_wrapped(
+    authenticated_client: AsyncClient,
+    repo: SqliteRepository,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Dry-run where crontab line is NOT wrapped → 409."""
+    monkeypatch.setenv("HM_CRON_HOST_ROOT", str(tmp_path))
+    monkeypatch.setenv("HM_HOST_HOSTNAME", _HOST)
+
+    # Write a bare (unwrapped) line
+    (tmp_path / "etc").mkdir(exist_ok=True)
+    (tmp_path / "etc" / "crontab").write_text(f"{_SCHEDULE} root {_COMMAND}\n")
+
+    fp = await _seed_cron(repo, host=_HOST)
+
+    resp = await authenticated_client.post(
+        f"/api/crons/{fp}/uninstall-wrapper",
+        json={"confirm": False},
+        headers=_csrf(authenticated_client),
+    )
+    assert resp.status_code == 409  # noqa: PLR2004
+
+
+# ---------------------------------------------------------------------------
+# Dry-run: wrapped crontab → returns UninstallWrapperPreview
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_uninstall_wrapper_dry_run_returns_preview(
+    authenticated_client: AsyncClient,
+    repo: SqliteRepository,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Dry-run (confirm=false) on a wrapped line → 200 with UninstallWrapperPreview."""
+    monkeypatch.setenv("HM_CRON_HOST_ROOT", str(tmp_path))
+    monkeypatch.setenv("HM_HOST_HOSTNAME", _HOST)
+    _make_fake_wrapped_crontab(tmp_path)
+
+    fp = await _seed_cron(repo, host=_HOST)
+
+    resp = await authenticated_client.post(
+        f"/api/crons/{fp}/uninstall-wrapper",
+        json={"confirm": False},
+        headers=_csrf(authenticated_client),
+    )
+    assert resp.status_code == 200  # noqa: PLR2004
+    data = resp.json()
+    assert data["fingerprint"] == fp
+    diff = data["crontab_diff"]
+    assert "old_line" in diff
+    assert "new_line" in diff
+    # old_line contains the wrapper prefix; new_line does not
+    assert WRAPPER_INVOCATION_PREFIX in diff["old_line"]
+    assert WRAPPER_INVOCATION_PREFIX not in diff["new_line"]
+
+
+# ---------------------------------------------------------------------------
+# Executor unavailable → 503
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_uninstall_wrapper_executor_unavailable(
+    authenticated_client: AsyncClient,
+    repo: SqliteRepository,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Executor unavailable → 503."""
+    monkeypatch.setenv("HM_CRON_HOST_ROOT", str(tmp_path))
+    monkeypatch.setenv("HM_HOST_HOSTNAME", _HOST)
+    _make_fake_wrapped_crontab(tmp_path)
+
+    fp = await _seed_cron(repo, host=_HOST)
+
+    from homelab_monitor.kernel.cron.install import CronApplyUnavailableError  # noqa: PLC0415
+
+    with patch(
+        "homelab_monitor.kernel.cron.install.uninstall_wrapper_local",
+        side_effect=CronApplyUnavailableError("executor not running"),
+    ):
+        resp = await authenticated_client.post(
+            f"/api/crons/{fp}/uninstall-wrapper",
+            json={"confirm": True},
+            headers=_csrf(authenticated_client),
+        )
+
+    assert resp.status_code == 503  # noqa: PLR2004
+
+
+# ---------------------------------------------------------------------------
+# Confirm path: RemoteHostError → 400 (crons.py line 491)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_uninstall_wrapper_confirm_remote_host_returns_400(
+    authenticated_client: AsyncClient,
+    repo: SqliteRepository,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """confirm=true: uninstall_wrapper_local raises RemoteHostError → 400.
+
+    Covers crons.py line 491.
+    """
+    from unittest.mock import AsyncMock  # noqa: PLC0415
+
+    from homelab_monitor.kernel.cron.install import RemoteHostError  # noqa: PLC0415
+
+    monkeypatch.setenv("HM_CRON_HOST_ROOT", str(tmp_path))
+    monkeypatch.setenv("HM_HOST_HOSTNAME", _HOST)
+    _make_fake_wrapped_crontab(tmp_path)
+    fp = await _seed_cron(repo, host=_HOST)
+
+    with patch(
+        "homelab_monitor.kernel.cron.install.uninstall_wrapper_local",
+        new=AsyncMock(side_effect=RemoteHostError("cron is on remote host")),
+    ):
+        resp = await authenticated_client.post(
+            f"/api/crons/{fp}/uninstall-wrapper",
+            json={"confirm": True},
+            headers=_csrf(authenticated_client),
+        )
+
+    assert resp.status_code == 400  # noqa: PLR2004
+
+
+# ---------------------------------------------------------------------------
+# Confirm path: CronLineNotFoundError → 409 (crons.py line 493)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_uninstall_wrapper_confirm_line_not_found_returns_409(
+    authenticated_client: AsyncClient,
+    repo: SqliteRepository,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """confirm=true: uninstall_wrapper_local raises CronLineNotFoundError → 409.
+
+    Covers crons.py line 493.
+    """
+    from unittest.mock import AsyncMock  # noqa: PLC0415
+
+    from homelab_monitor.kernel.cron.install import CronLineNotFoundError  # noqa: PLC0415
+
+    monkeypatch.setenv("HM_CRON_HOST_ROOT", str(tmp_path))
+    monkeypatch.setenv("HM_HOST_HOSTNAME", _HOST)
+    _make_fake_wrapped_crontab(tmp_path)
+    fp = await _seed_cron(repo, host=_HOST)
+
+    with patch(
+        "homelab_monitor.kernel.cron.install.uninstall_wrapper_local",
+        new=AsyncMock(side_effect=CronLineNotFoundError("line not found")),
+    ):
+        resp = await authenticated_client.post(
+            f"/api/crons/{fp}/uninstall-wrapper",
+            json={"confirm": True},
+            headers=_csrf(authenticated_client),
+        )
+
+    assert resp.status_code == 409  # noqa: PLR2004
+
+
+# ---------------------------------------------------------------------------
+# Confirm path: NotWrappedError → 409 (crons.py line 495)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_uninstall_wrapper_confirm_not_wrapped_returns_409(
+    authenticated_client: AsyncClient,
+    repo: SqliteRepository,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """confirm=true: uninstall_wrapper_local raises NotWrappedError → 409.
+
+    Covers crons.py line 495.
+    """
+    from unittest.mock import AsyncMock  # noqa: PLC0415
+
+    from homelab_monitor.kernel.cron.install import NotWrappedError  # noqa: PLC0415
+
+    monkeypatch.setenv("HM_CRON_HOST_ROOT", str(tmp_path))
+    monkeypatch.setenv("HM_HOST_HOSTNAME", _HOST)
+    _make_fake_wrapped_crontab(tmp_path)
+    fp = await _seed_cron(repo, host=_HOST)
+
+    with patch(
+        "homelab_monitor.kernel.cron.install.uninstall_wrapper_local",
+        new=AsyncMock(side_effect=NotWrappedError("already bare")),
+    ):
+        resp = await authenticated_client.post(
+            f"/api/crons/{fp}/uninstall-wrapper",
+            json={"confirm": True},
+            headers=_csrf(authenticated_client),
+        )
+
+    assert resp.status_code == 409  # noqa: PLR2004
+
+
+# ---------------------------------------------------------------------------
+# Confirm path: CrontabWriteError → 500 (crons.py lines 499-501)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_uninstall_wrapper_confirm_write_error_returns_500(
+    authenticated_client: AsyncClient,
+    repo: SqliteRepository,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """confirm=true: uninstall_wrapper_local raises CrontabWriteError → 500.
+
+    Covers crons.py lines 499-501.
+    """
+    from unittest.mock import AsyncMock  # noqa: PLC0415
+
+    from homelab_monitor.kernel.cron.install import CrontabWriteError  # noqa: PLC0415
+
+    monkeypatch.setenv("HM_CRON_HOST_ROOT", str(tmp_path))
+    monkeypatch.setenv("HM_HOST_HOSTNAME", _HOST)
+    _make_fake_wrapped_crontab(tmp_path)
+    fp = await _seed_cron(repo, host=_HOST)
+
+    with patch(
+        "homelab_monitor.kernel.cron.install.uninstall_wrapper_local",
+        new=AsyncMock(side_effect=CrontabWriteError("disk full")),
+    ):
+        resp = await authenticated_client.post(
+            f"/api/crons/{fp}/uninstall-wrapper",
+            json={"confirm": True},
+            headers=_csrf(authenticated_client),
+        )
+
+    assert resp.status_code == 500  # noqa: PLR2004
+    assert "uninstall failed" in resp.text
+
+
+# ---------------------------------------------------------------------------
+# Confirm path: success → 200 with UninstallWrapperResult (crons.py lines 503-504)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_uninstall_wrapper_confirm_success_returns_200(
+    authenticated_client: AsyncClient,
+    repo: SqliteRepository,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """confirm=true: successful uninstall returns 200 with UninstallWrapperResult.
+
+    Covers crons.py lines 503-504 (success path after uninstall_wrapper_local).
+    """
+    from unittest.mock import AsyncMock  # noqa: PLC0415
+
+    from homelab_monitor.kernel.cron.repository import CronRecord  # noqa: PLC0415
+    from homelab_monitor.kernel.db.time import utc_now_iso as _utc  # noqa: PLC0415
+
+    monkeypatch.setenv("HM_CRON_HOST_ROOT", str(tmp_path))
+    monkeypatch.setenv("HM_HOST_HOSTNAME", _HOST)
+    _make_fake_wrapped_crontab(tmp_path)
+    fp = await _seed_cron(repo, host=_HOST)
+
+    now = _utc()
+    fake_updated_cron = CronRecord(
+        fingerprint=fp,
+        name="backup",
+        host=_HOST,
+        command=_COMMAND,
+        schedule=_SCHEDULE,
+        schedule_canonical=_SCHEDULE,
+        cadence_seconds=300,
+        expected_grace_seconds=300,
+        enabled=True,
+        last_seen_state="unknown",
+        created_at=now,
+        updated_at=now,
+        hidden_at=None,
+        source_path=_SOURCE_PATH,
+        wrapper_last_seen_at=None,
+        last_discovered_at=None,
+        soft_deleted_at=None,
+        log_match_key=None,
+        wrapper_installed=False,
+    )
+
+    with patch(
+        "homelab_monitor.kernel.cron.install.uninstall_wrapper_local",
+        new=AsyncMock(return_value=fake_updated_cron),
+    ):
+        resp = await authenticated_client.post(
+            f"/api/crons/{fp}/uninstall-wrapper",
+            json={"confirm": True},
+            headers=_csrf(authenticated_client),
+        )
+
+    assert resp.status_code == 200  # noqa: PLR2004
+    data = resp.json()
+    assert "cron" in data
+    assert data["cron"]["fingerprint"] == fp

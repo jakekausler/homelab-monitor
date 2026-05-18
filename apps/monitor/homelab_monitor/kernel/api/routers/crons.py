@@ -62,6 +62,9 @@ from homelab_monitor.kernel.cron.schemas import (
     InstallWrapperResult,
     PreviewRunsQuery,
     PreviewRunsResponse,
+    UninstallWrapperPreview,
+    UninstallWrapperRequest,
+    UninstallWrapperResult,
     cron_record_to_out,
 )
 from homelab_monitor.kernel.db.time import utc_now_iso
@@ -394,6 +397,109 @@ async def install_wrapper(  # noqa: PLR0912 -- explicit per-exception-type HTTP 
 
     bound_log.info("install_wrapper.success")
     return InstallWrapperResult(
+        cron=cron_record_to_out(updated_cron, local_hostname=local_hostname)
+    )
+
+
+@router.post(
+    "/{fingerprint}/uninstall-wrapper",
+    responses={
+        200: {"description": "Dry-run preview OR uninstall result"},
+        400: {"description": "Cron is on a remote host"},
+        404: {"description": "Cron not found"},
+        409: {"description": "Crontab line not found, or not wrapped"},
+        503: {"description": "Host-side cron-apply executor unavailable"},
+        500: {"description": "Uninstall failed; rollback performed"},
+    },
+)
+async def uninstall_wrapper(
+    fingerprint: str,
+    payload: UninstallWrapperRequest,
+    request: Request,
+    user: Annotated[User, Depends(require_session())],
+    repo: Annotated[CronRepo, Depends(get_cron_repo)],
+) -> UninstallWrapperPreview | UninstallWrapperResult:
+    """Remove (or dry-run preview) the heartbeat wrapper for a local cron.
+
+    confirm=false → UninstallWrapperPreview (no file modifications).
+    confirm=true  → performs the uninstall, returns UninstallWrapperResult.
+    Session-auth; CSRF enforced automatically by require_session() on POST.
+
+    Uninstall is a pure crontab-line edit: the shared wrapper script and the
+    shared token file are NEVER touched (D1/D2).
+    """
+    from homelab_monitor.kernel.cron.install import (  # noqa: PLC0415
+        CronApplyUnavailableError,
+        CronLineNotFoundError,
+        CrontabWriteError,
+        NotWrappedError,
+        RemoteHostError,
+        build_uninstall_kit,
+        uninstall_wrapper_local,
+    )
+
+    bound_log = structlog.get_logger().bind(fingerprint=fingerprint)
+
+    local_hostname = resolve_hostname()
+
+    # Fetch cron
+    cron = await repo.get_cron(fingerprint, include_hidden=True)
+    if cron is None:
+        raise NotFoundProblem(message=f"cron not found: {fingerprint}")
+
+    # Check host
+    if cron.host != local_hostname:
+        raise HTTPException(
+            status_code=400,
+            detail=f"cron is on remote host {cron.host!r}; remote unwrapping ships in EPIC-017",
+        )
+
+    host_root = Path(os.environ.get("HM_CRON_HOST_ROOT", "/host"))
+
+    # Dry-run path (confirm=false)
+    if not payload.confirm:
+        try:
+            kit = await build_uninstall_kit(cron, host_root=host_root)
+        except CronLineNotFoundError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except NotWrappedError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+        return UninstallWrapperPreview(
+            fingerprint=kit.fingerprint,
+            crontab_diff=CrontabDiffOut(
+                source_path=kit.crontab_diff.source_path,
+                old_line=kit.crontab_diff.old_line,
+                new_line=kit.crontab_diff.new_line,
+            ),
+        )
+
+    # Confirm path (confirm=true)
+    try:
+        updated_cron = await uninstall_wrapper_local(
+            fingerprint,
+            cron_repo=repo,
+            host_root=host_root,
+            local_hostname=local_hostname,
+            who=user.username,
+            ip=_client_ip(request),
+            log=bound_log,
+        )
+    except RemoteHostError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except CronLineNotFoundError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except NotWrappedError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except CronApplyUnavailableError as exc:
+        bound_log.error("uninstall_wrapper.executor_unavailable", error=str(exc))
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except CrontabWriteError as exc:
+        bound_log.error("uninstall_wrapper.failed", error=str(exc))
+        raise HTTPException(status_code=500, detail="uninstall failed; rollback performed") from exc
+
+    bound_log.info("uninstall_wrapper.success")
+    return UninstallWrapperResult(
         cron=cron_record_to_out(updated_cron, local_hostname=local_hostname)
     )
 

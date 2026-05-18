@@ -31,8 +31,8 @@ SYSTEM_CRONTAB_PATH: Final[str] = "/etc/crontab"
 CRON_D_PREFIX: Final[str] = "/etc/cron.d/"
 
 #: Operation kinds carried in a request's `operations` list. The executor
-#: rejects any other value with `bad_request`. `unwrap-crontab` is reserved
-#: for STAGE-002-009A and is NOT emitted by this stage.
+#: rejects any other value with `bad_request`. `unwrap-crontab` is implemented
+#: and emitted by the uninstall path (STAGE-002-009A).
 OP_WRAP_CRONTAB: Final[str] = "wrap-crontab"
 OP_WRITE_WRAPPER_SCRIPT: Final[str] = "write-wrapper-script"
 OP_WRITE_TOKEN: Final[str] = "write-token"

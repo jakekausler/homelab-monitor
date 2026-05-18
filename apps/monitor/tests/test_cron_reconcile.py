@@ -89,6 +89,7 @@ async def test_reconcile_soft_deletes_absent_fingerprint(
         schedule="0 * * * *",
         command="echo backup",
         now=now,
+        is_wrapped=False,
     )
     fp = record.fingerprint
 
@@ -125,6 +126,7 @@ async def test_reconcile_restore_found_again(
         schedule="0 * * * *",
         command="echo backup",
         now=now,
+        is_wrapped=False,
     )
     fp = record.fingerprint
 
@@ -165,6 +167,7 @@ async def test_reconcile_noop_present_and_active(
         schedule="0 * * * *",
         command="echo backup",
         now=now,
+        is_wrapped=False,
     )
     fp = record.fingerprint
 
@@ -197,6 +200,7 @@ async def test_reconcile_noop_absent_and_already_soft_deleted(
         schedule="0 * * * *",
         command="echo backup",
         now=now,
+        is_wrapped=False,
     )
 
     await cron_repo.reconcile_soft_deletes(
@@ -256,6 +260,7 @@ async def test_reconcile_per_host_filter(
         schedule="0 * * * *",
         command="echo backup",
         now=now,
+        is_wrapped=False,
     )
     fp_a = rec_a.fingerprint
 
@@ -265,6 +270,7 @@ async def test_reconcile_per_host_filter(
         schedule="0 * * * *",
         command="echo backup",
         now=now,
+        is_wrapped=False,
     )
     fp_b = rec_b.fingerprint
 
@@ -305,6 +311,7 @@ async def test_reconcile_remote_only_never_touched(
         schedule="0 * * * *",
         command="echo backup",
         now=now,
+        is_wrapped=False,
     )
     fp_real = rec.fingerprint
 
@@ -337,6 +344,7 @@ async def test_reconcile_partial_scan_other_paths_still_run(
         schedule="0 * * * *",
         command="echo stale",
         now=now,
+        is_wrapped=False,
     )
     fp_stale = rec_stale.fingerprint
 
@@ -347,6 +355,7 @@ async def test_reconcile_partial_scan_other_paths_still_run(
         schedule="0 * * * *",
         command="echo active",
         now=now,
+        is_wrapped=False,
     )
     fp_active = rec_active.fingerprint
 
@@ -409,6 +418,7 @@ async def test_reconcile_deleted_cron_d_file(
         schedule="0 * * * *",
         command="echo backup",
         now=now,
+        is_wrapped=False,
     )
     fp = rec.fingerprint
 
@@ -444,6 +454,7 @@ async def test_reconcile_audit_minimal_diff(
         schedule="0 * * * *",
         command="echo backup",
         now=now,
+        is_wrapped=False,
     )
     fp = rec.fingerprint
 
@@ -510,6 +521,7 @@ async def test_reconcile_does_not_touch_last_discovered_at(
         schedule="0 * * * *",
         command="echo backup",
         now=now,
+        is_wrapped=False,
     )
     fp = rec.fingerprint
 

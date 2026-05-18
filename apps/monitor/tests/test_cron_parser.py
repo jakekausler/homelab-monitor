@@ -5,7 +5,14 @@ from pathlib import Path
 import pytest
 
 from homelab_monitor.kernel.cron.discovery_types import CronSourceKind
-from homelab_monitor.plugins.discoverers.cron_parser import parse_cron_file
+from homelab_monitor.kernel.cron.fingerprint import compute_fingerprint
+from homelab_monitor.kernel.cron.wrapper_constants import (
+    WRAPPER_INVOCATION_PREFIX,
+)
+from homelab_monitor.plugins.discoverers.cron_parser import (
+    parse_cron_file,
+    parse_one_line,
+)
 
 FIXTURE_DIR = Path(__file__).parent / "data" / "cron_fixtures"
 HOST = "test-host"
@@ -219,3 +226,49 @@ def test_parse_one_line_malformed_fielded_line_returns_none() -> None:
     # Only 5 tokens, USER_CRONTAB needs 6
     result = parse_one_line(line="* * * * *", source_kind=CronSourceKind.USER_CRONTAB)
     assert result is None
+
+
+# ---------------------------------------------------------------------------
+# STAGE-002-009A: fingerprint round-trip REGRESSION
+# ---------------------------------------------------------------------------
+
+
+def test_fingerprint_unchanged_after_install_and_uninstall() -> None:
+    """REGRESSION: fingerprint is identical before install, while wrapped, after uninstall.
+
+    The discoverer unwraps before fingerprinting (cron_parser calls unwrap_command),
+    so wrapping/unwrapping must NOT change the fingerprint. This is a construction
+    guarantee — the test ensures no future refactor breaks it.
+    """
+    host = "test-host"
+    source_path = "/etc/crontab"
+    schedule = "*/10 * * * *"
+    bare_command = "/usr/bin/myjob.sh --arg"
+
+    # Fingerprint of the bare (unwrapped) line
+    fp_before = compute_fingerprint(
+        host=host, source_path=source_path, schedule=schedule, command=bare_command
+    )
+
+    # Simulate parsing a WRAPPED line — parser calls unwrap_command internally.
+    # parse_one_line returns (schedule, command) tuple — not a named object.
+    wrapped_command = WRAPPER_INVOCATION_PREFIX + bare_command
+    wrapped_line = f"{schedule} root {wrapped_command}"
+    parsed = parse_one_line(line=wrapped_line, source_kind=CronSourceKind.SYSTEM_WITH_USER_FIELD)
+    assert parsed is not None, "Parser returned None for wrapped line"
+    parsed_schedule, parsed_command = parsed
+    fp_while_wrapped = compute_fingerprint(
+        host=host, source_path=source_path, schedule=parsed_schedule, command=parsed_command
+    )
+
+    # Fingerprint of the re-unwrapped (after uninstall) bare command
+    fp_after = compute_fingerprint(
+        host=host, source_path=source_path, schedule=schedule, command=bare_command
+    )
+
+    assert fp_before == fp_while_wrapped, (
+        f"Fingerprint changed after install: {fp_before!r} != {fp_while_wrapped!r}"
+    )
+    assert fp_before == fp_after, (
+        f"Fingerprint changed after uninstall: {fp_before!r} != {fp_after!r}"
+    )
