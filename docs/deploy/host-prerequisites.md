@@ -3,10 +3,11 @@
 This document lists the one-time host-side setup required before
 `docker compose up monitor` will succeed in production.
 
-## Cron discovery (STAGE-002-007, STAGE-002-007A)
+## Cron discovery (STAGE-002-007, STAGE-002-009)
 
-The cron-discoverer plugin reads the host's crontab files via read-only
-bind-mounts. To grant the container access without making it root:
+The cron-discoverer plugin discovers the host's crontab files via read-only
+bind-mounts. To grant the container read access without ACLs (which break
+vixie-cron):
 
 ### 1. Run the setup script
 
@@ -34,21 +35,45 @@ sudo bash scripts/host-setup.sh --write-env deploy/dev/dev.env
 The script:
 - Creates the `homelab-monitor` host user (system user, no shell).
 - Adds it to the `crontab` group (Debian/Ubuntu).
-- Sets read ACLs on `/var/spool/cron/crontabs/`: directory traversal (rx),
-  per-existing-file (r), AND default ACL (r) for new files. Requires
-  `setfacl` (Debian/Ubuntu: `apt install acl`).
-- Installs and enables a systemd `.path` unit
-  (`homelab-monitor-crontab-acl.path`) that watches
-  `/var/spool/cron/crontabs/` and re-applies the read ACLs on every change.
-  Requires `systemctl` (any systemd host).
+- Sets read ACLs on `/etc/crontab` and `/etc/cron.d/` (system crontabs only).
+  Requires `setfacl` (Debian/Ubuntu: `apt install acl`). Real user crontabs
+  (`/var/spool/cron/crontabs/*`) are **NOT** given an ACL — an ACL makes
+  vixie-cron reject the crontab as INSECURE MODE and refuse to run it.
+- Installs and enables three systemd units for the **crontab-snapshot**
+  mechanism (STAGE-002-009 Option B fix):
+  - `homelab-monitor-crontab-snapshot.service` — `Type=oneshot` unit that runs
+    the snapshot script.
+  - `homelab-monitor-crontab-snapshot.path` — watches `/var/spool/cron/crontabs`
+    for changes and triggers the snapshot refresh.
+  - `homelab-monitor-crontab-snapshot.timer` — periodic refresh (~300s) as a
+    backstop.
+- Installs the `hm-crontab-snapshot` host script, which runs `crontab -l -u
+  <user>` (the cron-sanctioned read path) and writes a world-readable snapshot
+  of each user's crontab into `/var/lib/homelab-monitor/crontab-snapshot`. The
+  discoverer reads the snapshot instead of the real `0600` spool files.
+- Installs and enables three systemd units for the **cron-apply executor**
+  (STAGE-002-009 — the host-side privileged-write path for wrapper installs):
+  - `homelab-monitor-cron-apply.service` — `Type=oneshot` root executor
+    (`hm-cron-apply`) that processes wrapper-install request files.
+  - `homelab-monitor-cron-apply.path` — watches
+    `/var/lib/homelab-monitor/cron-apply/requests` and triggers the executor on
+    each new request.
+  - `homelab-monitor-cron-apply.timer` — a 60-second safety-net sweep that runs
+    the executor even if the `.path` watcher misses a filesystem event.
+- Installs the `hm-cron-apply` host script and creates the IPC directory tree
+  `/var/lib/homelab-monitor/cron-apply/{requests,results}`. Requires `jq` on
+  the host (the executor parses request JSON with it).
+- Removes any stale `homelab-monitor-crontab-acl.{path,service}` units and the
+  `refresh-crontab-acl.sh` script left by older installs — that ACL-based
+  approach was retired because an ACL on a spool file makes vixie-cron reject
+  the crontab as `INSECURE MODE`.
 
-**Run this script ONCE per machine.** `crontab -e` does not edit a crontab in
-place — it `rename()`s a new `0600` file into the spool directory, and a moved
-file does NOT inherit the directory's default ACL. The installed `.path` unit
-catches every such change and re-runs `/usr/local/sbin/refresh-crontab-acl.sh`,
-so the container never loses read access. No operator action is needed after
-the initial run. (On a host without `systemd`, the watcher cannot be
-installed — re-run `host-setup.sh` manually after each `crontab -e`.)
+**Run this script ONCE per machine.** The `.path` watchers and `.timer`s keep
+the snapshot fresh and process cron-apply requests automatically. No operator
+action is needed after the initial run. (On a host without `systemd`, the
+watchers and timers cannot be installed — manually run `hm-crontab-snapshot`
+after each `crontab -e`; the cron-apply executor / wrapper-install feature
+requires systemd.)
 
 ### 2. Update your env
 
@@ -70,21 +95,37 @@ Dev rig: edit `deploy/dev/dev.env`.
 docker compose up -d --force-recreate monitor
 ```
 
-## Compose bind-mounts (read-only)
+## Compose bind-mounts
 
-The monitor container reads the host's crontab files via two read-only
-bind-mounts wired in `deploy/compose/docker-compose.yml`:
+The monitor container's host mounts are wired in
+`deploy/compose/docker-compose.yml`:
 
 ```yaml
 volumes:
-  - /etc:/host/etc:ro                               # /etc/crontab + /etc/cron.d/*
-  - /var/spool/cron/crontabs:/host/var/spool/cron/crontabs:ro
+  - /etc:/host/etc:ro                                                    # /etc/crontab + /etc/cron.d/* (READ-ONLY)
+  - /var/lib/homelab-monitor/crontab-snapshot:/host-crontab-snapshot:ro   # user crontab snapshot (READ-ONLY)
+  - /var/lib/homelab-monitor/cron-apply:/host-ipc:rw                      # cron-apply IPC (READ-WRITE)
 ```
 
-The container reads from `/host/...` paths (configurable via
-`HM_CRON_HOST_ROOT`, default `/host`); the database stores the equivalent
-HOST paths (e.g., `/etc/crontab`, `crontab:alice`) so fingerprints converge
-with wrapper installers (see `docs/architecture/cron-identity.md`).
+System crontabs (`/etc/crontab`, `/etc/cron.d/*`) are read directly from
+`/host/etc`. User crontabs are read from the host-generated snapshot
+directory (`HM_CRON_SNAPSHOT_DIR`, default `/host-crontab-snapshot`). The
+snapshot is populated by the `hm-crontab-snapshot` host script (installed
+and triggered by `host-setup.sh`), which reads each user's crontab via the
+cron-sanctioned `crontab -l -u <user>` path and writes it to a world-readable
+snapshot file. The real `0600` spool files are never modified.
+
+The `/host-ipc` mount is the **only** read-write host mount and the single
+privilege boundary. The container writes wrapper-install request files into
+`requests/`; the host-side cron-apply executor writes result files into
+`results/`. The container never writes any other host path — the crontab
+rewrite, the wrapper script, and the token file are all written by the
+executor on the host. See `docs/cron/install-heartbeat.md`.
+
+The container reads from `/host/...` and `/host-crontab-snapshot` paths; the
+database stores the equivalent HOST paths (e.g., `/etc/crontab`, `crontab:alice`)
+so fingerprints converge with the wrapper installer (see
+`docs/architecture/cron-identity.md`).
 
 ## Environment variables
 
@@ -93,19 +134,26 @@ with wrapper installers (see `docs/architecture/cron-identity.md`).
 | `HM_CRON_HOST_UID` | `1000` | Host UID for `homelab-monitor` user; container drops to this UID |
 | `HM_CRON_HOST_GID` | `1000` | Host GID for `homelab-monitor` user |
 | `HM_HOST_HOSTNAME` | (empty → `socket.gethostname()`) | Stored on every discovered cron row's `host` column |
-| `HM_CRON_HOST_ROOT` | `/host` | Container-side prefix where host bind-mounts land |
+| `HM_CRON_HOST_ROOT` | `/host` | Container-side prefix where host bind-mounts land (/etc, /etc/cron.d) |
+| `HM_CRON_SNAPSHOT_DIR` | `/host-crontab-snapshot` | Container-side path of the host crontab-snapshot directory (Option B fix). Bind-mounted read-only. |
+| `HM_CRON_APPLY_IPC_DIR` | `/host-ipc` | Container-side path of the cron-apply IPC directory. Bind-mounted read-write. The monitor writes `requests/` files here; the host executor writes `results/`. |
 | `HM_CRON_DISCOVERY_INTERVAL_SECONDS` | `300` | Discoverer tick interval; frozen at module-import time |
+| `HOMELAB_MONITOR_PUBLIC_URL` | (none — unset) | Host-reachable base URL baked into the heartbeat wrapper. **No default;** a wrapper install fails with HTTP 400 if unset. Required only for the wrapper-install feature. |
 | `HOMELAB_MONITOR_BIND_HOST` | `127.0.0.1` | Host address the monitor port binds to. Set to `0.0.0.0` for LAN access in trusted homelab networks. |
 
 ### Distro variance
 
 - **Debian / Ubuntu** (default): user crontabs at `/var/spool/cron/crontabs/`. Script works as-is.
-- **RHEL / CentOS / Fedora**: user crontabs at `/var/spool/cron/`. Edit the bind-mount in `docker-compose.yml`:
-  ```yaml
-  - /var/spool/cron:/host/var/spool/cron/crontabs:ro
+- **RHEL / CentOS / Fedora**: user crontabs at `/var/spool/cron/`. Edit the
+  `SPOOL_DIR` constant in `scripts/hm-crontab-snapshot.sh` to match your distro:
+  ```bash
+  readonly SPOOL_DIR="${_ROOT}/var/spool/cron"  # change from /var/spool/cron/crontabs
   ```
-  (Map the distro's path to the container's expected location.)
-- **Arch / other**: check `man crontab` for the spool dir. Adjust the mount accordingly.
+  The snapshot mechanism and bind-mounts remain the same.
+- **Arch / other**: check `man crontab` for the spool dir. Edit
+  `scripts/hm-crontab-snapshot.sh` and `docs/architecture/cron-logscrape.md`
+  accordingly. The snapshot mechanism is spool-path-agnostic; only the source
+  directory name needs adjustment.
 
 ### Security implications
 
@@ -115,31 +163,55 @@ with wrapper installers (see `docs/architecture/cron-identity.md`).
   readable by the monitor process. Use environment variables in cron jobs
   instead — best practice anyway.
 
-### Crontab ACL watcher (systemd)
+### Host-side systemd artifacts
 
-`host-setup.sh` installs three host-side artifacts so per-user crontab ACLs
-survive `crontab -e`:
+`host-setup.sh` installs two independent host-side mechanisms (STAGE-002-009):
+the **crontab-snapshot** (read path for discovery) and the **cron-apply
+executor** (privileged-write path for wrapper installs). Each is three systemd
+units plus a root script.
+
+**Crontab-snapshot** — keeps the discovery snapshot fresh:
 
 | Artifact | Installed to | Purpose |
 |---|---|---|
-| `refresh-crontab-acl.sh` | `/usr/local/sbin/refresh-crontab-acl.sh` | Re-applies `homelab-monitor` read ACLs on the spool dir and every file in it. Idempotent. |
-| `homelab-monitor-crontab-acl.service` | `/etc/systemd/system/` | `Type=oneshot` unit that runs the refresh script. |
-| `homelab-monitor-crontab-acl.path` | `/etc/systemd/system/` | `PathChanged=` watcher on `/var/spool/cron/crontabs`; triggers the service on every change. |
+| `hm-crontab-snapshot` | `/usr/local/sbin/hm-crontab-snapshot` | Runs `crontab -l -u <user>` for each user and writes a world-readable snapshot. Idempotent. |
+| `homelab-monitor-crontab-snapshot.service` | `/etc/systemd/system/` | `Type=oneshot` unit that runs the snapshot script. |
+| `homelab-monitor-crontab-snapshot.path` | `/etc/systemd/system/` | `PathChanged=` watcher on `/var/spool/cron/crontabs`; triggers the service on every change. |
+| `homelab-monitor-crontab-snapshot.timer` | `/etc/systemd/system/` | Periodic refresh (~300s) as a backstop. |
 
-The repo source for these lives in `deploy/systemd/` (units) and
-`scripts/refresh-crontab-acl.sh`.
+**Cron-apply executor** — the host-side process that performs every privileged
+write for a heartbeat-wrapper install. The monitor container has no host-write
+capability; it only writes a request JSON into the IPC `requests/` directory,
+and this executor (running as root) applies the wrapper script, the token
+file, and the crontab rewrite atomically with rollback:
 
-Inspect the watcher:
+| Artifact | Installed to | Purpose |
+|---|---|---|
+| `hm-cron-apply` | `/usr/local/sbin/hm-cron-apply` | Root executor: reads a request JSON, applies the operations atomically (snapshot + rollback on failure), writes a result JSON. Requires `jq`. |
+| `homelab-monitor-cron-apply.service` | `/etc/systemd/system/` | `Type=oneshot` unit that runs the executor. Hardened (`ProtectSystem=strict`, explicit `ReadWritePaths`). |
+| `homelab-monitor-cron-apply.path` | `/etc/systemd/system/` | `PathChanged=` watcher on `/var/lib/homelab-monitor/cron-apply/requests`; triggers the executor on each new request. |
+| `homelab-monitor-cron-apply.timer` | `/etc/systemd/system/` | 60-second safety-net sweep — runs the executor even if the `.path` watcher missed a filesystem event. |
+| IPC directory | `/var/lib/homelab-monitor/cron-apply/{requests,results}` | `requests/` owned by the monitor user (container writes); `results/` owned by root (executor writes). |
+
+The repo source for all six units lives in `deploy/systemd/`; the scripts in
+`scripts/hm-crontab-snapshot.sh` and `scripts/hm-cron-apply.sh`.
+
+Inspect the units:
 
 ```bash
-systemctl status homelab-monitor-crontab-acl.path
-journalctl -u homelab-monitor-crontab-acl.service   # see each ACL refresh
+systemctl status homelab-monitor-crontab-snapshot.path
+systemctl status homelab-monitor-crontab-snapshot.timer
+journalctl -u homelab-monitor-crontab-snapshot.service   # see each snapshot
+
+systemctl status homelab-monitor-cron-apply.path
+systemctl status homelab-monitor-cron-apply.timer
+journalctl -u homelab-monitor-cron-apply.service         # see each apply run
 ```
 
-To re-apply ACLs by hand at any time:
+To refresh the crontab snapshot by hand at any time:
 
 ```bash
-sudo /usr/local/sbin/refresh-crontab-acl.sh
+sudo /usr/local/sbin/hm-crontab-snapshot
 ```
 
 ### Disabling discovery

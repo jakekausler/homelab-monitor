@@ -1,0 +1,14 @@
+[Unit]
+Description=Periodic homelab-monitor cron-apply request sweep
+Documentation=https://github.com/jakekausler/homelab-monitor/blob/main/docs/architecture/cron-identity.md
+
+[Timer]
+# Safety net for missed .path watcher edges: process any pending cron-apply
+# requests every 60s even if the homelab-monitor-cron-apply.path watcher
+# missed a filesystem event. The executor is idempotent per request id.
+OnBootSec=60s
+OnUnitActiveSec=60s
+Unit=homelab-monitor-cron-apply.service
+
+[Install]
+WantedBy=timers.target

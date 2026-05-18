@@ -31,6 +31,7 @@ from homelab_monitor.kernel.cron.discovery_types import (
     CronSourceKind,
     ParsedCronEntry,
 )
+from homelab_monitor.kernel.cron.wrapper_constants import unwrap_command
 
 # matches KEY=value or KEY = value (cron does NOT support inline comments after =)
 _ENV_VAR_RE = re.compile(r"^[A-Z_][A-Z0-9_]*\s*=")
@@ -38,6 +39,32 @@ _ENV_VAR_RE = re.compile(r"^[A-Z_][A-Z0-9_]*\s*=")
 _NICKNAMES = frozenset(
     {"@hourly", "@daily", "@weekly", "@monthly", "@yearly", "@annually", "@midnight", "@reboot"}
 )
+
+
+def parse_one_line(*, line: str, source_kind: CronSourceKind) -> tuple[str, str] | None:
+    """Parse a single raw crontab line → (schedule, command), or None if the
+    line is blank / a comment / an env-var / unparseable.
+
+    The command is UNWRAPPED if it is a wrapper invocation.
+    Returns None for skip-lines (blank, comment, env-var) and on parse errors.
+    Does NOT validate the schedule via croniter (caller handles that).
+    """
+    if not line or line.startswith("#"):
+        return None
+    if _ENV_VAR_RE.match(line):
+        return None
+
+    try:
+        if line.startswith("@"):
+            schedule, command = _parse_nickname_line(line=line, source_kind=source_kind)
+        else:
+            schedule, command = _parse_fielded_line(line=line, source_kind=source_kind)
+    except ValueError:
+        return None
+
+    # Unwrap the command if it's a wrapper invocation
+    command = unwrap_command(command)
+    return schedule, command
 
 
 def parse_cron_file(
@@ -68,24 +95,25 @@ def parse_cron_file(
         line = raw_line.strip()
         if not line:
             continue
-        if line.startswith("#"):
+
+        # Skip blank lines, comments, and env vars
+        if not line or line.startswith("#"):
             continue
         if _ENV_VAR_RE.match(line):
             continue
 
-        # Detect leading @nickname vs 5-field expression.
+        # Parse the line — report errors rather than silently dropping them
         try:
             if line.startswith("@"):
-                # @reboot CMD  OR  @hourly CMD  (NO USER field in @nickname lines)
-                # In SYSTEM_WITH_USER_FIELD files, lines with @nicknames technically
-                # CAN have a user field per Debian convention; we accept either.
                 schedule, command = _parse_nickname_line(line=line, source_kind=source_kind)
             else:
-                # 5-field expression
                 schedule, command = _parse_fielded_line(line=line, source_kind=source_kind)
         except ValueError as exc:
             errors.append(CronScanError(host_source_path=host_source_path, error=str(exc)))
             continue
+
+        # Unwrap the command if it is a wrapper invocation
+        command = unwrap_command(command)
 
         # Validate schedule via croniter (skip for @reboot)
         if schedule != "@reboot" and not croniter.is_valid(schedule):
@@ -152,4 +180,4 @@ def _parse_fielded_line(*, line: str, source_kind: CronSourceKind) -> tuple[str,
     return schedule, command
 
 
-__all__ = ["parse_cron_file"]
+__all__ = ["parse_cron_file", "parse_one_line"]

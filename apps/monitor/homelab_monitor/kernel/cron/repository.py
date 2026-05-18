@@ -702,6 +702,39 @@ class CronRepo:
             assert refreshed_row is not None
             return _row_to_cron(refreshed_row), False
 
+    async def record_wrapper_installed(
+        self,
+        fingerprint: str,
+        *,
+        who: str,
+        ip: str | None,
+    ) -> None:
+        """Write a crons.wrapper_installed audit row.
+
+        Used by the install endpoint after a successful wrapper install.
+        Does NOT set wrapper_last_seen_at — that column is the
+        wrapper-HEALTH signal and is populated only by a real heartbeat
+        (or a /register with wrapper=True). Setting it at install time
+        would falsely report a healthy wrapper before it has run once.
+        The audit row is the durable record that an install occurred.
+        """
+        from homelab_monitor.kernel.cron.wrapper_constants import WRAPPER_PATH  # noqa: PLC0415
+
+        now = utc_now_iso()
+        async with self._db.transaction() as conn:
+            await insert_audit(
+                conn,
+                who=who,
+                what="crons.wrapper_installed",
+                before=None,
+                after={
+                    "fingerprint": fingerprint,
+                    "wrapper_path": WRAPPER_PATH,
+                },
+                ip=ip,
+                when=now,
+            )
+
     async def upsert_discovered(  # noqa: PLR0915
         self,
         *,

@@ -948,3 +948,51 @@ async def test_register_cron_restores_soft_deleted_no_wrapper(repo: SqliteReposi
     )
     assert restore_row is not None
     assert restore_row[0] == "testactor"
+
+
+# ---------------------------------------------------------------------------
+# record_wrapper_installed
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_record_wrapper_installed_writes_audit_only(
+    repo: SqliteRepository,
+) -> None:
+    """record_wrapper_installed: writes audit row but does NOT set wrapper_last_seen_at.
+
+    wrapper_last_seen_at is the wrapper-HEALTH signal populated only by a real
+    heartbeat. Setting it at install time would falsely report a healthy wrapper
+    before it has run once.
+    """
+    cron_repo = CronRepo(repo)
+    fp = await _seed_cron(repo, name="wrap-test")
+
+    # wrapper_last_seen_at must be NULL before the call
+    row_before = await repo.fetch_one(
+        text("SELECT wrapper_last_seen_at FROM crons WHERE fingerprint = :fp"),
+        {"fp": fp},
+    )
+    assert row_before is not None
+    assert row_before[0] is None
+
+    await cron_repo.record_wrapper_installed(fp, who=WHO, ip=IP)
+
+    # wrapper_last_seen_at must remain NULL (NOT set by install)
+    row_after = await repo.fetch_one(
+        text("SELECT wrapper_last_seen_at FROM crons WHERE fingerprint = :fp"),
+        {"fp": fp},
+    )
+    assert row_after is not None
+    assert row_after[0] is None
+
+    # audit row with correct verb must exist
+    audit_row = await repo.fetch_one(
+        text("SELECT who, what, after_json FROM audit_log WHERE what = 'crons.wrapper_installed'")
+    )
+    assert audit_row is not None
+    assert audit_row[0] == WHO
+    assert audit_row[1] == "crons.wrapper_installed"
+    after_payload = json.loads(audit_row[2])
+    assert after_payload["fingerprint"] == fp
+    assert "wrapper_path" in after_payload

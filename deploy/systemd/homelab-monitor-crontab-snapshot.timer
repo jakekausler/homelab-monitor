@@ -1,0 +1,13 @@
+[Unit]
+Description=Periodic homelab-monitor crontab snapshot refresh
+Documentation=https://github.com/jakekausler/homelab-monitor/blob/main/docs/architecture/cron-logscrape.md
+
+[Timer]
+# Fire shortly after boot, then every 5 minutes — aligned to the cron
+# discovery poll interval (HM_CRON_DISCOVERY_INTERVAL_SECONDS default 300s).
+OnBootSec=60s
+OnUnitActiveSec=300s
+Unit=homelab-monitor-crontab-snapshot.service
+
+[Install]
+WantedBy=timers.target

@@ -157,3 +157,26 @@ export function useDiscoverNow(): UseMutationResult<DiscoverResponse, ApiError, 
     },
   })
 }
+
+export function useInstallWrapper(
+  id: string,
+): UseMutationResult<
+  Schema<'InstallWrapperPreview'> | Schema<'InstallWrapperResult'>,
+  ApiError,
+  { confirm: boolean }
+> {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ confirm }) => {
+      const result = await apiClient.POST('/api/crons/{fingerprint}/install-wrapper', {
+        params: { path: { fingerprint: id } },
+        body: { confirm },
+      })
+      return unwrap(result)
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: cronQueryKeys.all })
+      void qc.invalidateQueries({ queryKey: cronQueryKeys.detail(id) })
+    },
+  })
+}

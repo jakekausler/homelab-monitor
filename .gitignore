@@ -44,6 +44,8 @@ deploy/dev/data/
 
 # Data
 data/
+# ...but apps/monitor/homelab_monitor/data/ is bundled package data (wrapper template), not runtime data
+!apps/monitor/homelab_monitor/data/
 
 # Local DB
 *.sqlite

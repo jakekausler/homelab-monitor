@@ -30,6 +30,11 @@ vi.mock('@/api/crons', () => ({
     mutateAsync: vi.fn().mockResolvedValue(undefined),
     isPending: false,
   })),
+  useInstallWrapper: vi.fn(() => ({
+    mutateAsync: vi.fn().mockReturnValue(new Promise(() => undefined)),
+    isPending: false,
+    error: null,
+  })),
   usePreviewSavedCron: vi.fn(() => ({ isLoading: false, error: null, data: { runs: [] } })),
   usePreviewExpr: vi.fn(() => ({ isLoading: false, error: null, data: null })),
   cronQueryKeys: { all: ['crons'] },
@@ -76,6 +81,7 @@ const baseCron = {
   hidden_at: null as string | null,
   soft_deleted_at: null as string | null,
   source_path: null as string | null,
+  is_local: false as boolean | null,
   wrapper_last_seen_at: null,
   last_discovered_at: null as string | null,
 }
@@ -161,12 +167,13 @@ describe('CronDetail', () => {
     expect(screen.getByText('Remote')).toBeInTheDocument()
   })
 
-  // 4. Hides "Remote" badge when source_path is present
-  it('hides Remote badge when source_path is present', async () => {
+  // 4. Hides "Remote" badge when is_local is true
+  it('hides Remote badge when is_local is true', async () => {
     vi.mocked(useGetCron).mockReturnValue(
-      makeGetCronResult({ source_path: '/etc/cron.d/backup' }) as unknown as ReturnType<
-        typeof useGetCron
-      >,
+      makeGetCronResult({
+        source_path: '/etc/cron.d/backup',
+        is_local: true,
+      }) as unknown as ReturnType<typeof useGetCron>,
     )
     renderInRouter(<CronDetail fingerprint={FP} />)
     await screen.findByText('daily-backup')
@@ -230,12 +237,13 @@ describe('CronDetail', () => {
     expect(screen.getByTestId('remote-banner')).toBeInTheDocument()
   })
 
-  // 8. Hides remote banner when source_path is present
-  it('hides remote banner when source_path is present', async () => {
+  // 8. Hides remote banner when is_local is true
+  it('hides remote banner when is_local is true', async () => {
     vi.mocked(useGetCron).mockReturnValue(
-      makeGetCronResult({ source_path: '/etc/cron.d/backup' }) as unknown as ReturnType<
-        typeof useGetCron
-      >,
+      makeGetCronResult({
+        source_path: '/etc/cron.d/backup',
+        is_local: true,
+      }) as unknown as ReturnType<typeof useGetCron>,
     )
     renderInRouter(<CronDetail fingerprint={FP} />)
     await screen.findByText('daily-backup')
@@ -367,5 +375,47 @@ describe('CronDetail', () => {
     // Check that somewhere in the document there's an em dash near the label
     const contentArea = rows[0]!.parentElement!
     expect(contentArea).toHaveTextContent('—')
+  })
+
+  // 20. Install wrapper button is ENABLED for is_local: true cron
+  it('Install heartbeat wrapper button is enabled for a local cron (is_local: true)', async () => {
+    vi.mocked(useGetCron).mockReturnValue(
+      makeGetCronResult({ is_local: true }) as unknown as ReturnType<typeof useGetCron>,
+    )
+    renderInRouter(<CronDetail fingerprint={FP} />)
+    await screen.findByText('daily-backup')
+    expect(screen.getByRole('button', { name: 'Install heartbeat wrapper' })).toBeEnabled()
+  })
+
+  // 21. Install wrapper button is DISABLED for is_local: false cron (remote)
+  it('Install heartbeat wrapper button is disabled for a remote cron (is_local: false)', async () => {
+    renderInRouter(<CronDetail fingerprint={FP} />)
+    await screen.findByText('daily-backup')
+    // baseCron has is_local: false — button rendered inside a span with tooltip
+    expect(screen.getByRole('button', { name: 'Install heartbeat wrapper' })).toBeDisabled()
+  })
+
+  // 22. Clicking install button opens the modal (for local cron)
+  it('clicking Install heartbeat wrapper button opens the modal for a local cron', async () => {
+    vi.mocked(useGetCron).mockReturnValue(
+      makeGetCronResult({ is_local: true }) as unknown as ReturnType<typeof useGetCron>,
+    )
+    renderInRouter(<CronDetail fingerprint={FP} />)
+    await screen.findByText('daily-backup')
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Install heartbeat wrapper' }))
+    expect(
+      await screen.findByText('Install heartbeat wrapper', { selector: '[role="dialog"] *' }),
+    ).toBeInTheDocument()
+  })
+
+  // 23. is_local null → treated as remote (no ?? true fallback); button disabled
+  it('Install heartbeat wrapper button is disabled when is_local is null (treated as remote)', async () => {
+    vi.mocked(useGetCron).mockReturnValue(
+      makeGetCronResult({ is_local: null }) as unknown as ReturnType<typeof useGetCron>,
+    )
+    renderInRouter(<CronDetail fingerprint={FP} />)
+    await screen.findByText('daily-backup')
+    // is_local=null → isLocal=null (falsy) → isRemote=true → button disabled
+    expect(screen.getByRole('button', { name: 'Install heartbeat wrapper' })).toBeDisabled()
   })
 })

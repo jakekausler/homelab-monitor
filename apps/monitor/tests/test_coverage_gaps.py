@@ -1073,19 +1073,21 @@ async def test_resolve_session_user_not_found_skips(
         sid = make_session_id()
         future = (datetime.now(UTC) + timedelta(hours=1)).isoformat()
         csrf = make_csrf_token()
-        await app.state.repo.execute(
-            text(
-                "INSERT INTO sessions (id, user_id, expires_at, created_ip, csrf_token) "
-                "VALUES (:id, :uid, :exp, :ip, :csrf)"
-            ),
-            {"id": sid, "uid": user.id, "exp": future, "ip": "127.0.0.1", "csrf": csrf},
-        )
-        # Delete the session first (FK), then delete the user, then re-insert the session
-        # to simulate a dangling session referencing a deleted user.
-        # SQLite FK enforcement: disable temporarily to insert orphaned session.
-        await app.state.repo.execute(text("PRAGMA foreign_keys = OFF"), {})
-        await app.state.repo.execute(text("DELETE FROM users WHERE id = :id"), {"id": user.id})
-        await app.state.repo.execute(text("PRAGMA foreign_keys = ON"), {})
+        # Build a dangling session referencing a now-deleted user. PRAGMA
+        # foreign_keys is per-connection and repo.execute() opens a fresh pooled
+        # transaction per call, so the user-delete + orphan-session-insert MUST
+        # share one connection with FK enforcement disabled on that connection.
+        user_id = user.id
+        await app.state.repo.execute(text("DELETE FROM users WHERE id = :id"), {"id": user_id})
+        async with app.state.repo.transaction() as conn:
+            await conn.execute(text("PRAGMA foreign_keys = OFF"))
+            await conn.execute(
+                text(
+                    "INSERT INTO sessions (id, user_id, expires_at, created_ip, csrf_token) "
+                    "VALUES (:id, :uid, :exp, :ip, :csrf)"
+                ),
+                {"id": sid, "uid": user_id, "exp": future, "ip": "127.0.0.1", "csrf": csrf},
+            )
         cookie_val = make_session_cookie_value(sid, master_key)
         resp = await client.get(
             "/api/auth/me",

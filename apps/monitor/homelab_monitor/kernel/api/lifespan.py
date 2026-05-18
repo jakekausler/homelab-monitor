@@ -337,6 +337,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
 
     app.state.master_key = master_key
     app.state.auth_repo = auth_repo
+    app.state.secrets_repo = secrets_repo
     app.state.login_rate_limiter = login_rate_limiter
     app.state.scheduler = scheduler
     app.state.repo = repo

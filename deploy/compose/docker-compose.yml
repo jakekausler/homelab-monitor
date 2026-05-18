@@ -21,6 +21,7 @@ services:
     environment:
       HOMELAB_MONITOR_DB_URL: ${HOMELAB_MONITOR_DB_URL:-sqlite+aiosqlite:////data/homelab-monitor.db}
       HOMELAB_MONITOR_MASTER_KEY: ${HOMELAB_MONITOR_MASTER_KEY}
+      HOMELAB_MONITOR_PUBLIC_URL: ${HOMELAB_MONITOR_PUBLIC_URL:-}
       HOMELAB_MONITOR_VM_URL: http://victoriametrics:8428
       HOMELAB_MONITOR_VL_URL: http://victorialogs:9428
       HOMELAB_MONITOR_HTTPS_ONLY_COOKIES: ${HOMELAB_MONITOR_HTTPS_ONLY_COOKIES:-true}
@@ -30,8 +31,10 @@ services:
       HOMELAB_MONITOR_UI_DIR: /app/ui
       HOMELAB_MONITOR_BACKUP_ROOT: /storage/backup/homelab-monitor
       HM_CRON_HOST_ROOT: /host
+      HM_CRON_SNAPSHOT_DIR: /host-crontab-snapshot
       HM_CRON_DISCOVERY_INTERVAL_SECONDS: ${HM_CRON_DISCOVERY_INTERVAL_SECONDS:-300}
       HM_HOST_HOSTNAME: ${HM_HOST_HOSTNAME:-}
+      HM_CRON_APPLY_IPC_DIR: /host-ipc
     volumes:
       - data_monitor:/data
       - data_vm:/var/vm-data:ro
@@ -41,8 +44,29 @@ services:
       - data_alertmanager_config:/var/alertmanager-config
       - ../vector/vector.toml.template:/etc/vector-template/vector.toml.template:ro
       - data_vector_config:/var/vector-config
+      # Host crontab locations are mounted READ-ONLY: the monitor container
+      # (uid 995) only READS crontabs for discovery. EVERY host write — crontab
+      # rewrites, the wrapper script, the token file — goes through the
+      # host-side cron-apply executor (STAGE-002-009) via the cron-apply IPC
+      # mount below. The container has NO write mount on the host filesystem
+      # except that IPC directory; that is the single privilege boundary.
+      #
+      # /etc is mounted READ-ONLY: discovery reads /etc/crontab + /etc/cron.d.
+      # The container never writes under /etc — the token write to
+      # /etc/homelab-monitor is performed by the executor.
+      # There is intentionally NO /usr/local/bin mount: the wrapper script is
+      # written by the executor, not the container.
       - /etc:/host/etc:ro
-      - /var/spool/cron/crontabs:/host/var/spool/cron/crontabs:ro
+      # User crontabs are read via the root-generated crontab snapshot
+      # (STAGE-002-009 Option B fix): hm-crontab-snapshot writes one
+      # world-readable file per user into this host dir; the discoverer reads
+      # it instead of the 0600 spool files (which keep their cron-required
+      # 0600-no-ACL mode). READ-ONLY — the container never writes the snapshot.
+      - /var/lib/homelab-monitor/crontab-snapshot:/host-crontab-snapshot:ro
+      # Cron-apply IPC: the monitor writes request JSON into requests/, the
+      # host-side hm-cron-apply executor writes result JSON into results/.
+      # This is the ONLY read-write host mount.
+      - /var/lib/homelab-monitor/cron-apply:/host-ipc:rw
     depends_on:
       victoriametrics:
         condition: service_healthy

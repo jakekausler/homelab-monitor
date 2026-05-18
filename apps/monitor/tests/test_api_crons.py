@@ -748,3 +748,70 @@ async def test_cron_out_includes_soft_deleted_at_field(
     cron = body["cron"]
     assert "soft_deleted_at" in cron
     assert cron["soft_deleted_at"] is None
+
+
+# ---------------------------------------------------------------------------
+# is_local — LIST and DETAIL endpoints
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_list_crons_is_local_true_for_local_host(
+    authenticated_client: AsyncClient,
+    repo: SqliteRepository,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """GET /api/crons returns is_local=True when cron.host matches the local hostname."""
+    monkeypatch.setenv("HM_HOST_HOSTNAME", "host-a")
+    fp = await _seed_cron(repo, name="local-cron", host="host-a")
+    resp = await authenticated_client.get("/api/crons")
+    assert resp.status_code == 200  # noqa: PLR2004
+    body = resp.json()
+    items = {it["fingerprint"]: it for it in body["items"]}
+    assert items[fp]["is_local"] is True
+
+
+@pytest.mark.asyncio
+async def test_list_crons_is_local_false_for_remote_host(
+    authenticated_client: AsyncClient,
+    repo: SqliteRepository,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """GET /api/crons returns is_local=False when cron.host differs from the local hostname."""
+    monkeypatch.setenv("HM_HOST_HOSTNAME", "host-a")
+    fp = await _seed_cron(repo, name="remote-cron", host="host-b")
+    resp = await authenticated_client.get("/api/crons")
+    assert resp.status_code == 200  # noqa: PLR2004
+    body = resp.json()
+    items = {it["fingerprint"]: it for it in body["items"]}
+    assert items[fp]["is_local"] is False
+
+
+@pytest.mark.asyncio
+async def test_get_cron_is_local_true_for_local_host(
+    authenticated_client: AsyncClient,
+    repo: SqliteRepository,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """GET /api/crons/{fp} returns is_local=True when cron.host matches the local hostname."""
+    monkeypatch.setenv("HM_HOST_HOSTNAME", "host-a")
+    fp = await _seed_cron(repo, name="local-detail", host="host-a")
+    resp = await authenticated_client.get(f"/api/crons/{fp}")
+    assert resp.status_code == 200  # noqa: PLR2004
+    body = resp.json()
+    assert body["cron"]["is_local"] is True
+
+
+@pytest.mark.asyncio
+async def test_get_cron_is_local_false_for_remote_host(
+    authenticated_client: AsyncClient,
+    repo: SqliteRepository,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """GET /api/crons/{fp} returns is_local=False when cron.host differs from the local hostname."""
+    monkeypatch.setenv("HM_HOST_HOSTNAME", "host-a")
+    fp = await _seed_cron(repo, name="remote-detail", host="host-b")
+    resp = await authenticated_client.get(f"/api/crons/{fp}")
+    assert resp.status_code == 200  # noqa: PLR2004
+    body = resp.json()
+    assert body["cron"]["is_local"] is False

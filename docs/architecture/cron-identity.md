@@ -86,14 +86,22 @@ is the correct and future-proof choice.
 
 ## Sources of cron rows
 
-### 1. Auto-discovery (STAGE-002-007, future)
+### 1. Auto-discovery (STAGE-002-007, STAGE-002-009)
 
-Discovery scans local crontab files (`/etc/crontab`, `/etc/cron.d/*`,
-`crontab -l` per user), computes the fingerprint for each entry, and inserts a
-row with `source_path` set to the file it was found in. On subsequent scans,
-the same fingerprint is a no-op (idempotent upsert). Audit verb: `crons.discover`.
-The discovery scanner does NOT use the suggestion queue — crons appear directly
-in the registry as derived state (per spec §EPIC-011 note).
+Discovery scans local crontab files:
+- `/etc/crontab` and `/etc/cron.d/*` (system crontabs, world-readable, read directly)
+- The crontab-snapshot directory (user crontabs, `HM_CRON_SNAPSHOT_DIR`, default
+  `/host-crontab-snapshot`; populated by the root-side `hm-crontab-snapshot` script
+  via `crontab -l -u <user>` — the cron-sanctioned read path; one snapshot file per user)
+
+For each entry, discovery computes the fingerprint and inserts a row with
+`source_path` set to the logical source: `/etc/crontab`, `/etc/cron.d/filename`, or
+`crontab:<username>`. Note: `source_path="crontab:<user>"` is a logical identifier
+(the user whose crontab contains the entry), NOT a file path; the physical read
+source is the snapshot file `<snapshot-dir>/<user>`. On subsequent scans, the same
+fingerprint is a no-op (idempotent upsert). Audit verb: `crons.discover`. The
+discovery scanner does NOT use the suggestion queue — crons appear directly in
+the registry as derived state (per spec §EPIC-011 note).
 
 ### 2. `/register` wrapper handshake (STAGE-002-005)
 
@@ -308,11 +316,18 @@ no suggestion queue.
 
 - `/etc/crontab` (system-wide; has USER field).
 - `/etc/cron.d/*` (drop-in files; have USER field; dotfiles skipped).
-- `/var/spool/cron/crontabs/*` (per-user; no USER field; filename = username).
+- Per-user crontabs (no USER field; filename = username). Logically these are
+  `/var/spool/cron/crontabs/*`, but the `0600` spool files are unreadable by
+  the non-root container. The discoverer instead reads a world-readable
+  **snapshot directory** (`HM_CRON_SNAPSHOT_DIR`, default
+  `/host-crontab-snapshot`), one file per user, populated by the root-side
+  `hm-crontab-snapshot` script via `crontab -l -u <user>`.
 
-Each file is bind-mounted read-only into the container at `/host/etc/...` and
-`/host/var/spool/cron/crontabs/...`. The container runs as a dedicated host
-user — see `docs/deploy/host-prerequisites.md`.
+System crontabs (`/etc/crontab`, `/etc/cron.d/*`) are bind-mounted read-only
+into the container under `/host/etc/...`. There is **no** bind-mount of
+`/var/spool/cron/crontabs` (STAGE-002-009 Option B) — user crontabs reach the
+container only via the snapshot directory mount. The container runs as a
+dedicated host user — see `docs/deploy/host-prerequisites.md`.
 
 ### `source_path` convention
 
@@ -324,7 +339,7 @@ The DB stores HOST paths, not container paths:
 | `/etc/cron.d/certbot`                     | `/etc/cron.d/certbot`   |
 | `/var/spool/cron/crontabs/alice`          | `crontab:alice`         |
 
-This decoupling is critical: wrapper installers (STAGE-002-006) commit to
+This decoupling is critical: the wrapper installer (STAGE-002-009) commits to
 host paths. Discovery must use the same convention so the same cron has the
 same fingerprint regardless of which subsystem registered it first.
 
@@ -360,6 +375,35 @@ disk. Editing `@hourly` to `0 * * * *` changes the fingerprint, producing a
 new row. STAGE-002-007A's soft-delete will mark the old row as gone within
 one scan cycle. Acceptable churn for the operator-rare action of editing a
 schedule's textual representation.
+
+### Wrapper-unwrap convergence (STAGE-002-009)
+
+Installing the heartbeat wrapper rewrites a crontab line's command in place
+to `/usr/local/bin/cron-with-heartbeat.sh -- <original command>`. This would
+change the `command` element of the identity tuple — and therefore the
+fingerprint — if the raw on-disk command were fingerprinted directly.
+
+It is not. Both the discovery parser
+(`cron_parser.py:parse_one_line` / `parse_cron_file`) and the wrapper
+installer's line matcher (`install.py:_find_matching_line`) call
+`wrapper_constants.unwrap_command()` before computing the fingerprint:
+a command beginning with the wrapper invocation prefix
+(`/usr/local/bin/cron-with-heartbeat.sh -- `) has that prefix stripped, so the
+fingerprint is always computed from the **inner, original** command. The
+wrapper invocation prefix is a single shared constant (`wrapper_constants.py`)
+referenced by the installer, the parser, and the wrapper script itself.
+
+Consequences:
+
+- Wrapping (or later un-wrapping) a crontab line does **not** change the
+  cron's fingerprint — the registry row is retained across install.
+- A discovery scan run before and after an install converges on the same row;
+  the install also performs an explicit `upsert_discovered` so the row's
+  `last_discovered_at` reflects the operator touch immediately.
+- `install.py:_find_matching_line` can locate the cron's line whether the file
+  currently shows the wrapped or the unwrapped form, because it matches on the
+  unwrapped fingerprint either way. The installer still refuses to wrap a line
+  that is already wrapped (`AlreadyWrappedError`).
 
 ### Cross-stage interfaces
 

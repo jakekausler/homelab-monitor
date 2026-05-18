@@ -169,3 +169,53 @@ def test_parse_system_nickname_no_user_field_falls_back_to_root() -> None:
     assert errors == []
     assert len(entries) == 1
     assert entries[0].command == "/usr/bin/backup"
+
+
+# ---------------------------------------------------------------------------
+# parse_one_line branch coverage (lines 55, 59, 62-63)
+# ---------------------------------------------------------------------------
+
+
+def test_parse_one_line_env_var_returns_none() -> None:
+    """parse_one_line: env-var line → None (line 55)."""
+    from homelab_monitor.plugins.discoverers.cron_parser import parse_one_line  # noqa: PLC0415
+
+    assert parse_one_line(line="PATH=/usr/bin", source_kind=CronSourceKind.USER_CRONTAB) is None
+
+
+def test_parse_one_line_env_var_with_spaces_returns_none() -> None:
+    """parse_one_line: env-var with spaces around = → None (line 55)."""
+    from homelab_monitor.plugins.discoverers.cron_parser import parse_one_line  # noqa: PLC0415
+
+    assert parse_one_line(line="FOO_BAR = value", source_kind=CronSourceKind.USER_CRONTAB) is None
+
+
+def test_parse_one_line_nickname_line_parsed() -> None:
+    """parse_one_line: @nickname line → (schedule, command) via _parse_nickname_line (line 59)."""
+    from homelab_monitor.plugins.discoverers.cron_parser import parse_one_line  # noqa: PLC0415
+
+    result = parse_one_line(
+        line="@daily /usr/bin/backup.sh", source_kind=CronSourceKind.USER_CRONTAB
+    )
+    assert result is not None
+    schedule, command = result
+    assert schedule == "@daily"
+    assert command == "/usr/bin/backup.sh"
+
+
+def test_parse_one_line_malformed_nickname_returns_none() -> None:
+    """parse_one_line: unknown/malformed @nickname → ValueError caught → None (lines 62-63)."""
+    from homelab_monitor.plugins.discoverers.cron_parser import parse_one_line  # noqa: PLC0415
+
+    # @unknown is not in _NICKNAMES → ValueError → returns None
+    result = parse_one_line(line="@unknown /usr/bin/task", source_kind=CronSourceKind.USER_CRONTAB)
+    assert result is None
+
+
+def test_parse_one_line_malformed_fielded_line_returns_none() -> None:
+    """parse_one_line: too-few-field line → ValueError caught → None (lines 62-63)."""
+    from homelab_monitor.plugins.discoverers.cron_parser import parse_one_line  # noqa: PLC0415
+
+    # Only 5 tokens, USER_CRONTAB needs 6
+    result = parse_one_line(line="* * * * *", source_kind=CronSourceKind.USER_CRONTAB)
+    assert result is None

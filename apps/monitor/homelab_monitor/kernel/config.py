@@ -161,9 +161,19 @@ def load_log_stream_budget_config() -> LogStreamBudgetConfig:
     )
 
 
+def get_public_url() -> str | None:
+    """Return the monitor's externally-reachable base URL from HOMELAB_MONITOR_PUBLIC_URL.
+
+    Used by the wrapper installer to render the heartbeat callback URL.
+    Returns None if unset or empty.
+    """
+    return os.environ.get("HOMELAB_MONITOR_PUBLIC_URL") or None
+
+
 __all__ = [
     "DiskBudgetConfig",
     "LogStreamBudgetConfig",
+    "get_public_url",
     "load_disk_budget_config",
     "load_log_stream_budget_config",
 ]

@@ -26,7 +26,13 @@ def _make_host_tree(
     cron_d_files: dict[str, str] | None = None,
     user_crontabs: dict[str, str] | None = None,
 ) -> None:
-    """Build a fake /host tree structure."""
+    """Build a fake /host tree plus a sibling crontab-snapshot dir.
+
+    `user_crontabs` keys are usernames; values are raw `crontab -l` output.
+    They are written into <root>/crontab-snapshot/<user> — the layout the
+    hm-crontab-snapshot host script produces and the discoverer reads via
+    HM_CRON_SNAPSHOT_DIR.
+    """
     (root / "etc").mkdir(parents=True, exist_ok=True)
     if crontab is not None:
         (root / "etc" / "crontab").write_text(crontab)
@@ -35,9 +41,10 @@ def _make_host_tree(
         for name, content in cron_d_files.items():
             (root / "etc" / "cron.d" / name).write_text(content)
     if user_crontabs:
-        (root / "var" / "spool" / "cron" / "crontabs").mkdir(parents=True, exist_ok=True)
+        snap = root / "crontab-snapshot"
+        snap.mkdir(parents=True, exist_ok=True)
         for user, content in user_crontabs.items():
-            (root / "var" / "spool" / "cron" / "crontabs" / user).write_text(content)
+            (snap / user).write_text(content)
 
 
 class _NullLog:
@@ -78,6 +85,7 @@ async def test_first_scan_inserts_rows_and_audits(
         cron_d_files={"backup": "10 4 * * * root /storage/scripts/cron/backup.sh\n"},
     )
     monkeypatch.setenv("HM_CRON_HOST_ROOT", str(tmp_path))
+    monkeypatch.setenv("HM_CRON_SNAPSHOT_DIR", str(tmp_path / "crontab-snapshot"))
     monkeypatch.setenv("HM_HOST_HOSTNAME", "test-host")
     discoverer = CronDiscoverer()
     cron_repo = CronRepo(repo)
@@ -105,6 +113,7 @@ async def test_second_scan_bump_only_no_audit(
         },
     )
     monkeypatch.setenv("HM_CRON_HOST_ROOT", str(tmp_path))
+    monkeypatch.setenv("HM_CRON_SNAPSHOT_DIR", str(tmp_path / "crontab-snapshot"))
     monkeypatch.setenv("HM_HOST_HOSTNAME", "test-host")
     cron_repo = CronRepo(repo)
     discoverer = CronDiscoverer()
@@ -139,6 +148,7 @@ async def test_invalid_line_sets_partial(
         },
     )
     monkeypatch.setenv("HM_CRON_HOST_ROOT", str(tmp_path))
+    monkeypatch.setenv("HM_CRON_SNAPSHOT_DIR", str(tmp_path / "crontab-snapshot"))
     monkeypatch.setenv("HM_HOST_HOSTNAME", "test-host")
     result = await CronDiscoverer().scan(CronRepo(repo), log=_NullLog())
     assert result.partial is True
@@ -157,6 +167,7 @@ async def test_user_crontab_uses_filename_as_user(
         },
     )
     monkeypatch.setenv("HM_CRON_HOST_ROOT", str(tmp_path))
+    monkeypatch.setenv("HM_CRON_SNAPSHOT_DIR", str(tmp_path / "crontab-snapshot"))
     monkeypatch.setenv("HM_HOST_HOSTNAME", "test-host")
     result = await CronDiscoverer().scan(CronRepo(repo), log=_NullLog())
     assert result.inserted_count == 1
@@ -178,6 +189,7 @@ async def test_reboot_cron_cadence_zero(
         },
     )
     monkeypatch.setenv("HM_CRON_HOST_ROOT", str(tmp_path))
+    monkeypatch.setenv("HM_CRON_SNAPSHOT_DIR", str(tmp_path / "crontab-snapshot"))
     monkeypatch.setenv("HM_HOST_HOSTNAME", "test-host")
     await CronDiscoverer().scan(CronRepo(repo), log=_NullLog())
     row = await repo.fetch_one(text("SELECT schedule, cadence_seconds FROM crons LIMIT 1"))
@@ -192,6 +204,7 @@ async def test_missing_host_root_partial_with_errors(
 ) -> None:
     """Test that missing host root doesn't cause errors (files are optional)."""
     monkeypatch.setenv("HM_CRON_HOST_ROOT", str(tmp_path / "nonexistent"))
+    monkeypatch.setenv("HM_CRON_SNAPSHOT_DIR", str(tmp_path / "crontab-snapshot"))
     monkeypatch.setenv("HM_HOST_HOSTNAME", "test-host")
     result = await CronDiscoverer().scan(CronRepo(repo), log=_NullLog())
     # Missing optional files are not errors per discoverer design; result is empty + partial=False
@@ -212,6 +225,7 @@ async def test_dotfiles_in_cron_d_skipped(
         },
     )
     monkeypatch.setenv("HM_CRON_HOST_ROOT", str(tmp_path))
+    monkeypatch.setenv("HM_CRON_SNAPSHOT_DIR", str(tmp_path / "crontab-snapshot"))
     monkeypatch.setenv("HM_HOST_HOSTNAME", "test-host")
     result = await CronDiscoverer().scan(CronRepo(repo), log=_NullLog())
     # Only "real" gets parsed — .placeholder skipped
@@ -285,6 +299,7 @@ async def test_scan_cron_d_iterdir_oserror_sets_partial(
     cron_d = tmp_path / "etc" / "cron.d"
     cron_d.mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("HM_CRON_HOST_ROOT", str(tmp_path))
+    monkeypatch.setenv("HM_CRON_SNAPSHOT_DIR", str(tmp_path / "crontab-snapshot"))
     monkeypatch.setenv("HM_HOST_HOSTNAME", "test-host")
 
     original_iterdir = Path.iterdir
@@ -311,16 +326,17 @@ async def test_scan_spool_iterdir_oserror_sets_partial(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """OSError from spool/crontabs iterdir captured as error and partial=True."""
-    spool = tmp_path / "var" / "spool" / "cron" / "crontabs"
-    spool.mkdir(parents=True, exist_ok=True)
+    """OSError from snapshot dir iterdir captured as error and partial=True."""
+    snapshot_dir = tmp_path / "crontab-snapshot"
+    snapshot_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("HM_CRON_HOST_ROOT", str(tmp_path))
+    monkeypatch.setenv("HM_CRON_SNAPSHOT_DIR", str(snapshot_dir))
     monkeypatch.setenv("HM_HOST_HOSTNAME", "test-host")
 
     original_iterdir = Path.iterdir
 
     def patched_iterdir(self: Path) -> Iterator[Path]:  # type: ignore[override]
-        if self == spool:
+        if self == snapshot_dir:
             raise OSError("permission denied spool")
         return original_iterdir(self)
 
@@ -346,6 +362,7 @@ async def test_scan_upsert_exception_sets_partial(
         cron_d_files={"test": "10 4 * * * root /bin/true\n"},
     )
     monkeypatch.setenv("HM_CRON_HOST_ROOT", str(tmp_path))
+    monkeypatch.setenv("HM_CRON_SNAPSHOT_DIR", str(tmp_path / "crontab-snapshot"))
     monkeypatch.setenv("HM_HOST_HOSTNAME", "test-host")
 
     bad_repo = MagicMock()
@@ -371,6 +388,7 @@ async def test_scan_one_file_missing_returns_empty(
     # Create etc/ dir but NOT /etc/crontab, so _scan_one_file hits `return [], [], False`
     (tmp_path / "etc").mkdir(parents=True)
     monkeypatch.setenv("HM_CRON_HOST_ROOT", str(tmp_path))
+    monkeypatch.setenv("HM_CRON_SNAPSHOT_DIR", str(tmp_path / "crontab-snapshot"))
     monkeypatch.setenv("HM_HOST_HOSTNAME", "test-host")
     result = await CronDiscoverer().scan(CronRepo(repo), log=_NullLog())
     assert result.partial is False
@@ -463,6 +481,7 @@ async def test_run_with_cron_repo_returns_ok(
         cron_d_files={"backup": "10 4 * * * root /storage/scripts/cron/backup.sh\n"},
     )
     monkeypatch.setenv("HM_CRON_HOST_ROOT", str(tmp_path))
+    monkeypatch.setenv("HM_CRON_SNAPSHOT_DIR", str(tmp_path / "crontab-snapshot"))
     monkeypatch.setenv("HM_HOST_HOSTNAME", "test-host")
 
     discoverer = CronDiscoverer()
@@ -492,10 +511,11 @@ async def test_scan_spool_dotfile_skipped(
             "alice": "*/5 * * * * /opt/alice/sync.sh\n",
         },
     )
-    # Add a dotfile to the spool directory
-    dotfile = tmp_path / "var" / "spool" / "cron" / "crontabs" / ".hidden"
+    # Add a dotfile to the snapshot directory — should be skipped
+    dotfile = tmp_path / "crontab-snapshot" / ".hidden"
     dotfile.write_text("* * * * * /bin/hidden\n")
     monkeypatch.setenv("HM_CRON_HOST_ROOT", str(tmp_path))
+    monkeypatch.setenv("HM_CRON_SNAPSHOT_DIR", str(tmp_path / "crontab-snapshot"))
     monkeypatch.setenv("HM_HOST_HOSTNAME", "test-host")
     result = await CronDiscoverer().scan(CronRepo(repo), log=_NullLog())
     assert result.inserted_count == 1  # only alice, not .hidden
@@ -514,10 +534,11 @@ async def test_scan_spool_subdirectory_skipped(
             "alice": "*/5 * * * * /opt/alice/sync.sh\n",
         },
     )
-    # Add a subdirectory to spool — should be skipped (is_file() check)
-    subdir = tmp_path / "var" / "spool" / "cron" / "crontabs" / "subdir"
+    # Add a subdirectory to the snapshot dir — should be skipped (is_file() check)
+    subdir = tmp_path / "crontab-snapshot" / "subdir"
     subdir.mkdir()
     monkeypatch.setenv("HM_CRON_HOST_ROOT", str(tmp_path))
+    monkeypatch.setenv("HM_CRON_SNAPSHOT_DIR", str(tmp_path / "crontab-snapshot"))
     monkeypatch.setenv("HM_HOST_HOSTNAME", "test-host")
     result = await CronDiscoverer().scan(CronRepo(repo), log=_NullLog())
     assert result.inserted_count == 1  # only alice, not subdir
@@ -540,6 +561,7 @@ async def test_scan_cron_d_subdirectory_skipped(
     subdir = tmp_path / "etc" / "cron.d" / "subdir"
     subdir.mkdir()
     monkeypatch.setenv("HM_CRON_HOST_ROOT", str(tmp_path))
+    monkeypatch.setenv("HM_CRON_SNAPSHOT_DIR", str(tmp_path / "crontab-snapshot"))
     monkeypatch.setenv("HM_HOST_HOSTNAME", "test-host")
     result = await CronDiscoverer().scan(CronRepo(repo), log=_NullLog())
     assert result.inserted_count == 1  # only real, not subdir
@@ -559,6 +581,7 @@ async def test_scan_updated_non_bump_increments_updated_count(
         cron_d_files={"backup": "10 4 * * * root /storage/scripts/cron/backup.sh\n"},
     )
     monkeypatch.setenv("HM_CRON_HOST_ROOT", str(tmp_path))
+    monkeypatch.setenv("HM_CRON_SNAPSHOT_DIR", str(tmp_path / "crontab-snapshot"))
     monkeypatch.setenv("HM_HOST_HOSTNAME", "test-host")
     cron_repo = CronRepo(repo)
     discoverer = CronDiscoverer()
@@ -592,6 +615,7 @@ async def test_scan_log_without_info_attr(
         cron_d_files={"backup": "10 4 * * * root /bin/true\n"},
     )
     monkeypatch.setenv("HM_CRON_HOST_ROOT", str(tmp_path))
+    monkeypatch.setenv("HM_CRON_SNAPSHOT_DIR", str(tmp_path / "crontab-snapshot"))
     monkeypatch.setenv("HM_HOST_HOSTNAME", "test-host")
     result = await CronDiscoverer().scan(CronRepo(repo), log=_NoInfoLog())
     assert result.inserted_count == 1
@@ -646,6 +670,7 @@ async def test_scan_populates_clean_source_paths(
         cron_d_files={"backup": "10 4 * * * root /storage/scripts/cron/backup.sh\n"},
     )
     monkeypatch.setenv("HM_CRON_HOST_ROOT", str(tmp_path))
+    monkeypatch.setenv("HM_CRON_SNAPSHOT_DIR", str(tmp_path / "crontab-snapshot"))
     monkeypatch.setenv("HM_HOST_HOSTNAME", "test-host")
     discoverer = CronDiscoverer()
     cron_repo = CronRepo(repo)
@@ -667,6 +692,7 @@ async def test_scan_found_by_source_path_grouping(
         cron_d_files={"backup": "10 4 * * * root /storage/scripts/cron/backup.sh\n"},
     )
     monkeypatch.setenv("HM_CRON_HOST_ROOT", str(tmp_path))
+    monkeypatch.setenv("HM_CRON_SNAPSHOT_DIR", str(tmp_path / "crontab-snapshot"))
     monkeypatch.setenv("HM_HOST_HOSTNAME", "test-host")
     discoverer = CronDiscoverer()
     cron_repo = CronRepo(repo)
@@ -687,6 +713,7 @@ async def test_scan_cron_d_iterdir_oserror_excludes_from_clean(
     _make_host_tree(tmp_path, crontab="0 * * * * echo system\n")
     (tmp_path / "etc" / "cron.d").mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("HM_CRON_HOST_ROOT", str(tmp_path))
+    monkeypatch.setenv("HM_CRON_SNAPSHOT_DIR", str(tmp_path / "crontab-snapshot"))
     monkeypatch.setenv("HM_HOST_HOSTNAME", "test-host")
 
     # Mock iterdir to fail on cron.d
@@ -719,6 +746,7 @@ async def test_scan_parse_error_excludes_file_from_clean(
         cron_d_files={"bad": "*/X * * * * root /bin/false\n"},  # Invalid schedule
     )
     monkeypatch.setenv("HM_CRON_HOST_ROOT", str(tmp_path))
+    monkeypatch.setenv("HM_CRON_SNAPSHOT_DIR", str(tmp_path / "crontab-snapshot"))
     monkeypatch.setenv("HM_HOST_HOSTNAME", "test-host")
 
     discoverer = CronDiscoverer()
@@ -740,6 +768,7 @@ async def test_run_reconcile_soft_deletes_raises_returns_ok(
         cron_d_files={"backup": "10 4 * * * root /storage/scripts/cron/backup.sh\n"},
     )
     monkeypatch.setenv("HM_CRON_HOST_ROOT", str(tmp_path))
+    monkeypatch.setenv("HM_CRON_SNAPSHOT_DIR", str(tmp_path / "crontab-snapshot"))
     monkeypatch.setenv("HM_HOST_HOSTNAME", "test-host")
 
     # Create a mock cron_repo whose reconcile_soft_deletes raises
@@ -769,6 +798,7 @@ async def test_run_reconcile_raises_log_without_warning_attr(
     """run() skips ctx.log.warning when reconcile raises and log lacks .warning (113->117)."""
     _make_host_tree(tmp_path)
     monkeypatch.setenv("HM_CRON_HOST_ROOT", str(tmp_path))
+    monkeypatch.setenv("HM_CRON_SNAPSHOT_DIR", str(tmp_path / "crontab-snapshot"))
     monkeypatch.setenv("HM_HOST_HOSTNAME", "test-host")
 
     mock_repo = AsyncMock()
@@ -798,6 +828,7 @@ async def test_run_reconcile_ok_log_without_info_attr(
     """run() skips ctx.log.info call when log object lacks .info (117->123 branch)."""
     _make_host_tree(tmp_path)
     monkeypatch.setenv("HM_CRON_HOST_ROOT", str(tmp_path))
+    monkeypatch.setenv("HM_CRON_SNAPSHOT_DIR", str(tmp_path / "crontab-snapshot"))
     monkeypatch.setenv("HM_HOST_HOSTNAME", "test-host")
 
     mock_repo = AsyncMock()
@@ -828,6 +859,7 @@ async def test_scan_crontab_errors_excluded_from_clean_source_paths(
     (tmp_path / "etc").mkdir(parents=True, exist_ok=True)
     (tmp_path / "etc" / "crontab").write_text("*/X * * * * root /bin/false\n")
     monkeypatch.setenv("HM_CRON_HOST_ROOT", str(tmp_path))
+    monkeypatch.setenv("HM_CRON_SNAPSHOT_DIR", str(tmp_path / "crontab-snapshot"))
     monkeypatch.setenv("HM_HOST_HOSTNAME", "test-host")
 
     result = await CronDiscoverer().scan(CronRepo(repo), log=_NullLog())
@@ -840,10 +872,11 @@ async def test_scan_spool_errors_excluded_from_clean_source_paths(
     repo: SqliteRepository, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A parse error in a user crontab keeps it out of clean_source_paths (211->195)."""
-    spool = tmp_path / "var" / "spool" / "cron" / "crontabs"
-    spool.mkdir(parents=True, exist_ok=True)
-    (spool / "alice").write_text("*/X * * * * /bin/false\n")
+    snap = tmp_path / "crontab-snapshot"
+    snap.mkdir(parents=True, exist_ok=True)
+    (snap / "alice").write_text("*/X * * * * /bin/false\n")
     monkeypatch.setenv("HM_CRON_HOST_ROOT", str(tmp_path))
+    monkeypatch.setenv("HM_CRON_SNAPSHOT_DIR", str(snap))
     monkeypatch.setenv("HM_HOST_HOSTNAME", "test-host")
 
     result = await CronDiscoverer().scan(CronRepo(repo), log=_NullLog())
@@ -861,6 +894,7 @@ async def test_scan_known_db_path_not_owned_by_scanner_skipped(
     """
     _make_host_tree(tmp_path)
     monkeypatch.setenv("HM_CRON_HOST_ROOT", str(tmp_path))
+    monkeypatch.setenv("HM_CRON_SNAPSHOT_DIR", str(tmp_path / "crontab-snapshot"))
     monkeypatch.setenv("HM_HOST_HOSTNAME", "test-host")
 
     from homelab_monitor.kernel.cron import repository as _repo_mod  # noqa: PLC0415
@@ -898,6 +932,7 @@ async def test_unreadable_user_crontab_not_soft_deleted(
         user_crontabs={"jakekausler": "*/5 * * * * /opt/sync.sh\n"},
     )
     monkeypatch.setenv("HM_CRON_HOST_ROOT", str(tmp_path))
+    monkeypatch.setenv("HM_CRON_SNAPSHOT_DIR", str(tmp_path / "crontab-snapshot"))
     monkeypatch.setenv("HM_HOST_HOSTNAME", "test-host")
     cron_repo = CronRepo(repo)
     discoverer = CronDiscoverer()
@@ -909,7 +944,7 @@ async def test_unreadable_user_crontab_not_soft_deleted(
     (fp,) = tuple(result1.found_fingerprints)
 
     # Scan 2 — the file is now unreadable.
-    _patch_read_text_permission_error(monkeypatch, deny_suffix="/crontabs/jakekausler")
+    _patch_read_text_permission_error(monkeypatch, deny_suffix="/crontab-snapshot/jakekausler")
     result2 = await discoverer.scan(cron_repo, log=_NullLog())
 
     # The unreadable path must be tracked and excluded from clean_source_paths.
@@ -947,6 +982,7 @@ async def test_unreadable_cron_d_file_not_soft_deleted(
         cron_d_files={"backup": "10 4 * * * root /storage/scripts/backup.sh\n"},
     )
     monkeypatch.setenv("HM_CRON_HOST_ROOT", str(tmp_path))
+    monkeypatch.setenv("HM_CRON_SNAPSHOT_DIR", str(tmp_path / "crontab-snapshot"))
     monkeypatch.setenv("HM_HOST_HOSTNAME", "test-host")
     cron_repo = CronRepo(repo)
     discoverer = CronDiscoverer()
@@ -987,6 +1023,7 @@ async def test_unreadable_etc_crontab_not_soft_deleted(
     registered crons soft-deleted."""
     _make_host_tree(tmp_path, crontab="0 3 * * * root /storage/scripts/nightly.sh\n")
     monkeypatch.setenv("HM_CRON_HOST_ROOT", str(tmp_path))
+    monkeypatch.setenv("HM_CRON_SNAPSHOT_DIR", str(tmp_path / "crontab-snapshot"))
     monkeypatch.setenv("HM_HOST_HOSTNAME", "test-host")
     cron_repo = CronRepo(repo)
     discoverer = CronDiscoverer()
@@ -1033,6 +1070,7 @@ async def test_emptied_readable_file_still_soft_deletes(
         cron_d_files={"backup": "10 4 * * * root /storage/scripts/backup.sh\n"},
     )
     monkeypatch.setenv("HM_CRON_HOST_ROOT", str(tmp_path))
+    monkeypatch.setenv("HM_CRON_SNAPSHOT_DIR", str(tmp_path / "crontab-snapshot"))
     monkeypatch.setenv("HM_HOST_HOSTNAME", "test-host")
     cron_repo = CronRepo(repo)
     discoverer = CronDiscoverer()
@@ -1082,6 +1120,7 @@ async def test_scan_result_unreadable_source_paths_field(
         },
     )
     monkeypatch.setenv("HM_CRON_HOST_ROOT", str(tmp_path))
+    monkeypatch.setenv("HM_CRON_SNAPSHOT_DIR", str(tmp_path / "crontab-snapshot"))
     monkeypatch.setenv("HM_HOST_HOSTNAME", "test-host")
     cron_repo = CronRepo(repo)
     discoverer = CronDiscoverer()
@@ -1114,6 +1153,7 @@ async def test_discovered_cron_has_log_match_key(
         cron_d_files={"backup": f"10 4 * * * root {command}\n"},
     )
     monkeypatch.setenv("HM_CRON_HOST_ROOT", str(tmp_path))
+    monkeypatch.setenv("HM_CRON_SNAPSHOT_DIR", str(tmp_path / "crontab-snapshot"))
     monkeypatch.setenv("HM_HOST_HOSTNAME", "test-host")
     cron_repo = CronRepo(repo)
     result = await CronDiscoverer().scan(cron_repo, log=_NullLog())
@@ -1122,3 +1162,72 @@ async def test_discovered_cron_has_log_match_key(
     assert row is not None
     assert row.log_match_key is not None
     assert row.log_match_key == canonical_log_key(row.command)
+
+
+# ---------------------------------------------------------------------------
+# _resolve_hostname: log object without warning method (line 73->79 branch)
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_hostname_log_without_warning_method(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """_resolve_hostname: when log has no 'warning' attr, branch at line 73 is False → skipped.
+
+    This covers the 73->79 branch: the inner `if hasattr(log, "warning")` is False,
+    so no warning is logged, but _hostname_fallback_warned is still set.
+    """
+    import homelab_monitor.plugins.discoverers.cron_discoverer as disc  # noqa: PLC0415
+
+    # Reset global so the branch is entered
+    monkeypatch.setattr(disc, "_hostname_fallback_warned", False)
+    monkeypatch.delenv("HM_HOST_HOSTNAME", raising=False)
+
+    # Pass a log object with NO warning method
+    class _NoWarnLog:
+        pass
+
+    result = _resolve_hostname(_NoWarnLog())
+    # Should return socket.gethostname() (no crash)
+    import socket  # noqa: PLC0415
+
+    assert result == socket.gethostname()
+    # Flag should now be set
+    assert disc._hostname_fallback_warned is True  # pyright: ignore[reportPrivateUsage]
+
+
+# ---------------------------------------------------------------------------
+# Option B fingerprint-stability regression (STAGE-002-009)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_snapshot_user_cron_fingerprint_matches_crontab_source_path(
+    repo: SqliteRepository, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A user cron discovered from the snapshot dir has the SAME fingerprint
+    that compute_fingerprint produces for source_path='crontab:<user>'.
+
+    Locks the Option B invariant: swapping the read source (spool -> snapshot)
+    must NOT change the identity tuple. source_path stays 'crontab:<user>'.
+    """
+    from homelab_monitor.kernel.cron.fingerprint import compute_fingerprint  # noqa: PLC0415
+
+    _make_host_tree(
+        tmp_path,
+        user_crontabs={"jakekausler": "17 * * * * /storage/scripts/rtlamr.sh\n"},
+    )
+    monkeypatch.setenv("HM_CRON_HOST_ROOT", str(tmp_path))
+    monkeypatch.setenv("HM_CRON_SNAPSHOT_DIR", str(tmp_path / "crontab-snapshot"))
+    monkeypatch.setenv("HM_HOST_HOSTNAME", "test-host")
+
+    result = await CronDiscoverer().scan(CronRepo(repo), log=_NullLog())
+    assert result.inserted_count == 1
+    (fp,) = tuple(result.found_fingerprints)
+    expected = compute_fingerprint(
+        host="test-host",
+        source_path="crontab:jakekausler",
+        schedule="17 * * * *",
+        command="/storage/scripts/rtlamr.sh",
+    )
+    assert fp == expected

@@ -55,6 +55,7 @@ const sampleCron: CronOut = {
   cadence_seconds: 0,
   expected_grace_seconds: 300,
   enabled: true,
+  is_local: true,
   last_seen_state: 'ok' as const,
   created_at: '2026-05-01T00:00:00Z',
   updated_at: '2026-05-01T00:00:00Z',

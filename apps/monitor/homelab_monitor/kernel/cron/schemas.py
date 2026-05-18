@@ -173,6 +173,7 @@ class CronOut(BaseModel):
     wrapper_last_seen_at: str | None
     last_discovered_at: str | None
     soft_deleted_at: str | None
+    is_local: bool
 
 
 class CronListResponse(BaseModel):
@@ -203,13 +204,54 @@ class PreviewRunsResponse(BaseModel):
     runs: list[str]
 
 
+# ---------- Install wrapper request/response ----------
+
+
+class InstallWrapperRequest(BaseModel):
+    """Body for POST /api/crons/{fingerprint}/install-wrapper."""
+
+    model_config = ConfigDict(extra="forbid")
+    confirm: bool = False
+
+
+class CrontabDiffOut(BaseModel):
+    """Crontab line diff for install preview."""
+
+    model_config = ConfigDict(extra="forbid")
+    source_path: str
+    old_line: str
+    new_line: str
+
+
+class InstallWrapperPreview(BaseModel):
+    """Dry-run response (confirm=false)."""
+
+    model_config = ConfigDict(extra="forbid")
+    fingerprint: str
+    wrapper_path: str
+    wrapper_content: str
+    token_file_path: str
+    crontab_diff: CrontabDiffOut
+
+
+class InstallWrapperResult(BaseModel):
+    """confirm=true response."""
+
+    model_config = ConfigDict(extra="forbid")
+    cron: CronOut
+
+
 # ---------- Helpers ----------
 
 
-def cron_record_to_out(rec: CronRecord) -> CronOut:
+def cron_record_to_out(rec: CronRecord, *, local_hostname: str | None = None) -> CronOut:
     """Convert a CronRecord (database row) to CronOut (public projection).
 
     Shared across heartbeat and crons routers to avoid duplication.
+
+    Args:
+        rec: The cron record to convert.
+        local_hostname: The local hostname for computing `is_local`. If None, `is_local` is False.
     """
     return CronOut(
         fingerprint=rec.fingerprint,
@@ -229,4 +271,5 @@ def cron_record_to_out(rec: CronRecord) -> CronOut:
         wrapper_last_seen_at=rec.wrapper_last_seen_at,
         last_discovered_at=rec.last_discovered_at,
         soft_deleted_at=rec.soft_deleted_at,
+        is_local=(local_hostname is not None and rec.host == local_hostname),
     )

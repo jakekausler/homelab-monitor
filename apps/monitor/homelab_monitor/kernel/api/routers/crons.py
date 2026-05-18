@@ -20,20 +20,29 @@ Preview endpoints (read-only, GET):
 from __future__ import annotations
 
 import asyncio
+import os
 import time as _time
+from importlib.resources import files as _resource_files
+from pathlib import Path
 from typing import Annotated
 
 import structlog
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
+from starlette.responses import PlainTextResponse
 from starlette.responses import Response as _FastApiResponse
 
-from homelab_monitor.kernel.api.dependencies import get_cron_repo, require_session
+from homelab_monitor.kernel.api.dependencies import (
+    get_cron_repo,
+    require_session,
+    require_token_scope,
+)
 from homelab_monitor.kernel.api.errors import (
     DependencyUnavailableProblem,
     NotFoundProblem,
     TooManyRequestsProblem,
 )
-from homelab_monitor.kernel.auth.models import User
+from homelab_monitor.kernel.auth.models import ApiToken, User
+from homelab_monitor.kernel.auth.scopes import Scope
 from homelab_monitor.kernel.cron.discovery_types import CronScanResult
 from homelab_monitor.kernel.cron.repository import CronRepo, CronWithState
 from homelab_monitor.kernel.cron.schedule import (
@@ -44,15 +53,20 @@ from homelab_monitor.kernel.cron.schemas import (
     CronListQuery,
     CronListResponse,
     CronOut,
+    CrontabDiffOut,
     CronUpdate,
     CronWithStateOut,
     HeartbeatStateOut,
+    InstallWrapperPreview,
+    InstallWrapperRequest,
+    InstallWrapperResult,
     PreviewRunsQuery,
     PreviewRunsResponse,
     cron_record_to_out,
 )
 from homelab_monitor.kernel.db.time import utc_now_iso
 from homelab_monitor.kernel.heartbeat.schemas import query_model
+from homelab_monitor.plugins.discoverers.cron_discoverer import resolve_hostname
 
 router = APIRouter(prefix="/crons", tags=["crons"])
 
@@ -68,7 +82,7 @@ def _client_ip(request: Request) -> str | None:
     return None  # pragma: no cover -- defensive
 
 
-def _with_state_to_out(joined: CronWithState) -> CronWithStateOut:
+def _with_state_to_out(joined: CronWithState, *, local_hostname: str) -> CronWithStateOut:
     state_out: HeartbeatStateOut | None = None
     if joined.state is not None:  # pragma: no cover
         s = joined.state
@@ -84,7 +98,10 @@ def _with_state_to_out(joined: CronWithState) -> CronWithStateOut:
             last_exit_code=s.last_exit_code,
             updated_at=s.updated_at,
         )
-    return CronWithStateOut(cron=cron_record_to_out(joined.cron), state=state_out)
+    return CronWithStateOut(
+        cron=cron_record_to_out(joined.cron, local_hostname=local_hostname),
+        state=state_out,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -110,8 +127,9 @@ async def list_crons(
         include_soft_deleted=query.include_soft_deleted,
         wrapper_installed=query.wrapper_installed,
     )
+    local_hostname = resolve_hostname()
     return CronListResponse(
-        items=[cron_record_to_out(r) for r in page.items],
+        items=[cron_record_to_out(r, local_hostname=local_hostname) for r in page.items],
         total=page.total,
         page=page.page,
         page_size=page.page_size,
@@ -171,6 +189,29 @@ async def preview_runs_saved(
     return PreviewRunsResponse(runs=runs)
 
 
+@router.get("/wrapper-template", response_class=PlainTextResponse)
+async def get_wrapper_template(
+    _token: Annotated[ApiToken, Depends(require_token_scope(Scope.HEARTBEAT_WRITE))],
+) -> PlainTextResponse:
+    """Return the raw cron heartbeat-wrapper script template (text/plain).
+
+    Served so the standalone remote installer can fetch the canonical
+    template instead of embedding its own divergent copy. The template
+    carries no secrets; HEARTBEAT_WRITE scope is required for uniform API
+    authentication (the remote installer already holds that token).
+
+    The four placeholders ({{INSTALL_DATE}}, {{FINGERPRINT}},
+    {{HEARTBEAT_URL_BASE}}, {{TOKEN_FILE_PATH}}) are substituted by the
+    caller, identically to install.py:_build_wrapper_content().
+    """
+    template_text = (
+        _resource_files("homelab_monitor")
+        .joinpath("data", "cron-with-heartbeat.sh.tmpl")
+        .read_text(encoding="utf-8")
+    )
+    return PlainTextResponse(content=template_text)
+
+
 @router.get("/{fingerprint}", response_model=CronWithStateOut)
 async def get_cron(
     fingerprint: str,
@@ -187,7 +228,7 @@ async def get_cron(
     joined = await repo.get_cron_with_state(fingerprint, include_hidden=include_hidden)
     if joined is None:
         raise NotFoundProblem(message=f"cron not found: {fingerprint}")
-    return _with_state_to_out(joined)
+    return _with_state_to_out(joined, local_hostname=resolve_hostname())
 
 
 @router.patch("/{fingerprint}", response_model=CronOut)
@@ -205,7 +246,7 @@ async def update_cron(
         )
     except LookupError as exc:
         raise NotFoundProblem(message=str(exc)) from exc
-    return cron_record_to_out(rec)
+    return cron_record_to_out(rec, local_hostname=resolve_hostname())
 
 
 @router.delete("/{fingerprint}", status_code=204)
@@ -220,6 +261,141 @@ async def delete_cron(
         await repo.soft_delete_cron(fingerprint, who=user.username, ip=_client_ip(request))
     except LookupError as exc:
         raise NotFoundProblem(message=str(exc)) from exc
+
+
+@router.post(
+    "/{fingerprint}/install-wrapper",
+    responses={
+        200: {"description": "Dry-run preview OR install result"},
+        400: {"description": "Cron is on a remote host or public URL not configured"},
+        404: {"description": "Cron not found"},
+        409: {"description": "Crontab line not found, or already wrapped"},
+        503: {"description": "Host-side cron-apply executor unavailable"},
+        500: {"description": "Install failed; rollback performed"},
+    },
+)
+async def install_wrapper(  # noqa: PLR0912 -- explicit per-exception-type HTTP status mapping (4xx/5xx) for each install failure mode
+    fingerprint: str,
+    payload: InstallWrapperRequest,
+    request: Request,
+    user: Annotated[User, Depends(require_session())],
+    repo: Annotated[CronRepo, Depends(get_cron_repo)],
+) -> InstallWrapperPreview | InstallWrapperResult:
+    """Install (or dry-run preview) the heartbeat wrapper for a local cron.
+
+    confirm=false → InstallWrapperPreview (no file modifications).
+    confirm=true  → performs the install, returns InstallWrapperResult.
+    Session-auth; CSRF enforced automatically by require_session() on POST.
+    """
+    from homelab_monitor.kernel.config import get_public_url  # noqa: PLC0415
+    from homelab_monitor.kernel.cron.install import (  # noqa: PLC0415
+        AlreadyWrappedError,
+        CronApplyUnavailableError,
+        CronLineNotFoundError,
+        CrontabWriteError,
+        RemoteHostError,
+        build_install_kit,
+        install_wrapper_local,
+    )
+
+    bound_log = structlog.get_logger().bind(fingerprint=fingerprint)
+
+    # Resolve local hostname and public URL
+    local_hostname = resolve_hostname()
+    public_url = get_public_url()
+    if not public_url:
+        raise HTTPException(
+            status_code=400,
+            detail="HOMELAB_MONITOR_PUBLIC_URL is not configured",
+        )
+
+    # Fetch cron
+    cron = await repo.get_cron(fingerprint, include_hidden=True)
+    if cron is None:
+        raise NotFoundProblem(message=f"cron not found: {fingerprint}")
+
+    # Check host
+    if cron.host != local_hostname:
+        raise HTTPException(
+            status_code=400,
+            detail=f"cron is on remote host {cron.host!r}; remote wrapping ships in EPIC-017",
+        )
+
+    # Resolve host root and install date
+    host_root = Path(os.environ.get("HM_CRON_HOST_ROOT", "/host"))
+    install_date = utc_now_iso()[:10]
+
+    # Dry-run path (confirm=false)
+    if not payload.confirm:
+        try:
+            kit = await build_install_kit(
+                cron, host_root=host_root, public_url=public_url, install_date=install_date
+            )
+        except CronLineNotFoundError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except AlreadyWrappedError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except RemoteHostError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        return InstallWrapperPreview(
+            fingerprint=kit.fingerprint,
+            wrapper_path=kit.wrapper_path,
+            wrapper_content=kit.wrapper_content,
+            token_file_path=kit.token_file_path,
+            crontab_diff=CrontabDiffOut(
+                source_path=kit.crontab_diff.source_path,
+                old_line=kit.crontab_diff.old_line,
+                new_line=kit.crontab_diff.new_line,
+            ),
+        )
+
+    # Confirm path (confirm=true)
+    # Need auth_repo and secrets_repo from app.state
+    auth_repo = getattr(request.app.state, "auth_repo", None)
+    secrets_repo = getattr(request.app.state, "secrets_repo", None)
+
+    if auth_repo is None:
+        raise DependencyUnavailableProblem(
+            code="auth_repo_unavailable",
+            message="auth repository not available",
+        )
+    if secrets_repo is None:
+        raise DependencyUnavailableProblem(
+            code="secrets_repo_unavailable",
+            message="secrets repository not available",
+        )
+
+    try:
+        updated_cron = await install_wrapper_local(
+            fingerprint,
+            cron_repo=repo,
+            auth_repo=auth_repo,
+            secrets_repo=secrets_repo,
+            host_root=host_root,
+            public_url=public_url,
+            local_hostname=local_hostname,
+            who=user.username,
+            ip=_client_ip(request),
+            log=bound_log,
+        )
+    except RemoteHostError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except CronLineNotFoundError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except AlreadyWrappedError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except CronApplyUnavailableError as exc:
+        bound_log.error("install_wrapper.executor_unavailable", error=str(exc))
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except CrontabWriteError as exc:
+        bound_log.error("install_wrapper.failed", error=str(exc))
+        raise HTTPException(status_code=500, detail="install failed; rollback performed") from exc
+
+    bound_log.info("install_wrapper.success")
+    return InstallWrapperResult(
+        cron=cron_record_to_out(updated_cron, local_hostname=local_hostname)
+    )
 
 
 @router.post("/discover-now", status_code=202)

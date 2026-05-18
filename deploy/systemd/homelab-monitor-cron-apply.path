@@ -1,0 +1,10 @@
+[Unit]
+Description=Watch homelab-monitor cron-apply request directory
+Documentation=https://github.com/jakekausler/homelab-monitor/blob/main/docs/architecture/cron-identity.md
+
+[Path]
+PathChanged=/var/lib/homelab-monitor/cron-apply/requests
+Unit=homelab-monitor-cron-apply.service
+
+[Install]
+WantedBy=paths.target

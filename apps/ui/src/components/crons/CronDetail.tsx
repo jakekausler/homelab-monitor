@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { toast } from 'sonner'
 
 import { ApiError } from '@/api/client'
@@ -9,6 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { StateBadge } from '@/components/crons/badges'
 import { CronForm } from '@/components/crons/CronForm'
+import { InstallHeartbeatModal } from '@/components/crons/InstallHeartbeatModal'
 import { formatAbsolute, formatRelative } from '@/lib/relativeTime'
 
 type CronUpdate = Schema<'CronUpdate'>
@@ -21,6 +23,7 @@ export function CronDetail({ fingerprint }: CronDetailProps) {
   const detail = useGetCron(fingerprint, { includeHidden: true })
   const update = useUpdateCron(fingerprint)
   const hide = useHideCron(fingerprint)
+  const [installModalOpen, setInstallModalOpen] = useState(false)
 
   if (detail.isLoading) {
     return <p className="text-muted-foreground">Loading cron…</p>
@@ -39,7 +42,8 @@ export function CronDetail({ fingerprint }: CronDetailProps) {
   const cron = detail.data.cron
   const state = detail.data.state
   const isHidden = cron.hidden_at !== null
-  const isRemote = cron.source_path === null
+  const isLocal = cron.is_local
+  const isRemote = !isLocal
   const isSoftDeleted = cron.soft_deleted_at !== null
 
   const handleSave = async (body: CronUpdate) => {
@@ -101,12 +105,20 @@ export function CronDetail({ fingerprint }: CronDetailProps) {
         <MonitoringPolicyPanel cron={cron} onSave={handleSave} isSubmitting={update.isPending} />
         <ActionsPanel
           isHidden={isHidden}
+          isLocal={isLocal}
           onHide={handleHide}
           onUnhide={handleUnhide}
           hidePending={hide.isPending}
           unhidePending={update.isPending}
+          onInstallWrapper={() => setInstallModalOpen(true)}
         />
       </div>
+
+      <InstallHeartbeatModal
+        fingerprint={fingerprint}
+        open={installModalOpen}
+        onOpenChange={setInstallModalOpen}
+      />
     </div>
   )
 }
@@ -154,7 +166,6 @@ function HeartbeatStatePanel({
               <Row label="Last exit code">{state.last_exit_code}</Row>
             )}
             <WrapperRow at={cron.wrapper_last_seen_at} />
-            {/* TODO(STAGE-002-009): append install method when wrapper_install_method ships */}
           </>
         ) : (
           <>
@@ -254,16 +265,20 @@ function MonitoringPolicyPanel({
 
 function ActionsPanel({
   isHidden,
+  isLocal,
   onHide,
   onUnhide,
   hidePending,
   unhidePending,
+  onInstallWrapper,
 }: {
   isHidden: boolean
+  isLocal: boolean
   onHide: () => Promise<void>
   onUnhide: () => Promise<void>
   hidePending: boolean
   unhidePending: boolean
+  onInstallWrapper: () => void
 }) {
   return (
     <Card aria-labelledby="panel-actions">
@@ -294,7 +309,7 @@ function ActionsPanel({
 
         <hr className="border-border" />
 
-        {/* Row 2: Install heartbeat wrapper (disabled) */}
+        {/* Row 2: Install heartbeat wrapper */}
         <div className="flex items-center justify-between">
           <div>
             <p className="text-sm font-medium">Install heartbeat wrapper</p>
@@ -302,23 +317,24 @@ function ActionsPanel({
               Replace ad-hoc heartbeats with a managed wrapper script.
             </p>
           </div>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              {/* Wrap disabled button in a span so the tooltip can still trigger on hover.
-                  Radix Tooltip TriggerAsChild w/ disabled button: wrap in span to keep events. */}
-              <span tabIndex={0}>
-                <Button disabled aria-label="Install heartbeat wrapper">
-                  Install heartbeat wrapper
-                </Button>
-              </span>
-            </TooltipTrigger>
-            <TooltipContent>
-              Local install ships in STAGE-002-009. Remote install requires cross-host work in
-              EPIC-015 / EPIC-017.
-            </TooltipContent>
-          </Tooltip>
+          {isLocal ? (
+            <Button onClick={onInstallWrapper}>Install heartbeat wrapper</Button>
+          ) : (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                {/* Wrap disabled button in a span so the tooltip can still trigger on hover. */}
+                <span tabIndex={0}>
+                  <Button disabled aria-label="Install heartbeat wrapper">
+                    Install heartbeat wrapper
+                  </Button>
+                </span>
+              </TooltipTrigger>
+              <TooltipContent>
+                Remote-host install ships in EPIC-017 (SSH probe framework).
+              </TooltipContent>
+            </Tooltip>
+          )}
         </div>
-        {/* TODO(STAGE-002-010): render wrapper-health badge from vmalert / recorded label */}
       </CardContent>
     </Card>
   )

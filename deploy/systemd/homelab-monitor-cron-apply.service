@@ -1,0 +1,35 @@
+[Unit]
+Description=Apply homelab-monitor cron-wrapper requests (host-side executor)
+Documentation=https://github.com/jakekausler/homelab-monitor/blob/main/docs/architecture/cron-identity.md
+After=cron.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/hm-cron-apply
+
+# --- Hardening ------------------------------------------------------------
+# Runs as root (default User). Locked down so a compromised request can only
+# touch crontab files + the IPC dirs.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+# ProtectSystem=strict makes the WHOLE filesystem (incl. /etc, /usr) read-only.
+# The executor MUST be able to write: the crontab spool, /etc/crontab,
+# /etc/cron.d, the wrapper script under /usr/local/bin, the token under
+# /etc/homelab-monitor, and the IPC dir — list every writable path here.
+# /etc/crontab is a FILE; naming it (and the dirs) in ReadWritePaths is
+# correct and sufficient. /etc/homelab-monitor may not yet exist — naming a
+# not-yet-existing path in ReadWritePaths is permitted (systemd creates the
+# mount point); the executor's `mkdir -p` then creates the real directory.
+ReadWritePaths=/var/spool/cron/crontabs /etc/crontab /etc/cron.d /etc/homelab-monitor /usr/local/bin /var/lib/homelab-monitor/cron-apply

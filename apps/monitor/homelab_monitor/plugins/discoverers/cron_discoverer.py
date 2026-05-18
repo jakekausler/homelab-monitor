@@ -1,7 +1,7 @@
 """STAGE-002-007: cron-discoverer plugin.
 
 In-process Python BaseCollector. Scans /host/etc/crontab, /host/etc/cron.d/*,
-and /host/var/spool/cron/crontabs/* on every tick (default 300s), computing
+and the crontab-snapshot directory on every tick (default 300s), computing
 per-line fingerprints and upserting into the `crons` registry.
 
 Self-metrics: piggybacks on `homelab_collector_run_*` emitted by the scheduler
@@ -10,6 +10,12 @@ for any BaseCollector. No bespoke metric naming.
 Configuration:
 - HM_CRON_HOST_ROOT (default `/host`) — root prefix where host files are
   bind-mounted into the container.
+- HM_CRON_SNAPSHOT_DIR (default `/host-crontab-snapshot`) — container path of
+  the host crontab-snapshot directory (Option B fix, STAGE-002-009). The host
+  script hm-crontab-snapshot writes one file per user here (filename = username,
+  content = that user's raw `crontab -l` output). The discoverer reads the
+  snapshot instead of the 0600 spool files (which keep their cron-required mode
+  permanently unmodified).
 - HM_CRON_DISCOVERY_INTERVAL_SECONDS (default 300) — read at module import time
   to override `interval`. The interval is frozen at class definition time (ClassVar).
   For tests that need to vary the interval, monkeypatch `CronDiscoverer.interval`
@@ -54,25 +60,41 @@ def _resolve_host_root() -> Path:
     return Path(os.environ.get("HM_CRON_HOST_ROOT", "/host"))
 
 
+def resolve_snapshot_dir() -> Path:
+    """Container path of the host crontab-snapshot directory (Option B fix).
+
+    The host script `hm-crontab-snapshot` writes one file per user (filename =
+    username) containing that user's raw `crontab -l` output. The host snapshot
+    dir `/var/lib/homelab-monitor/crontab-snapshot` is bind-mounted into the
+    container at this path. Default `/host-crontab-snapshot`.
+    """
+    return Path(os.environ.get("HM_CRON_SNAPSHOT_DIR", "/host-crontab-snapshot"))
+
+
 _hostname_fallback_warned = False
+
+
+def resolve_hostname() -> str:
+    """Return HM_HOST_HOSTNAME if set+non-empty, else socket.gethostname().
+    Pure (no logging) — for callers that just need the value."""
+    explicit = os.environ.get("HM_HOST_HOSTNAME", "").strip()
+    return explicit or socket.gethostname()
 
 
 def _resolve_hostname(log: object) -> str:
     """Return HM_HOST_HOSTNAME if set; otherwise socket.gethostname() (with a one-time warning)."""
     global _hostname_fallback_warned  # noqa: PLW0603
-    explicit = os.environ.get("HM_HOST_HOSTNAME", "").strip()
-    if explicit:
-        return explicit
-    fallback = socket.gethostname()
+    hostname = resolve_hostname()
     # structlog log object; use bound logger interface
-    if not _hostname_fallback_warned and hasattr(log, "warning"):
-        log.warning(  # type: ignore[attr-defined]
-            "cron_discoverer.hostname_fallback",
-            reason="HM_HOST_HOSTNAME unset; using container hostname",
-            fallback=fallback,
-        )
+    if not _hostname_fallback_warned and not os.environ.get("HM_HOST_HOSTNAME", "").strip():
+        if hasattr(log, "warning"):
+            log.warning(  # type: ignore[attr-defined]
+                "cron_discoverer.hostname_fallback",
+                reason="HM_HOST_HOSTNAME unset; using container hostname",
+                fallback=hostname,
+            )
         _hostname_fallback_warned = True
-    return fallback
+    return hostname
 
 
 class CronDiscoverer(BaseCollector):
@@ -198,11 +220,17 @@ class CronDiscoverer(BaseCollector):
                 partial = True
                 unreachable_prefixes.add("/etc/cron.d")
 
-        # 3. /host/var/spool/cron/crontabs/* (filename = user)
-        spool = host_root / "var" / "spool" / "cron" / "crontabs"
-        if spool.is_dir():
+        # 3. Crontab snapshot directory (Option B fix). The host-side
+        #    hm-crontab-snapshot script writes one file per user here
+        #    (filename = username; content = raw `crontab -l` output). The
+        #    discoverer reads the SNAPSHOT instead of the 0600 spool files —
+        #    the snapshot is root-generated + world-readable, so the non-root
+        #    container can read it without breaking vixie-cron with an ACL.
+        #    source_path stays "crontab:<user>" so fingerprints are unchanged.
+        snapshot_dir = resolve_snapshot_dir()
+        if snapshot_dir.is_dir():
             try:
-                for child in sorted(spool.iterdir()):
+                for child in sorted(snapshot_dir.iterdir()):
                     if child.name.startswith("."):
                         continue
                     if not child.is_file():
@@ -361,4 +389,4 @@ class CronDiscoverer(BaseCollector):
         return entries, errors, bool(errors)
 
 
-__all__ = ["CronDiscoverer"]
+__all__ = ["CronDiscoverer", "resolve_hostname", "resolve_snapshot_dir"]
