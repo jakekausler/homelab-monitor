@@ -1,0 +1,801 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>homelab-monitor: Architectural Overview (EPIC-002 — Heartbeat receiver + cron registry + cron auto-discovery)</title>
+<style>
+  :root {
+    --bg: #0e1117;
+    --panel: #161b22;
+    --panel-2: #1c232c;
+    --border: #2b323d;
+    --text: #d6dde7;
+    --muted: #8b95a4;
+    --accent: #58a6ff;
+    --auth: #4ade80;
+    --sched: #60a5fa;
+    --plug: #fb923c;
+    --db: #c084fc;
+    --api: #2dd4bf;
+    --warn: #facc15;
+    --danger: #f87171;
+    --code-bg: #0a0d12;
+    /* EPIC-002 categories */
+    --ui: #f472b6;
+    --metrics: #38bdf8;
+    --logs: #a3e635;
+    --alerts: #fb7185;
+    --hb: #34d399;
+    --cron: #f59e0b;
+    --wrapper: #818cf8;
+    --ci: #94a3b8;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+    line-height: 1.55;
+  }
+  .wrap { max-width: 1200px; margin: 0 auto; padding: 32px 28px 96px; }
+  h1, h2, h3, h4 { font-weight: 600; line-height: 1.2; margin-top: 0; }
+  h1 { font-size: 2.1rem; margin-bottom: 0.25rem; }
+  h2 { font-size: 1.5rem; margin: 56px 0 14px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+  h3 { font-size: 1.15rem; margin: 28px 0 10px; }
+  h4 { font-size: 1rem; margin: 20px 0 8px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  p { margin: 0 0 1em; }
+  code, kbd, pre, .mono { font-family: "JetBrains Mono", "Fira Code", Menlo, Consolas, monospace; }
+  code { background: var(--code-bg); padding: 2px 5px; border-radius: 4px; font-size: 0.9em; color: #e3e8ef; }
+  pre { background: var(--code-bg); padding: 12px 16px; border-radius: 6px; overflow-x: auto; font-size: 0.86em; border: 1px solid var(--border); }
+  a { color: var(--accent); }
+  .lead { color: var(--muted); font-size: 1.1rem; }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 18px 22px;
+    margin: 14px 0;
+  }
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; }
+  table { border-collapse: collapse; width: 100%; margin: 14px 0; font-size: 0.92rem; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { background: var(--panel-2); color: #e3e8ef; font-weight: 600; }
+  tr:hover td { background: var(--panel-2); }
+  .tag {
+    display: inline-block;
+    padding: 1px 8px;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    border: 1px solid currentColor;
+    line-height: 1.5;
+  }
+  .tag-auth { color: var(--auth); }
+  .tag-sched { color: var(--sched); }
+  .tag-plug { color: var(--plug); }
+  .tag-db { color: var(--db); }
+  .tag-api { color: var(--api); }
+  .tag-warn { color: var(--warn); }
+  .tag-none { color: var(--muted); }
+  .tag-ui { color: var(--ui); }
+  .tag-metrics { color: var(--metrics); }
+  .tag-logs { color: var(--logs); }
+  .tag-alerts { color: var(--alerts); }
+  .tag-hb { color: var(--hb); }
+  .tag-cron { color: var(--cron); }
+  .tag-wrapper { color: var(--wrapper); }
+  .tag-ci { color: var(--ci); }
+  ul, ol { padding-left: 22px; }
+  li { margin-bottom: 6px; }
+  .meta {
+    color: var(--muted);
+    font-size: 0.9rem;
+    margin-top: 12px;
+  }
+  .legend {
+    display: flex;
+    gap: 18px;
+    flex-wrap: wrap;
+    margin: 8px 0 18px;
+    font-size: 0.88rem;
+    color: var(--muted);
+  }
+  .legend .sw {
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    border-radius: 3px;
+    margin-right: 6px;
+    vertical-align: middle;
+  }
+  .toc {
+    background: var(--panel-2);
+    border-radius: 8px;
+    padding: 14px 22px 14px 38px;
+    border: 1px solid var(--border);
+  }
+  .toc ol { margin: 0; }
+  .toc li { margin-bottom: 4px; }
+  .callout {
+    border-left: 3px solid var(--accent);
+    padding: 8px 14px;
+    background: var(--panel-2);
+    border-radius: 0 6px 6px 0;
+    margin: 14px 0;
+  }
+  .callout.warn { border-left-color: var(--warn); }
+  .callout.danger { border-left-color: var(--danger); }
+  svg { display: block; max-width: 100%; }
+  .svg-wrap { overflow-x: auto; padding: 14px 0; background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; margin: 12px 0; }
+  .small { font-size: 0.85rem; color: var(--muted); }
+  hr { border: none; border-top: 1px solid var(--border); margin: 36px 0; }
+  .kicker { color: var(--accent); font-weight: 600; text-transform: uppercase; letter-spacing: .08em; font-size: 0.78rem; }
+
+  /* ============================================================
+     Mobile overrides (≤768px). Desktop styles above are unchanged.
+     ============================================================ */
+  @media (max-width: 768px) {
+    .wrap {
+      max-width: 100%;
+      width: 100%;
+      margin: 0;
+      padding: 16px 14px 64px;
+    }
+
+    /* Type scale */
+    h1 { font-size: 1.5rem; line-height: 1.25; }
+    h2 { font-size: 1.25rem; margin: 32px 0 12px; padding-bottom: 6px; }
+    h3 { font-size: 1.05rem; margin: 20px 0 8px; }
+    h4 { font-size: 0.92rem; margin: 16px 0 6px; }
+    .lead { font-size: 1rem; }
+
+    /* Section spacing */
+    hr { margin: 24px 0; }
+
+    /* Panels & cards: tighter padding */
+    .panel { padding: 12px 14px; margin: 10px 0; }
+    .toc { padding: 12px 14px 12px 30px; }
+    .callout { padding: 8px 12px; margin: 12px 0; }
+    .svg-wrap { padding: 10px 0; margin: 10px 0; }
+
+    /* Grids collapse to a single column on mobile */
+    .grid-2, .grid-3 { grid-template-columns: 1fr; gap: 10px; }
+
+    /* Code blocks: smaller, scrollable */
+    pre {
+      padding: 10px 12px;
+      font-size: 0.78rem;
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+    }
+    code { font-size: 0.85em; word-break: break-word; }
+
+    /* Tables: horizontal scroll wrapper. */
+    table {
+      display: block;
+      width: 100%;
+      max-width: 100%;
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+      white-space: normal;
+      font-size: 0.85rem;
+    }
+    table thead, table tbody { display: table; width: 100%; min-width: 560px; }
+    th, td { padding: 6px 8px; }
+    td code, th code { word-break: break-word; }
+
+    .svg-wrap svg { min-width: 0; }
+    .svg-wrap svg text { font-size: 14px; }
+
+    /* Touch targets: any link inside a list gets a 44px tap area */
+    .toc li a,
+    nav.toc li a,
+    ol li > a,
+    ul li > a {
+      display: inline-block;
+      padding: 8px 0;
+      min-height: 44px;
+      line-height: 1.5;
+    }
+
+    .legend { gap: 10px; font-size: 0.82rem; }
+  }
+
+  @media (max-width: 480px) {
+    .wrap { padding: 12px 12px 56px; }
+    h1 { font-size: 1.35rem; }
+    h2 { font-size: 1.15rem; }
+    pre { font-size: 0.75rem; }
+    table { font-size: 0.8rem; }
+    table thead, table tbody { min-width: 480px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="kicker">homelab-monitor</div>
+  <h1>Architectural Overview <span class="small mono">(EPIC-002 — Heartbeat receiver + cron registry + cron auto-discovery)</span></h1>
+  <p class="lead">
+    This picks up where <a href="overview-stages-12-21.html">overview-stages-12-21.html</a> left off
+    (EPIC-001 closed: a synthetic CPU spike becomes a firing alert in the UI within ~60 seconds).
+    EPIC-002 delivers the <em>cron-monitoring half</em> of the system across twelve stages:
+    a Healthchecks.io-style heartbeat receiver, a fingerprint-keyed cron registry, automatic
+    discovery of crons from <code>/etc/cron.*</code> and user crontabs, B-mode log-scrape that
+    tracks exit codes of unmodified crons, one-click wrapper install/remove helpers, and
+    vmalert cron-health alerting. By the end of STAGE-002-010, the Inventory screen exposes a
+    Crons tab listing every known cron with last-seen state, lateness, and recent runs;
+    vmalert fires when a cron is late or failing; and the operator can opt any local cron into
+    active heartbeat with a one-click wrapper install.
+  </p>
+  <div class="legend">
+    <span><span class="sw" style="background:var(--hb)"></span>heartbeat</span>
+    <span><span class="sw" style="background:var(--cron)"></span>cron registry</span>
+    <span><span class="sw" style="background:var(--plug)"></span>discovery</span>
+    <span><span class="sw" style="background:var(--logs)"></span>log-scrape</span>
+    <span><span class="sw" style="background:var(--wrapper)"></span>wrapper</span>
+    <span><span class="sw" style="background:var(--alerts)"></span>alerting</span>
+    <span><span class="sw" style="background:var(--db)"></span>db / schema</span>
+    <span><span class="sw" style="background:var(--ui)"></span>ui</span>
+    <span><span class="sw" style="background:var(--api)"></span>api</span>
+  </div>
+</header>
+
+<nav class="toc">
+  <ol>
+    <li><a href="#arch">Subsystem architecture</a></li>
+    <li><a href="#stage-001">STAGE-002-001 — Heartbeat receiver + <code>crons</code>/<code>heartbeats_state</code> schema</a></li>
+    <li><a href="#stage-002">STAGE-002-002 — Cron registry CRUD API + Inventory "Crons" tab</a></li>
+    <li><a href="#stage-003">STAGE-002-003 — Schema redesign: fingerprint identity</a></li>
+    <li><a href="#stage-004">STAGE-002-004 — API removal: drop manual create</a></li>
+    <li><a href="#stage-005">STAGE-002-005 — <code>/register</code> endpoint</a></li>
+    <li><a href="#stage-006">STAGE-002-006 — UI redesign: 4-panel detail page</a></li>
+    <li><a href="#stage-007">STAGE-002-007 — Cron auto-discovery</a></li>
+    <li><a href="#stage-007a">STAGE-002-007A — Auto-soft-delete + auto-restore</a></li>
+    <li><a href="#stage-008">STAGE-002-008 — B-mode log-scrape</a></li>
+    <li><a href="#stage-009">STAGE-002-009 — Wrapper install helpers</a></li>
+    <li><a href="#stage-009a">STAGE-002-009A — Wrapper removal helpers</a></li>
+    <li><a href="#stage-010">STAGE-002-010 — vmalert cron-health alerting</a></li>
+    <li><a href="#decisions">Key design decisions</a></li>
+    <li><a href="#closure">EPIC-002 closure</a></li>
+  </ol>
+</nav>
+
+<!-- ====================================================== -->
+<h2 id="arch">1. Subsystem architecture</h2>
+
+<p>
+  EPIC-002 adds three new data-flow paths to the EPIC-001 kernel, all converging on
+  two SQLite tables: <code>crons</code> (the registry) and <code>heartbeats_state</code>
+  (derived observational state per cron). A cron row is content-addressable by its
+  <strong>fingerprint</strong> — a SHA256 of the 4-tuple
+  <code>(host, source_path, schedule, command)</code> — so every path that observes the
+  same cron converges on the same row without a coordination protocol.
+</p>
+
+<p>
+  Cron monitoring is <strong>hybrid by design</strong> (spec §2 / Q5). Three observation
+  modes feed the same registry:
+</p>
+
+<ul>
+  <li><strong>B (default) — log-scrape.</strong> A <code>cron-log-collector</code> plugin
+    watches journald/syslog via VictoriaLogs and matches dispatch lines to crons by a
+    fingerprint heuristic. Works on any cron with no modification.</li>
+  <li><strong>A (gold standard) — active heartbeat.</strong> The cron is wrapped to POST
+    <code>/api/hb/{fingerprint}/start</code> then <code>.../ok</code> or <code>.../fail</code>.
+    Most reliable; requires touching the cron.</li>
+  <li><strong>C (bootstrap helper) — discovery + wrapper.</strong> The monitor reads the
+    host's crontabs, auto-generates a per-job wrapper script, and offers it as a one-click
+    install from the dashboard.</li>
+</ul>
+
+<div class="svg-wrap">
+<svg viewBox="0 0 1120 540" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system, sans-serif" font-size="13">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#8b95a4"/>
+    </marker>
+  </defs>
+
+  <!-- Sources column -->
+  <rect x="20" y="40" width="220" height="56" rx="6" fill="#161b22" stroke="#fb923c"/>
+  <text x="130" y="63" fill="#fb923c" text-anchor="middle">cron-discoverer plugin</text>
+  <text x="130" y="81" fill="#8b95a4" text-anchor="middle" font-size="11">scans /etc/cron.* + snapshots</text>
+
+  <rect x="20" y="130" width="220" height="56" rx="6" fill="#161b22" stroke="#34d399"/>
+  <text x="130" y="153" fill="#34d399" text-anchor="middle">wrapped cron job</text>
+  <text x="130" y="171" fill="#8b95a4" text-anchor="middle" font-size="11">curl /hb/{fp}/start|ok|fail</text>
+
+  <rect x="20" y="220" width="220" height="56" rx="6" fill="#161b22" stroke="#a3e635"/>
+  <text x="130" y="243" fill="#a3e635" text-anchor="middle">cron-log-collector plugin</text>
+  <text x="130" y="261" fill="#8b95a4" text-anchor="middle" font-size="11">journald/syslog via VictoriaLogs</text>
+
+  <line x1="240" y1="68"  x2="330" y2="150" stroke="#fb923c" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="240" y1="158" x2="330" y2="170" stroke="#34d399" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="240" y1="248" x2="330" y2="200" stroke="#a3e635" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <!-- Kernel box -->
+  <rect x="330" y="50" width="470" height="240" rx="10" fill="#161b22" stroke="#2b323d" stroke-width="1.5"/>
+  <text x="565" y="76" fill="#e3e8ef" text-anchor="middle" font-weight="600" font-size="14">FastAPI kernel</text>
+
+  <rect x="350" y="92" width="200" height="52" rx="5" fill="#0a0d12" stroke="#2dd4bf"/>
+  <text x="450" y="114" fill="#2dd4bf" text-anchor="middle">heartbeat router</text>
+  <text x="450" y="132" fill="#8b95a4" text-anchor="middle" font-size="11">/hb/{fp}/register|start|ok|fail</text>
+
+  <rect x="570" y="92" width="210" height="52" rx="5" fill="#0a0d12" stroke="#f59e0b"/>
+  <text x="675" y="114" fill="#f59e0b" text-anchor="middle">crons router</text>
+  <text x="675" y="132" fill="#8b95a4" text-anchor="middle" font-size="11">GET/PATCH/DELETE + wrapper ops</text>
+
+  <rect x="350" y="160" width="200" height="52" rx="5" fill="#1c232c" stroke="#c084fc"/>
+  <text x="450" y="182" fill="#c084fc" text-anchor="middle">CronRepo</text>
+  <text x="450" y="200" fill="#8b95a4" text-anchor="middle" font-size="11">fingerprint upsert + reconcile</text>
+
+  <rect x="570" y="160" width="210" height="52" rx="5" fill="#1c232c" stroke="#38bdf8"/>
+  <text x="675" y="182" fill="#38bdf8" text-anchor="middle">HeartbeatStateCollector</text>
+  <text x="675" y="200" fill="#8b95a4" text-anchor="middle" font-size="11">6 metrics / cron, every 30s</text>
+
+  <rect x="350" y="228" width="430" height="48" rx="5" fill="#1c232c" stroke="#818cf8"/>
+  <text x="565" y="250" fill="#818cf8" text-anchor="middle">cron-apply IPC → host-side root executor</text>
+  <text x="565" y="266" fill="#8b95a4" text-anchor="middle" font-size="11">wrapper install / uninstall — monitor has zero host-write capability</text>
+
+  <!-- DB -->
+  <rect x="330" y="320" width="240" height="78" rx="6" fill="#1c232c" stroke="#c084fc" stroke-width="2"/>
+  <text x="450" y="348" fill="#c084fc" text-anchor="middle" font-weight="600">SQLite</text>
+  <text x="450" y="368" fill="#8b95a4" text-anchor="middle" font-size="11">crons (fingerprint PK)</text>
+  <text x="450" y="384" fill="#8b95a4" text-anchor="middle" font-size="11">heartbeats_state (derived)</text>
+
+  <line x1="450" y1="212" x2="450" y2="320" stroke="#8b95a4" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="675" y1="212" x2="540" y2="320" stroke="#8b95a4" stroke-width="1.5" stroke-dasharray="3 2" marker-end="url(#arr)"/>
+
+  <!-- VM + alerting -->
+  <rect x="850" y="92" width="240" height="56" rx="6" fill="#161b22" stroke="#38bdf8"/>
+  <text x="970" y="115" fill="#38bdf8" text-anchor="middle">VictoriaMetrics</text>
+  <text x="970" y="133" fill="#8b95a4" text-anchor="middle" font-size="11">homelab_heartbeat_* series</text>
+
+  <rect x="850" y="180" width="240" height="56" rx="6" fill="#161b22" stroke="#fb7185"/>
+  <text x="970" y="203" fill="#fb7185" text-anchor="middle">vmalert — heartbeats.yaml</text>
+  <text x="970" y="221" fill="#8b95a4" text-anchor="middle" font-size="11">6 alert + 4 recording rules</text>
+
+  <rect x="850" y="268" width="240" height="56" rx="6" fill="#161b22" stroke="#facc15"/>
+  <text x="970" y="291" fill="#facc15" text-anchor="middle">Alertmanager</text>
+  <text x="970" y="309" fill="#8b95a4" text-anchor="middle" font-size="11">cron-health + monitoring-health</text>
+
+  <line x1="780" y1="186" x2="850" y2="130" stroke="#38bdf8" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="970" y1="148" x2="970" y2="180" stroke="#fb7185" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="970" y1="236" x2="970" y2="268" stroke="#facc15" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <!-- UI -->
+  <rect x="330" y="430" width="470" height="56" rx="6" fill="#161b22" stroke="#f472b6"/>
+  <text x="565" y="453" fill="#f472b6" text-anchor="middle">Inventory → Crons tab — 4-panel cron detail page</text>
+  <text x="565" y="471" fill="#8b95a4" text-anchor="middle" font-size="11">disk source · monitoring policy · heartbeat state · actions (install/remove toggle)</text>
+
+  <line x1="450" y1="398" x2="450" y2="430" stroke="#8b95a4" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <text x="560" y="520" fill="#8b95a4" text-anchor="middle" font-size="11">Solid: write path. Dashed: read path. Three observation modes (discovery / heartbeat / log-scrape) converge on the fingerprint-keyed registry.</text>
+</svg>
+</div>
+
+<div class="callout">
+  <strong>Public-release default policy (spec §2 Q30).</strong> The open-source release is
+  conservative: discovery records every cron without modifying it, and B-mode log-scrape
+  always runs. Active heartbeat (A) and wrapper install (C) are strictly opt-in per cron,
+  through the dashboard. No existing user cron is ever modified silently. The host-specific
+  <code>homelab-monitor-overrides</code> repo can be more aggressive; that wiring is a later
+  epic, not EPIC-002.
+</div>
+
+<!-- ====================================================== -->
+<h2 id="stage-001">2. STAGE-002-001 — Heartbeat receiver + <code>crons</code>/<code>heartbeats_state</code> schema <span class="tag tag-hb">heartbeat</span> <span class="tag tag-db">db</span></h2>
+
+<p>
+  The foundation stage. It replaced the auth-only heartbeat router stub from STAGE-001-021
+  with a real receiver that persists per-cron state, and landed the migration adding the
+  behavioral columns to <code>crons</code> (cadence, grace, integration_mode) and
+  <code>heartbeats_state</code> (current_state, last_ok_at, current_streak,
+  expected_next_at). The <code>/hb/{id}/start</code>, <code>/hb/{id}/ok</code>, and
+  <code>/hb/{id}/fail</code> endpoints update those tables, audit every state transition,
+  and the receiver 404s on an unknown id — at this stage the only creation path was the
+  registry CRUD coming in STAGE-002-002.
+</p>
+<p>
+  Heartbeat endpoints accept API tokens only — no anonymous posts. Tokens carry the
+  <code>heartbeat:write</code> scope (<code>Scope.HEARTBEAT_WRITE</code>) and are
+  rate-limited per token. The schema shipped here is later substantially reshaped by the
+  STAGE-003–006 redesign block; the receiver semantics it established (audited transitions,
+  derived <code>heartbeats_state</code>) survive intact.
+</p>
+
+<!-- ====================================================== -->
+<h2 id="stage-002">3. STAGE-002-002 — Cron registry CRUD API + Inventory "Crons" tab <span class="tag tag-cron">cron registry</span> <span class="tag tag-ui">ui</span></h2>
+
+<p>
+  Built the first user-facing surface for the registry: a typed CRUD API for
+  <code>crons</code> rows (list, get, create, update, soft-delete) plus a "Crons" tab in the
+  Inventory screen showing every known cron with last-seen state, expected next run,
+  current streak, and integration mode. As originally shipped it allowed manual cron
+  creation, used a UUID primary key, and carried an <code>integration_mode</code> field
+  (<code>observe</code>/<code>heartbeat</code>/<code>both</code>).
+</p>
+<div class="callout warn">
+  <strong>Superseded by the redesign block.</strong> Manual create, the UUID PK, and
+  <code>integration_mode</code> were all removed or replaced in STAGE-002-003 and 002-004.
+  EPIC-002 was reshaped on 2026-05-11 by the cron-derived-state-redesign brainstorm: four
+  new stages (003–006) introduce the fingerprint identity model and the derived-state UI,
+  and the original 003–006 were renumbered 007–010.
+</div>
+
+<!-- ====================================================== -->
+<h2 id="stage-003">4. STAGE-002-003 — Schema redesign: fingerprint identity <span class="tag tag-db">db</span></h2>
+
+<p>
+  Replaced the UUID-keyed cron schema with a fingerprint-keyed one. After this stage
+  <code>crons.fingerprint</code> is the primary key — a SHA256 hex digest of
+  <code>(host, source_path, schedule, command)</code>; <code>integration_mode</code> is
+  gone; <code>archived_at</code> is renamed <code>hidden_at</code>; new columns
+  <code>source_path</code> and <code>wrapper_installed_at</code> are present. The heartbeat
+  receiver and <code>CronRepo</code> were updated to use the fingerprint as the cron
+  identifier. This was a destructive migration — dev seed data was dropped and re-seeded by
+  the migration's own <code>upgrade()</code> (no production data existed).
+</p>
+<p>
+  The fingerprint algorithm (<code>kernel/cron/fingerprint.py</code>) serializes the 4-tuple
+  as JSON with <code>sort_keys=True</code>, <code>separators=(",",":")</code>, and
+  <code>ensure_ascii=False</code>, then SHA256s the UTF-8 bytes. JSON-canonical rather than
+  delimiter-joined: cron commands legitimately contain pipes, colons, and quotes, so any
+  delimiter scheme would collide. See <a href="cron-identity.md"><code>cron-identity.md</code></a>
+  for the full derivation.
+</p>
+
+<!-- ====================================================== -->
+<h2 id="stage-004">5. STAGE-002-004 — API removal: drop manual create <span class="tag tag-api">api</span></h2>
+
+<p>
+  The "no add" enforcement stage. It stripped the manual-create path entirely: the
+  <code>POST /api/crons</code> endpoint, the <code>CronCreate</code> Pydantic schema, the
+  <code>AddCronModal</code> UI component, the "+ Add cron" button were all removed, and
+  <code>CronForm</code> collapsed to edit-only mode. After this stage the only ways a
+  <code>crons</code> row can come into existence are auto-discovery (STAGE-002-007) and the
+  <code>/register</code> endpoint (STAGE-002-005). Manual-add cannot return without a
+  deliberate code change reverting the deletion.
+</p>
+
+<!-- ====================================================== -->
+<h2 id="stage-005">6. STAGE-002-005 — <code>/register</code> endpoint <span class="tag tag-hb">heartbeat</span> <span class="tag tag-api">api</span></h2>
+
+<p>
+  Added <code>POST /api/hb/{fingerprint}/register</code> — the heartbeat-side creation path.
+  A wrapper script (or any heartbeat client) POSTs
+  <code>{host, source_path, schedule, command, wrapper: bool}</code>; the server recomputes
+  the fingerprint from the body and rejects with 422 (<code>fingerprint_mismatch</code>) if
+  it does not match the URL. The endpoint is an idempotent upsert: first call for a
+  fingerprint INSERTs (<strong>201</strong>), subsequent calls RETURN the existing row
+  (<strong>200</strong>) and never touch operator-edited fields — the only column that may
+  mutate on re-register is <code>wrapper_last_seen_at</code>, and only when the body carries
+  <code>wrapper: true</code>.
+</p>
+<p>
+  <code>/start</code>, <code>/ok</code>, and <code>/fail</code> continue to 404 on unknown
+  fingerprints — creation happens only via <code>/register</code> or discovery. This
+  reverses STAGE-002-001's "404 on unknown" stance for the register path specifically,
+  justified by the derived-state model where the heartbeat wrapper is a legitimate
+  authority on what it wraps. Stage decisions D1–D10 are locked in
+  <code>epics/EPIC-002-heartbeat-cron/STAGE-002-005.md</code>.
+</p>
+
+<!-- ====================================================== -->
+<h2 id="stage-006">7. STAGE-002-006 — UI redesign: 4-panel detail page <span class="tag tag-ui">ui</span></h2>
+
+<p>
+  Redesigned the cron detail page to reflect the derived-state model. The page is split into
+  four clearly-labeled panels:
+</p>
+<table>
+  <thead><tr><th>Panel</th><th>Contents</th></tr></thead>
+  <tbody>
+    <tr><td>Disk source</td><td>Read-only: <code>host</code>, <code>source_path</code>, <code>schedule</code>, <code>command</code> — the fingerprint inputs.</td></tr>
+    <tr><td>Monitoring policy</td><td>Editable: <code>name</code>, <code>expected_grace_seconds</code>, <code>enabled</code>.</td></tr>
+    <tr><td>Heartbeat state</td><td>Read-only with diagnostics: current state, last ok/fail, streak, lateness.</td></tr>
+    <tr><td>Actions</td><td>Hide/Unhide; Install heartbeat (disabled in this stage, enabled in STAGE-002-009 for local-host crons only).</td></tr>
+  </tbody>
+</table>
+<p>
+  The Crons toolbar replaced the <code>include_archived</code> filter with
+  <code>include_hidden</code> and replaced the <code>integration_mode</code> filter with a
+  <code>wrapper_installed</code> filter. The list view shows a "Remote (no disk source)"
+  badge for rows where <code>source_path IS NULL</code>. After this stage the UI matches the
+  derived-state mental model; downstream stages extend it without further structural change.
+</p>
+
+<!-- ====================================================== -->
+<h2 id="stage-007">8. STAGE-002-007 — Cron auto-discovery <span class="tag tag-plug">discovery</span> <span class="tag tag-cron">cron registry</span></h2>
+
+<p>
+  Stood up the <code>cron-discoverer</code> builtin plugin — a standard in-process
+  <code>BaseCollector</code> (interval 300s default, concurrency group <code>discovery</code>)
+  that scans the host's crontab files and writes <em>directly</em> into the
+  <code>crons</code> registry. It populates <code>host</code>, <code>source_path</code>,
+  <code>schedule</code>, <code>command</code>, <code>cadence_seconds</code>,
+  <code>schedule_canonical</code>, and <code>last_discovered_at</code>. There is no
+  suggestion-queue interaction — per the derived-state redesign, discovered crons appear in
+  the registry as derived state the moment a scan sees them.
+</p>
+<p>
+  Sources scanned: <code>/etc/crontab</code> and <code>/etc/cron.d/*</code> (system
+  crontabs, world-readable, bind-mounted read-only under <code>/host/etc/...</code>) plus
+  per-user crontabs. The <code>0600</code> spool files are unreadable by the non-root
+  container, so discovery reads a world-readable <strong>snapshot directory</strong>
+  (<code>HM_CRON_SNAPSHOT_DIR</code>) populated by a root-side <code>hm-crontab-snapshot</code>
+  script via <code>crontab -l -u &lt;user&gt;</code>. The DB stores host paths, not container
+  paths: <code>/etc/crontab</code>, <code>/etc/cron.d/certbot</code>, or the logical
+  identifier <code>crontab:&lt;user&gt;</code>. Audit verb: <code>crons.discover</code>.
+</p>
+
+<!-- ====================================================== -->
+<h2 id="stage-007a">9. STAGE-002-007A — Auto-soft-delete + auto-restore <span class="tag tag-plug">discovery</span> <span class="tag tag-cron">cron registry</span></h2>
+
+<p>
+  An inserted sub-stage. Before it, a discovered cron whose crontab line was later deleted
+  left an orphan row forever. STAGE-002-007A introduced <strong>automatic soft-delete</strong>:
+  after each scan, <code>CronRepo.reconcile_soft_deletes()</code> compares the DB rows for
+  each <em>cleanly inspected</em> source file against the fingerprints the scan actually
+  found. A row whose fingerprint is absent from a clean scan gets
+  <code>soft_deleted_at = now</code> and a <code>crons.soft_delete</code> audit row; when the
+  fingerprint reappears on a later clean scan, the row is auto-restored
+  (<code>soft_deleted_at = NULL</code>, <code>crons.restore</code>).
+</p>
+<div class="callout">
+  <strong>The reachability gate is the safety invariant.</strong> Soft-delete runs only for
+  source files that were <em>cleanly</em> read and parsed this scan. An unreadable file (a
+  <code>0600</code> crontab the container UID cannot read, a parse error) is never treated
+  as a clean empty scan — "we couldn't see the file" is not "the cron is gone."
+  Reconciliation is per-host and per-source-file, and remote-only crons with
+  <code>source_path IS NULL</code> are never auto-soft-deleted.
+</div>
+<p>
+  <code>soft_deleted_at</code> (system-controlled, set by discovery) is distinct from
+  <code>hidden_at</code> (operator-controlled suppression). Both columns can coexist on one
+  row. The same restore also fires when a soft-deleted cron is re-registered via
+  <code>/register</code>.
+</p>
+
+<!-- ====================================================== -->
+<h2 id="stage-008">10. STAGE-002-008 — B-mode log-scrape <span class="tag tag-logs">log-scrape</span> <span class="tag tag-hb">heartbeat</span></h2>
+
+<p>
+  Shipped the log-scrape pipeline: vector + journald + a <code>cron-log-collector</code>
+  plugin that watches VictoriaLogs for cron output and updates <code>heartbeats_state</code>
+  rows. After this stage every cron in the registry — wrapper or not — gets
+  <code>last_seen_state</code> updates from log evidence whenever the host runs the cron.
+</p>
+<p>
+  Reworked from the original STAGE-002-004 plan in two ways. First, no
+  <code>integration_mode</code> gating — the derived-state model has no such field, so
+  log-scrape <em>always</em> runs for any registered cron; if a cron also has heartbeat
+  evidence the timestamps tie-break naturally (most recent wins). Second, logs are matched
+  to crons by a fingerprint heuristic: the collector parses a log line into
+  <code>(host, command_extracted)</code> and updates every <code>crons</code> row where
+  <code>host</code> and <code>command</code> match. Parsing is idempotent — a per-cron
+  high-water mark plus per-line content hash guarantees re-processing the same syslog line
+  never double-counts. A NEUTRAL observed run writes the <code>cron.observed_run</code>
+  audit verb and bumps <code>observed_runs_total</code> without changing
+  <code>current_state</code>.
+</p>
+
+<!-- ====================================================== -->
+<h2 id="stage-009">11. STAGE-002-009 — Wrapper install helpers <span class="tag tag-wrapper">wrapper</span> <span class="tag tag-api">api</span></h2>
+
+<p>
+  Delivered the C-mode bootstrap helper: a bash wrapper template
+  (<code>cron-with-heartbeat.sh.tmpl</code>) that wraps a host cron command and POSTs
+  <code>/start</code> then <code>/ok</code>|<code>/fail</code> heartbeats. The fingerprint,
+  heartbeat URL base, and token file path are baked into the wrapper at install time. Three
+  install paths exist: the UI "Install heartbeat wrapper" button (an
+  <code>InstallHeartbeatModal</code> dry-run-preview → confirm flow), the CLI
+  <code>hm cron install-wrapper</code>, and a standalone <code>install_wrapper_remote.py</code>
+  for hosts not running the monitor stack.
+</p>
+<div class="callout warn">
+  <strong>The monitor container has zero host-write capability.</strong> Wrapper install
+  routes through a host-side cron-apply executor: the monitor writes only an IPC request
+  file into <code>/var/lib/homelab-monitor/cron-apply/{requests,results}/</code>; a root
+  systemd oneshot service (<code>scripts/hm-cron-apply.sh</code>, triggered by a
+  <code>.path</code> watcher with a 60s <code>.timer</code> safety-net) performs the
+  privileged crontab rewrite, writes the shared wrapper script at
+  <code>/usr/local/bin/cron-with-heartbeat.sh</code>, and writes the shared token at
+  <code>/etc/homelab-monitor/heartbeat.token</code>. The executor re-derives the wrapped
+  line itself, writes to fixed paths only, and snapshots + rolls back on any failure.
+</div>
+<p>
+  A wrapped crontab line is <em>unwrapped before fingerprinting</em>, so a cron keeps its
+  original fingerprint across install — no spurious soft-delete. The
+  <code>is_local</code> computed field on <code>CronOut</code> gates the UI Install button
+  to local-host crons. The new env var <code>HOMELAB_MONITOR_PUBLIC_URL</code> supplies the
+  heartbeat URL base baked into the wrapper. This stage also retired the fragile
+  crontab-ACL discovery mechanism (vixie-cron rejects an ACL-carrying crontab) in favour of
+  the root-side <code>hm-crontab-snapshot</code> systemd units.
+</p>
+
+<!-- ====================================================== -->
+<h2 id="stage-009a">12. STAGE-002-009A — Wrapper removal helpers <span class="tag tag-wrapper">wrapper</span> <span class="tag tag-ui">ui</span></h2>
+
+<p>
+  The inverse of STAGE-009. An inserted sub-stage that reverts a wrapped crontab line
+  <code>&lt;schedule&gt; /usr/local/bin/cron-with-heartbeat.sh -- &lt;original&gt;</code> back to
+  <code>&lt;schedule&gt; &lt;original&gt;</code> — byte-exact original command. Three uninstall
+  paths mirror the install paths: the UI cron detail page now has an Install/Remove
+  <strong>toggle</strong> (<code>RemoveHeartbeatModal</code> with an un-wrap diff preview),
+  the CLI <code>hm cron uninstall-wrapper</code>, and the remote script's
+  <code>--uninstall</code> mode. The new endpoint
+  <code>POST /api/crons/{fingerprint}/uninstall-wrapper</code> routes through the same
+  host-side executor via a new <code>unwrap-crontab</code> operation. A typed
+  <code>NotWrappedError</code> → HTTP 409 mirrors <code>AlreadyWrappedError</code>.
+</p>
+<p>
+  This stage added the <code>wrapper_installed</code> boolean column (alembic migration
+  <code>0013</code>) — derived by the discoverer from the crontab line's actual wrapped
+  state. The UI toggle keys on <code>wrapper_installed</code>, <em>not</em> on
+  <code>wrapper_last_seen_at</code> (which is NULL for an installed-but-never-fired wrapper
+  and would misalign the toggle). The cron-apply executor now refreshes the crontab snapshot
+  inline after every wrap/unwrap, and the monitor requests a one-shot cron-discovery on
+  startup so <code>wrapper_installed</code> converges within seconds of a restart instead of
+  up to 300s.
+</p>
+
+<!-- ====================================================== -->
+<h2 id="stage-010">13. STAGE-002-010 — vmalert cron-health alerting <span class="tag tag-alerts">alerting</span> <span class="tag tag-metrics">metrics</span></h2>
+
+<p>
+  The EPIC-002 closer. It adds cron-health alerting end to end: a metrics collector, vmalert
+  rules, a new Alertmanager channel, and a wrapper-health badge in the UI.
+</p>
+
+<h3>HeartbeatStateCollector</h3>
+<p>
+  A scheduler-registered collector
+  (<code>kernel/metrics/heartbeat_collector.py</code>) that every 30 seconds emits six
+  Prometheus metrics per non-hidden, non-soft-deleted cron:
+</p>
+<table>
+  <thead><tr><th>Metric</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr><td><code>homelab_heartbeat_seconds_since_last_ok</code></td><td>Age of the last successful run.</td></tr>
+    <tr><td><code>homelab_heartbeat_seconds_since_last_fail</code></td><td>Age of the last failed run.</td></tr>
+    <tr><td><code>homelab_heartbeat_current_streak</code></td><td>Consecutive ok (positive) or fail (negative) count.</td></tr>
+    <tr><td><code>homelab_heartbeat_expected_next_seconds</code></td><td>Time to the lateness threshold; negative when overdue.</td></tr>
+    <tr><td><code>homelab_heartbeat_last_duration_seconds</code></td><td>Duration of the last observed run.</td></tr>
+    <tr><td><code>homelab_heartbeat_logscrape_count_since_last_heartbeat</code></td><td>Log-scrape runs observed since the last real heartbeat — the wrapper-staleness signal.</td></tr>
+  </tbody>
+</table>
+<p>
+  The collector uses <code>replace_family()</code> for an atomic per-family series swap, so
+  hidden / soft-deleted crons' series are dropped rather than persisting forever (a
+  stale-gauge bug found and fixed in Refinement 3a). <code>@reboot</code> lateness is handled
+  inside the collector: it emits a negative <code>expected_next_seconds</code> when
+  <code>last_ok_at</code> predates host boot time, reusing the HeartbeatStale alert ladder
+  with no separate <code>@reboot</code> rule. Host boot time is read from
+  <code>/host/proc/stat</code> via <code>host_boot_time.py</code> — a
+  <code>/proc:/host/proc:ro</code> bind mount was added for this (and it fixed a real
+  <code>host.py</code> bug where <code>psutil.boot_time()</code> returned container uptime).
+</p>
+
+<h3>vmalert rules — <code>heartbeats.yaml</code></h3>
+<p>
+  <code>deploy/vmalert/metrics/heartbeats.yaml</code> ships 6 alert rules + 4 recording
+  rules: <code>HeartbeatStale_Warning</code>/<code>_Error</code>/<code>_Critical</code>,
+  <code>HeartbeatFailed</code>, <code>HeartbeatFlapping</code>, and
+  <code>WrapperPossiblyStale</code>. The first five carry
+  <code>routing_channel=cron-health</code>; <code>WrapperPossiblyStale</code> carries
+  <code>routing_channel=monitoring-health</code> and fires when
+  <code>wrapper_installed="yes"</code> AND the log-scrape count is &ge; 3 for 60s — i.e. the
+  cron is still running (log-scrape sees it) but the wrapper has stopped reporting.
+</p>
+
+<h3>The <code>logscrape_runs_since_heartbeat</code> counter</h3>
+<p>
+  A new counter column on <code>heartbeats_state</code> (alembic migration
+  <code>0014</code>, chains from <code>0013</code>). It is incremented in
+  <code>record_observed_run</code> and reset to 0 by <code>record_ok</code> /
+  <code>record_fail</code> / <code>record_start</code> — so a non-zero value means the cron
+  has run (per log-scrape) without the wrapper firing. It backs both the
+  <code>WrapperPossiblyStale</code> alert and the <code>wrapper_health</code> API field.
+</p>
+
+<h3>monitoring-health channel + wrapper-health badge</h3>
+<p>
+  A new <code>monitoring-health</code> route and <code>monitoring-health-channel</code>
+  receiver were added to the Alertmanager template, keeping wrapper-degradation alerts on a
+  separate channel from ordinary cron-health alerts. The API gained a
+  <code>wrapper_health</code> enum field (<code>ok</code>/<code>stale</code>/<code>unknown</code>)
+  on <code>CronWithStateOut</code>, computed via <code>_compute_wrapper_health</code> against
+  a <code>_WRAPPER_STALE_THRESHOLD = 3</code>. The cron-detail Actions panel shows a
+  wrapper-health badge whenever the cron's wrapper is installed, and the UI label "Next due"
+  was renamed "Overdue after" to accurately describe the lateness threshold.
+</p>
+
+<!-- ====================================================== -->
+<h2 id="decisions">14. Key design decisions</h2>
+
+<ul>
+  <li><strong>Fingerprint identity — content-addressable cron rows.</strong> A cron is the
+    SHA256 of <code>(host, source_path, schedule, command)</code>, JSON-canonical. Discovery
+    and the <code>/register</code> handshake both compute the same fingerprint from the same
+    source data, so they converge on one row with no coordination protocol. Editing the
+    schedule or command produces a new fingerprint; the old row goes stale. The user cannot
+    create cron rows manually — rows exist only because discovery or a wrapper handshake
+    created them. <code>name</code> is deliberately not in the tuple, so the operator can
+    rename freely without changing identity.</li>
+  <li><strong>Derived-state model for <code>heartbeats_state</code>.</strong> Every value in
+    <code>heartbeats_state</code> can be recomputed from the events log (heartbeat receiver
+    writes + B-mode collector writes). It is treated as a materialized view, never the
+    source of truth. The same principle drove the STAGE-003–006 redesign that removed manual
+    cron creation: the registry is derived from observed reality, not operator data entry.</li>
+  <li><strong>Hybrid B / A / C cron-monitoring model.</strong> B-mode log-scrape (default,
+    works on any cron unmodified), A-mode active heartbeat (gold standard, requires
+    wrapping), and C-mode discovery + wrapper bootstrap. All three feed the one
+    fingerprint-keyed registry. Log-scrape always runs regardless of whether a wrapper is
+    installed; when both exist, the more recent timestamp wins and
+    <code>WrapperPossiblyStale</code> cross-checks them.</li>
+  <li><strong>Public-A-default policy (spec §2 Q30).</strong> The open-source release
+    observes existing crons without modifying them — discovery records, B-mode scrapes, but
+    A/C modifications are strictly opt-in per cron through the dashboard. No user cron is
+    edited silently. The host-specific <code>homelab-monitor-overrides</code> repo is the
+    place for more aggressive B/C application; that wiring is out of scope for EPIC-002.</li>
+  <li><strong>Zero host-write capability in the monitor container.</strong> All privileged
+    host writes (crontab rewrites, the wrapper script, the shared token) are performed by a
+    root-side systemd executor (<code>hm-cron-apply.sh</code>) triggered through an IPC
+    request/result directory. The monitor only ever writes a request file. The executor
+    re-derives every line itself, writes to fixed paths only, and snapshots + rolls back on
+    failure.</li>
+  <li><strong>Reachability gate on auto-soft-delete.</strong> A cron is soft-deleted only
+    when its fingerprint is absent from a <em>cleanly</em> scanned, readable source file.
+    An unreadable file is never treated as an empty scan. This prevents a transient
+    permission error or parse failure from wiping the registry.</li>
+  <li><strong>Idempotent log-scrape.</strong> Re-processing the same journald/syslog line
+    never double-counts — guaranteed by a per-cron high-water mark plus a per-line content
+    hash. The <code>logscrape_runs_since_heartbeat</code> counter is the wrapper-staleness
+    signal that connects log evidence to wrapper-health alerting.</li>
+  <li><strong>Unwrap-before-fingerprint convergence.</strong> Installing or removing the
+    heartbeat wrapper rewrites a crontab line's command, which would change the fingerprint
+    if hashed directly. Both the discovery parser and the wrapper installer strip the
+    wrapper invocation prefix before fingerprinting, so a cron's identity is stable across
+    install → uninstall → re-install.</li>
+</ul>
+
+<!-- ====================================================== -->
+<h2 id="closure">15. EPIC-002 closure</h2>
+
+<p>
+  All twelve stages — STAGE-002-001 through 002-010, with 002-007A and 002-009A inserted as
+  sub-stages — are <strong>Complete</strong>. The cron-monitoring half of homelab-monitor is
+  in place: a Healthchecks.io-style heartbeat receiver, a fingerprint-keyed cron registry
+  populated entirely by auto-discovery and the <code>/register</code> handshake, B-mode
+  log-scrape that tracks unmodified crons, one-click wrapper install/remove helpers, and
+  vmalert cron-health alerting routed across the <code>cron-health</code> and
+  <code>monitoring-health</code> channels. The Inventory → Crons tab presents every known
+  cron through the 4-panel detail page.
+</p>
+<p>
+  EPIC-003 and later can now rely on an authoritative cron registry, a heartbeat receiver
+  that backs Healthchecks-style integrations from any source (not just crons — also
+  long-running jobs, backups, and the local-watchdog itself), and the foundation for the
+  digest's "Cron heartbeat report" section.
+</p>
+
+<hr/>
+<p class="meta">
+  Generated 2026-05-18 by Claude. Branch <code>main</code>. Section anchors are stable; if a
+  path or symbol drifts, the source files
+  (<code>apps/monitor/homelab_monitor/</code>, <code>apps/ui/src/</code>,
+  <code>deploy/</code>, <code>epics/EPIC-002-heartbeat-cron/</code>) and
+  <a href="cron-identity.md"><code>docs/architecture/cron-identity.md</code></a> are
+  authoritative. Companion documents:
+  <a href="overview-stages-1-11.html">overview-stages-1-11.html</a> and
+  <a href="overview-stages-12-21.html">overview-stages-12-21.html</a> (EPIC-001).
+</p>
+
+</div>
+</body>
+</html>
