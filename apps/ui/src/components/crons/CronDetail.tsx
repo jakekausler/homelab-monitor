@@ -43,6 +43,7 @@ export function CronDetail({ fingerprint }: CronDetailProps) {
 
   const cron = detail.data.cron
   const state = detail.data.state
+  const wrapperHealth = detail.data.wrapper_health
   const isHidden = cron.hidden_at !== null
   const isLocal = cron.is_local
   const isRemote = !isLocal
@@ -110,6 +111,7 @@ export function CronDetail({ fingerprint }: CronDetailProps) {
           isHidden={isHidden}
           isLocal={isLocal}
           wrapperInstalled={wrapperInstalled}
+          wrapperHealth={wrapperHealth}
           onHide={handleHide}
           onUnhide={handleUnhide}
           hidePending={hide.isPending}
@@ -168,7 +170,7 @@ function HeartbeatStatePanel({
             <Row label="Streak">{state.current_streak}</Row>
             <Row label="Last OK">{formatRelative(state.last_ok_at)}</Row>
             <Row label="Last Fail">{formatRelative(state.last_fail_at)}</Row>
-            <Row label="Next due">{formatRelative(state.expected_next_at)}</Row>
+            <Row label="Overdue after">{formatRelative(state.expected_next_at)}</Row>
             {state.last_duration_seconds !== null && (
               <Row label="Last duration">{state.last_duration_seconds}s</Row>
             )}
@@ -277,6 +279,7 @@ function ActionsPanel({
   isHidden,
   isLocal,
   wrapperInstalled,
+  wrapperHealth,
   onHide,
   onUnhide,
   hidePending,
@@ -287,6 +290,7 @@ function ActionsPanel({
   isHidden: boolean
   isLocal: boolean
   wrapperInstalled: boolean
+  wrapperHealth: Schema<'CronWithStateOut'>['wrapper_health']
   onHide: () => Promise<void>
   onUnhide: () => Promise<void>
   hidePending: boolean
@@ -363,6 +367,29 @@ function ActionsPanel({
             </Tooltip>
           )}
         </div>
+
+        {wrapperInstalled && (
+          <>
+            <hr className="border-border" />
+            {/* Row 3: Wrapper health */}
+            <div className="flex items-center justify-between" data-testid="wrapper-health-row">
+              <div>
+                <p className="text-sm font-medium">Wrapper health</p>
+                <p className="text-xs text-muted-foreground">
+                  {wrapperHealth === 'stale'
+                    ? 'Log-scrape sees runs but the wrapper has not sent a heartbeat recently.'
+                    : 'The managed wrapper is sending heartbeats as expected.'}
+                </p>
+              </div>
+              <Badge
+                variant={wrapperHealth === 'stale' ? 'warn' : 'ok'}
+                data-testid="wrapper-health-badge"
+              >
+                {wrapperHealth === 'stale' ? 'Stale' : 'OK'}
+              </Badge>
+            </div>
+          </>
+        )}
       </CardContent>
     </Card>
   )

@@ -105,6 +105,7 @@ volumes:
   - /etc:/host/etc:ro                                                    # /etc/crontab + /etc/cron.d/* (READ-ONLY)
   - /var/lib/homelab-monitor/crontab-snapshot:/host-crontab-snapshot:ro   # user crontab snapshot (READ-ONLY)
   - /var/lib/homelab-monitor/cron-apply:/host-ipc:rw                      # cron-apply IPC (READ-WRITE)
+  - /proc:/host/proc:ro                                                    # host /proc for btime (READ-ONLY, STAGE-002-010)
 ```
 
 System crontabs (`/etc/crontab`, `/etc/cron.d/*`) are read directly from

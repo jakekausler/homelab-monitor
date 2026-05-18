@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, NamedTuple
 
 import pytest
@@ -558,3 +559,62 @@ def test_build_exclude_pattern_empty_returns_none() -> None:
     )
 
     assert _build_exclude_pattern([]) is None
+
+
+# ---------------------------------------------------------------------------
+# T4 — host.py uptime bugfix (STAGE-002-010)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_run_emits_uptime_from_host_btime_when_proc_available(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """With HM_HOST_PROC_DIR pointing at a fake stat file, uptime is computed
+    from host btime rather than psutil.boot_time()."""
+    from pathlib import Path  # noqa: PLC0415
+
+    _patch_psutil_happy_path(monkeypatch)
+
+    # Write a fake /proc/stat with a different btime than psutil's mock (1_700_000_000)
+    # psutil mock: boot=1_700_000_000, time=1_700_000_100 → uptime 100s
+    # host btime:  1_700_000_050 → uptime from host = time(1_700_000_100) - 1_700_000_050 = 50s
+    host_proc_dir = Path(str(tmp_path)) / "proc"
+    host_proc_dir.mkdir()
+    (host_proc_dir / "stat").write_text("cpu  0\nbtime 1700000050\n")
+
+    monkeypatch.setenv("HM_HOST_PROC_DIR", str(host_proc_dir))
+
+    writer = MemoryRetainingMetricsWriter()
+    cfg = HostCollectorConfig(name="host")
+    result = await HostCollector().run(_ctx(writer, cfg))
+
+    assert result.ok
+    up = [e for e in writer.snapshot() if e.name == "homelab_host_uptime_seconds"]
+    assert len(up) == 1
+    # uptime = time.time() - host_btime = 1_700_000_100 - 1_700_000_050 = 50s
+    assert up[0].value == 50.0  # noqa: PLR2004
+
+
+@pytest.mark.asyncio
+async def test_run_emits_uptime_seconds_fallback_to_psutil_when_no_host_proc(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Without /host/proc (default env), uptime falls back to psutil.boot_time().
+
+    This is the existing test_run_emits_uptime_seconds under a new name to confirm
+    the fallback path still works after the host.py bugfix.
+    """
+    _patch_psutil_happy_path(monkeypatch)
+    # Ensure HM_HOST_PROC_DIR points at something that doesn't exist
+    monkeypatch.setenv("HM_HOST_PROC_DIR", "/nonexistent-proc-dir-for-test")
+
+    writer = MemoryRetainingMetricsWriter()
+    cfg = HostCollectorConfig(name="host")
+    result = await HostCollector().run(_ctx(writer, cfg))
+
+    assert result.ok
+    up = [e for e in writer.snapshot() if e.name == "homelab_host_uptime_seconds"]
+    assert len(up) == 1
+    assert up[0].value == 100.0  # noqa: PLR2004  (psutil mock: time=100_offset - boot=0_offset)

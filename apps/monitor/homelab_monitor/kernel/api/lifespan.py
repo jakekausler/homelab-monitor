@@ -225,6 +225,27 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
         )
         degraded.append("cron-discoverer")
 
+    try:
+        from homelab_monitor.kernel.metrics.heartbeat_collector import (  # noqa: PLC0415
+            HeartbeatStateCollector,
+        )
+
+        loader.register(
+            HeartbeatStateCollector,
+            {
+                "name": "heartbeat_state",
+                "interval_seconds": int(HeartbeatStateCollector.interval.total_seconds()),
+                "timeout_seconds": int(HeartbeatStateCollector.timeout.total_seconds()),
+            },
+        )
+    except Exception as exc:  # pragma: no cover -- defensive
+        log.warning(
+            "lifespan.collector_register_failed",
+            name="heartbeat_state",
+            error=str(exc),
+        )
+        degraded.append("heartbeat_state")
+
     plugins_env = os.environ.get("HOMELAB_MONITOR_PLUGINS_DIR")
     if plugins_env is not None:
         plugins_dir: Path | None = Path(plugins_env)

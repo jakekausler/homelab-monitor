@@ -84,6 +84,7 @@ def _row_to_state(row: Row[Any]) -> HeartbeatStateRecord:
         last_observed_run_at=(
             None if row.last_observed_run_at is None else str(row.last_observed_run_at)
         ),
+        logscrape_runs_since_heartbeat=int(row.logscrape_runs_since_heartbeat),
     )
 
 
@@ -98,7 +99,8 @@ _SELECT_CRON_SQL = text(
 _SELECT_STATE_SQL = text(
     "SELECT cron_fingerprint, current_state, last_start_at, last_ok_at, "
     "last_fail_at, current_streak, expected_next_at, last_duration_seconds, "
-    "last_exit_code, updated_at, observed_runs_total, last_observed_run_at FROM heartbeats_state "
+    "last_exit_code, updated_at, observed_runs_total, last_observed_run_at, "
+    "logscrape_runs_since_heartbeat FROM heartbeats_state "
     "WHERE cron_fingerprint = :cron_fingerprint"
 )
 
@@ -106,12 +108,13 @@ _UPSERT_STATE_SQL = text(
     "INSERT INTO heartbeats_state ("
     "  cron_fingerprint, current_state, last_start_at, last_ok_at, last_fail_at, "
     "  current_streak, expected_next_at, last_duration_seconds, "
-    "  last_exit_code, updated_at, observed_runs_total, last_observed_run_at"
+    "  last_exit_code, updated_at, observed_runs_total, last_observed_run_at, "
+    "  logscrape_runs_since_heartbeat"
     ") VALUES ("
     "  :cron_fingerprint, :current_state, :last_start_at, :last_ok_at, "
     "  :last_fail_at, :current_streak, :expected_next_at, "
     "  :last_duration_seconds, :last_exit_code, :updated_at, "
-    "  :observed_runs_total, :last_observed_run_at"
+    "  :observed_runs_total, :last_observed_run_at, 0"
     ") "
     "ON CONFLICT(cron_fingerprint) DO UPDATE SET "
     "  current_state = excluded.current_state, "
@@ -122,7 +125,8 @@ _UPSERT_STATE_SQL = text(
     "  expected_next_at = excluded.expected_next_at, "
     "  last_duration_seconds = excluded.last_duration_seconds, "
     "  last_exit_code = excluded.last_exit_code, "
-    "  updated_at = excluded.updated_at"
+    "  updated_at = excluded.updated_at, "
+    "  logscrape_runs_since_heartbeat = 0"
 )
 
 _UPDATE_CRONS_LAST_SEEN_SQL = text(
@@ -134,15 +138,18 @@ _UPSERT_OBSERVED_RUN_SQL = text(
     "INSERT INTO heartbeats_state ("
     "  cron_fingerprint, current_state, last_start_at, last_ok_at, last_fail_at, "
     "  current_streak, expected_next_at, last_duration_seconds, last_exit_code, "
-    "  updated_at, observed_runs_total, last_observed_run_at"
+    "  updated_at, observed_runs_total, last_observed_run_at, "
+    "  logscrape_runs_since_heartbeat"
     ") VALUES ("
     "  :cron_fingerprint, 'unknown', NULL, NULL, NULL, 0, NULL, NULL, NULL, "
-    "  :now, 1, :observed_at"
+    "  :now, 1, :observed_at, 1"
     ") "
     "ON CONFLICT(cron_fingerprint) DO UPDATE SET "
     "  observed_runs_total = heartbeats_state.observed_runs_total + 1, "
     "  last_observed_run_at = excluded.last_observed_run_at, "
-    "  updated_at = excluded.updated_at"
+    "  updated_at = excluded.updated_at, "
+    "  logscrape_runs_since_heartbeat = "
+    "    heartbeats_state.logscrape_runs_since_heartbeat + 1"
 )
 
 
@@ -298,10 +305,10 @@ class HeartbeatRepo:
 
         A vanilla cron dispatch line proves "cron fired the job", not "the job
         succeeded". So this increments ``observed_runs_total``, sets
-        ``last_observed_run_at`` + ``updated_at``, and DOES NOT touch
-        ``current_state``, ``last_ok_at``, ``last_fail_at``, ``current_streak``,
-        ``last_exit_code``, or ``expected_next_at``. It does NOT mirror to
-        ``crons.last_seen_state``.
+        ``last_observed_run_at`` + ``updated_at``, and increments
+        ``logscrape_runs_since_heartbeat``. Does NOT touch ``current_state``,
+        ``last_ok_at``, ``last_fail_at``, ``current_streak``, ``last_exit_code``,
+        or ``expected_next_at``. It does NOT mirror to ``crons.last_seen_state``.
 
         Writes an ``audit_log`` row with ``what="cron.observed_run"`` in the SAME
         transaction. Caller MUST have verified ``fingerprint`` exists.
@@ -363,8 +370,10 @@ class HeartbeatRepo:
     ) -> HeartbeatStateRecord:
         """Atomic upsert of state + crons mirror + audit row.
 
-        Caller MUST have already verified ``fingerprint`` exists (404 happens at
-        the router; this method assumes the row is present).
+        Resets ``logscrape_runs_since_heartbeat`` to 0 on every state transition
+        (ok/fail/start proves the wrapper executed). Caller MUST have already
+        verified ``fingerprint`` exists (404 happens at the router; this method
+        assumes the row is present).
         """
         async with self._db.engine.begin() as conn:
             cron = await self._fetch_cron_in_conn(conn, fingerprint)

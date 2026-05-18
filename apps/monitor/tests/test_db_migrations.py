@@ -715,3 +715,69 @@ async def test_migration_0009_round_trip(db_url: str) -> None:
         assert "wrapper_installed_at" not in cols
     finally:
         await engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# Migration 0014 — heartbeats_state.logscrape_runs_since_heartbeat
+# ---------------------------------------------------------------------------
+
+
+async def test_migration_0014_column_present_at_head(db_engine: AsyncEngine) -> None:
+    """After head, heartbeats_state has logscrape_runs_since_heartbeat (NOT NULL, default 0)."""
+
+    def _inspect_hb(sync_conn: object) -> dict[str, object]:
+        ins = inspect(sync_conn)
+        assert ins is not None
+        for col in ins.get_columns("heartbeats_state"):
+            if col["name"] == "logscrape_runs_since_heartbeat":
+                return col
+        return {}
+
+    async with db_engine.connect() as conn:
+        col_info = await conn.run_sync(_inspect_hb)
+
+    assert col_info, "logscrape_runs_since_heartbeat column missing from heartbeats_state"
+    assert col_info.get("nullable") is False
+    # server_default "0" → default value is 0
+    server_default = col_info.get("default")
+    assert server_default is not None
+    assert "0" in str(server_default)
+
+
+async def test_migration_0014_round_trip(db_url: str) -> None:
+    """upgrade head -> downgrade 0013 -> upgrade head: column absent then present."""
+    cfg = Config()
+    cfg.set_main_option("script_location", str(ALEMBIC_DIR))
+    cfg.set_main_option("sqlalchemy.url", db_url)
+    command.upgrade(cfg, "head")
+    command.downgrade(cfg, "0013")
+
+    engine = get_engine(url=db_url)
+    try:
+
+        def _hb_cols_at_0013(sync_conn: object) -> set[str]:
+            ins = inspect(sync_conn)
+            assert ins is not None
+            return {c["name"] for c in ins.get_columns("heartbeats_state")}
+
+        async with engine.connect() as conn:
+            cols = await conn.run_sync(_hb_cols_at_0013)
+        assert "logscrape_runs_since_heartbeat" not in cols
+    finally:
+        await engine.dispose()
+
+    # Re-upgrade: column should be back
+    command.upgrade(cfg, "head")
+    engine = get_engine(url=db_url)
+    try:
+
+        def _hb_cols_at_head(sync_conn: object) -> set[str]:
+            ins = inspect(sync_conn)
+            assert ins is not None
+            return {c["name"] for c in ins.get_columns("heartbeats_state")}
+
+        async with engine.connect() as conn:
+            cols = await conn.run_sync(_hb_cols_at_head)
+        assert "logscrape_runs_since_heartbeat" in cols
+    finally:
+        await engine.dispose()

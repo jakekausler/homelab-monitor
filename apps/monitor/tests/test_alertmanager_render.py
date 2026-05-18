@@ -544,6 +544,81 @@ def test_render_config_chown_oserror_logged(tmp_path: Path) -> None:
     assert "test-token-chown-fail" in output_file.read_text()
 
 
+# ---------------------------------------------------------------------------
+# T6 — monitoring-health receiver in alertmanager template (STAGE-002-010)
+# ---------------------------------------------------------------------------
+
+
+def _alertmanager_template_path() -> Path:
+    """Resolve the alertmanager template relative to the repo root."""
+    # tests/ → apps/monitor/ → apps/ → homelab-monitor/ → deploy/alertmanager/
+    return (
+        Path(__file__).parent.parent.parent.parent
+        / "deploy"
+        / "alertmanager"
+        / "alertmanager.yml.template"
+    )
+
+
+def test_render_config_monitoring_health_receiver_present(tmp_path: Path) -> None:
+    """Rendered alertmanager config contains the monitoring-health-channel receiver."""
+    import yaml  # noqa: PLC0415
+
+    template_path = _alertmanager_template_path()
+    output_file = tmp_path / "alertmanager.yml"
+    log = structlog.get_logger()
+    token = "test-token-t6"
+
+    render_config(
+        template_path=template_path,
+        output_path=output_file,
+        token=token,
+        log=log,
+    )
+
+    content = output_file.read_text()
+
+    # Rendered YAML must parse
+    parsed = yaml.safe_load(content)
+    assert parsed is not None
+
+    # monitoring-health-channel receiver must be present
+    receiver_names = {r["name"] for r in parsed.get("receivers", [])}
+    assert "monitoring-health-channel" in receiver_names
+
+    # Child route with routing_channel="monitoring-health" must be present
+    routes = parsed.get("route", {}).get("routes", [])
+    assert any(
+        any(
+            "routing_channel" in str(m) and "monitoring-health" in str(m)
+            for m in r.get("matchers", [])
+        )
+        for r in routes
+    ), "No child route with routing_channel=monitoring-health found"
+
+
+def test_render_config_token_substituted_in_both_receivers(tmp_path: Path) -> None:
+    """${ALERTMANAGER_INGEST_TOKEN} is replaced in BOTH receiver blocks."""
+    template_path = _alertmanager_template_path()
+    output_file = tmp_path / "alertmanager.yml"
+    log = structlog.get_logger()
+    token = "unique-test-token-xyz"
+
+    render_config(
+        template_path=template_path,
+        output_path=output_file,
+        token=token,
+        log=log,
+    )
+
+    content = output_file.read_text()
+
+    # No literal placeholder remains
+    assert "${ALERTMANAGER_INGEST_TOKEN}" not in content
+    # The token appears at least twice (once per receiver)
+    assert content.count(token) >= 2  # noqa: PLR2004
+
+
 def test_render_config_cleans_up_tmp_file_on_replace_failure(tmp_path: Path) -> None:
     """OSError during os.replace → temp file is unlinked, then re-raised."""
     template_file = tmp_path / "alertmanager.yml.template"

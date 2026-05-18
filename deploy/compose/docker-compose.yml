@@ -67,6 +67,12 @@ services:
       # host-side hm-cron-apply executor writes result JSON into results/.
       # This is the ONLY read-write host mount.
       - /var/lib/homelab-monitor/cron-apply:/host-ipc:rw
+      # Host /proc mounted READ-ONLY: HeartbeatStateCollector and the host
+      # collector read /host/proc/stat `btime` (host boot time). Docker cannot
+      # reliably bind-mount an individual synthetic /proc file, so the whole
+      # /proc is mounted ro — /proc/stat btime is world-readable. Used for
+      # @reboot cron lateness and a correct homelab_host_uptime_seconds.
+      - /proc:/host/proc:ro
     depends_on:
       victoriametrics:
         condition: service_healthy
@@ -102,13 +108,16 @@ services:
     image: busybox:1.36
     container_name: homelab-config-init
     user: "0:0"
+    environment:
+      HM_CRON_HOST_UID: ${HM_CRON_HOST_UID:-1000}
     command:
       - sh
       - -c
       - >
         chown 0:2000 /var/vector-config /var/alertmanager-config &&
         chmod 3777 /var/vector-config /var/alertmanager-config &&
-        echo "config-init: render-config volumes set to root:amconfig 3777"
+        if [ -f /var/alertmanager-config/alertmanager.yml ]; then chown ${HM_CRON_HOST_UID:-1000}:2000 /var/alertmanager-config/alertmanager.yml; fi &&
+        echo "config-init: render-config volumes set to root:amconfig 3777, am seed reowned to monitor uid"
     volumes:
       - data_vector_config:/var/vector-config
       - data_alertmanager_config:/var/alertmanager-config
@@ -289,6 +298,7 @@ services:
     command:
       - "-datasource.url=http://victoriametrics:8428"
       - "-notifier.url=http://alertmanager:9093"
+      - "-remoteWrite.url=http://victoriametrics:8428"
       - "-rule=/etc/vmalert/metrics/*.yaml"
       - "-evaluationInterval=30s"
       - "-configCheckInterval=30s"
@@ -301,8 +311,8 @@ services:
       victoriametrics:
         condition: service_healthy
     healthcheck:
-      # vmalert exposes /-/health (Prometheus convention); VL exposes /health.
-      test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1:8880/-/health"]
+      # vmalert exposes /-/healthy (VictoriaMetrics convention); VL exposes /health.
+      test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1:8880/-/healthy"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -329,8 +339,8 @@ services:
       victorialogs:
         condition: service_healthy
     healthcheck:
-      # vmalert exposes /-/health (Prometheus convention); VL exposes /health.
-      test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1:8880/-/health"]
+      # vmalert exposes /-/healthy (VictoriaMetrics convention); VL exposes /health.
+      test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1:8880/-/healthy"]
       interval: 30s
       timeout: 5s
       retries: 3

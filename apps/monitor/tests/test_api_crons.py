@@ -815,3 +815,150 @@ async def test_get_cron_is_local_false_for_remote_host(
     assert resp.status_code == 200  # noqa: PLR2004
     body = resp.json()
     assert body["cron"]["is_local"] is False
+
+
+# ---------------------------------------------------------------------------
+# T5 — wrapper_health API field (STAGE-002-010)
+# ---------------------------------------------------------------------------
+
+
+async def _seed_state(
+    repo: SqliteRepository,
+    *,
+    fingerprint: str,
+    logscrape_runs_since_heartbeat: int = 0,
+) -> None:
+    """Insert a heartbeats_state row with the given logscrape counter."""
+    now = utc_now_iso()
+    async with repo.engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO heartbeats_state (cron_fingerprint, current_state, "
+                "last_start_at, last_ok_at, last_fail_at, current_streak, "
+                "expected_next_at, last_duration_seconds, last_exit_code, updated_at, "
+                "observed_runs_total, last_observed_run_at, logscrape_runs_since_heartbeat) "
+                "VALUES (:fp, 'ok', NULL, :now, NULL, 1, NULL, NULL, NULL, :now, 0, NULL, :lsc)"
+            ),
+            {"fp": fingerprint, "now": now, "lsc": logscrape_runs_since_heartbeat},
+        )
+
+
+async def _seed_wrapper_cron(
+    repo: SqliteRepository,
+    *,
+    name: str,
+    wrapper_installed: bool,
+) -> str:
+    """Seed a cron with wrapper_installed set and return its fingerprint."""
+    from homelab_monitor.kernel.cron.fingerprint import compute_fingerprint  # noqa: PLC0415
+
+    fp = compute_fingerprint(
+        host="host-a",
+        source_path="/etc/crontab",
+        schedule="*/5 * * * *",
+        command=f"/cmd-{name}",
+    )
+    now = utc_now_iso()
+    wi_int = 1 if wrapper_installed else 0
+    wlsa = now if wrapper_installed else None
+    async with repo.engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO crons (fingerprint, name, host, command, schedule, "
+                "schedule_canonical, cadence_seconds, expected_grace_seconds, "
+                "enabled, last_seen_state, created_at, updated_at, hidden_at, "
+                "source_path, wrapper_last_seen_at, wrapper_installed, soft_deleted_at) VALUES ("
+                ":fp, :name, 'host-a', :cmd, '*/5 * * * *', '*/5 * * * *', 0, "
+                "300, 1, 'unknown', :now, :now, NULL, '/etc/crontab', :wlsa, :wi, NULL)"
+            ),
+            {
+                "fp": fp,
+                "name": name,
+                "cmd": f"/cmd-{name}",
+                "now": now,
+                "wlsa": wlsa,
+                "wi": wi_int,
+            },
+        )
+    return fp
+
+
+@pytest.mark.asyncio
+async def test_wrapper_health_unknown_when_not_installed(
+    authenticated_client: AsyncClient, repo: SqliteRepository
+) -> None:
+    """wrapper_installed=False → wrapper_health == 'unknown'."""
+    fp = await _seed_wrapper_cron(repo, name="wh-no-wrap", wrapper_installed=False)
+    resp = await authenticated_client.get(f"/api/crons/{fp}")
+    assert resp.status_code == 200  # noqa: PLR2004
+    assert resp.json()["wrapper_health"] == "unknown"
+
+
+@pytest.mark.asyncio
+async def test_wrapper_health_ok_when_installed_no_state(
+    authenticated_client: AsyncClient, repo: SqliteRepository
+) -> None:
+    """wrapper_installed=True, no heartbeats_state row → wrapper_health == 'ok'."""
+    fp = await _seed_wrapper_cron(repo, name="wh-installed-no-state", wrapper_installed=True)
+    # No state row seeded
+    resp = await authenticated_client.get(f"/api/crons/{fp}")
+    assert resp.status_code == 200  # noqa: PLR2004
+    body = resp.json()
+    assert body["state"] is None
+    assert body["wrapper_health"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_wrapper_health_ok_when_logscrape_counter_two(
+    authenticated_client: AsyncClient, repo: SqliteRepository
+) -> None:
+    """wrapper_installed=True, logscrape_runs_since_heartbeat == 2 → 'ok' (threshold is 3)."""
+    fp = await _seed_wrapper_cron(repo, name="wh-counter-2", wrapper_installed=True)
+    await _seed_state(repo, fingerprint=fp, logscrape_runs_since_heartbeat=2)
+    resp = await authenticated_client.get(f"/api/crons/{fp}")
+    assert resp.status_code == 200  # noqa: PLR2004
+    assert resp.json()["wrapper_health"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_wrapper_health_stale_when_logscrape_counter_three(
+    authenticated_client: AsyncClient, repo: SqliteRepository
+) -> None:
+    """wrapper_installed=True, logscrape_runs_since_heartbeat == 3 → 'stale'."""
+    fp = await _seed_wrapper_cron(repo, name="wh-counter-3", wrapper_installed=True)
+    await _seed_state(repo, fingerprint=fp, logscrape_runs_since_heartbeat=3)
+    resp = await authenticated_client.get(f"/api/crons/{fp}")
+    assert resp.status_code == 200  # noqa: PLR2004
+    assert resp.json()["wrapper_health"] == "stale"
+
+
+@pytest.mark.asyncio
+async def test_wrapper_health_stale_when_logscrape_counter_five(
+    authenticated_client: AsyncClient, repo: SqliteRepository
+) -> None:
+    """wrapper_installed=True, logscrape_runs_since_heartbeat == 5 → 'stale'."""
+    fp = await _seed_wrapper_cron(repo, name="wh-counter-5", wrapper_installed=True)
+    await _seed_state(repo, fingerprint=fp, logscrape_runs_since_heartbeat=5)
+    resp = await authenticated_client.get(f"/api/crons/{fp}")
+    assert resp.status_code == 200  # noqa: PLR2004
+    assert resp.json()["wrapper_health"] == "stale"
+
+
+@pytest.mark.asyncio
+async def test_with_state_to_out_both_branches_covered(
+    authenticated_client: AsyncClient, repo: SqliteRepository
+) -> None:
+    """Exercise _with_state_to_out: state-present branch AND state-absent branch."""
+    # state-absent branch (state is None)
+    fp_no_state = await _seed_wrapper_cron(repo, name="wh-no-state-branch", wrapper_installed=True)
+    resp = await authenticated_client.get(f"/api/crons/{fp_no_state}")
+    assert resp.status_code == 200  # noqa: PLR2004
+    assert resp.json()["state"] is None
+
+    # state-present branch (state is not None) — exercises the if joined.state is not None body
+    fp_with_state = await _seed_wrapper_cron(repo, name="wh-state-branch", wrapper_installed=True)
+    await _seed_state(repo, fingerprint=fp_with_state, logscrape_runs_since_heartbeat=0)
+    resp2 = await authenticated_client.get(f"/api/crons/{fp_with_state}")
+    assert resp2.status_code == 200  # noqa: PLR2004
+    assert resp2.json()["state"] is not None
+    assert resp2.json()["wrapper_health"] == "ok"

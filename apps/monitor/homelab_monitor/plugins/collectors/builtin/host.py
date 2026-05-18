@@ -287,8 +287,18 @@ class HostCollector(BaseCollector):
             return 0, [f"net_io_counters: {exc}"]
 
     def _collect_uptime(self, ctx: CollectorContext) -> tuple[int, list[str]]:
+        """Emit host uptime. Reads host btime from /host/proc/stat when
+        available (correct in-container value); falls back to psutil.boot_time()
+        on the dev rig where /host/proc is not mounted.
+        """
         try:
-            uptime = time.time() - psutil.boot_time()
+            from homelab_monitor.kernel.metrics.host_boot_time import (  # noqa: PLC0415
+                read_host_btime,
+            )
+
+            btime = read_host_btime()
+            boot_epoch = btime if btime is not None else psutil.boot_time()
+            uptime = time.time() - boot_epoch
             ctx.vm.write_gauge("homelab_host_uptime_seconds", float(uptime), {})
             return 1, []
         except Exception as exc:  # pragma: no cover -- defensive psutil failure

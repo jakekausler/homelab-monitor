@@ -62,6 +62,7 @@ vi.mock('sonner', () => ({
 // ---------------------------------------------------------------------------
 
 import { useGetCron, useHideCron, useUpdateCron } from '@/api/crons'
+import type { Schema } from '@/api/types'
 import { toast } from 'sonner'
 
 // ---------------------------------------------------------------------------
@@ -94,11 +95,15 @@ const baseCron = {
 
 const baseState = null
 
-function makeGetCronResult(overrides: Partial<typeof baseCron> = {}, state = baseState) {
+function makeGetCronResult(
+  overrides: Partial<typeof baseCron> = {},
+  state: Schema<'HeartbeatStateOut'> | null = baseState,
+  wrapperHealth: 'ok' | 'stale' | 'unknown' = 'unknown',
+) {
   return {
     isLoading: false,
     error: null,
-    data: { cron: { ...baseCron, ...overrides }, state },
+    data: { cron: { ...baseCron, ...overrides }, state, wrapper_health: wrapperHealth },
   }
 }
 
@@ -467,5 +472,77 @@ describe('CronDetail', () => {
     renderInRouter(<CronDetail fingerprint={FP} />)
     await screen.findByText('daily-backup')
     expect(screen.getByRole('button', { name: 'Remove heartbeat wrapper' })).toBeDisabled()
+  })
+
+  // ---------------------------------------------------------------------------
+  // T7 — wrapper-health badge + "Overdue after" label (STAGE-002-010)
+  // ---------------------------------------------------------------------------
+
+  // 27. Wrapper NOT installed → no wrapper-health-row
+  it('does not render wrapper-health-row when wrapper not installed', async () => {
+    vi.mocked(useGetCron).mockReturnValue(
+      makeGetCronResult({ wrapper_installed: false }, null, 'unknown') as unknown as ReturnType<
+        typeof useGetCron
+      >,
+    )
+    renderInRouter(<CronDetail fingerprint={FP} />)
+    await screen.findByText('daily-backup')
+    expect(screen.queryByTestId('wrapper-health-row')).toBeNull()
+  })
+
+  // 28. wrapper_installed=true, wrapper_health='ok' → badge "OK"
+  it('renders wrapper-health-badge with text OK when wrapper_health is ok', async () => {
+    vi.mocked(useGetCron).mockReturnValue(
+      makeGetCronResult(
+        { is_local: true, wrapper_installed: true },
+        null,
+        'ok',
+      ) as unknown as ReturnType<typeof useGetCron>,
+    )
+    renderInRouter(<CronDetail fingerprint={FP} />)
+    await screen.findByText('daily-backup')
+    expect(screen.getByTestId('wrapper-health-row')).toBeInTheDocument()
+    expect(screen.getByTestId('wrapper-health-badge')).toHaveTextContent('OK')
+  })
+
+  // 29. wrapper_installed=true, wrapper_health='stale' → badge "Stale"
+  it('renders wrapper-health-badge with text Stale when wrapper_health is stale', async () => {
+    vi.mocked(useGetCron).mockReturnValue(
+      makeGetCronResult(
+        { is_local: true, wrapper_installed: true },
+        null,
+        'stale',
+      ) as unknown as ReturnType<typeof useGetCron>,
+    )
+    renderInRouter(<CronDetail fingerprint={FP} />)
+    await screen.findByText('daily-backup')
+    expect(screen.getByTestId('wrapper-health-badge')).toHaveTextContent('Stale')
+  })
+
+  // 30. "Overdue after" label appears; "Next due" does NOT appear
+  it('shows "Overdue after" label and not "Next due" when state has expected_next_at', async () => {
+    const stateWithDeadline = {
+      cron_fingerprint: FP,
+      current_state: 'ok' as const,
+      last_start_at: null,
+      last_ok_at: '2026-05-01T00:00:00Z',
+      last_fail_at: null,
+      current_streak: 1,
+      expected_next_at: '2026-05-02T00:00:00Z',
+      last_duration_seconds: null,
+      last_exit_code: null,
+      updated_at: '2026-05-01T00:00:00Z',
+    }
+    vi.mocked(useGetCron).mockReturnValue(
+      makeGetCronResult(
+        { cadence_seconds: 3600 },
+        stateWithDeadline,
+        'unknown',
+      ) as unknown as ReturnType<typeof useGetCron>,
+    )
+    renderInRouter(<CronDetail fingerprint={FP} />)
+    await screen.findByText('daily-backup')
+    expect(screen.getByText('Overdue after')).toBeInTheDocument()
+    expect(screen.queryByText('Next due')).toBeNull()
   })
 })

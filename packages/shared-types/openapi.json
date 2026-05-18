@@ -895,11 +895,21 @@
                 "type": "null"
               }
             ]
+          },
+          "wrapper_health": {
+            "enum": [
+              "ok",
+              "stale",
+              "unknown"
+            ],
+            "title": "Wrapper Health",
+            "type": "string"
           }
         },
         "required": [
           "cron",
-          "state"
+          "state",
+          "wrapper_health"
         ],
         "title": "CronWithStateOut",
         "type": "object"

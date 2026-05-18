@@ -436,3 +436,90 @@ async def test_record_ok_preserves_observed_runs_total(repo: SqliteRepository) -
     state_after_ok = await hbr.record_ok(fp, duration_seconds=5.0, who="test", ip=None)
     # observed_runs_total should be preserved
     assert state_after_ok.observed_runs_total == 1
+
+
+# ---------------------------------------------------------------------------
+# T2 — logscrape_runs_since_heartbeat counter (STAGE-002-010)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_record_observed_run_increments_logscrape_counter(
+    repo: SqliteRepository,
+) -> None:
+    """record_observed_run once → logscrape_runs_since_heartbeat == 1."""
+    fp = await _seed_cron(repo, fingerprint="lsc-1", name="lsc1", host="h")
+    hbr = HeartbeatRepo(repo)
+    now = utc_now_iso()
+    state = await hbr.record_observed_run(fp, observed_at=now, who="t", ip=None)
+    assert state.logscrape_runs_since_heartbeat == 1
+
+
+@pytest.mark.asyncio
+async def test_record_observed_run_three_times_counter_is_three(
+    repo: SqliteRepository,
+) -> None:
+    """Three record_observed_run calls → counter == 3."""
+    fp = await _seed_cron(repo, fingerprint="lsc-3", name="lsc3", host="h")
+    hbr = HeartbeatRepo(repo)
+    now = utc_now_iso()
+    for _ in range(2):
+        await hbr.record_observed_run(fp, observed_at=now, who="t", ip=None)
+    state = await hbr.record_observed_run(fp, observed_at=now, who="t", ip=None)
+    assert state.logscrape_runs_since_heartbeat == 3  # noqa: PLR2004
+
+
+@pytest.mark.asyncio
+async def test_record_ok_resets_logscrape_counter(repo: SqliteRepository) -> None:
+    """After observed runs, record_ok resets logscrape_runs_since_heartbeat to 0."""
+    fp = await _seed_cron(repo, fingerprint="lsc-ok", name="lsc-ok", host="h")
+    hbr = HeartbeatRepo(repo)
+    now = utc_now_iso()
+    await hbr.record_observed_run(fp, observed_at=now, who="t", ip=None)
+    await hbr.record_observed_run(fp, observed_at=now, who="t", ip=None)
+    state = await hbr.record_ok(fp, duration_seconds=None, who="t", ip=None)
+    assert state.logscrape_runs_since_heartbeat == 0
+
+
+@pytest.mark.asyncio
+async def test_record_fail_resets_logscrape_counter(repo: SqliteRepository) -> None:
+    """After observed runs, record_fail resets logscrape_runs_since_heartbeat to 0."""
+    fp = await _seed_cron(repo, fingerprint="lsc-fail", name="lsc-fail", host="h")
+    hbr = HeartbeatRepo(repo)
+    now = utc_now_iso()
+    await hbr.record_observed_run(fp, observed_at=now, who="t", ip=None)
+    state = await hbr.record_fail(fp, duration_seconds=None, exit_code=None, who="t", ip=None)
+    assert state.logscrape_runs_since_heartbeat == 0
+
+
+@pytest.mark.asyncio
+async def test_record_start_resets_logscrape_counter(repo: SqliteRepository) -> None:
+    """After observed runs, record_start resets logscrape_runs_since_heartbeat to 0."""
+    fp = await _seed_cron(repo, fingerprint="lsc-start", name="lsc-start", host="h")
+    hbr = HeartbeatRepo(repo)
+    now = utc_now_iso()
+    await hbr.record_observed_run(fp, observed_at=now, who="t", ip=None)
+    state = await hbr.record_start(fp, who="t", ip=None)
+    assert state.logscrape_runs_since_heartbeat == 0
+
+
+@pytest.mark.asyncio
+async def test_fresh_record_ok_insert_branch_counter_zero(repo: SqliteRepository) -> None:
+    """Fresh record_ok on a never-pinged cron → counter 0 (INSERT branch literal 0)."""
+    fp = await _seed_cron(repo, fingerprint="lsc-fresh", name="lsc-fresh", host="h")
+    hbr = HeartbeatRepo(repo)
+    state = await hbr.record_ok(fp, duration_seconds=None, who="t", ip=None)
+    assert state.logscrape_runs_since_heartbeat == 0
+
+
+@pytest.mark.asyncio
+async def test_get_heartbeat_state_returns_logscrape_field(repo: SqliteRepository) -> None:
+    """get_heartbeat_state returns a HeartbeatStateRecord with logscrape_runs_since_heartbeat."""
+    fp = await _seed_cron(repo, fingerprint="lsc-get", name="lsc-get", host="h")
+    hbr = HeartbeatRepo(repo)
+    now = utc_now_iso()
+    await hbr.record_observed_run(fp, observed_at=now, who="t", ip=None)
+    await hbr.record_observed_run(fp, observed_at=now, who="t", ip=None)
+    state = await hbr.get_heartbeat_state(fp)
+    assert state is not None
+    assert state.logscrape_runs_since_heartbeat == 2  # noqa: PLR2004

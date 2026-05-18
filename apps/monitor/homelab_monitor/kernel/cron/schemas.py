@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     from homelab_monitor.kernel.cron.repository import CronRecord
 
 LastSeenState = Literal["unknown", "running", "ok", "failed", "late"]
+WrapperHealth = Literal["ok", "stale", "unknown"]
 
 
 # ---------- Query params ----------
@@ -195,6 +196,7 @@ class CronWithStateOut(BaseModel):
 
     cron: CronOut
     state: HeartbeatStateOut | None
+    wrapper_health: WrapperHealth
 
 
 class PreviewRunsResponse(BaseModel):

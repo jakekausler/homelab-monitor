@@ -1,0 +1,98 @@
+# vmalert heartbeat metric rules. Picked up by the vmalert-metrics sidecar.
+# Severity vocabulary: info / warning / error / critical (spec §8.2).
+# routing_channel routes the notification: cron-health vs monitoring-health.
+#
+# These rules read series emitted by HeartbeatStateCollector
+# (kernel/metrics/heartbeat_collector.py). A hidden or soft-deleted cron
+# emits NO series, so no rule fires for it (STAGE-002-010 D7).
+#
+# `for: 60s` won't fire inside the fast test rig — the slow integration
+# test (test_heartbeat_alerts_e2e.py) stages a real firing path.
+
+groups:
+  - name: homelab.heartbeats
+    interval: 30s
+    rules:
+      - alert: HeartbeatStale_Warning
+        expr: homelab_heartbeat_expected_next_seconds < -60
+        for: 60s
+        labels:
+          severity: warning
+          source_tool: vmalert-metrics
+          target_kind: cron
+          routing_channel: cron-health
+        annotations:
+          summary: "Cron {{ $labels.name }} on {{ $labels.host }} is overdue"
+          description: 'Heartbeat for {{ $labels.name }} is {{ $value }}s past its deadline (warning at 60s overdue).'
+
+      - alert: HeartbeatStale_Error
+        expr: homelab_heartbeat_expected_next_seconds < -300
+        for: 60s
+        labels:
+          severity: error
+          source_tool: vmalert-metrics
+          target_kind: cron
+          routing_channel: cron-health
+        annotations:
+          summary: "Cron {{ $labels.name }} on {{ $labels.host }} is significantly overdue"
+          description: 'Heartbeat for {{ $labels.name }} is {{ $value }}s past its deadline (error at 300s overdue).'
+
+      - alert: HeartbeatStale_Critical
+        expr: homelab_heartbeat_expected_next_seconds < -3600
+        for: 60s
+        labels:
+          severity: critical
+          source_tool: vmalert-metrics
+          target_kind: cron
+          routing_channel: cron-health
+        annotations:
+          summary: "Cron {{ $labels.name }} on {{ $labels.host }} has not run in over an hour"
+          description: 'Heartbeat for {{ $labels.name }} is {{ $value }}s past its deadline (critical at 3600s overdue).'
+
+      - alert: HeartbeatFailed
+        expr: homelab_heartbeat_current_streak <= -1 and homelab_heartbeat_seconds_since_last_fail < 600
+        for: 0s
+        labels:
+          severity: error
+          source_tool: vmalert-metrics
+          target_kind: cron
+          routing_channel: cron-health
+        annotations:
+          summary: "Cron {{ $labels.name }} on {{ $labels.host }} is failing"
+          description: 'Cron {{ $labels.name }} has a failing streak ({{ $value }}) with a recent failure.'
+
+      - alert: HeartbeatFlapping
+        expr: changes(homelab_heartbeat_current_streak[10m]) > 6
+        for: 0s
+        labels:
+          severity: warning
+          source_tool: vmalert-metrics
+          target_kind: cron
+          routing_channel: cron-health
+        annotations:
+          summary: "Cron {{ $labels.name }} on {{ $labels.host }} is flapping"
+          description: 'Cron {{ $labels.name }} streak changed {{ $value }} times in 10m (flapping).'
+
+      - alert: WrapperPossiblyStale
+        expr: homelab_heartbeat_logscrape_count_since_last_heartbeat{wrapper_installed="yes"} >= 3
+        for: 60s
+        labels:
+          severity: warning
+          source_tool: vmalert-metrics
+          target_kind: cron
+          routing_channel: monitoring-health
+        annotations:
+          summary: "Wrapper for {{ $labels.name }} on {{ $labels.host }} may have stopped sending heartbeats"
+          description: 'Log-scrape sees {{ $value }} runs since last heartbeat; check wrapper script.'
+
+      - record: homelab:heartbeat_overdue_count
+        expr: count(homelab_heartbeat_expected_next_seconds < -60) or vector(0)
+
+      - record: homelab:heartbeat_fail_count
+        expr: count(homelab_heartbeat_current_streak <= -1) or vector(0)
+
+      - record: homelab:heartbeat_runtime_p95_seconds
+        expr: quantile(0.95, homelab_heartbeat_last_duration_seconds)
+
+      - record: homelab:wrapper_stale_count
+        expr: count(homelab_heartbeat_logscrape_count_since_last_heartbeat{wrapper_installed="yes"} >= 3) or vector(0)

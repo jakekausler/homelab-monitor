@@ -15,6 +15,15 @@ route:
   group_interval: 5m
   repeat_interval: 4h
   receiver: 'monitor-webhook'
+  routes:
+    # Wrapper-health / "your monitoring is broken" alerts route to a
+    # dedicated channel so the operator can mute them independently of
+    # cron-health alerts. The public default points this at the SAME
+    # ingest webhook as monitor-webhook; the homelab-monitor-overrides
+    # repo swaps in a distinct destination.
+    - matchers:
+        - routing_channel="monitoring-health"
+      receiver: 'monitoring-health-channel'
 
 receivers:
   - name: 'monitor-webhook'
@@ -22,7 +31,18 @@ receivers:
       # TODO: hardcoded for docker-compose deployment target.
       # If/when k8s/nomad/bare-metal support is added, parameterize via env-var
       # substitution at render time (similar to ALERTMANAGER_INGEST_TOKEN).
-      - url: 'http://homelab-monitor-monitor:9090/api/alerts/ingest'
+      - url: 'http://monitor:9090/api/alerts/ingest'
+        send_resolved: true
+        http_config:
+          authorization:
+            type: Bearer
+            credentials: '${ALERTMANAGER_INGEST_TOKEN}'
+
+  - name: 'monitoring-health-channel'
+    webhook_configs:
+      # Public default: same ingest webhook as monitor-webhook. The alert
+      # still lands in /api/alerts, just carrying routing_channel=monitoring-health.
+      - url: 'http://monitor:9090/api/alerts/ingest'
         send_resolved: true
         http_config:
           authorization:

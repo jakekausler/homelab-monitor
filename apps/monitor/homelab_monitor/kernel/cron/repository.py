@@ -125,6 +125,7 @@ class HeartbeatStateRecord:
     updated_at: str
     observed_runs_total: int
     last_observed_run_at: str | None
+    logscrape_runs_since_heartbeat: int
 
 
 @dataclass(slots=True, frozen=True)
@@ -198,6 +199,7 @@ def _row_to_state(row: Row[Any]) -> HeartbeatStateRecord:
         last_observed_run_at=(
             None if row.last_observed_run_at is None else str(row.last_observed_run_at)
         ),
+        logscrape_runs_since_heartbeat=int(row.logscrape_runs_since_heartbeat),
     )
 
 
@@ -243,7 +245,8 @@ _CLEAR_WRAPPER_LAST_SEEN_SQL = text(
 _SELECT_STATE_SQL = text(
     "SELECT cron_fingerprint, current_state, last_start_at, last_ok_at, "
     "last_fail_at, current_streak, expected_next_at, last_duration_seconds, "
-    "last_exit_code, updated_at, observed_runs_total, last_observed_run_at FROM heartbeats_state "
+    "last_exit_code, updated_at, observed_runs_total, last_observed_run_at, "
+    "logscrape_runs_since_heartbeat FROM heartbeats_state "
     "WHERE cron_fingerprint = :cron_fingerprint"
 )
 

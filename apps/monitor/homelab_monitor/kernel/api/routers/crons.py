@@ -65,6 +65,7 @@ from homelab_monitor.kernel.cron.schemas import (
     UninstallWrapperPreview,
     UninstallWrapperRequest,
     UninstallWrapperResult,
+    WrapperHealth,
     cron_record_to_out,
 )
 from homelab_monitor.kernel.db.time import utc_now_iso
@@ -85,9 +86,29 @@ def _client_ip(request: Request) -> str | None:
     return None  # pragma: no cover -- defensive
 
 
+_WRAPPER_STALE_THRESHOLD = 3
+
+
+def _compute_wrapper_health(joined: CronWithState) -> WrapperHealth:
+    """Derive the wrapper-health enum (D5).
+
+    "unknown" when the wrapper is not installed; "stale" when log-scrape
+    evidence outpaces heartbeat evidence by >=3 runs (consistent with the
+    WrapperPossiblyStale vmalert rule); "ok" otherwise.
+    """
+    if not joined.cron.wrapper_installed:
+        return "unknown"
+    if (
+        joined.state is not None
+        and joined.state.logscrape_runs_since_heartbeat >= _WRAPPER_STALE_THRESHOLD
+    ):
+        return "stale"
+    return "ok"
+
+
 def _with_state_to_out(joined: CronWithState, *, local_hostname: str) -> CronWithStateOut:
     state_out: HeartbeatStateOut | None = None
-    if joined.state is not None:  # pragma: no cover
+    if joined.state is not None:
         s = joined.state
         state_out = HeartbeatStateOut(
             cron_fingerprint=s.cron_fingerprint,
@@ -104,6 +125,7 @@ def _with_state_to_out(joined: CronWithState, *, local_hostname: str) -> CronWit
     return CronWithStateOut(
         cron=cron_record_to_out(joined.cron, local_hostname=local_hostname),
         state=state_out,
+        wrapper_health=_compute_wrapper_health(joined),
     )
 
 

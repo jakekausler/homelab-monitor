@@ -1,0 +1,69 @@
+# Rule unit-test fixtures for deploy/vmalert/metrics/heartbeats.yaml.
+# Schema: Prometheus / vmalert rule unit-test format.
+# Run manually: vmalert -rule.config=heartbeats.yaml -rule.testFile=...
+# (No make target wires this yet — forward-compatible static fixture.)
+
+rule_files:
+  - ../heartbeats.yaml
+
+evaluation_interval: 30s
+
+tests:
+  # Warning lateness: -120s overdue -> HeartbeatStale_Warning after 60s.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_heartbeat_expected_next_seconds{fingerprint="fp1",host="h",name="job1",cadence_seconds="3600",wrapper_installed="no"}'
+        values: '-120x10'
+    alert_rule_test:
+      - eval_time: 90s
+        alertname: HeartbeatStale_Warning
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              routing_channel: cron-health
+              source_tool: vmalert-metrics
+              target_kind: cron
+              fingerprint: fp1
+              host: h
+              name: job1
+              cadence_seconds: "3600"
+              wrapper_installed: "no"
+
+  # wrapper_installed=yes + logscrape_count=3 -> WrapperPossiblyStale fires.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_heartbeat_logscrape_count_since_last_heartbeat{fingerprint="fp2",host="h",name="job2",wrapper_installed="yes"}'
+        values: '3x10'
+    alert_rule_test:
+      - eval_time: 90s
+        alertname: WrapperPossiblyStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              routing_channel: monitoring-health
+              source_tool: vmalert-metrics
+              target_kind: cron
+              fingerprint: fp2
+              host: h
+              name: job2
+              wrapper_installed: "yes"
+
+  # wrapper_installed=no + logscrape_count=10 -> NO WrapperPossiblyStale.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_heartbeat_logscrape_count_since_last_heartbeat{fingerprint="fp3",host="h",name="job3",wrapper_installed="no"}'
+        values: '10x10'
+    alert_rule_test:
+      - eval_time: 90s
+        alertname: WrapperPossiblyStale
+        exp_alerts: []
+
+  # wrapper_installed=yes + logscrape_count=2 -> NO WrapperPossiblyStale (threshold 3).
+  - interval: 30s
+    input_series:
+      - series: 'homelab_heartbeat_logscrape_count_since_last_heartbeat{fingerprint="fp4",host="h",name="job4",wrapper_installed="yes"}'
+        values: '2x10'
+    alert_rule_test:
+      - eval_time: 90s
+        alertname: WrapperPossiblyStale
+        exp_alerts: []
