@@ -22,6 +22,7 @@ hostnames / paths). Log fingerprints + counts.
 
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, datetime
 from typing import Annotated
 
@@ -33,6 +34,7 @@ from structlog.stdlib import BoundLogger
 
 from homelab_monitor.kernel.api.dependencies import (
     get_cron_repo,
+    get_cron_run_repo,
     get_heartbeat_repo,
     get_metrics_writer,
     require_token_scope,
@@ -46,6 +48,7 @@ from homelab_monitor.kernel.cron.log_event import (
 )
 from homelab_monitor.kernel.cron.log_match import canonical_log_key
 from homelab_monitor.kernel.cron.repository import CronRepo
+from homelab_monitor.kernel.cron.run_repository import CronRunRepository
 from homelab_monitor.kernel.db.time import utc_now_iso
 from homelab_monitor.kernel.heartbeat.repository import HeartbeatRepo
 from homelab_monitor.kernel.plugins.io import MetricsWriter
@@ -115,6 +118,7 @@ async def ingest_cron_events(
     _token: Annotated[ApiToken, Depends(require_token_scope(Scope.CRON_EVENTS_INGEST_WRITE))],
     cron_repo: Annotated[CronRepo, Depends(get_cron_repo)],
     heartbeat_repo: Annotated[HeartbeatRepo, Depends(get_heartbeat_repo)],
+    cron_run_repo: Annotated[CronRunRepository, Depends(get_cron_run_repo)],
     metrics: Annotated[MetricsWriter, Depends(get_metrics_writer)],
 ) -> JSONResponse:
     """Ingest a batch of structured cron log events from Vector."""
@@ -134,6 +138,7 @@ async def ingest_cron_events(
             event,
             cron_repo=cron_repo,
             heartbeat_repo=heartbeat_repo,
+            cron_run_repo=cron_run_repo,
             metrics=metrics,
             log=log,
         )
@@ -153,11 +158,12 @@ async def ingest_cron_events(
     )
 
 
-async def _process_one(
+async def _process_one(  # noqa: PLR0913
     event: CronLogEvent,
     *,
     cron_repo: CronRepo,
     heartbeat_repo: HeartbeatRepo,
+    cron_run_repo: CronRunRepository,
     metrics: MetricsWriter,
     log: BoundLogger,
 ) -> CronEventDisposition:
@@ -202,6 +208,18 @@ async def _process_one(
             who=INGEST_WHO,
             ip=None,
         )
+        # B-mode run row: server-gen UUID, source=logscrape, state=running.
+        # Row-creation idempotency is the cursor claim above (try_claim_cursor) —
+        # a replayed CMD event never reaches here. insert_run is itself
+        # INSERT-OR-IGNORE on run_id, but each call gets a fresh UUID so the
+        # cursor claim is the real guard (D-BMODE-CORR).
+        await cron_run_repo.insert_run(
+            run_id=str(uuid.uuid4()),
+            cron_fingerprint=cron.fingerprint,
+            source="logscrape",
+            started_at=event.timestamp,
+            vl_window_start=event.timestamp,
+        )
         return CronEventDisposition.OBSERVED_RUN
     if event.exit_code == 0:
         await heartbeat_repo.record_ok(
@@ -210,6 +228,7 @@ async def _process_one(
             who=INGEST_WHO,
             ip=None,
         )
+        await _close_bmode_run(cron_run_repo, cron.fingerprint, event, state="ok")
         return CronEventDisposition.STATE_OK
     await heartbeat_repo.record_fail(
         cron.fingerprint,
@@ -218,7 +237,49 @@ async def _process_one(
         who=INGEST_WHO,
         ip=None,
     )
+    await _close_bmode_run(cron_run_repo, cron.fingerprint, event, state="fail")
     return CronEventDisposition.STATE_FAIL
+
+
+async def _close_bmode_run(
+    cron_run_repo: CronRunRepository,
+    cron_fingerprint: str,
+    event: CronLogEvent,
+    *,
+    state: str,
+) -> None:
+    """Correlate an exit= line to the most-recent open B-mode run and close it.
+
+    D-BMODE-CORR: the exit line at event.timestamp closes the most-recent
+    state='running' cron_runs row of this fingerprint whose started_at is at or
+    before the exit timestamp. If no such row exists (a dropped CMD event, or
+    an exit= with no matching start) the close is a no-op — the run, if it
+    exists at all, is later timeout-closed `unknown` by the reconciler.
+    """
+    open_run = await cron_run_repo.find_open_run_by_fingerprint(cron_fingerprint, event.timestamp)
+    if open_run is None:
+        return
+    duration: float | None = None
+    started_dt = datetime.fromisoformat(open_run.started_at)
+    # started_at comes from the cron_runs DB row, which stores the timestamp
+    # verbatim (no tz validation) — it CAN be naive, so coerce it to UTC.
+    if started_dt.tzinfo is None:
+        started_dt = started_dt.replace(tzinfo=UTC)
+    # event.timestamp is guaranteed tz-aware: CronEventItem._validate_timestamp
+    # rejects naive timestamps with a 422 before the event reaches this path.
+    ended_dt = datetime.fromisoformat(event.timestamp)
+    assert ended_dt.tzinfo is not None  # validator invariant — naive is a 422
+    duration = (ended_dt - started_dt).total_seconds()
+    await cron_run_repo.close_run(
+        run_id=open_run.run_id,
+        cron_fingerprint=cron_fingerprint,
+        source="logscrape",
+        state=state,
+        ended_at=event.timestamp,
+        duration_seconds=duration,
+        exit_code=event.exit_code,
+        vl_window_end=event.timestamp,
+    )
 
 
 __all__ = ["router"]

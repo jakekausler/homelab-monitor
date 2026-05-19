@@ -28,7 +28,7 @@ Login defaults: `admin` / `admin-dev-password` (override via `HM_DEV_ADMIN_*` in
 
 ## Port map
 
-All ports bind to `127.0.0.1` only (host firewall: nothing exposed to the LAN by default). Override any port in `deploy/dev/dev.env` via the `HM_DEV_*_PORT` vars.
+All dev sidecar ports bind to `127.0.0.1` only and are published by the dev-only override `deploy/dev/docker-compose.dev.yml` (see "How dev sidecar ports get published" below). Override any port in `deploy/dev/dev.env` via the `HM_DEV_*_PORT` vars.
 
 | Service | Host port | Container port | Notes |
 |---|---|---|---|
@@ -46,6 +46,26 @@ All ports bind to `127.0.0.1` only (host firewall: nothing exposed to the LAN by
 | Grafana | 3000 | 3000 | Embedded in `/metrics` via reverse proxy. |
 | fixture-host | 8000 | 8000 | Test fixture (only in test rig). |
 | noisy-logger | 8001 | 8001 | Test fixture (only in test rig). |
+
+### How dev sidecar ports get published
+
+The prod compose file (`deploy/compose/docker-compose.yml`) intentionally
+publishes **no** sidecar host ports — in production every sidecar is reached
+through the monitor's `/api/<sidecar>/` reverse proxy (the port-map invariant:
+prod publishes only the monitor backend on `29090`).
+
+In **hybrid** dev mode the backend runs on the host and must reach the docker
+sidecars directly, so `scripts/dev-up.sh` layers a dev-only override file,
+`deploy/dev/docker-compose.dev.yml`, via a second `-f` flag:
+
+    docker compose -f deploy/compose/docker-compose.yml \
+                   -f deploy/dev/docker-compose.dev.yml up -d <sidecars...>
+
+That override is the ONLY thing that adds `127.0.0.1:1xxxx:cccc` `ports:`
+mappings, and it is loaded ONLY by `make dev` / `make dev-clean` (hybrid mode).
+`make dev-prod` and real production never load it, so prod sidecars stay
+container-internal. The host-port values default to the CLAUDE.md port-map
+table and are overridable via the `HM_DEV_*_PORT` vars in `deploy/dev/dev.env`.
 
 ## Master key generation
 

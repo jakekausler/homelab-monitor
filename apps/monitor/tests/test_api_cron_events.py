@@ -671,3 +671,268 @@ async def test_metric_emitted_on_match(
     r2 = await client.post(_URL, json=[_event(cursor="metric-c2")])
     assert r2.status_code == 202  # noqa: PLR2004
     assert r2.json()["ambiguous"] == 1
+
+
+# ---------------------------------------------------------------------------
+# STAGE-002-013: B-mode cron_runs row create/close tests
+# ---------------------------------------------------------------------------
+
+
+async def _get_cron_runs(repo: SqliteRepository, cron_fingerprint: str) -> list[dict[str, object]]:
+    """Fetch all cron_runs rows for a fingerprint as dicts."""
+    rows = await repo.fetch_all(
+        text(
+            "SELECT run_id, cron_fingerprint, source, state, started_at, ended_at,"
+            "       duration_seconds, exit_code, vl_window_start, vl_window_end"
+            " FROM cron_runs WHERE cron_fingerprint = :fp"
+            " ORDER BY started_at ASC"
+        ),
+        {"fp": cron_fingerprint},
+    )
+    return [
+        {
+            "run_id": str(r.run_id),
+            "cron_fingerprint": str(r.cron_fingerprint),
+            "source": str(r.source),
+            "state": str(r.state),
+            "started_at": str(r.started_at),
+            "ended_at": r.ended_at,
+            "duration_seconds": r.duration_seconds,
+            "exit_code": r.exit_code,
+            "vl_window_start": r.vl_window_start,
+            "vl_window_end": r.vl_window_end,
+        }
+        for r in rows
+    ]
+
+
+@pytest.mark.asyncio
+async def test_bmode_cmd_creates_cron_runs_row(
+    cron_events_client: tuple[AsyncClient, SqliteRepository],
+) -> None:
+    """OBSERVED_RUN creates a cron_runs row with source='logscrape' and state='running'."""
+    client, repo = cron_events_client
+    fp = await _insert_cron_with_log_key(repo)
+
+    ts = _now_iso()
+    resp = await client.post(
+        _URL, json=[_event(exit_code=None, cursor="bmode-cmd-1", timestamp=ts)]
+    )
+    assert resp.status_code == 202  # noqa: PLR2004
+    assert resp.json()["observed_runs"] == 1
+
+    runs = await _get_cron_runs(repo, fp)
+    assert len(runs) == 1
+    run = runs[0]
+    assert run["source"] == "logscrape"
+    assert run["state"] == "running"
+    assert run["started_at"] == ts
+    assert run["vl_window_start"] == ts
+    assert run["ended_at"] is None
+    assert run["vl_window_end"] is None
+
+    # Heartbeat state (record_observed_run) still fires
+    state = await _state(repo, fp)
+    assert state is not None
+    assert state["observed_runs_total"] == 1
+
+
+@pytest.mark.asyncio
+async def test_bmode_exit0_closes_run_ok(
+    cron_events_client: tuple[AsyncClient, SqliteRepository],
+) -> None:
+    """CMD then exit=0: the run row is closed state='ok' with duration and exit_code=0."""
+    client, repo = cron_events_client
+    fp = await _insert_cron_with_log_key(repo)
+
+    ts_start = "2026-05-19T00:00:00+00:00"
+    ts_end = "2026-05-19T00:00:10+00:00"
+
+    # CMD event
+    await client.post(_URL, json=[_event(exit_code=None, cursor="bclose-cmd", timestamp=ts_start)])
+    # exit=0 event
+    resp = await client.post(
+        _URL, json=[_event(exit_code=0, cursor="bclose-exit0", timestamp=ts_end)]
+    )
+    assert resp.status_code == 202  # noqa: PLR2004
+    assert resp.json()["state_ok"] == 1
+
+    runs = await _get_cron_runs(repo, fp)
+    assert len(runs) == 1
+    run = runs[0]
+    assert run["state"] == "ok"
+    assert run["exit_code"] == 0
+    assert run["ended_at"] == ts_end
+    assert run["vl_window_end"] == ts_end
+    assert run["duration_seconds"] is not None
+    assert float(run["duration_seconds"]) > 0  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_bmode_exit_nonzero_closes_run_fail(
+    cron_events_client: tuple[AsyncClient, SqliteRepository],
+) -> None:
+    """CMD then exit=N (non-zero): run row is closed state='fail' with exit_code=N."""
+    client, repo = cron_events_client
+    fp = await _insert_cron_with_log_key(repo)
+
+    ts_start = "2026-05-19T00:00:00+00:00"
+    ts_end = "2026-05-19T00:00:05+00:00"
+
+    await client.post(_URL, json=[_event(exit_code=None, cursor="bfail-cmd", timestamp=ts_start)])
+    resp = await client.post(
+        _URL, json=[_event(exit_code=2, cursor="bfail-exit", timestamp=ts_end)]
+    )
+    assert resp.status_code == 202  # noqa: PLR2004
+    assert resp.json()["state_fail"] == 1
+
+    runs = await _get_cron_runs(repo, fp)
+    assert len(runs) == 1
+    run = runs[0]
+    assert run["state"] == "fail"
+    assert run["exit_code"] == 2  # noqa: PLR2004
+
+
+@pytest.mark.asyncio
+async def test_bmode_exit_without_prior_cmd_is_noop(
+    cron_events_client: tuple[AsyncClient, SqliteRepository],
+) -> None:
+    """exit= with no matching open run is a no-op: no cron_runs row, no crash."""
+    client, repo = cron_events_client
+    fp = await _insert_cron_with_log_key(repo)
+
+    ts_end = "2026-05-19T00:00:10+00:00"
+    resp = await client.post(
+        _URL, json=[_event(exit_code=0, cursor="bnostart-exit", timestamp=ts_end)]
+    )
+    assert resp.status_code == 202  # noqa: PLR2004
+    assert resp.json()["state_ok"] == 1
+
+    runs = await _get_cron_runs(repo, fp)
+    # No CMD was posted, so no cron_runs row should exist
+    assert len(runs) == 0
+
+
+@pytest.mark.asyncio
+async def test_bmode_two_cmds_exit_closes_most_recent(
+    cron_events_client: tuple[AsyncClient, SqliteRepository],
+) -> None:
+    """Two CMD events then one exit=: exit correlates to the MOST RECENT open run."""
+    client, repo = cron_events_client
+    fp = await _insert_cron_with_log_key(repo)
+
+    ts1 = "2026-05-19T00:00:00+00:00"
+    ts2 = "2026-05-19T00:01:00+00:00"
+    ts_exit = "2026-05-19T00:01:30+00:00"
+
+    await client.post(_URL, json=[_event(exit_code=None, cursor="two-cmd-1", timestamp=ts1)])
+    await client.post(_URL, json=[_event(exit_code=None, cursor="two-cmd-2", timestamp=ts2)])
+    resp = await client.post(_URL, json=[_event(exit_code=0, cursor="two-exit", timestamp=ts_exit)])
+    assert resp.status_code == 202  # noqa: PLR2004
+
+    runs = await _get_cron_runs(repo, fp)
+    assert len(runs) == 2  # noqa: PLR2004
+    # Sort by started_at ascending (already done by query)
+    first_run = runs[0]  # started at ts1
+    second_run = runs[1]  # started at ts2
+
+    # First run: still running (no exit correlated)
+    assert first_run["state"] == "running"
+    # Second run: closed by exit=0
+    assert second_run["state"] == "ok"
+    assert second_run["ended_at"] == ts_exit
+
+
+@pytest.mark.asyncio
+async def test_bmode_cursor_idempotency_no_duplicate_row(
+    cron_events_client: tuple[AsyncClient, SqliteRepository],
+) -> None:
+    """Posting the same CMD event twice (same journal_cursor) creates exactly ONE cron_runs row."""
+    client, repo = cron_events_client
+    fp = await _insert_cron_with_log_key(repo)
+
+    ev = [_event(exit_code=None, cursor="idem-cmd-1")]
+
+    r1 = await client.post(_URL, json=ev)
+    assert r1.status_code == 202  # noqa: PLR2004
+    assert r1.json()["observed_runs"] == 1
+
+    r2 = await client.post(_URL, json=ev)
+    assert r2.status_code == 202  # noqa: PLR2004
+    assert r2.json()["replay_skipped"] == 1
+
+    runs = await _get_cron_runs(repo, fp)
+    assert len(runs) == 1  # exactly ONE row, no duplicate
+
+
+@pytest.mark.asyncio
+async def test_bmode_dropped_exit_leaves_run_running(
+    cron_events_client: tuple[AsyncClient, SqliteRepository],
+) -> None:
+    """CMD with no subsequent exit= leaves the run in state='running' for reconciler."""
+    client, repo = cron_events_client
+    fp = await _insert_cron_with_log_key(repo)
+
+    ts_start = _now_iso()
+    resp = await client.post(
+        _URL, json=[_event(exit_code=None, cursor="dropped-exit-1", timestamp=ts_start)]
+    )
+    assert resp.status_code == 202  # noqa: PLR2004
+    assert resp.json()["observed_runs"] == 1
+
+    runs = await _get_cron_runs(repo, fp)
+    assert len(runs) == 1
+    assert runs[0]["state"] == "running"
+
+
+# ---------------------------------------------------------------------------
+# Group E3 — naive-timestamp normalization in _close_bmode_run
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_close_bmode_run_normalizes_naive_timestamps(
+    cron_events_client: tuple[AsyncClient, SqliteRepository],
+) -> None:
+    """_close_bmode_run handles a naive DB-stored started_at without TypeError.
+
+    The started_dt naive-coercion branch must execute and succeed so the
+    naive/aware subtraction works and duration_seconds is computed correctly.
+    (event.timestamp is always tz-aware — CronEventItem validation rejects naive.)
+    """
+    client, repo = cron_events_client
+    fp = await _insert_cron_with_log_key(repo)
+
+    # Seed a running cron_runs row whose started_at is a NAIVE ISO-8601 string
+    # (no +00:00 offset) — exercises the `started_dt.tzinfo is None` branch.
+    naive_started_at = "2026-05-19T00:00:00"
+    from homelab_monitor.kernel.cron.run_repository import CronRunRepository  # noqa: PLC0415
+
+    run_repo = CronRunRepository(repo)
+    await run_repo.insert_run(
+        run_id="naive-ts-run",
+        cron_fingerprint=fp,
+        source="logscrape",
+        started_at=naive_started_at,
+        vl_window_start=naive_started_at,
+    )
+
+    # POST an exit=0 event whose timestamp is also NAIVE — exercises the
+    # `ended_dt.tzinfo is None` branch. The field_validator in CronEventItem
+    # normalizes tz-aware timestamps; posting a naive one is rejected at the API
+    # layer. To exercise the _close_bmode_run code path we use an aware timestamp
+    # that is 10 seconds after the naive started_at (the validator accepts it).
+    # The started_at stored in the DB is naive, which is what triggers the branch.
+    ts_end = "2026-05-19T00:00:10+00:00"
+    resp = await client.post(
+        _URL,
+        json=[_event(exit_code=0, cursor="naive-ts-exit", timestamp=ts_end)],
+    )
+    assert resp.status_code == 202  # noqa: PLR2004
+    assert resp.json()["state_ok"] == 1
+
+    runs = await _get_cron_runs(repo, fp)
+    assert len(runs) == 1
+    run = runs[0]
+    assert run["state"] == "ok"
+    assert run["duration_seconds"] == pytest.approx(10.0)  # pyright: ignore[reportUnknownMemberType]

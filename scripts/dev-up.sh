@@ -21,6 +21,9 @@ cd "${REPO_ROOT}"
 DEV_ENV_EXAMPLE="${REPO_ROOT}/deploy/dev/dev.env.example"
 DEV_ENV_FILE="${REPO_ROOT}/deploy/dev/dev.env"
 COMPOSE_FILE="${REPO_ROOT}/deploy/compose/docker-compose.yml"
+# Dev-only compose override: publishes sidecar host ports for HYBRID mode.
+# Layered via `-f COMPOSE_FILE -f DEV_OVERRIDE`. NEVER passed in prod mode.
+DEV_OVERRIDE="${REPO_ROOT}/deploy/dev/docker-compose.dev.yml"
 LOG_DIR="${REPO_ROOT}/deploy/dev/logs"
 
 # ----------------------------------------------------------------------------
@@ -137,12 +140,34 @@ clean_existing() {
   pkill -f "pnpm.*dev"               2>/dev/null || true
 
   # Tear down BOTH the prod and test compose stacks (covers all modes).
-  docker compose -f "${COMPOSE_FILE}" down -v 2>/dev/null || true
+  # Pass the dev override too so `down` resolves the same service set the
+  # hybrid `up` created. `down` matches by project name (`homelab-monitor`)
+  # and is unaffected by the override's `ports:`; including it is purely for
+  # consistency with the `up` invocation.
+  docker compose -f "${COMPOSE_FILE}" -f "${DEV_OVERRIDE}" down -v 2>/dev/null || true
 
   # Test compose may also be up if user was running integration tests.
   local test_compose="${REPO_ROOT}/deploy/compose/docker-compose.test.yml"
   if [[ -f "${test_compose}" ]]; then
     docker compose -f "${test_compose}" down -v 2>/dev/null || true
+  fi
+
+  # The dev SQLite DB is a HOST file (not a docker volume), so `down -v`
+  # above does NOT wipe it. Remove it here so `--clean` truly yields a
+  # fresh DB — otherwise a stale DB encrypted with an old master key
+  # fails AES-GCM verification (SecretIntegrityError) on backend start.
+  # Only handle sqlite (optionally with +aiosqlite driver) DSNs that point to
+  # an absolute host file: sqlite[+aiosqlite]:////absolute/path.db (four
+  # slashes = absolute path per the sqlalchemy DSN convention). Relative
+  # paths (3 slashes) and the in-memory DSN (`:memory:`) are intentionally
+  # ignored — they have no host file to remove.
+  local db_url="${HOMELAB_MONITOR_DB_URL:-}"
+  if [[ "${db_url}" =~ ^sqlite(\+aiosqlite)?:////(.+)$ ]]; then
+    local db_path="/${BASH_REMATCH[2]}"
+    if [[ "${db_path}" != "/:memory:" ]]; then
+      _log "removing host dev DB: ${db_path}"
+      rm -f "${db_path}" "${db_path}-wal" "${db_path}-shm"
+    fi
   fi
 
   _log "clean complete"
@@ -199,16 +224,28 @@ up_hybrid() {
   _log "mode: hybrid (docker sidecars + host backend + host UI)"
 
   # Bring up sidecar services only (NOT the monitor container itself).
-  # The monitor service in prod compose has hardcoded VM/VL/AM URLs for the
-  # docker-network DNS names; in hybrid mode we want the host backend to
-  # talk to 127.0.0.1:<host-port>, which means publishing the sidecar ports.
-  #
-  # The prod compose binds these ports to 127.0.0.1 already; for hybrid mode
-  # we bring up exactly the services we need with explicit names. Grafana
-  # depends on victoriametrics health, so order matters — `up -d` resolves
-  # depends_on automatically.
+  # In hybrid mode the backend runs on the HOST and talks to the sidecars
+  # over 127.0.0.1:<host-port>. The prod compose file publishes NO sidecar
+  # ports — so we layer deploy/dev/docker-compose.dev.yml (the DEV_OVERRIDE)
+  # which adds the 127.0.0.1:1xxxx:cccc mappings. We list the sidecar service
+  # names explicitly so the `monitor` container is never started in hybrid
+  # mode. Grafana depends on victoriametrics health, so order matters —
+  # `up -d` resolves depends_on automatically.
   _log "starting docker sidecars..."
-  docker compose -f "${COMPOSE_FILE}" up -d --no-build \
+  # HYBRID mode: layer the dev override so each sidecar publishes its
+  # 127.0.0.1:1xxxx host port (the host-run backend reaches sidecars over
+  # those ports). The prod compose file alone keeps sidecars container-only.
+  # The `monitor` service is intentionally NOT listed below — in hybrid mode
+  # the backend runs on the host, not in a container.
+  # --no-deps: name the sidecar set explicitly and DO NOT let compose resolve
+  # depends_on. Without this, alertmanager and vector both `depends_on: monitor`
+  # (see deploy/compose/docker-compose.yml) so compose would transitively start
+  # the `monitor` container, whose ports: 9090:9090 mapping collides with the
+  # host-run backend ("address already in use"). config-init is listed
+  # explicitly because --no-deps also skips it, and vector/alertmanager need its
+  # render-config volume chmod to have run.
+  docker compose -f "${COMPOSE_FILE}" -f "${DEV_OVERRIDE}" up -d --no-build --no-deps \
+    config-init \
     victoriametrics \
     victorialogs \
     vmagent \
@@ -312,11 +349,13 @@ print_banner() {
   Backend healthz:   ${backend_url}/api/healthz
 
   Sidecars (host-direct, hybrid mode only):
-    Alertmanager:    http://127.0.0.1:${HM_DEV_AM_PORT:-19093}
-    Karma:           http://127.0.0.1:${HM_DEV_KARMA_PORT:-18080}
-    Grafana:         http://127.0.0.1:${HM_DEV_GRAFANA_PORT:-13000}
-    VictoriaMetrics: http://127.0.0.1:${HM_DEV_VM_PORT:-18428}
-    VictoriaLogs:    http://127.0.0.1:${HM_DEV_VL_PORT:-19428}
+    Alertmanager:      http://127.0.0.1:${HM_DEV_AM_PORT:-19093}
+    Karma:             http://127.0.0.1:${HM_DEV_KARMA_PORT:-18080}
+    Grafana:           http://127.0.0.1:${HM_DEV_GRAFANA_PORT:-13000}
+    VictoriaMetrics:   http://127.0.0.1:${HM_DEV_VM_PORT:-18428}
+    VictoriaLogs:      http://127.0.0.1:${HM_DEV_VL_PORT:-19428}
+    vmagent:           http://127.0.0.1:${HM_DEV_VMAGENT_PORT:-18429}
+    vector:            http://127.0.0.1:${HM_DEV_VECTOR_PORT:-18686}
     vmalert (metrics): http://127.0.0.1:${HM_DEV_VMALERT_METRICS_PORT:-18880}
     vmalert (logs):    http://127.0.0.1:${HM_DEV_VMALERT_LOGS_PORT:-18881}
 

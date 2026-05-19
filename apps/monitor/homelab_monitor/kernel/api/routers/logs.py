@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import json
 from datetime import UTC, datetime, timedelta
-from typing import Any, cast
+from typing import cast
 
 import httpx
 import structlog
@@ -24,12 +23,15 @@ from homelab_monitor.kernel.api.schemas import (
     LogsStreamsResponse,
 )
 from homelab_monitor.kernel.auth.models import User
+from homelab_monitor.kernel.config import load_vl_query_limits
+from homelab_monitor.kernel.logs.victorialogs_client import (
+    VictoriaLogsClient,
+    VictoriaLogsClientError,
+)
 from homelab_monitor.plugins.collectors.builtin.log_stream_budget import LogStreamState
 
 router = APIRouter()
 
-_VL_TIMEOUT_S = 5.0
-_HTTP_OK = 200
 _MAX_EXPR_LEN = 4096
 _DEFAULT_LIMIT = 100
 _MAX_LIMIT = 5000
@@ -96,14 +98,12 @@ async def logs_query(  # noqa: PLR0913
             message=f"time range cannot exceed {_MAX_RANGE_DAYS} days",
         )
 
-    params = {"query": expr, "start": start, "end": end, "limit": str(limit)}
+    limits = load_vl_query_limits()
+    # The endpoint's own `limit` query-param caps below the client's max_lines.
+    client = VictoriaLogsClient(vl_url=vl_url, http_client=http_client, limits=limits)
     try:
-        resp = await http_client.get(
-            f"{vl_url}/select/logsql/query",
-            params=params,
-            timeout=_VL_TIMEOUT_S,
-        )
-    except (httpx.TimeoutException, httpx.RequestError) as exc:
+        result = await client.query(expr=expr, start=start, end=end)
+    except VictoriaLogsClientError as exc:
         log.warning("logs_query.upstream_error", error=str(exc), expr=expr)
         raise HttpProblem(
             status_code=502,
@@ -111,41 +111,10 @@ async def logs_query(  # noqa: PLR0913
             message="victorialogs query failed",
         ) from exc
 
-    if resp.status_code != _HTTP_OK:
-        log.warning(
-            "logs_query.upstream_status",
-            status=resp.status_code,
-            body=resp.text[:200],
-        )
-        # SECURITY: do NOT relay resp.text to the client. VL error bodies may
-        # contain log line excerpts that could leak data across queries.
-        raise HttpProblem(
-            status_code=502,
-            code="upstream_unavailable",
-            message=f"victorialogs returned status {resp.status_code}",
-        )
-
-    # VL /select/logsql/query returns NDJSON: one JSON object per line.
-    # Parse each line; tolerate empty lines + malformed entries (skip them).
-    entries: list[LogsQueryEntry] = []
-    for raw_line in resp.text.splitlines():
-        if not raw_line.strip():
-            continue
-        try:
-            obj_raw: object = json.loads(raw_line)
-        except ValueError:
-            continue
-        if not isinstance(obj_raw, dict):
-            continue
-        obj = cast(dict[str, Any], obj_raw)
-        stream = str(obj.get("_stream_id", ""))
-        line = str(obj.get("_msg", ""))
-        ts = str(obj.get("_time", ""))
-        fields: dict[str, str] = {
-            k: str(v) for k, v in obj.items() if k not in {"_stream_id", "_msg", "_time"}
-        }
-        entries.append(LogsQueryEntry(stream=stream, line=line, ts=ts, fields=fields))
-
+    entries = [
+        LogsQueryEntry(stream=line.stream, line=line.message, ts=line.timestamp, fields=line.fields)
+        for line in result.lines[:limit]
+    ]
     return LogsQueryResponse(entries=entries, next_cursor=None)
 
 

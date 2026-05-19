@@ -42,7 +42,7 @@ async def test_query_proxies_vl_success(
         ' "_time": "2026-05-07T00:00:01+00:00", "level": "info"}\n'
     )
     httpx_mock.add_response(
-        url="http://vl-test:9428/select/logsql/query?query=%2A&start=2026-05-07T00%3A00%3A00Z&end=2026-05-07T01%3A00%3A00Z&limit=100",
+        url="http://vl-test:9428/select/logsql/query?query=%2A&start=2026-05-07T00%3A00%3A00Z&end=2026-05-07T01%3A00%3A00Z&limit=10001",
         method="GET",
         text=ndjson,
     )
@@ -72,7 +72,7 @@ async def test_query_502_on_vl_error(
     """VL returning 500 surfaces as 502 ``upstream_unavailable``."""
     monkeypatch.setenv("HOMELAB_MONITOR_VL_URL", "http://vl-test:9428")
     httpx_mock.add_response(
-        url="http://vl-test:9428/select/logsql/query?query=%2A&start=2026-05-07T00%3A00%3A00Z&end=2026-05-07T01%3A00%3A00Z&limit=100",
+        url="http://vl-test:9428/select/logsql/query?query=%2A&start=2026-05-07T00%3A00%3A00Z&end=2026-05-07T01%3A00%3A00Z&limit=10001",
         method="GET",
         status_code=500,
         text="vl error",
@@ -135,7 +135,7 @@ async def test_query_tolerates_blank_lines(
     monkeypatch.setenv("HOMELAB_MONITOR_VL_URL", "http://vl-test:9428")
     ndjson = '\n{"_stream_id": "s", "_msg": "x", "_time": "t"}\n\n'
     httpx_mock.add_response(
-        url="http://vl-test:9428/select/logsql/query?query=%2A&start=2026-05-07T00%3A00%3A00Z&end=2026-05-07T01%3A00%3A00Z&limit=100",
+        url="http://vl-test:9428/select/logsql/query?query=%2A&start=2026-05-07T00%3A00%3A00Z&end=2026-05-07T01%3A00%3A00Z&limit=10001",
         method="GET",
         text=ndjson,
     )
@@ -162,7 +162,7 @@ async def test_query_skips_malformed_json_line(
     monkeypatch.setenv("HOMELAB_MONITOR_VL_URL", "http://vl-test:9428")
     ndjson = 'not-json\n{"_stream_id": "s", "_msg": "ok", "_time": "t"}\n'
     httpx_mock.add_response(
-        url="http://vl-test:9428/select/logsql/query?query=%2A&start=2026-05-07T00%3A00%3A00Z&end=2026-05-07T01%3A00%3A00Z&limit=100",
+        url="http://vl-test:9428/select/logsql/query?query=%2A&start=2026-05-07T00%3A00%3A00Z&end=2026-05-07T01%3A00%3A00Z&limit=10001",
         method="GET",
         text=ndjson,
     )
@@ -303,7 +303,7 @@ async def test_query_skips_non_dict_json_line(
     monkeypatch.setenv("HOMELAB_MONITOR_VL_URL", "http://vl-test:9428")
     ndjson = '[1,2,3]\n{"_stream_id": "s", "_msg": "kept", "_time": "2026-05-07T00:00:00+00:00"}\n'
     httpx_mock.add_response(
-        url="http://vl-test:9428/select/logsql/query?query=%2A&start=2026-05-07T00%3A00%3A00Z&end=2026-05-07T01%3A00%3A00Z&limit=100",
+        url="http://vl-test:9428/select/logsql/query?query=%2A&start=2026-05-07T00%3A00%3A00Z&end=2026-05-07T01%3A00%3A00Z&limit=10001",
         method="GET",
         text=ndjson,
     )

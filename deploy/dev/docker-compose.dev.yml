@@ -1,0 +1,67 @@
+# homelab-monitor — DEV-ONLY compose override.
+#
+# Layered on top of deploy/compose/docker-compose.yml by scripts/dev-up.sh in
+# HYBRID mode:
+#   docker compose -f deploy/compose/docker-compose.yml \
+#                  -f deploy/dev/docker-compose.dev.yml up -d <sidecars...>
+#
+# WHY THIS FILE EXISTS:
+# The prod compose file keeps every sidecar container-internal (no published
+# host ports) — that is the CLAUDE.md port-map invariant: prod publishes ONLY
+# the monitor backend on 29090; all other prod sidecars are reached via the
+# monitor's /api/<sidecar>/ reverse proxy.
+#
+# In HYBRID dev mode the backend runs on the HOST (not in a container), so it
+# must reach the docker sidecars over published host ports. This override adds
+# exactly those `ports:` mappings — and ONLY for dev, because dev-up.sh is the
+# ONLY caller that passes this file. Prod (`docker compose -f .../docker-compose.yml
+# up`) never loads it, so the invariant holds.
+#
+# Port values mirror the CLAUDE.md "Port Map (dev vs prod)" table. They are
+# overridable via HM_DEV_*_PORT in deploy/dev/dev.env (the single source of
+# truth); the values below are the documented defaults.
+#
+# All host bindings are 127.0.0.1-only (localhost-isolated).
+#
+# Each service block declares ONLY `ports:` — compose deep-merges every other
+# key (image, command, volumes, healthcheck, depends_on, ...) from the base
+# file. Do NOT duplicate any other key here, or compose will concatenate it.
+#
+# This file IS committed (it is shared dev infrastructure, not a secret).
+
+services:
+  victoriametrics:
+    ports:
+      - "127.0.0.1:${HM_DEV_VM_PORT:-18428}:8428"
+
+  victorialogs:
+    ports:
+      - "127.0.0.1:${HM_DEV_VL_PORT:-19428}:9428"
+
+  vmagent:
+    ports:
+      - "127.0.0.1:${HM_DEV_VMAGENT_PORT:-18429}:8429"
+
+  vector:
+    ports:
+      - "127.0.0.1:${HM_DEV_VECTOR_PORT:-18686}:8686"
+
+  alertmanager:
+    ports:
+      - "127.0.0.1:${HM_DEV_AM_PORT:-19093}:9093"
+
+  karma:
+    ports:
+      - "127.0.0.1:${HM_DEV_KARMA_PORT:-18080}:8080"
+
+  vmalert-metrics:
+    ports:
+      - "127.0.0.1:${HM_DEV_VMALERT_METRICS_PORT:-18880}:8880"
+
+  vmalert-logs:
+    ports:
+      - "127.0.0.1:${HM_DEV_VMALERT_LOGS_PORT:-18881}:8880"
+
+  grafana:
+    ports:
+      - "127.0.0.1:${HM_DEV_GRAFANA_PORT:-13000}:3000"

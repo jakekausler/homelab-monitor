@@ -12,6 +12,9 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_ROOT}"
 
 COMPOSE_FILE="${REPO_ROOT}/deploy/compose/docker-compose.yml"
+# Dev-only override (sidecar host ports). Included on `down` so a hybrid
+# stack tears down with the same file set it was brought up with.
+DEV_OVERRIDE="${REPO_ROOT}/deploy/dev/docker-compose.dev.yml"
 LOG_DIR="${REPO_ROOT}/deploy/dev/logs"
 
 _log()  { printf '\033[1;36m[dev-down]\033[0m %s\n' "$*"; }
@@ -46,7 +49,7 @@ kill_pidfile_then_name() {
 # Detect what's running.
 # ----------------------------------------------------------------------------
 docker_running=0
-if docker compose -f "${COMPOSE_FILE}" ps --status running --quiet 2>/dev/null | grep -q .; then
+if docker compose -f "${COMPOSE_FILE}" -f "${DEV_OVERRIDE}" ps --status running --quiet 2>/dev/null | grep -q .; then
   docker_running=1
 fi
 
@@ -79,7 +82,7 @@ fi
 
 if (( docker_running )); then
   _log "stopping docker compose stack..."
-  docker compose -f "${COMPOSE_FILE}" down 2>/dev/null \
+  docker compose -f "${COMPOSE_FILE}" -f "${DEV_OVERRIDE}" down 2>/dev/null \
     || _warn "docker compose down failed (already down?)"
 fi
 

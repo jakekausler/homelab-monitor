@@ -413,3 +413,552 @@ def test_derive_started_at_without_duration() -> None:
     ended_at = "2026-05-19T00:00:10+00:00"
     result = _derive_started_at(ended_at, None)
     assert result == ended_at
+
+
+# ---------------------------------------------------------------------------
+# New STAGE-002-013 methods
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_list_open_bmode_runs_returns_only_logscrape_running(
+    repo: SqliteRepository,
+) -> None:
+    """list_open_bmode_runs returns only source='logscrape' AND state='running' rows."""
+    run_repo = CronRunRepository(repo)
+
+    # seed: logscrape+running (should appear)
+    await run_repo.insert_run(
+        run_id="bmode-running-1",
+        cron_fingerprint="fp-bmode",
+        source="logscrape",
+        started_at="2026-05-19T00:01:00+00:00",
+        vl_window_start="2026-05-19T00:01:00+00:00",
+    )
+    # seed: logscrape+ok (closed — should NOT appear)
+    await run_repo.close_run(
+        run_id="bmode-closed-1",
+        cron_fingerprint="fp-bmode",
+        source="logscrape",
+        state="ok",
+        ended_at="2026-05-19T00:00:30+00:00",
+        duration_seconds=30.0,
+        exit_code=0,
+        vl_window_end="2026-05-19T00:00:30+00:00",
+    )
+    # seed: wrapper+running (should NOT appear — wrong source)
+    await run_repo.insert_run(
+        run_id="amode-running-1",
+        cron_fingerprint="fp-wrapper",
+        source="wrapper",
+        started_at="2026-05-19T00:02:00+00:00",
+        vl_window_start="2026-05-19T00:02:00+00:00",
+    )
+
+    results = await run_repo.list_open_bmode_runs()
+    assert len(results) == 1
+    assert results[0].run_id == "bmode-running-1"
+    assert results[0].source == "logscrape"
+    assert results[0].state == "running"
+
+
+@pytest.mark.asyncio
+async def test_list_open_bmode_runs_ordered_by_fingerprint_then_started_at(
+    repo: SqliteRepository,
+) -> None:
+    """list_open_bmode_runs is ordered (cron_fingerprint ASC, started_at ASC)."""
+    run_repo = CronRunRepository(repo)
+
+    await run_repo.insert_run(
+        run_id="fp-b-run-1",
+        cron_fingerprint="fp-b",
+        source="logscrape",
+        started_at="2026-05-19T00:02:00+00:00",
+        vl_window_start="2026-05-19T00:02:00+00:00",
+    )
+    await run_repo.insert_run(
+        run_id="fp-a-run-2",
+        cron_fingerprint="fp-a",
+        source="logscrape",
+        started_at="2026-05-19T00:02:00+00:00",
+        vl_window_start="2026-05-19T00:02:00+00:00",
+    )
+    await run_repo.insert_run(
+        run_id="fp-a-run-1",
+        cron_fingerprint="fp-a",
+        source="logscrape",
+        started_at="2026-05-19T00:01:00+00:00",
+        vl_window_start="2026-05-19T00:01:00+00:00",
+    )
+
+    results = await run_repo.list_open_bmode_runs()
+    fps = [r.cron_fingerprint for r in results]
+    # fp-a comes before fp-b alphabetically
+    assert fps == ["fp-a", "fp-a", "fp-b"]
+    # Within fp-a, earlier started_at is first
+    fp_a_runs = [r for r in results if r.cron_fingerprint == "fp-a"]
+    assert fp_a_runs[0].run_id == "fp-a-run-1"
+    assert fp_a_runs[1].run_id == "fp-a-run-2"
+
+
+@pytest.mark.asyncio
+async def test_list_open_bmode_runs_empty(repo: SqliteRepository) -> None:
+    """list_open_bmode_runs returns empty list when no B-mode running rows exist."""
+    run_repo = CronRunRepository(repo)
+    results = await run_repo.list_open_bmode_runs()
+    assert results == []
+
+
+@pytest.mark.asyncio
+async def test_find_open_run_by_fingerprint_returns_most_recent(
+    repo: SqliteRepository,
+) -> None:
+    """find_open_run_by_fingerprint returns newest started_at <= at_ts run."""
+    run_repo = CronRunRepository(repo)
+    fp = "fp-find"
+
+    await run_repo.insert_run(
+        run_id="run-older",
+        cron_fingerprint=fp,
+        source="logscrape",
+        started_at="2026-05-19T00:01:00+00:00",
+        vl_window_start="2026-05-19T00:01:00+00:00",
+    )
+    await run_repo.insert_run(
+        run_id="run-newer",
+        cron_fingerprint=fp,
+        source="logscrape",
+        started_at="2026-05-19T00:02:00+00:00",
+        vl_window_start="2026-05-19T00:02:00+00:00",
+    )
+
+    # at_ts after both → returns newer
+    result = await run_repo.find_open_run_by_fingerprint(fp, "2026-05-19T00:03:00+00:00")
+    assert result is not None
+    assert result.run_id == "run-newer"
+
+    # at_ts between them → returns older (newer not yet started)
+    result2 = await run_repo.find_open_run_by_fingerprint(fp, "2026-05-19T00:01:30+00:00")
+    assert result2 is not None
+    assert result2.run_id == "run-older"
+
+
+@pytest.mark.asyncio
+async def test_find_open_run_by_fingerprint_returns_none_before_both(
+    repo: SqliteRepository,
+) -> None:
+    """find_open_run_by_fingerprint returns None when at_ts is before all runs."""
+    run_repo = CronRunRepository(repo)
+    fp = "fp-early"
+
+    await run_repo.insert_run(
+        run_id="run-1",
+        cron_fingerprint=fp,
+        source="logscrape",
+        started_at="2026-05-19T00:05:00+00:00",
+        vl_window_start="2026-05-19T00:05:00+00:00",
+    )
+
+    result = await run_repo.find_open_run_by_fingerprint(fp, "2026-05-19T00:01:00+00:00")
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_find_open_run_by_fingerprint_unknown_fingerprint(
+    repo: SqliteRepository,
+) -> None:
+    """find_open_run_by_fingerprint returns None for unknown fingerprint."""
+    run_repo = CronRunRepository(repo)
+    result = await run_repo.find_open_run_by_fingerprint("no-such-fp", "2026-05-19T00:00:00+00:00")
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_find_open_run_by_fingerprint_ignores_closed_runs(
+    repo: SqliteRepository,
+) -> None:
+    """find_open_run_by_fingerprint only matches state='running' rows."""
+    run_repo = CronRunRepository(repo)
+    fp = "fp-closed"
+
+    # Insert then close
+    await run_repo.insert_run(
+        run_id="run-closed",
+        cron_fingerprint=fp,
+        source="logscrape",
+        started_at="2026-05-19T00:01:00+00:00",
+        vl_window_start="2026-05-19T00:01:00+00:00",
+    )
+    await run_repo.close_run(
+        run_id="run-closed",
+        cron_fingerprint=fp,
+        source="logscrape",
+        state="ok",
+        ended_at="2026-05-19T00:02:00+00:00",
+        duration_seconds=60.0,
+        exit_code=0,
+        vl_window_end="2026-05-19T00:02:00+00:00",
+    )
+
+    result = await run_repo.find_open_run_by_fingerprint(fp, "2026-05-19T00:03:00+00:00")
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_list_runs_needing_enrich_excludes_within_grace(
+    repo: SqliteRepository,
+) -> None:
+    """list_runs_needing_enrich excludes runs ended after the grace cutoff."""
+    run_repo = CronRunRepository(repo)
+
+    # Closed run ended BEFORE cutoff → should be returned
+    await run_repo.close_run(
+        run_id="enrich-old",
+        cron_fingerprint="fp-enrich",
+        source="wrapper",
+        state="ok",
+        ended_at="2026-05-19T00:00:00+00:00",
+        duration_seconds=10.0,
+        exit_code=0,
+        vl_window_end="2026-05-19T00:00:00+00:00",
+    )
+    # Closed run ended AFTER cutoff → excluded (within grace window)
+    await run_repo.close_run(
+        run_id="enrich-new",
+        cron_fingerprint="fp-enrich",
+        source="wrapper",
+        state="ok",
+        ended_at="2026-05-19T01:00:00+00:00",
+        duration_seconds=10.0,
+        exit_code=0,
+        vl_window_end="2026-05-19T01:00:00+00:00",
+    )
+
+    # grace_cutoff = 2026-05-19T00:30:00 (old run is before it, new run is after it)
+    results = await run_repo.list_runs_needing_enrich("2026-05-19T00:30:00+00:00")
+    assert len(results) == 1
+    assert results[0].run_id == "enrich-old"
+
+
+@pytest.mark.asyncio
+async def test_list_runs_needing_enrich_excludes_running_rows(
+    repo: SqliteRepository,
+) -> None:
+    """list_runs_needing_enrich excludes still-running rows (state='running')."""
+    run_repo = CronRunRepository(repo)
+
+    await run_repo.insert_run(
+        run_id="still-running",
+        cron_fingerprint="fp-r",
+        source="logscrape",
+        started_at="2026-05-19T00:00:00+00:00",
+        vl_window_start="2026-05-19T00:00:00+00:00",
+    )
+
+    results = await run_repo.list_runs_needing_enrich("2026-05-19T01:00:00+00:00")
+    assert all(r.run_id != "still-running" for r in results)
+
+
+@pytest.mark.asyncio
+async def test_list_runs_needing_enrich_excludes_already_enriched(
+    repo: SqliteRepository,
+) -> None:
+    """list_runs_needing_enrich excludes runs that already have enriched_at set."""
+    run_repo = CronRunRepository(repo)
+
+    await run_repo.close_run(
+        run_id="already-enriched",
+        cron_fingerprint="fp-e",
+        source="wrapper",
+        state="ok",
+        ended_at="2026-05-19T00:00:00+00:00",
+        duration_seconds=5.0,
+        exit_code=0,
+        vl_window_end="2026-05-19T00:00:00+00:00",
+    )
+    # Write enrichment so enriched_at is set
+    await run_repo.set_enrichment(
+        run_id="already-enriched",
+        line_count=3,
+        byte_count=100,
+        content_digest="abc123",
+        enriched_at=utc_now_iso(),
+    )
+
+    results = await run_repo.list_runs_needing_enrich("2026-05-19T01:00:00+00:00")
+    assert all(r.run_id != "already-enriched" for r in results)
+
+
+@pytest.mark.asyncio
+async def test_finalize_bmode_run_sets_all_fields(repo: SqliteRepository) -> None:
+    """finalize_bmode_run sets state/ended_at/duration_seconds/vl_window_end."""
+    run_repo = CronRunRepository(repo)
+    run_id = "finalize-me"
+
+    await run_repo.insert_run(
+        run_id=run_id,
+        cron_fingerprint="fp-fin",
+        source="logscrape",
+        started_at="2026-05-19T00:00:00+00:00",
+        vl_window_start="2026-05-19T00:00:00+00:00",
+    )
+
+    ended_at = "2026-05-19T00:05:00+00:00"
+    await run_repo.finalize_bmode_run(
+        run_id=run_id,
+        state="unknown",
+        ended_at=ended_at,
+        duration_seconds=300.0,
+    )
+
+    row = await run_repo.get_run(run_id)
+    assert row is not None
+    assert row.state == "unknown"
+    assert row.ended_at == ended_at
+    assert row.duration_seconds == 300.0  # noqa: PLR2004
+    assert row.vl_window_end == ended_at
+
+
+@pytest.mark.asyncio
+async def test_finalize_bmode_run_is_idempotent(repo: SqliteRepository) -> None:
+    """finalize_bmode_run called twice on the same run is a no-op the second time."""
+    run_repo = CronRunRepository(repo)
+    run_id = "finalize-idem"
+
+    await run_repo.insert_run(
+        run_id=run_id,
+        cron_fingerprint="fp-idem",
+        source="logscrape",
+        started_at="2026-05-19T00:00:00+00:00",
+        vl_window_start="2026-05-19T00:00:00+00:00",
+    )
+    ended_at = "2026-05-19T00:05:00+00:00"
+    await run_repo.finalize_bmode_run(
+        run_id=run_id,
+        state="unknown",
+        ended_at=ended_at,
+        duration_seconds=300.0,
+    )
+    # Second call: the state='running' guard in the UPDATE makes this a no-op
+    await run_repo.finalize_bmode_run(
+        run_id=run_id,
+        state="ok",  # different state — should be ignored
+        ended_at="2026-05-19T01:00:00+00:00",
+        duration_seconds=3600.0,
+    )
+
+    row = await run_repo.get_run(run_id)
+    assert row is not None
+    assert row.state == "unknown"  # first call wins
+    assert row.ended_at == ended_at
+
+
+@pytest.mark.asyncio
+async def test_set_overlapping_sets_flag(repo: SqliteRepository) -> None:
+    """set_overlapping flips overlapping to True."""
+    run_repo = CronRunRepository(repo)
+    run_id = "overlap-test"
+
+    await run_repo.insert_run(
+        run_id=run_id,
+        cron_fingerprint="fp-ov",
+        source="logscrape",
+        started_at="2026-05-19T00:00:00+00:00",
+        vl_window_start="2026-05-19T00:00:00+00:00",
+    )
+
+    # Before: overlapping is False
+    row = await run_repo.get_run(run_id)
+    assert row is not None
+    assert row.overlapping is False
+
+    await run_repo.set_overlapping(run_id)
+
+    row2 = await run_repo.get_run(run_id)
+    assert row2 is not None
+    assert row2.overlapping is True
+
+
+@pytest.mark.asyncio
+async def test_set_enrichment_sets_fields(repo: SqliteRepository) -> None:
+    """set_enrichment writes line_count/byte_count/content_digest/enriched_at."""
+    run_repo = CronRunRepository(repo)
+    run_id = "enrich-write"
+
+    await run_repo.close_run(
+        run_id=run_id,
+        cron_fingerprint="fp-ew",
+        source="wrapper",
+        state="ok",
+        ended_at="2026-05-19T00:01:00+00:00",
+        duration_seconds=10.0,
+        exit_code=0,
+        vl_window_end="2026-05-19T00:01:00+00:00",
+    )
+
+    enriched_at = utc_now_iso()
+    await run_repo.set_enrichment(
+        run_id=run_id,
+        line_count=42,
+        byte_count=8192,
+        content_digest="deadbeef" * 8,
+        enriched_at=enriched_at,
+    )
+
+    row = await run_repo.get_run(run_id)
+    assert row is not None
+    assert row.line_count == 42  # noqa: PLR2004
+    assert row.byte_count == 8192  # noqa: PLR2004
+    assert row.content_digest == "deadbeef" * 8
+    assert row.enriched_at == enriched_at
+    # anomaly_flags must remain untouched at the empty default
+    assert row.anomaly_flags == ""
+
+
+@pytest.mark.asyncio
+async def test_prune_runs_by_age_deletes_old_rows(repo: SqliteRepository) -> None:
+    """prune_runs age bound: rows with started_at before cutoff are deleted."""
+    run_repo = CronRunRepository(repo)
+    fp = "fp-prune-age"
+
+    # Old row: before cutoff
+    await run_repo.close_run(
+        run_id="old-row",
+        cron_fingerprint=fp,
+        source="wrapper",
+        state="ok",
+        ended_at="2026-05-01T00:00:00+00:00",
+        duration_seconds=None,
+        exit_code=0,
+        vl_window_end="2026-05-01T00:00:00+00:00",
+    )
+    # New row: after cutoff (started_at derived = ended_at when duration=None)
+    await run_repo.close_run(
+        run_id="new-row",
+        cron_fingerprint=fp,
+        source="wrapper",
+        state="ok",
+        ended_at="2026-05-19T00:00:00+00:00",
+        duration_seconds=None,
+        exit_code=0,
+        vl_window_end="2026-05-19T00:00:00+00:00",
+    )
+
+    deleted = await run_repo.prune_runs(
+        retention_cutoff="2026-05-10T00:00:00+00:00",
+        max_rows_per_cron=100_000,
+    )
+
+    assert deleted >= 1
+    assert await run_repo.get_run("old-row") is None
+    assert await run_repo.get_run("new-row") is not None
+
+
+@pytest.mark.asyncio
+async def test_prune_runs_by_count_keeps_newest(repo: SqliteRepository) -> None:
+    """prune_runs count bound: only the newest max_rows_per_cron rows are kept."""
+    run_repo = CronRunRepository(repo)
+    fp = "fp-prune-count"
+
+    # Seed 5 rows with distinct started_at (derived via duration=None → ended_at)
+    run_ids: list[str] = []
+    for i in range(5):
+        rid = f"count-run-{i}"
+        run_ids.append(rid)
+        started = f"2026-05-19T00:00:{i:02d}+00:00"
+        await run_repo.close_run(
+            run_id=rid,
+            cron_fingerprint=fp,
+            source="wrapper",
+            state="ok",
+            ended_at=started,
+            duration_seconds=None,
+            exit_code=0,
+            vl_window_end=started,
+        )
+
+    # prune to keep only newest 3
+    deleted = await run_repo.prune_runs(
+        retention_cutoff="2020-01-01T00:00:00+00:00",  # nothing older than this
+        max_rows_per_cron=3,
+    )
+
+    assert deleted == 2  # noqa: PLR2004
+    # Newest 3 (indices 2,3,4) must still exist
+    assert await run_repo.get_run("count-run-4") is not None
+    assert await run_repo.get_run("count-run-3") is not None
+    assert await run_repo.get_run("count-run-2") is not None
+    # Oldest 2 (indices 0,1) must be deleted
+    assert await run_repo.get_run("count-run-0") is None
+    assert await run_repo.get_run("count-run-1") is None
+
+
+@pytest.mark.asyncio
+async def test_prune_runs_both_bounds_combined(repo: SqliteRepository) -> None:
+    """prune_runs applies age then count; both passes contribute to deleted count."""
+    run_repo = CronRunRepository(repo)
+    fp = "fp-prune-both"
+
+    # One very old row (age-pruned)
+    await run_repo.close_run(
+        run_id="ancient",
+        cron_fingerprint=fp,
+        source="wrapper",
+        state="ok",
+        ended_at="2020-01-01T00:00:00+00:00",
+        duration_seconds=None,
+        exit_code=0,
+        vl_window_end="2020-01-01T00:00:00+00:00",
+    )
+    # 4 newer rows (not age-pruned, but 2 should be count-pruned with max_rows=2)
+    for i in range(4):
+        started = f"2026-05-19T00:00:{i:02d}+00:00"
+        await run_repo.close_run(
+            run_id=f"newer-{i}",
+            cron_fingerprint=fp,
+            source="wrapper",
+            state="ok",
+            ended_at=started,
+            duration_seconds=None,
+            exit_code=0,
+            vl_window_end=started,
+        )
+
+    deleted = await run_repo.prune_runs(
+        retention_cutoff="2026-01-01T00:00:00+00:00",
+        max_rows_per_cron=2,
+    )
+
+    # 1 age-pruned + 2 count-pruned = 3
+    assert deleted == 3  # noqa: PLR2004
+    assert await run_repo.get_run("ancient") is None
+    assert await run_repo.get_run("newer-0") is None
+    assert await run_repo.get_run("newer-1") is None
+    assert await run_repo.get_run("newer-2") is not None
+    assert await run_repo.get_run("newer-3") is not None
+
+
+@pytest.mark.asyncio
+async def test_prune_runs_returns_zero_when_nothing_to_prune(
+    repo: SqliteRepository,
+) -> None:
+    """prune_runs returns 0 when no rows match the prune criteria."""
+    run_repo = CronRunRepository(repo)
+
+    await run_repo.close_run(
+        run_id="safe-run",
+        cron_fingerprint="fp-safe",
+        source="wrapper",
+        state="ok",
+        ended_at="2026-05-19T00:00:00+00:00",
+        duration_seconds=None,
+        exit_code=0,
+        vl_window_end="2026-05-19T00:00:00+00:00",
+    )
+
+    deleted = await run_repo.prune_runs(
+        retention_cutoff="2020-01-01T00:00:00+00:00",  # nothing older than this
+        max_rows_per_cron=100_000,
+    )
+
+    assert deleted == 0

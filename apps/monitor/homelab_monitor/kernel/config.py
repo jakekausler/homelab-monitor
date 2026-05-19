@@ -170,10 +170,84 @@ def get_public_url() -> str | None:
     return os.environ.get("HOMELAB_MONITOR_PUBLIC_URL") or None
 
 
+@dataclass(frozen=True, slots=True)
+class VlQueryLimits:
+    """Hard bounds applied to every VictoriaLogsClient query.
+
+    ``timeout_seconds`` is the OVERALL httpx timeout (connect + read +
+    write), not a per-stage budget. The reconciler's collector ``timeout``
+    is ``timedelta(seconds=20)``, so two back-to-back VL timeouts at the
+    default ``10s`` still fit a single tick.
+    """
+
+    max_lines: int = 10_000
+    max_bytes: int = 5_000_000
+    timeout_seconds: float = 10.0
+
+
+def load_vl_query_limits() -> VlQueryLimits:
+    """Load VL query hard-limits from env (HOMELAB_MONITOR_VL_QUERY_*)."""
+    defaults = VlQueryLimits()
+    max_lines = defaults.max_lines
+    max_bytes = defaults.max_bytes
+    timeout_seconds = defaults.timeout_seconds
+    raw_lines = os.environ.get("HOMELAB_MONITOR_VL_QUERY_MAX_LINES")
+    if raw_lines is not None:
+        max_lines = int(raw_lines)
+    raw_bytes = os.environ.get("HOMELAB_MONITOR_VL_QUERY_MAX_BYTES")
+    if raw_bytes is not None:
+        max_bytes = int(raw_bytes)
+    raw_timeout = os.environ.get("HOMELAB_MONITOR_VL_QUERY_TIMEOUT_SECONDS")
+    if raw_timeout is not None:
+        timeout_seconds = float(raw_timeout)
+    return VlQueryLimits(max_lines=max_lines, max_bytes=max_bytes, timeout_seconds=timeout_seconds)
+
+
+@dataclass(frozen=True, slots=True)
+class CronRunReconcilerConfig:
+    """Runtime tunables for CronRunReconciler (env-only)."""
+
+    retention_days: int = 30
+    max_rows_per_cron: int = 50_000
+    bmode_timeout_hours: int = 6
+    enrich_grace_seconds: int = 15
+
+
+def load_cron_run_reconciler_config() -> CronRunReconcilerConfig:
+    """Load CronRunReconciler tunables from env (HOMELAB_MONITOR_CRON_RUN_*)."""
+    defaults = CronRunReconcilerConfig()
+    retention_days = defaults.retention_days
+    max_rows_per_cron = defaults.max_rows_per_cron
+    bmode_timeout_hours = defaults.bmode_timeout_hours
+    enrich_grace_seconds = defaults.enrich_grace_seconds
+    raw_days = os.environ.get("HOMELAB_MONITOR_CRON_RUN_RETENTION_DAYS")
+    if raw_days is not None:
+        retention_days = int(raw_days)
+    raw_max = os.environ.get("HOMELAB_MONITOR_CRON_RUN_MAX_ROWS_PER_CRON")
+    if raw_max is not None:
+        max_rows_per_cron = int(raw_max)
+    raw_timeout_h = os.environ.get("HOMELAB_MONITOR_CRON_RUN_BMODE_TIMEOUT_HOURS")
+    if raw_timeout_h is not None:
+        bmode_timeout_hours = int(raw_timeout_h)
+    raw_grace = os.environ.get("HOMELAB_MONITOR_CRON_RUN_ENRICH_GRACE_SECONDS")
+    if raw_grace is not None:
+        enrich_grace_seconds = int(raw_grace)
+    return CronRunReconcilerConfig(
+        retention_days=retention_days,
+        max_rows_per_cron=max_rows_per_cron,
+        bmode_timeout_hours=bmode_timeout_hours,
+        enrich_grace_seconds=enrich_grace_seconds,
+    )
+
+
 __all__ = [
+    "CronRunReconcilerConfig",
     "DiskBudgetConfig",
     "LogStreamBudgetConfig",
+    "VlQueryLimits",
     "get_public_url",
+    "load_cron_run_reconciler_config",
     "load_disk_budget_config",
     "load_log_stream_budget_config",
+    "load_vl_query_limits",
 ]

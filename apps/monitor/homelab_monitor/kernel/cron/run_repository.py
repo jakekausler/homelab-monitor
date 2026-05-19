@@ -135,6 +135,70 @@ _CLOSE_RUN_SQL = text(
     "  vl_window_end = excluded.vl_window_end"
 )
 
+# B-mode open-run scan — runs still 'running' for a fingerprint, oldest-first.
+_SELECT_OPEN_BMODE_RUNS_SQL = text(
+    f"SELECT {_RUN_COLS} FROM cron_runs "
+    "WHERE source = 'logscrape' AND state = 'running' "
+    "ORDER BY cron_fingerprint ASC, started_at ASC"
+)
+
+# Most-recent open run of one fingerprint whose start <= :at_ts. Used by the
+# B-mode exit= correlation AND by window-finalize's next-CMD close.
+_SELECT_OPEN_RUN_BY_FINGERPRINT_SQL = text(
+    f"SELECT {_RUN_COLS} FROM cron_runs "
+    "WHERE cron_fingerprint = :fp AND state = 'running' "
+    "AND started_at <= :at_ts "
+    "ORDER BY started_at DESC, run_id DESC LIMIT 1"
+)
+
+# Enrich work-queue — closed, un-enriched runs whose ended_at is past the grace
+# cutoff. Uses ix_cron_runs_enrich_queue (partial on enriched_at IS NULL AND
+# state != 'running').
+_SELECT_RUNS_NEEDING_ENRICH_SQL = text(
+    f"SELECT {_RUN_COLS} FROM cron_runs "
+    "WHERE enriched_at IS NULL AND state != 'running' "
+    "AND ended_at IS NOT NULL AND ended_at <= :grace_cutoff "
+    "ORDER BY ended_at ASC"
+)
+
+# Window-finalize: close a B-mode run by next-CMD or timeout.
+_FINALIZE_BMODE_RUN_SQL = text(
+    "UPDATE cron_runs SET "
+    "  state = :state, ended_at = :ended_at, "
+    "  duration_seconds = :duration_seconds, vl_window_end = :vl_window_end "
+    "WHERE run_id = :run_id AND state = 'running' AND source = 'logscrape'"
+)
+
+_SET_OVERLAPPING_SQL = text("UPDATE cron_runs SET overlapping = 1 WHERE run_id = :run_id")
+
+_SET_ENRICHMENT_SQL = text(
+    "UPDATE cron_runs SET "
+    "  line_count = :line_count, byte_count = :byte_count, "
+    "  content_digest = :content_digest, enriched_at = :enriched_at "
+    "WHERE run_id = :run_id"
+)
+
+# Prune: rows older than the retention cutoff (by started_at).
+_PRUNE_BY_AGE_SQL = text("DELETE FROM cron_runs WHERE started_at < :retention_cutoff")
+
+# Prune: per-cron row cap. Delete the oldest rows of one fingerprint beyond the
+# newest `max_rows` rows. Subquery selects the run_ids to KEEP.
+_PRUNE_BY_COUNT_SQL = text(
+    "DELETE FROM cron_runs WHERE cron_fingerprint = :fp AND run_id NOT IN ("
+    "  SELECT run_id FROM cron_runs WHERE cron_fingerprint = :fp "
+    "  ORDER BY started_at DESC, run_id DESC LIMIT :max_rows"
+    ")"
+)
+
+# TODO: at scale (millions of cron_runs rows), verify SQLite uses the
+# ix_cron_runs_fingerprint_started index for this DISTINCT scan via
+# EXPLAIN QUERY PLAN. If the index isn't used, rewrite as
+# ``SELECT cron_fingerprint FROM cron_runs GROUP BY cron_fingerprint``
+# (which more reliably triggers index-based dedup) or add a covering
+# index. Current scale (~7k rows, ~13 fingerprints) is fine.
+# Distinct fingerprints (for the per-cron count-prune pass).
+_DISTINCT_FINGERPRINTS_SQL = text("SELECT DISTINCT cron_fingerprint FROM cron_runs")
+
 
 def _derive_started_at(ended_at: str, duration_seconds: float | None) -> str:
     """Best-effort started_at for the lost-/start UPSERT INSERT branch.
@@ -273,6 +337,142 @@ class CronRunRepository:
             items = items[:limit]
             next_cursor = items[-1].started_at
         return CronRunListPage(items=items, next_cursor=next_cursor)
+
+    async def list_open_bmode_runs(self) -> list[CronRunRecord]:
+        """Return all B-mode (source='logscrape') runs still in state='running'.
+
+        Ordered (cron_fingerprint ASC, started_at ASC) so the reconciler can group
+        consecutive runs of the same cron and apply the next-CMD rule.
+
+        Invariant: rows in ``cron_runs`` carry ``started_at`` values that the
+        ingest path (``CronEventItem._validate_timestamp``) and ``utc_now_iso``
+        both emit in normalized ``+00:00`` ISO-8601 form. Under that invariant
+        the SQL ``ORDER BY started_at ASC`` on this TEXT column is
+        chronological. A hand-inserted row in a different format (``Z``,
+        offset omitted, etc.) would mis-sort; we do not currently enforce the
+        format at the schema level.
+        """
+        rows = await self._db.fetch_all(_SELECT_OPEN_BMODE_RUNS_SQL)
+        return [_row_to_cron_run(r) for r in rows]
+
+    async def find_open_run_by_fingerprint(
+        self, cron_fingerprint: str, at_ts: str
+    ) -> CronRunRecord | None:
+        """Return the most-recent open run of `cron_fingerprint` started at or
+        before `at_ts`, or None.
+
+        Used by the B-mode exit= correlation: an exit line at time T closes the
+        most-recent running run of that fingerprint whose window contains T (its
+        started_at <= T). Also reused by window-finalize.
+        """
+        row = await self._db.fetch_one(
+            _SELECT_OPEN_RUN_BY_FINGERPRINT_SQL,
+            {"fp": cron_fingerprint, "at_ts": at_ts},
+        )
+        return None if row is None else _row_to_cron_run(row)
+
+    async def list_runs_needing_enrich(self, grace_cutoff: str) -> list[CronRunRecord]:
+        """Return closed, un-enriched runs whose ended_at <= grace_cutoff.
+
+        `grace_cutoff` is (now - enrich_grace_seconds) as an ISO-8601 string — runs
+        that ended within the grace window are excluded so VL has time to ingest
+        trailing lines. Ordered ended_at ASC (oldest first).
+        """
+        rows = await self._db.fetch_all(
+            _SELECT_RUNS_NEEDING_ENRICH_SQL, {"grace_cutoff": grace_cutoff}
+        )
+        return [_row_to_cron_run(r) for r in rows]
+
+    async def finalize_bmode_run(
+        self,
+        *,
+        run_id: str,
+        state: str,
+        ended_at: str,
+        duration_seconds: float | None,
+    ) -> None:
+        """Close a still-running B-mode run (window-finalize phase).
+
+        Sets state, ended_at, duration_seconds, and vl_window_end (= ended_at, so
+        the run-log endpoint has a populated upper bound for B-mode runs — D-BMODE-WINDOW).
+        The `state = 'running'` guard in the UPDATE makes this idempotent: a
+        re-run tick that already closed the row is a no-op.
+        """
+        async with self._db.transaction() as conn:
+            await conn.execute(
+                _FINALIZE_BMODE_RUN_SQL,
+                {
+                    "run_id": run_id,
+                    "state": state,
+                    "ended_at": ended_at,
+                    "duration_seconds": duration_seconds,
+                    "vl_window_end": ended_at,
+                },
+            )
+
+    async def set_overlapping(self, run_id: str) -> None:
+        """Set overlapping=1 on a run (window-finalize phase)."""
+        async with self._db.transaction() as conn:
+            await conn.execute(_SET_OVERLAPPING_SQL, {"run_id": run_id})
+
+    async def set_enrichment(
+        self,
+        *,
+        run_id: str,
+        line_count: int,
+        byte_count: int,
+        content_digest: str,
+        enriched_at: str,
+    ) -> None:
+        """Write the VL-derived enrichment fields + enriched_at (enrich phase).
+
+        anomaly_flags is intentionally NOT touched — STAGE-002-014 owns it; this
+        stage leaves it at its '' default.
+        """
+        async with self._db.transaction() as conn:
+            await conn.execute(
+                _SET_ENRICHMENT_SQL,
+                {
+                    "run_id": run_id,
+                    "line_count": line_count,
+                    "byte_count": byte_count,
+                    "content_digest": content_digest,
+                    "enriched_at": enriched_at,
+                },
+            )
+
+    async def prune_runs(self, *, retention_cutoff: str, max_rows_per_cron: int) -> int:
+        """Prune cron_runs by age AND per-cron row cap. Returns rows deleted.
+
+        Two passes in ONE transaction:
+          1. Age: delete every row with started_at < retention_cutoff.
+          2. Count: for each remaining distinct fingerprint, delete rows beyond the
+             newest `max_rows_per_cron` (by started_at DESC, run_id DESC).
+        Whichever bound prunes a given row first wins; the count pass runs after
+        the age pass so it operates on the already-age-pruned set.
+
+        Concurrency note: the age-prune DELETE and every per-fingerprint
+        count-prune run inside ONE transaction. SQLite serializes writers,
+        so this holds the writer lock for the full prune duration —
+        competing with the cron-events B-mode ingest path. At current
+        scale (~ms) this is fine. If prune duration grows to a meaningful
+        fraction of a 30s tick, split this into one transaction per
+        fingerprint to release the writer lock between rows.
+        """
+        deleted = 0
+        async with self._db.transaction() as conn:
+            age_result = await conn.execute(
+                _PRUNE_BY_AGE_SQL, {"retention_cutoff": retention_cutoff}
+            )
+            deleted += age_result.rowcount
+            fp_rows = (await conn.execute(_DISTINCT_FINGERPRINTS_SQL)).fetchall()
+            for fp_row in fp_rows:
+                fp = str(fp_row.cron_fingerprint)
+                count_result = await conn.execute(
+                    _PRUNE_BY_COUNT_SQL, {"fp": fp, "max_rows": max_rows_per_cron}
+                )
+                deleted += count_result.rowcount
+        return deleted
 
 
 __all__ = [
