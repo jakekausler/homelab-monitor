@@ -124,7 +124,8 @@ A-MODE (wrapper-installed cron) — synchronous facts:
           `HM_RUN=<uuid>` prefix into a regular `run_id` field, strips it from
           the message body → VictoriaLogs
     → logger --tag hmrun "HM_RUN_END fp=<fp> run=<RUN_ID> exit=<n> duration=<s>"
-    → POST /api/hb/<fp>/ok|fail?run_id=<RUN_ID>&duration=<s>[&exit_code=<n>]
+    → POST /api/hb/<fp>/ok|fail?run_id=<RUN_ID>&duration=<s>&exit_code=<n>
+        (exit_code is sent on both ok (0) and fail (non-zero))
         → heartbeat receiver UPDATEs cron_runs row (state, ended_at,
           duration_seconds, exit_code, vl_window_end)                      [SYNC]
 
@@ -195,7 +196,7 @@ the head and renumber if it has advanced by implementation time).
 | `started_at` | TEXT | NOT NULL | UTC ISO-8601. |
 | `ended_at` | TEXT | NULL | UTC ISO-8601. NULL while `state=running`. |
 | `duration_seconds` | REAL | NULL | Set at close. |
-| `exit_code` | INTEGER | NULL | A-mode: from `/fail` call. B-mode: from the `exit=` syslog tag if present, else NULL. |
+| `exit_code` | INTEGER | NULL | A-mode: from the `/ok` (exit 0) or `/fail` call — the wrapper sends `exit_code` on both. B-mode: from the `exit=` syslog tag if present, else NULL. |
 | `vl_window_start` | TEXT | NULL | UTC ISO-8601 — lower time bound for the VL log query. |
 | `vl_window_end` | TEXT | NULL | UTC ISO-8601 — upper time bound. NULL while running. |
 | `overlapping` | INTEGER | NOT NULL DEFAULT 0 | B-mode only: `1` if this run's window intersects another run of the same cron. |
@@ -233,6 +234,9 @@ parameter. The optional `run_id` field is added to **all three heartbeat query s
 classes** — `HeartbeatStartQuery`, `HeartbeatOkQuery`, and `HeartbeatFailQuery` (in
 `apps/monitor/homelab_monitor/kernel/heartbeat/schemas.py`) — and `openapi.json` regenerates
 as a result.
+
+`HeartbeatOkQuery` gains both `run_id` and `exit_code` optional params; `HeartbeatStartQuery`
+and `HeartbeatFailQuery` gain `run_id` (`HeartbeatFailQuery` already carries exit info).
 
 - **Present** (A-mode, upgraded wrapper) → used to INSERT/UPDATE the matching `cron_runs` row.
 - **Absent** (legacy wrapper, or the `/register` path) → behavior is **exactly as today** — no
@@ -293,7 +297,8 @@ remains a fixed constant as today.
    regular VictoriaLogs `run_id` field, and strips the prefix from the message body.
 5. Capture the real command's exit code and the run duration.
 6. `logger` an end boundary marker: `HM_RUN_END fp=<fp> run=<RUN_ID> exit=<n> duration=<s>`.
-7. `POST /api/hb/<fp>/ok|fail?run_id=<RUN_ID>&duration=<s>[&exit_code=<n>]`.
+7. `POST /api/hb/<fp>/ok|fail?run_id=<RUN_ID>&duration=<s>&exit_code=<n>` — `exit_code` is
+   sent on both the `/ok` call (`0`) and the `/fail` call (the non-zero code).
 
 Heartbeat POSTs remain best-effort and bounded (`curl --max-time 5`, all output discarded,
 `|| true`) — a network failure NEVER blocks or alters the real command. This principle is
@@ -318,8 +323,8 @@ A `WRAPPER_FORMAT_VERSION` marker is introduced:
 - A version constant embedded in the wrapper template, and recorded in the `crons` record at
   install time via an **explicit new `wrapper_format_version` column** on the `crons` table
   (queryable and testable — no reliance on derived wrapper-health state for the stored value).
-  The column is added by its own small migration, or folded into STAGE-002-012's
-  wrapper-rewrite migration.
+  The column is added by its own alembic migration — `0016_crons_wrapper_format_version.py`
+  (decided in STAGE-002-012; confirm the head at implementation time).
 - The outdated-format state is surfaced by **extending the `WrapperHealth` Literal type**
   (`apps/monitor/homelab_monitor/kernel/cron/schemas.py`, currently
   `Literal["ok", "stale", "unknown"]`) with a new member **`"format_outdated"`**.
@@ -363,7 +368,7 @@ proxy will later be built on top of it.
 **Hard limits (mandatory — not optional):**
 - Every query is bounded by an explicit time range.
 - A max-lines cap (`HM_VL_QUERY_MAX_LINES`, default 10000).
-- A max-bytes cap.
+- A max-bytes cap — env `HM_VL_QUERY_MAX_BYTES`, default 5000000 (5 MB).
 - An HTTP timeout.
 - A run that produced more than the cap returns the capped lines plus a `truncated: true`
   flag — never an unbounded fetch.
@@ -623,7 +628,7 @@ table).
 | Stage | Scope | Host-integration? |
 | --- | --- | --- |
 | **STAGE-002-011** | `cron_runs` table + alembic migration + `CronRunRepository`; heartbeat receiver accepts and threads the optional `run_id` (added to `HeartbeatStartQuery` / `HeartbeatOkQuery` / `HeartbeatFailQuery`, with `openapi.json` regeneration); synchronous A-mode `cron_runs` row create/close from the heartbeat path with INSERT-or-ignore / UPSERT semantics. Backend foundation, no host changes. | No (3a only) |
-| **STAGE-002-012** | Wrapper rewrite — generic shared script, fingerprint-as-argument, `/etc/homelab-monitor/wrapper.env`, run-UUID generation, per-line `HM_RUN=<uuid>` output prefixing, start/end boundary markers, `run_id` threaded onto the heartbeat calls; the new `deploy/vector/vector.toml.template` transform branch that parses `SYSLOG_IDENTIFIER == "hmrun"` lines and extracts the `run_id` field; `hm-cron-apply.sh` / install-executor changes; `WRAPPER_FORMAT_VERSION` — adding the `wrapper_format_version` column to `crons` (its own small migration or folded into the wrapper-rewrite migration), extending the `WrapperHealth` Literal with `"format_outdated"`, the consequent `openapi.json` regeneration, and the UI badge update rendering the new state. | **Yes (3a + 3b)** |
+| **STAGE-002-012** | Wrapper rewrite — generic shared script, fingerprint-as-argument, `/etc/homelab-monitor/wrapper.env`, run-UUID generation, per-line `HM_RUN=<uuid>` output prefixing, start/end boundary markers, `run_id` threaded onto the heartbeat calls; the new `deploy/vector/vector.toml.template` transform branch that parses `SYSLOG_IDENTIFIER == "hmrun"` lines and extracts the `run_id` field; `hm-cron-apply.sh` / install-executor changes; `WRAPPER_FORMAT_VERSION` — adding the `wrapper_format_version` column to `crons` (its own migration `0016_crons_wrapper_format_version.py`), extending the `WrapperHealth` Literal with `"format_outdated"`, the consequent `openapi.json` regeneration, and the UI badge update rendering the new state. | **Yes (3a + 3b)** |
 | **STAGE-002-013** | `VictoriaLogsClient` (bounded VL query module) + `CronRunReconciler` (window-finalize, enrich, prune) + B-mode `cron_runs` row create/close as an extension of the existing `cron_events._process_one` ingest handler (`exit=` event correlation, the at-most-once contract) + the `overlapping` flag + the A-mode `SYSLOG_IDENTIFIER:hmrun AND run_id:<run_id>` VL query consumption. | Yes (3a + 3b) |
 | **STAGE-002-014** | Run-history API (`GET /runs`) + the narrow run-log endpoint (`GET /runs/{id}/log`) + the anomaly heuristic evaluator wired into the reconciler. | No (3a only) |
 | **STAGE-002-015** | UI — the `CronDetail` "Recent runs" teaser panel, the `/crons/{fp}/runs` list route, and the `/crons/{fp}/runs/{run_id}` log-viewer route. | No (3a only; frontend) |
