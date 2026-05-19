@@ -29,6 +29,7 @@ from structlog.stdlib import BoundLogger
 
 from homelab_monitor.kernel.api.dependencies import (
     get_cron_repo,
+    get_cron_run_repo,
     get_heartbeat_repo,
     require_token_scope,
 )
@@ -37,6 +38,7 @@ from homelab_monitor.kernel.auth.models import ApiToken
 from homelab_monitor.kernel.auth.scopes import Scope
 from homelab_monitor.kernel.cron.fingerprint import compute_fingerprint
 from homelab_monitor.kernel.cron.repository import CronRepo
+from homelab_monitor.kernel.cron.run_repository import CronRunRepository
 from homelab_monitor.kernel.cron.schedule import (
     InvalidCronExpression,
     canonicalize_schedule,
@@ -46,6 +48,7 @@ from homelab_monitor.kernel.cron.schemas import (
     RegisterCronBody,
     cron_record_to_out,
 )
+from homelab_monitor.kernel.db.time import utc_now_iso
 from homelab_monitor.kernel.heartbeat.rate_limiter import cron_rate_limiter
 from homelab_monitor.kernel.heartbeat.repository import CronRecord, HeartbeatRepo
 from homelab_monitor.kernel.heartbeat.schemas import (
@@ -106,12 +109,13 @@ _log: BoundLogger = cast(BoundLogger, structlog.get_logger().bind(component="hea
 
 
 @router.post("/{fingerprint}/start", status_code=204)
-async def receive_start(
+async def receive_start(  # noqa: PLR0913
     fingerprint: str,
     request: Request,
     token: Annotated[ApiToken, Depends(require_token_scope(Scope.HEARTBEAT_WRITE))],
     repo: Annotated[HeartbeatRepo, Depends(get_heartbeat_repo)],
-    _query: Annotated[HeartbeatStartQuery, Depends(query_model(HeartbeatStartQuery))],
+    run_repo: Annotated[CronRunRepository, Depends(get_cron_run_repo)],
+    query: Annotated[HeartbeatStartQuery, Depends(query_model(HeartbeatStartQuery))],
 ) -> Response:
     """Record a ``/start`` ping for ``fingerprint``."""
     await _resolve_cron_or_404(repo, fingerprint)
@@ -124,20 +128,34 @@ async def receive_start(
         who=token.name,
         ip=_client_ip(request),
     )
+    # The cron_runs write is a separate transaction from the heartbeats_state
+    # write above (intentional, consistent with the existing at-most-once
+    # heartbeat contract — a crash between the two is an accepted loss).
+    if query.run_id is not None:
+        now = utc_now_iso()
+        await run_repo.insert_run(
+            run_id=query.run_id,
+            cron_fingerprint=fingerprint,
+            source="wrapper",
+            started_at=now,
+            vl_window_start=now,
+        )
     _log.info(
         "heartbeat.start.received",
         cron_fingerprint=fingerprint,
+        run_id=query.run_id,
         streak=state.current_streak,
     )
     return Response(status_code=204)
 
 
 @router.post("/{fingerprint}/ok", status_code=204)
-async def receive_ok(
+async def receive_ok(  # noqa: PLR0913
     fingerprint: str,
     request: Request,
     token: Annotated[ApiToken, Depends(require_token_scope(Scope.HEARTBEAT_WRITE))],
     repo: Annotated[HeartbeatRepo, Depends(get_heartbeat_repo)],
+    run_repo: Annotated[CronRunRepository, Depends(get_cron_run_repo)],
     query: Annotated[HeartbeatOkQuery, Depends(query_model(HeartbeatOkQuery))],
 ) -> Response:
     """Record an ``/ok`` ping for ``fingerprint``. Optional ``?duration=<seconds>``.
@@ -158,9 +176,25 @@ async def receive_ok(
         who=token.name,
         ip=_client_ip(request),
     )
+    # The cron_runs write is a separate transaction from the heartbeats_state
+    # write above (intentional, consistent with the existing at-most-once
+    # heartbeat contract — a crash between the two is an accepted loss).
+    if query.run_id is not None:
+        now = utc_now_iso()
+        await run_repo.close_run(
+            run_id=query.run_id,
+            cron_fingerprint=fingerprint,
+            source="wrapper",
+            state="ok",
+            ended_at=now,
+            duration_seconds=query.duration,
+            exit_code=query.exit_code if query.exit_code is not None else 0,
+            vl_window_end=now,
+        )
     _log.info(
         "heartbeat.ok.received",
         cron_fingerprint=fingerprint,
+        run_id=query.run_id,
         duration_seconds=query.duration,
         streak=state.current_streak,
     )
@@ -168,11 +202,12 @@ async def receive_ok(
 
 
 @router.post("/{fingerprint}/fail", status_code=204)
-async def receive_fail(
+async def receive_fail(  # noqa: PLR0913
     fingerprint: str,
     request: Request,
     token: Annotated[ApiToken, Depends(require_token_scope(Scope.HEARTBEAT_WRITE))],
     repo: Annotated[HeartbeatRepo, Depends(get_heartbeat_repo)],
+    run_repo: Annotated[CronRunRepository, Depends(get_cron_run_repo)],
     query: Annotated[HeartbeatFailQuery, Depends(query_model(HeartbeatFailQuery))],
 ) -> Response:
     """Record a ``/fail`` ping for ``fingerprint``. Optional ``?duration``, ``?exit_code``."""
@@ -188,9 +223,25 @@ async def receive_fail(
         who=token.name,
         ip=_client_ip(request),
     )
+    # The cron_runs write is a separate transaction from the heartbeats_state
+    # write above (intentional, consistent with the existing at-most-once
+    # heartbeat contract — a crash between the two is an accepted loss).
+    if query.run_id is not None:
+        now = utc_now_iso()
+        await run_repo.close_run(
+            run_id=query.run_id,
+            cron_fingerprint=fingerprint,
+            source="wrapper",
+            state="fail",
+            ended_at=now,
+            duration_seconds=query.duration,
+            exit_code=query.exit_code,
+            vl_window_end=now,
+        )
     _log.info(
         "heartbeat.fail.received",
         cron_fingerprint=fingerprint,
+        run_id=query.run_id,
         exit_code=query.exit_code,
         streak=state.current_streak,
     )

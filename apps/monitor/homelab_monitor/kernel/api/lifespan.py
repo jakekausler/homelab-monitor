@@ -20,6 +20,7 @@ from homelab_monitor.kernel.alerts.repository import AlertRepository
 from homelab_monitor.kernel.api.sse import SseBroker
 from homelab_monitor.kernel.backup.service import BackupService
 from homelab_monitor.kernel.cron.repository import CronRepo
+from homelab_monitor.kernel.cron.run_repository import CronRunRepository
 from homelab_monitor.kernel.db.engine import dispose_engine, get_engine
 from homelab_monitor.kernel.db.migrations import MigrationsPendingError, run_migrations
 from homelab_monitor.kernel.db.repository import SqliteRepository
@@ -291,6 +292,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
     alert_repo = AlertRepository(repo)
     heartbeat_repo = HeartbeatRepo(repo)
     cron_repo = CronRepo(repo)
+    cron_run_repo = CronRunRepository(repo)
     alert_dispatcher = AlertDispatcher(
         channels=[InprocDashboardChannel(broker)],
         log=log,
@@ -396,6 +398,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
     app.state.alert_repo = alert_repo
     app.state.heartbeat_repo = heartbeat_repo
     app.state.cron_repo = cron_repo
+    app.state.cron_run_repo = cron_run_repo
     app.state.alert_dispatcher = alert_dispatcher
     app.state.ttl_resolver = ttl_resolver
     app.state.http_client = http_client

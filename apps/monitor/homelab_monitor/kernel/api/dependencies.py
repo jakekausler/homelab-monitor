@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     from homelab_monitor.kernel.api.sse import SseBroker
     from homelab_monitor.kernel.backup.service import BackupService
     from homelab_monitor.kernel.cron.repository import CronRepo
+    from homelab_monitor.kernel.cron.run_repository import CronRunRepository
     from homelab_monitor.kernel.db.repository import SqliteRepository
     from homelab_monitor.kernel.dispatch.dispatcher import AlertDispatcher
     from homelab_monitor.kernel.heartbeat.repository import HeartbeatRepo
@@ -244,6 +245,16 @@ def get_cron_repo(request: Request) -> CronRepo:  # type: ignore[name-defined]
         attr="cron_repo",
         code="cron_repo_unavailable",
         message="cron repository is not initialized",
+    )
+
+
+def get_cron_run_repo(request: Request) -> CronRunRepository:  # type: ignore[name-defined]
+    """Get the cron run repository from app state (STAGE-002-011)."""
+    return _require_state(
+        request,
+        attr="cron_run_repo",
+        code="cron_run_repo_unavailable",
+        message="cron run repository is not initialized",
     )
 
 

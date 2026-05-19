@@ -632,3 +632,281 @@ async def test_heartbeat_accepts_hidden_cron_per_verb(
     )
     assert state_row is not None
     assert state_row[0] == expected_state
+
+
+# ---------------------------------------------------------------------------
+# STAGE-002-011: run_id threading into cron_runs table
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_start_with_run_id_creates_running_cron_run(
+    api_token_client: AsyncClient,
+    repo: SqliteRepository,
+    seeded_crons: SeededCrons,
+) -> None:
+    """POST /api/hb/{fp}/start?run_id=test-run-1 creates a cron_runs row."""
+    fp = seeded_crons.first.fingerprint
+    run_id = "test-run-1"
+
+    resp = await api_token_client.post(f"/api/hb/{fp}/start?run_id={run_id}")
+    assert resp.status_code == 204  # noqa: PLR2004
+
+    row = await repo.fetch_one(
+        text("SELECT run_id, state, source, cron_fingerprint FROM cron_runs WHERE run_id = :rid"),
+        {"rid": run_id},
+    )
+    assert row is not None
+    assert row[0] == run_id
+    assert row[1] == "running"
+    assert row[2] == "wrapper"
+    assert row[3] == fp
+
+
+@pytest.mark.asyncio
+async def test_ok_with_run_id_closes_run_ok(
+    api_token_client: AsyncClient,
+    repo: SqliteRepository,
+    seeded_crons: SeededCrons,
+) -> None:
+    """start?run_id=r2 then ok?run_id=r2 closes the run as 'ok'."""
+    fp = seeded_crons.first.fingerprint
+    run_id = "r2"
+
+    await api_token_client.post(f"/api/hb/{fp}/start?run_id={run_id}")
+    resp = await api_token_client.post(f"/api/hb/{fp}/ok?run_id={run_id}&duration=3.5")
+    assert resp.status_code == 204  # noqa: PLR2004
+
+    row = await repo.fetch_one(
+        text(
+            "SELECT state, duration_seconds, exit_code, ended_at, vl_window_end "
+            "FROM cron_runs WHERE run_id = :rid"
+        ),
+        {"rid": run_id},
+    )
+    assert row is not None
+    assert row[0] == "ok"
+    assert float(row[1]) == 3.5  # noqa: PLR2004
+    assert int(row[2]) == 0  # default exit_code
+    assert row[3] is not None  # ended_at set
+    assert row[4] is not None  # vl_window_end set
+
+
+@pytest.mark.asyncio
+async def test_ok_with_run_id_and_explicit_exit_code(
+    api_token_client: AsyncClient,
+    repo: SqliteRepository,
+    seeded_crons: SeededCrons,
+) -> None:
+    """ok?run_id=r3&exit_code=0 stores the explicit exit code."""
+    fp = seeded_crons.first.fingerprint
+    run_id = "r3"
+
+    await api_token_client.post(f"/api/hb/{fp}/start?run_id={run_id}")
+    resp = await api_token_client.post(f"/api/hb/{fp}/ok?run_id={run_id}&exit_code=0")
+    assert resp.status_code == 204  # noqa: PLR2004
+
+    row = await repo.fetch_one(
+        text("SELECT exit_code FROM cron_runs WHERE run_id = :rid"),
+        {"rid": run_id},
+    )
+    assert row is not None
+    assert int(row[0]) == 0
+
+
+@pytest.mark.asyncio
+async def test_fail_with_run_id_closes_run_fail(
+    api_token_client: AsyncClient,
+    repo: SqliteRepository,
+    seeded_crons: SeededCrons,
+) -> None:
+    """start?run_id=r4 then fail?run_id=r4&exit_code=42 closes as 'fail'."""
+    fp = seeded_crons.first.fingerprint
+    run_id = "r4"
+
+    await api_token_client.post(f"/api/hb/{fp}/start?run_id={run_id}")
+    resp = await api_token_client.post(
+        f"/api/hb/{fp}/fail?run_id={run_id}&exit_code=42&duration=1.0"
+    )
+    assert resp.status_code == 204  # noqa: PLR2004
+
+    row = await repo.fetch_one(
+        text("SELECT state, exit_code FROM cron_runs WHERE run_id = :rid"),
+        {"rid": run_id},
+    )
+    assert row is not None
+    assert row[0] == "fail"
+    assert int(row[1]) == 42  # noqa: PLR2004
+
+
+@pytest.mark.asyncio
+async def test_ok_with_run_id_no_prior_start_upserts_closed_row(
+    api_token_client: AsyncClient,
+    repo: SqliteRepository,
+    seeded_crons: SeededCrons,
+) -> None:
+    """POST /ok?run_id=lost-1 without prior /start upserts a closed row."""
+    fp = seeded_crons.first.fingerprint
+    run_id = "lost-1"
+
+    resp = await api_token_client.post(f"/api/hb/{fp}/ok?run_id={run_id}&duration=2.0")
+    assert resp.status_code == 204  # noqa: PLR2004
+
+    row = await repo.fetch_one(
+        text("SELECT state, started_at, ended_at FROM cron_runs WHERE run_id = :rid"),
+        {"rid": run_id},
+    )
+    assert row is not None
+    assert row[0] == "ok"
+    # started_at = ended_at - 2.0 seconds
+    assert row[1] is not None
+    assert row[2] is not None
+
+
+@pytest.mark.asyncio
+async def test_start_with_duplicate_run_id_is_idempotent(
+    api_token_client: AsyncClient,
+    repo: SqliteRepository,
+    seeded_crons: SeededCrons,
+) -> None:
+    """POST /start?run_id=dup twice creates only one row."""
+    fp = seeded_crons.first.fingerprint
+    run_id = "dup"
+
+    await api_token_client.post(f"/api/hb/{fp}/start?run_id={run_id}")
+    await api_token_client.post(f"/api/hb/{fp}/start?run_id={run_id}")
+
+    rows = await repo.fetch_all(
+        text("SELECT COUNT(*) FROM cron_runs WHERE run_id = :rid"),
+        {"rid": run_id},
+    )
+    assert rows is not None
+    count = int(rows[0][0]) if rows else 0
+    assert count == 1
+
+
+@pytest.mark.asyncio
+async def test_start_without_run_id_creates_no_cron_run(
+    api_token_client: AsyncClient,
+    repo: SqliteRepository,
+    seeded_crons: SeededCrons,
+) -> None:
+    """POST /start (no run_id) creates no cron_runs row."""
+    fp = seeded_crons.first.fingerprint
+
+    await api_token_client.post(f"/api/hb/{fp}/start")
+
+    rows = await repo.fetch_all(
+        text("SELECT COUNT(*) FROM cron_runs WHERE cron_fingerprint = :fp"),
+        {"fp": fp},
+    )
+    count = int(rows[0][0]) if rows else 0
+    assert count == 0
+
+
+@pytest.mark.asyncio
+async def test_ok_without_run_id_creates_no_cron_run(
+    api_token_client: AsyncClient,
+    repo: SqliteRepository,
+    seeded_crons: SeededCrons,
+) -> None:
+    """POST /ok (no run_id) creates no cron_runs row."""
+    fp = seeded_crons.first.fingerprint
+
+    await api_token_client.post(f"/api/hb/{fp}/ok")
+
+    rows = await repo.fetch_all(
+        text("SELECT COUNT(*) FROM cron_runs WHERE cron_fingerprint = :fp"),
+        {"fp": fp},
+    )
+    count = int(rows[0][0]) if rows else 0
+    assert count == 0
+
+
+@pytest.mark.asyncio
+async def test_fail_without_run_id_creates_no_cron_run(
+    api_token_client: AsyncClient,
+    repo: SqliteRepository,
+    seeded_crons: SeededCrons,
+) -> None:
+    """POST /fail (no run_id) creates no cron_runs row."""
+    fp = seeded_crons.first.fingerprint
+
+    await api_token_client.post(f"/api/hb/{fp}/fail")
+
+    rows = await repo.fetch_all(
+        text("SELECT COUNT(*) FROM cron_runs WHERE cron_fingerprint = :fp"),
+        {"fp": fp},
+    )
+    count = int(rows[0][0]) if rows else 0
+    assert count == 0
+
+
+@pytest.mark.asyncio
+async def test_start_with_bad_charset_run_id_returns_422(
+    api_token_client: AsyncClient,
+    seeded_crons: SeededCrons,
+) -> None:
+    """POST /start?run_id=bad;value (semicolon) returns 422."""
+    fp = seeded_crons.first.fingerprint
+
+    resp = await api_token_client.post(f"/api/hb/{fp}/start?run_id=bad;value")
+    assert resp.status_code == 422  # noqa: PLR2004
+
+
+@pytest.mark.asyncio
+async def test_ok_with_overlong_run_id_returns_422(
+    api_token_client: AsyncClient,
+    seeded_crons: SeededCrons,
+) -> None:
+    """POST /ok?run_id=<65 chars> returns 422."""
+    fp = seeded_crons.first.fingerprint
+    long_id = "a" * 65
+
+    resp = await api_token_client.post(f"/api/hb/{fp}/ok?run_id={long_id}")
+    assert resp.status_code == 422  # noqa: PLR2004
+
+
+@pytest.mark.asyncio
+async def test_fail_with_whitespace_run_id_returns_422(
+    api_token_client: AsyncClient,
+    seeded_crons: SeededCrons,
+) -> None:
+    """POST /fail?run_id=has%20space returns 422."""
+    fp = seeded_crons.first.fingerprint
+
+    resp = await api_token_client.post(f"/api/hb/{fp}/fail?run_id=has%20space")
+    assert resp.status_code == 422  # noqa: PLR2004
+
+
+@pytest.mark.asyncio
+async def test_ok_with_valid_uuid_run_id_accepted(
+    api_token_client: AsyncClient,
+    seeded_crons: SeededCrons,
+) -> None:
+    """POST /ok?run_id=<36-char-UUID> accepts it."""
+    fp = seeded_crons.first.fingerprint
+    uuid_id = "123e4567-e89b-12d3-a456-426614174000"
+
+    resp = await api_token_client.post(f"/api/hb/{fp}/ok?run_id={uuid_id}")
+    assert resp.status_code == 204  # noqa: PLR2004
+
+
+@pytest.mark.asyncio
+async def test_run_id_422_writes_no_cron_run_row(
+    api_token_client: AsyncClient,
+    repo: SqliteRepository,
+    seeded_crons: SeededCrons,
+) -> None:
+    """A 422 on bad run_id doesn't create a cron_runs row."""
+    fp = seeded_crons.first.fingerprint
+
+    resp = await api_token_client.post(f"/api/hb/{fp}/start?run_id=bad;value")
+    assert resp.status_code == 422  # noqa: PLR2004
+
+    rows = await repo.fetch_all(
+        text("SELECT COUNT(*) FROM cron_runs WHERE cron_fingerprint = :fp"),
+        {"fp": fp},
+    )
+    count = int(rows[0][0]) if rows else 0
+    assert count == 0

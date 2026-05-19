@@ -43,6 +43,7 @@ EXPECTED_TABLES = {
     "suggestions",
     "tool_scorecards",
     "cron_log_cursors",
+    "cron_runs",
 }
 
 
@@ -779,5 +780,104 @@ async def test_migration_0014_round_trip(db_url: str) -> None:
         async with engine.connect() as conn:
             cols = await conn.run_sync(_hb_cols_at_head)
         assert "logscrape_runs_since_heartbeat" in cols
+    finally:
+        await engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# Migration 0015 — cron_runs table
+# ---------------------------------------------------------------------------
+
+
+async def test_migration_0015_cron_runs_table_present_at_head(
+    db_engine: AsyncEngine,
+) -> None:
+    """After head, cron_runs table exists with exactly 16 expected columns."""
+    expected_columns = {
+        "run_id",
+        "cron_fingerprint",
+        "source",
+        "state",
+        "started_at",
+        "ended_at",
+        "duration_seconds",
+        "exit_code",
+        "vl_window_start",
+        "vl_window_end",
+        "overlapping",
+        "enriched_at",
+        "line_count",
+        "byte_count",
+        "content_digest",
+        "anomaly_flags",
+    }
+
+    def _inspect_cron_runs(sync_conn: object) -> tuple[set[str], set[str]]:
+        ins = inspect(sync_conn)
+        assert ins is not None
+        cols = {c["name"] for c in ins.get_columns("cron_runs")}
+        pk = set(ins.get_pk_constraint("cron_runs").get("constrained_columns", []))
+        return cols, pk
+
+    async with db_engine.connect() as conn:
+        cols, pk = await conn.run_sync(_inspect_cron_runs)
+
+    assert cols == expected_columns
+    assert pk == {"run_id"}
+
+
+async def test_migration_0015_indexes_present_at_head(db_engine: AsyncEngine) -> None:
+    """After head, cron_runs has all 3 indexes including the partial one."""
+
+    async with db_engine.connect() as conn:
+        result = await conn.execute(text("PRAGMA index_list('cron_runs')"))
+        rows = result.fetchall()
+    # PRAGMA index_list columns: seq, name, unique, origin, partial
+    indexes = {row[1]: row for row in rows}
+
+    assert "ix_cron_runs_fingerprint_started" in indexes
+    assert "ix_cron_runs_enrich_queue" in indexes
+    assert "ix_cron_runs_fingerprint_state" in indexes
+
+    # ix_cron_runs_enrich_queue is partial (column 4 = partial flag)
+    enrich_queue_idx = indexes["ix_cron_runs_enrich_queue"]
+    assert enrich_queue_idx[4] == 1  # partial == 1
+
+
+async def test_migration_0015_round_trip(db_url: str) -> None:
+    """upgrade head -> downgrade 0014 -> upgrade head: table absent then present."""
+    cfg = Config()
+    cfg.set_main_option("script_location", str(ALEMBIC_DIR))
+    cfg.set_main_option("sqlalchemy.url", db_url)
+    command.upgrade(cfg, "head")
+    command.downgrade(cfg, "0014")
+
+    engine = get_engine(url=db_url)
+    try:
+
+        def _tables_at_0014(sync_conn: object) -> set[str]:
+            ins = inspect(sync_conn)
+            assert ins is not None
+            return set(ins.get_table_names())
+
+        async with engine.connect() as conn:
+            tables = await conn.run_sync(_tables_at_0014)
+        assert "cron_runs" not in tables
+    finally:
+        await engine.dispose()
+
+    # Re-upgrade: table should be back
+    command.upgrade(cfg, "head")
+    engine = get_engine(url=db_url)
+    try:
+
+        def _tables_at_head(sync_conn: object) -> set[str]:
+            ins = inspect(sync_conn)
+            assert ins is not None
+            return set(ins.get_table_names())
+
+        async with engine.connect() as conn:
+            tables = await conn.run_sync(_tables_at_head)
+        assert "cron_runs" in tables
     finally:
         await engine.dispose()

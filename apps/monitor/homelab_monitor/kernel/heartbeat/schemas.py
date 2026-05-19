@@ -9,6 +9,8 @@ Cap rationale:
   the metric range.
 - ``exit_code``: 0 .. 255 (POSIX ``waitpid`` truncates exit status to 8 bits).
   Anything outside is a malformed client payload.
+- ``run_id``: charset [A-Za-z0-9._-], length 1-64. Becomes the cron_runs
+  TEXT PRIMARY KEY; charset rejects quotes/semicolons/whitespace/control chars.
 """
 
 from __future__ import annotations
@@ -21,16 +23,28 @@ from fastapi import HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from pydantic_core import PydanticUndefined
 
+# run_id validation: client-supplied, becomes the cron_runs TEXT PRIMARY KEY.
+# Charset [A-Za-z0-9._-] comfortably fits a 36-char UUID
+# (/proc/sys/kernel/random/uuid) and a reasonable superset, while rejecting
+# quotes/semicolons/whitespace/control chars. A violation -> HTTP 422.
+_RUN_ID_PATTERN = r"^[A-Za-z0-9._-]+$"
+_RUN_ID_MAX_LEN = 64
+
 
 class HeartbeatStartQuery(BaseModel):
     """Query params for ``POST /api/hb/{cron_id}/start``.
 
-    Currently empty (``/start`` carries no run-context). Defined as a class so
-    that ``model_config = ConfigDict(extra='forbid')`` rejects rogue query
-    params with 422 — keeps the contract loud rather than silent.
+    ``run_id`` (optional) is the A-mode wrapper-generated run identifier — when
+    present, the receiver INSERTs a cron_runs row. Absent => legacy behavior.
     """
 
     model_config = ConfigDict(extra="forbid")
+    run_id: str | None = Field(
+        default=None,
+        pattern=_RUN_ID_PATTERN,
+        min_length=1,
+        max_length=_RUN_ID_MAX_LEN,
+    )
 
 
 class HeartbeatOkQuery(BaseModel):
@@ -38,6 +52,13 @@ class HeartbeatOkQuery(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     duration: float | None = Field(default=None, ge=0, le=86400)
+    run_id: str | None = Field(
+        default=None,
+        pattern=_RUN_ID_PATTERN,
+        min_length=1,
+        max_length=_RUN_ID_MAX_LEN,
+    )
+    exit_code: int | None = Field(default=None, ge=0, le=255)
 
 
 class HeartbeatFailQuery(BaseModel):
@@ -46,6 +67,12 @@ class HeartbeatFailQuery(BaseModel):
     model_config = ConfigDict(extra="forbid")
     duration: float | None = Field(default=None, ge=0, le=86400)
     exit_code: int | None = Field(default=None, ge=0, le=255)
+    run_id: str | None = Field(
+        default=None,
+        pattern=_RUN_ID_PATTERN,
+        min_length=1,
+        max_length=_RUN_ID_MAX_LEN,
+    )
 
 
 def query_model[T: BaseModel](model_cls: type[T]) -> Callable[..., Awaitable[T]]:
