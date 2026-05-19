@@ -199,3 +199,16 @@ When making changes to the cron inventory UI, re-verify:
 - [ ] `/api/logs/query` (refactored onto VictoriaLogsClient) returns the same response shape as before; bad input → 400, VL error → 502/degraded.
 - [ ] Prune respects the 30-day / 50k-per-cron retention bounds and does not delete recent rows.
 - [ ] Prod-rig (3b): rebuild the prod stack and confirm the reconciler enriches real B-mode `cron_runs` rows from the live Vector→VictoriaLogs pipeline (`line_count > 0` for crons that produce output).
+
+## STAGE-002-014 — Run-history API + run-log endpoint + anomaly heuristics v1
+
+- `make verify` GREEN: 100% kernel coverage, all backend + UI tests pass.
+- `GET /api/crons/{fingerprint}/runs` paginates correctly. Verify the compound `(started_at, run_id)` cursor regression: two runs with identical `started_at` and different `run_id` must NOT be dropped across a page boundary (paginate with `limit=1` and confirm both are returned).
+- `GET /api/crons/{fingerprint}/runs` `state` query param accepts only `running`/`ok`/`fail`/`unknown` (422 on any other value) and the returned items match the filter.
+- `GET /api/crons/{fingerprint}/runs/{run_id}/log` returns all FOUR response shapes correctly: `available` (200, entries populated for non-silent crons), `running` (200, VL upper bound substituted with `now()`), `expired` (200, `entries=[]`, no VL query), and 503 (`code="vl_unavailable"` when VictoriaLogs is unreachable).
+- Both new endpoints reject unauthenticated requests with 401 `unauthenticated`.
+- `GET /api/crons/{fingerprint}/runs/{run_id}/log` returns 404 (not the run's content) when the run belongs to a different cron — cross-cron leak prevention.
+- Anomaly evaluator (`kernel/cron/run_anomaly.py`): each of the 6 rules fires only when its threshold is crossed AND the cron has at least `min_history` completed runs. `content_digest` is NOT consumed in v1 (forward investment for EPIC-004).
+- The reconciler enrich phase calls the evaluator inside the existing per-run try/except — an evaluator bug must NOT poison the whole enrich phase.
+- `HOMELAB_MONITOR_CRON_ANOMALY_MIN_HISTORY` / `_ROLLING_WINDOW` / `_DURATION_K` / `_OUTPUT_BAND` env vars override the defaults (10 / 20 / 4.0 / 0.5). `HOMELAB_MONITOR_VL_RETENTION_DAYS` overrides the 30-day default.
+- Note: the run-log endpoint returns 503 `vl_unavailable` on VL failure; the generic `/api/logs/query` returns 502 `upstream_unavailable`. The asymmetry is deliberate per spec §8.2 — documented in the run-log endpoint's docstring. Do NOT "fix" by aligning them.
