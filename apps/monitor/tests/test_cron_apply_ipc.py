@@ -789,3 +789,47 @@ async def test_submit_and_wait_precheck_rejects_unwrap_op_invalid_target(
     assert exc_info.value.error_code == "bad_path"
     # No request file written
     assert list(requests_dir.glob("*.json")) == []
+
+
+# ---------------------------------------------------------------------------
+# STAGE-002-012: WriteWrapperEnvOp
+# ---------------------------------------------------------------------------
+
+
+def test_write_wrapper_env_op_payload() -> None:
+    """WriteWrapperEnvOp.to_payload() returns the expected dict."""
+    from homelab_monitor.kernel.cron.cron_apply_ipc import WriteWrapperEnvOp  # noqa: PLC0415
+
+    op = WriteWrapperEnvOp(content="HEARTBEAT_URL_BASE=https://monitor.example.com\n")
+    p = op.to_payload()
+    assert p == {
+        "operation": "write-wrapper-env",
+        "content": "HEARTBEAT_URL_BASE=https://monitor.example.com\n",
+    }
+
+
+def test_write_wrapper_env_op_no_path_key() -> None:
+    """WriteWrapperEnvOp payload must NOT carry path/target/target_crontab."""
+    from homelab_monitor.kernel.cron.cron_apply_ipc import WriteWrapperEnvOp  # noqa: PLC0415
+
+    op = WriteWrapperEnvOp(content="X=1\n")
+    p = op.to_payload()
+    assert "path" not in p
+    assert "target" not in p
+    assert "target_crontab" not in p
+
+
+@pytest.mark.asyncio
+async def test_submit_rejects_oversized_wrapper_env(tmp_path: Path) -> None:
+    """WriteWrapperEnvOp with content > 64 KiB → CronApplyRejectedError(bad_request)."""
+    from homelab_monitor.kernel.cron.cron_apply_ipc import WriteWrapperEnvOp  # noqa: PLC0415
+
+    base, requests_dir, _results_dir = _make_ipc_dirs(tmp_path)
+    oversized_content = "x" * (64 * 1024 + 1)
+    ops = [WriteWrapperEnvOp(content=oversized_content)]
+
+    with pytest.raises(CronApplyRejectedError) as exc_info:
+        await submit_and_wait(operations=ops, log=_null_log(), ipc_dir=base)
+
+    assert exc_info.value.error_code == "bad_request"
+    assert list(requests_dir.glob("*.json")) == []

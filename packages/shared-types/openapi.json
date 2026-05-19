@@ -900,7 +900,8 @@
             "enum": [
               "ok",
               "stale",
-              "unknown"
+              "unknown",
+              "format_outdated"
             ],
             "title": "Wrapper Health",
             "type": "string"
@@ -2589,7 +2590,7 @@
     },
     "/api/crons/wrapper-template": {
       "get": {
-        "description": "Return the raw cron heartbeat-wrapper script template (text/plain).\n\nServed so the standalone remote installer can fetch the canonical\ntemplate instead of embedding its own divergent copy. The template\ncarries no secrets; HEARTBEAT_WRITE scope is required for uniform API\nauthentication (the remote installer already holds that token).\n\nThe four placeholders ({{INSTALL_DATE}}, {{FINGERPRINT}},\n{{HEARTBEAT_URL_BASE}}, {{TOKEN_FILE_PATH}}) are substituted by the\ncaller, identically to install.py:_build_wrapper_content().",
+        "description": "Return the raw cron heartbeat-wrapper script template (text/plain).\n\nServed so the standalone remote installer can fetch the canonical\ntemplate instead of embedding its own divergent copy. The template\ncarries no secrets; HEARTBEAT_WRITE scope is required for uniform API\nauthentication (the remote installer already holds that token).\n\nThe three placeholders ({{TOKEN_FILE_PATH}}, {{WRAPPER_ENV_PATH}},\n{{WRAPPER_FORMAT_VERSION}}) are substituted by the caller (the wrapper is\ngeneric; additional substitution occurs downstream in install.py).",
         "operationId": "get_wrapper_template_api_crons_wrapper_template_get",
         "responses": {
           "200": {

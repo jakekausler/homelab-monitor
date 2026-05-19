@@ -21,6 +21,7 @@ from homelab_monitor.kernel.cron.cron_apply_ipc import (
     UnwrapCrontabOp,
     WrapCrontabOp,
     WriteTokenOp,
+    WriteWrapperEnvOp,
     WriteWrapperScriptOp,
     submit_and_wait,
 )
@@ -35,8 +36,13 @@ from homelab_monitor.kernel.cron.heartbeat_wrapper_token import (
 from homelab_monitor.kernel.cron.repository import CronRecord, CronRepo
 from homelab_monitor.kernel.cron.wrapper_constants import (
     TOKEN_FILE_PATH,
-    WRAPPER_INVOCATION_PREFIX,
+    WRAPPER_ENV_PATH,
+    WRAPPER_FORMAT_VERSION,
     WRAPPER_PATH,
+    WRAPPER_SEPARATOR,
+    build_invocation_prefix,
+    is_legacy_wrapped,
+    is_wrapped,
     unwrap_command,
 )
 from homelab_monitor.kernel.db.time import utc_now_iso
@@ -160,22 +166,32 @@ def _find_matching_line(
     host: str,
     source_path: str,
     fingerprint: str,
-) -> tuple[int, str, str, str]:
-    """Return (line_index, raw_line, schedule, inner_command) for the line whose
-    fingerprint matches. Raises CronLineNotFoundError if none match.
+) -> tuple[int, str, str, str, bool, str]:
+    """Return (line_index, raw_line, schedule, inner_command, line_is_wrapped, raw_command) for
+    the line whose fingerprint matches. Raises CronLineNotFoundError if none match.
 
     inner_command is the UNWRAPPED command — so fingerprint matching works
     whether the file currently shows the wrapped or unwrapped form. Matching
     uses compute_fingerprint(host, source_path, schedule, unwrap_command(cmd)).
+
+    line_is_wrapped is True iff the COMMAND PORTION of the matched line is a
+    wrapper invocation. It is computed via ``is_wrapped`` on the genuine
+    PRE-unwrap command (parsed with ``unwrap=False``) — NOT on the raw line,
+    which would always be False because ``is_wrapped`` is ``^``-anchored and the
+    wrapper path is never at the start of a crontab line (schedule/user precede it).
+
+    raw_command is the genuine PRE-unwrap command from the crontab line (the command
+    portion exactly as it appears on disk, before any unwrapping).
     """
     source_kind = _source_kind_from_path(source_path)
 
     for line_index, raw_line in enumerate(content.splitlines(keepends=False)):
-        parsed = parse_one_line(line=raw_line, source_kind=source_kind)
+        parsed = parse_one_line(line=raw_line, source_kind=source_kind, unwrap=False)
         if parsed is None:
             continue
 
         schedule, raw_command = parsed
+        line_is_wrapped = is_wrapped(raw_command)
         inner_command = unwrap_command(raw_command)
         fp = compute_fingerprint(
             host=host,
@@ -185,7 +201,7 @@ def _find_matching_line(
         )
 
         if fp == fingerprint:
-            return line_index, raw_line, schedule, inner_command
+            return line_index, raw_line, schedule, inner_command, line_is_wrapped, raw_command
 
     raise CronLineNotFoundError(f"no crontab line matches fingerprint {fingerprint}")
 
@@ -195,45 +211,52 @@ def _find_matching_line(
 
 def _rewrite_line(
     raw_line: str,
-    schedule: str,
     inner_command: str,
-    source_kind: CronSourceKind,
+    fingerprint: str,
 ) -> str:
     """Produce the wrapped replacement line.
 
-    Strategy: find inner_command as a substring at the END of raw_line and
-    replace it in-place with `WRAPPER_INVOCATION_PREFIX + inner_command`.
-    Preserves leading whitespace, the schedule field, and (for
-    SYSTEM_WITH_USER_FIELD) the USER column byte-exact — only the command tail
-    is rewritten. inner_command MUST be the LAST occurrence (rfind) since a
-    command can contain its own schedule-like substrings.
+    Handles TWO cases:
+    1. UNWRAPPED source line: find inner_command at the END (rfind) and prepend
+       the wrapper prefix.
+    2. LEGACY-wrapped source line: the line contains the segment
+       `<WRAPPER_PATH> -- <inner_command>`; this legacy segment must be
+       REPLACED (not just prepended) with the NEW format.
+
+    Preserves leading whitespace, the schedule field and (for system crontabs)
+    the USER column byte-exact — only the command tail is rewritten.
     """
+    legacy_segment = f"{WRAPPER_PATH} {WRAPPER_SEPARATOR} {inner_command}"
+    new_segment = build_invocation_prefix(fingerprint) + inner_command
+
+    # Try replacing the legacy segment (for format-migration re-wraps).
+    idx = raw_line.rfind(legacy_segment)
+    if idx >= 0:
+        return raw_line[:idx] + new_segment + raw_line[idx + len(legacy_segment) :]
+
+    # Fall back to the plain unwrapped case (rfind inner_command + prepend).
     idx = raw_line.rfind(inner_command)
     if idx < 0:  # defensive — parser extracted it from this line
         raise WrapperInstallError("internal: command not found in raw line")
-    return raw_line[:idx] + WRAPPER_INVOCATION_PREFIX + inner_command
+    return raw_line[:idx] + build_invocation_prefix(fingerprint) + inner_command
 
 
 # ---------- Wrapper content building ----------
 
 
-def _build_wrapper_content(
-    fingerprint: str,
-    public_url: str,
-    install_date: str,
-) -> str:
-    """Build the wrapper script with all 4 substitutions."""
+def _build_wrapper_content() -> str:
+    """Build the GENERIC wrapper script. Byte-identical for every cron — the
+    only substitutions are fixed constants (single-sourced from
+    wrapper_constants.py), so the rendered file is identical for all installs."""
     template_text = (
         files("homelab_monitor")
         .joinpath("data", "cron-with-heartbeat.sh.tmpl")
         .read_text(encoding="utf-8")
     )
-
     return (
-        template_text.replace("{{FINGERPRINT}}", fingerprint)
-        .replace("{{HEARTBEAT_URL_BASE}}", public_url)
-        .replace("{{TOKEN_FILE_PATH}}", TOKEN_FILE_PATH)
-        .replace("{{INSTALL_DATE}}", install_date)
+        template_text.replace("{{TOKEN_FILE_PATH}}", TOKEN_FILE_PATH)
+        .replace("{{WRAPPER_ENV_PATH}}", WRAPPER_ENV_PATH)
+        .replace("{{WRAPPER_FORMAT_VERSION}}", WRAPPER_FORMAT_VERSION)
     )
 
 
@@ -245,7 +268,6 @@ async def build_install_kit(
     *,
     host_root: Path,
     public_url: str,
-    install_date: str,
 ) -> WrapperInstallKit:
     """Pure-ish: resolve host paths, read the source crontab, find + match the
     line, build wrapper content + crontab diff. NO writes. Raises
@@ -266,20 +288,28 @@ async def build_install_kit(
 
     crontab_content = container_path.read_text(encoding="utf-8", errors="replace")
 
-    line_index, raw_line, schedule, inner_command = _find_matching_line(
+    (
+        line_index,
+        raw_line,
+        _schedule,
+        inner_command,
+        line_is_wrapped,
+        raw_command,
+    ) = _find_matching_line(
         content=crontab_content,
         host=cron.host,
         source_path=source_path,
         fingerprint=cron.fingerprint,
     )
 
-    if WRAPPER_INVOCATION_PREFIX in raw_line:
+    # A CURRENT-format wrapped line is rejected (genuinely already installed).
+    # A LEGACY-format wrapped line is allowed through (format-migration re-wrap).
+    if line_is_wrapped and not is_legacy_wrapped(raw_command):
         raise AlreadyWrappedError(f"crontab line is already wrapped for {cron.fingerprint}")
 
-    source_kind = _source_kind_from_path(source_path)
-    new_line = _rewrite_line(raw_line, schedule, inner_command, source_kind)
+    new_line = _rewrite_line(raw_line, inner_command, cron.fingerprint)
 
-    wrapper_content = _build_wrapper_content(cron.fingerprint, public_url, install_date)
+    wrapper_content = _build_wrapper_content()
 
     return WrapperInstallKit(
         fingerprint=cron.fingerprint,
@@ -323,7 +353,14 @@ async def build_uninstall_kit(
 
     crontab_content = container_path.read_text(encoding="utf-8", errors="replace")
 
-    line_index, raw_line, _schedule, inner_command = _find_matching_line(
+    (
+        line_index,
+        raw_line,
+        _schedule,
+        inner_command,
+        line_is_wrapped,
+        _raw_command,
+    ) = _find_matching_line(
         content=crontab_content,
         host=cron.host,
         source_path=source_path,
@@ -331,16 +368,20 @@ async def build_uninstall_kit(
     )
 
     # D6: gate on the crontab line itself — the crontab is ground truth.
-    if WRAPPER_INVOCATION_PREFIX not in raw_line:
+    if not line_is_wrapped:
         raise NotWrappedError(
             f"crontab line is not wrapped for {cron.fingerprint}; nothing to remove"
         )
 
-    # Re-derive the unwrapped line: strip the wrapper prefix in-place. The
-    # wrapped form is `<prefix-leading-ws><WRAPPER_INVOCATION_PREFIX><inner_command>`;
-    # removing exactly WRAPPER_INVOCATION_PREFIX restores the original line.
-    idx = raw_line.find(WRAPPER_INVOCATION_PREFIX)
-    new_line = raw_line[:idx] + raw_line[idx + len(WRAPPER_INVOCATION_PREFIX) :]
+    # Re-derive the unwrapped line: strip the wrapper prefix in-place by finding
+    # the prefix for this specific fingerprint and removing it.
+    prefix = build_invocation_prefix(cron.fingerprint)
+    idx = raw_line.find(prefix)
+    if idx < 0:
+        # The line is wrapped but with a DIFFERENT fingerprint argument than this
+        # cron's — should not happen (fingerprint match already passed). Defensive.
+        raise WrapperInstallError("internal: wrapper prefix not found in raw line")
+    new_line = raw_line[:idx] + raw_line[idx + len(prefix) :]
 
     return WrapperUninstallKit(
         fingerprint=cron.fingerprint,
@@ -376,12 +417,13 @@ async def install_wrapper_local(  # noqa: PLR0913 -- explicit DI (repos/log)
     2. Check host
     3. Build install kit (reads crontab, finds line, builds wrapper content)
     4. Ensure token exists
-    5. Build 3-operation request (wrapper-script, token, wrap-crontab)
+    5. Build 4-operation request (wrapper-script, token, wrapper-env, wrap-crontab)
     6. Submit to executor and wait for result
     7. Translate executor errors to typed errors
-    8. Upsert discovered (so row reflects wrapped line)
-    9. Audit record
-    10. Return refreshed cron
+    8. Set wrapper_format_version
+    9. Upsert discovered (so row reflects wrapped line)
+    10. Audit record
+    11. Return refreshed cron
 
     No host-side file I/O — all writes performed by the executor atomically
     with rollback. Errors before the IPC call (RemoteHostError,
@@ -398,10 +440,7 @@ async def install_wrapper_local(  # noqa: PLR0913 -- explicit DI (repos/log)
         raise RemoteHostError(f"cron is on host {cron.host!r}, not local {local_hostname!r}")
 
     # Step 3: Build install kit
-    install_date = utc_now_iso()[:10]
-    kit = await build_install_kit(
-        cron, host_root=host_root, public_url=public_url, install_date=install_date
-    )
+    kit = await build_install_kit(cron, host_root=host_root, public_url=public_url)
 
     # Step 4: Ensure token exists
     try:
@@ -410,9 +449,12 @@ async def install_wrapper_local(  # noqa: PLR0913 -- explicit DI (repos/log)
         raise CrontabWriteError(f"failed to ensure token: {exc}") from exc
 
     # Step 5: Build operation list (order matters: wrapper + token before wrap-crontab)
+    if "\n" in public_url or "\r" in public_url:
+        raise WrapperInstallError("public_url contains a newline — refusing to write wrapper.env")
     operations = [
         WriteWrapperScriptOp(content=kit.wrapper_content),
         WriteTokenOp(content=plaintext_token),
+        WriteWrapperEnvOp(content=f"HEARTBEAT_URL_BASE={public_url}\n"),
         WrapCrontabOp(
             target_crontab=kit.crontab_diff.source_path,
             old_line=kit.crontab_diff.old_line,
@@ -443,7 +485,10 @@ async def install_wrapper_local(  # noqa: PLR0913 -- explicit DI (repos/log)
 
     # Step 7: (No-op — executor already succeeded and rolled back on any failure)
 
-    # Step 8: Bump last_discovered_at so the registry's freshness reflects this
+    # Step 8: Record the installed wrapper's format version (D-FORMATVER).
+    await cron_repo.set_wrapper_format_version(fingerprint, WRAPPER_FORMAT_VERSION)
+
+    # Step 9: Bump last_discovered_at so the registry's freshness reflects this
     # operator-initiated touch; discovery re-converges on its next tick.
     await cron_repo.upsert_discovered(
         host=cron.host,
@@ -454,10 +499,10 @@ async def install_wrapper_local(  # noqa: PLR0913 -- explicit DI (repos/log)
         now=utc_now_iso(),
     )
 
-    # Step 9: Audit verb
+    # Step 10: Audit verb
     await cron_repo.record_wrapper_installed(fingerprint, who=who, ip=ip)
 
-    # Step 10: Return refreshed cron
+    # Step 11: Return refreshed cron
     updated_cron = await cron_repo.get_cron(fingerprint, include_hidden=True)
     if updated_cron is None:
         raise CrontabWriteError("cron disappeared after install")

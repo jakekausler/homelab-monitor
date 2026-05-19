@@ -372,20 +372,32 @@ function ActionsPanel({
           <>
             <hr className="border-border" />
             {/* Row 3: Wrapper health */}
-            <div className="flex items-center justify-between" data-testid="wrapper-health-row">
-              <div>
+            <div
+              className="flex items-start justify-between gap-3"
+              data-testid="wrapper-health-row"
+            >
+              <div className="min-w-0">
                 <p className="text-sm font-medium">Wrapper health</p>
                 <p className="text-xs text-muted-foreground">
-                  {wrapperHealth === 'stale'
-                    ? 'Log-scrape sees runs but the wrapper has not sent a heartbeat recently.'
-                    : 'The managed wrapper is sending heartbeats as expected.'}
+                  {wrapperHealth === 'format_outdated'
+                    ? 'This wrapper predates run-log capture. Re-install to enable per-run output capture.'
+                    : wrapperHealth === 'stale'
+                      ? 'Log-scrape sees runs but the wrapper has not sent a heartbeat recently.'
+                      : 'The managed wrapper is sending heartbeats as expected.'}
                 </p>
               </div>
               <Badge
-                variant={wrapperHealth === 'stale' ? 'warn' : 'ok'}
+                variant={
+                  wrapperHealth === 'stale' || wrapperHealth === 'format_outdated' ? 'warn' : 'ok'
+                }
                 data-testid="wrapper-health-badge"
+                className="shrink-0 whitespace-normal text-right"
               >
-                {wrapperHealth === 'stale' ? 'Stale' : 'OK'}
+                {wrapperHealth === 'format_outdated'
+                  ? 'Re-install to enable run logs'
+                  : wrapperHealth === 'stale'
+                    ? 'Stale'
+                    : 'OK'}
               </Badge>
             </div>
           </>

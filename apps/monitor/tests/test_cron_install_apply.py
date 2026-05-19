@@ -26,6 +26,7 @@ from homelab_monitor.kernel.cron.cron_apply_ipc import (
     CronApplyResult,
     WrapCrontabOp,
     WriteTokenOp,
+    WriteWrapperEnvOp,
     WriteWrapperScriptOp,
 )
 from homelab_monitor.kernel.cron.cron_apply_ipc import (
@@ -43,7 +44,8 @@ from homelab_monitor.kernel.cron.install import (
 )
 from homelab_monitor.kernel.cron.repository import CronRecord
 from homelab_monitor.kernel.cron.wrapper_constants import (
-    WRAPPER_INVOCATION_PREFIX,
+    WRAPPER_FORMAT_VERSION,
+    build_invocation_prefix,
 )
 
 # ---------------------------------------------------------------------------
@@ -85,6 +87,7 @@ def _make_cron_record(  # noqa: PLR0913 -- test factory mirrors every CronRecord
     soft_deleted_at: str | None = None,
     log_match_key: str | None = None,
     wrapper_installed: bool = False,
+    wrapper_format_version: str | None = None,
 ) -> CronRecord:
     return CronRecord(
         fingerprint=fingerprint,
@@ -106,6 +109,7 @@ def _make_cron_record(  # noqa: PLR0913 -- test factory mirrors every CronRecord
         soft_deleted_at=soft_deleted_at,
         log_match_key=log_match_key,
         wrapper_installed=wrapper_installed,
+        wrapper_format_version=wrapper_format_version,
     )
 
 
@@ -127,6 +131,7 @@ def _make_fake_repos(
     cron_repo.get_cron = AsyncMock(side_effect=[cron_record, updated_record or cron_record])
     cron_repo.upsert_discovered = AsyncMock(return_value=None)
     cron_repo.record_wrapper_installed = AsyncMock(return_value=None)
+    cron_repo.set_wrapper_format_version = AsyncMock(return_value=None)
 
     auth_repo = MagicMock()
     secrets_repo = MagicMock()
@@ -150,12 +155,13 @@ def _ok_result() -> CronApplyResult:
 
 
 @pytest.mark.asyncio
-async def test_install_calls_submit_and_wait_with_three_ops(tmp_path: Path) -> None:
-    """install_wrapper_local submits exactly 3 ops: WriteWrapperScriptOp,
-    WriteTokenOp, WrapCrontabOp."""
+async def test_install_calls_submit_and_wait_with_four_ops(tmp_path: Path) -> None:
+    """install_wrapper_local submits exactly 4 ops: WriteWrapperScriptOp,
+    WriteTokenOp, WriteWrapperEnvOp, WrapCrontabOp (STAGE-002-012)."""
     _make_crontab(tmp_path)
     cron = _make_cron_record()
     cron_repo, auth_repo, secrets_repo = _make_fake_repos(cron)
+    cron_repo.set_wrapper_format_version = AsyncMock(return_value=None)
 
     mock_submit = AsyncMock(return_value=_ok_result())
 
@@ -182,10 +188,11 @@ async def test_install_calls_submit_and_wait_with_three_ops(tmp_path: Path) -> N
     mock_submit.assert_awaited_once()
     _, kwargs = mock_submit.call_args
     ops = kwargs["operations"]
-    assert len(ops) == 3  # noqa: PLR2004
+    assert len(ops) == 4  # noqa: PLR2004
     assert isinstance(ops[0], WriteWrapperScriptOp)
     assert isinstance(ops[1], WriteTokenOp)
-    assert isinstance(ops[2], WrapCrontabOp)
+    assert isinstance(ops[2], WriteWrapperEnvOp)
+    assert isinstance(ops[3], WrapCrontabOp)
 
 
 @pytest.mark.asyncio
@@ -218,13 +225,13 @@ async def test_install_wrap_op_carries_kit_diff(tmp_path: Path) -> None:
         )
 
     _, kwargs = mock_submit.call_args
-    wrap_op = kwargs["operations"][2]
+    wrap_op = kwargs["operations"][3]  # index 3: WriteWrapperEnvOp now at [2]
     assert isinstance(wrap_op, WrapCrontabOp)
     assert wrap_op.target_crontab == _SOURCE_PATH
     assert _COMMAND in wrap_op.old_line
     assert wrap_op.command == _COMMAND
-    # I5: new_line must carry the wrapper-prefixed command
-    assert WRAPPER_INVOCATION_PREFIX + _COMMAND in wrap_op.new_line
+    # new_line must carry the fingerprint-prefixed command (STAGE-002-012)
+    assert build_invocation_prefix(_FINGERPRINT) + _COMMAND in wrap_op.new_line
 
 
 @pytest.mark.asyncio
@@ -260,11 +267,16 @@ async def test_install_wrapper_op_carries_wrapper_content(tmp_path: Path) -> Non
     _, kwargs = mock_submit.call_args
     script_op = kwargs["operations"][0]
     token_op = kwargs["operations"][1]
+    env_op = kwargs["operations"][2]
     assert isinstance(script_op, WriteWrapperScriptOp)
-    assert _FINGERPRINT in script_op.content
-    assert _PUBLIC_URL in script_op.content
+    # STAGE-002-012: generic wrapper — fingerprint and public URL are NOT baked in
+    assert _FINGERPRINT not in script_op.content
+    assert _PUBLIC_URL not in script_op.content
+    assert WRAPPER_FORMAT_VERSION in script_op.content
     assert isinstance(token_op, WriteTokenOp)
     assert token_op.content == "the-token"
+    assert isinstance(env_op, WriteWrapperEnvOp)
+    assert env_op.content == f"HEARTBEAT_URL_BASE={_PUBLIC_URL}\n"
 
 
 # ---------------------------------------------------------------------------
@@ -698,6 +710,7 @@ async def test_cron_disappears_after_install_raises(tmp_path: Path) -> None:
     cron_repo.get_cron = AsyncMock(side_effect=[cron, None])
     cron_repo.upsert_discovered = AsyncMock(return_value=None)
     cron_repo.record_wrapper_installed = AsyncMock(return_value=None)
+    cron_repo.set_wrapper_format_version = AsyncMock(return_value=None)
 
     auth_repo = MagicMock()
     secrets_repo = MagicMock()
@@ -727,6 +740,38 @@ async def test_cron_disappears_after_install_raises(tmp_path: Path) -> None:
         )
 
 
+@pytest.mark.asyncio
+async def test_install_public_url_with_newline_raises(tmp_path: Path) -> None:
+    """install_wrapper_local raises WrapperInstallError when public_url contains a newline."""
+    _make_crontab(tmp_path)
+    cron = _make_cron_record()
+    cron_repo, auth_repo, secrets_repo = _make_fake_repos(cron)
+
+    with (
+        patch(
+            "homelab_monitor.kernel.cron.install.ensure_heartbeat_wrapper_token",
+            new=AsyncMock(return_value="test-token"),
+        ),
+        patch(
+            "homelab_monitor.kernel.cron.install.submit_and_wait",
+            AsyncMock(return_value=_ok_result()),
+        ),
+        pytest.raises(WrapperInstallError, match="newline"),
+    ):
+        await install_wrapper_local(
+            _FINGERPRINT,
+            cron_repo=cron_repo,
+            auth_repo=auth_repo,
+            secrets_repo=secrets_repo,
+            host_root=tmp_path,
+            public_url="https://monitor.example.com\nmalicious",
+            local_hostname=_HOST,
+            who="test",
+            ip=None,
+            log=_null_log(),
+        )
+
+
 # ===========================================================================
 # STAGE-002-009A: build_uninstall_kit + uninstall_wrapper_local tests
 # ===========================================================================
@@ -743,11 +788,11 @@ from homelab_monitor.kernel.cron.install import (  # noqa: E402
 
 
 def _make_wrapped_crontab(tmp_path: Path) -> Path:
-    """Write /etc/crontab with a WRAPPED job line."""
+    """Write /etc/crontab with a WRAPPED job line (new fingerprint-prefix shape)."""
     etc = tmp_path / "etc"
     etc.mkdir(exist_ok=True)
     ct = etc / "crontab"
-    wrapped_cmd = WRAPPER_INVOCATION_PREFIX + _COMMAND
+    wrapped_cmd = build_invocation_prefix(_FINGERPRINT) + _COMMAND
     ct.write_text(f"# header\n{_SCHEDULE} root {wrapped_cmd}\n", encoding="utf-8")
     return ct
 
@@ -784,10 +829,10 @@ async def test_build_uninstall_kit_dry_run_produces_unwrap_diff(tmp_path: Path) 
 
     assert isinstance(kit, WrapperUninstallKit)
     assert kit.fingerprint == _FINGERPRINT
-    # old_line is the wrapped form
-    assert WRAPPER_INVOCATION_PREFIX in kit.crontab_diff.old_line
+    # old_line is the wrapped form (new fingerprint-prefix shape)
+    assert build_invocation_prefix(_FINGERPRINT) in kit.crontab_diff.old_line
     # new_line is the bare command — wrapper prefix stripped
-    assert WRAPPER_INVOCATION_PREFIX not in kit.crontab_diff.new_line
+    assert build_invocation_prefix(_FINGERPRINT) not in kit.crontab_diff.new_line
     assert _COMMAND in kit.crontab_diff.new_line
 
 
@@ -958,6 +1003,37 @@ async def test_build_uninstall_kit_missing_crontab_file_raises(tmp_path: Path) -
 
 
 @pytest.mark.asyncio
+async def test_build_uninstall_kit_mismatched_fingerprint_in_prefix_raises(
+    tmp_path: Path,
+) -> None:
+    """build_uninstall_kit raises WrapperInstallError when the line is wrapped but
+    carries a DIFFERENT fingerprint in the wrapper prefix than cron.fingerprint.
+
+    Covers install.py line 348 (defensive branch: idx < 0 after raw_line.find(prefix)).
+
+    The crontab line is wrapped with fp-B so _find_matching_line sees a valid
+    wrapper invocation, unwraps it to _COMMAND, fingerprints to _FINGERPRINT
+    (fp-A), and returns line_is_wrapped=True.  But build_invocation_prefix(fp-A)
+    is NOT in raw_line (fp-B is), so idx < 0 triggers the defensive raise.
+    """
+    other_fingerprint = "fp-B-other-fingerprint-mismatch"
+    # Build a crontab line wrapped for other_fingerprint so that:
+    #   unwrap_command(raw_command) == _COMMAND  → fingerprint == _FINGERPRINT
+    #   is_wrapped(raw_command) == True           → line_is_wrapped = True
+    #   build_invocation_prefix(_FINGERPRINT) not in raw_line → idx < 0
+    wrapped_cmd = build_invocation_prefix(other_fingerprint) + _COMMAND
+    etc = tmp_path / "etc"
+    etc.mkdir(exist_ok=True)
+    ct = etc / "crontab"
+    ct.write_text(f"# header\n{_SCHEDULE} root {wrapped_cmd}\n", encoding="utf-8")
+
+    cron = _make_cron_record()  # fingerprint == _FINGERPRINT
+
+    with pytest.raises(WrapperInstallError, match="internal: wrapper prefix not found in raw line"):
+        await build_uninstall_kit(cron, host_root=tmp_path)
+
+
+@pytest.mark.asyncio
 async def test_uninstall_wrapper_local_cron_not_found_raises(tmp_path: Path) -> None:
     """uninstall_wrapper_local with unknown fingerprint raises CronLineNotFoundError.
 
@@ -1071,3 +1147,113 @@ async def test_uninstall_cron_disappeared_after_uninstall_raises(tmp_path: Path)
             ip=None,
             log=_null_log(),
         )
+
+
+# ---------------------------------------------------------------------------
+# STAGE-002-012: new install assertions
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_install_sets_wrapper_format_version(tmp_path: Path) -> None:
+    """After install_wrapper_local succeeds, set_wrapper_format_version is called."""
+    _make_crontab(tmp_path)
+    cron = _make_cron_record()
+    cron_repo, auth_repo, secrets_repo = _make_fake_repos(cron)
+
+    mock_submit = AsyncMock(return_value=_ok_result())
+
+    with (
+        patch(
+            "homelab_monitor.kernel.cron.install.ensure_heartbeat_wrapper_token",
+            new=AsyncMock(return_value="test-token"),
+        ),
+        patch("homelab_monitor.kernel.cron.install.submit_and_wait", mock_submit),
+    ):
+        await install_wrapper_local(
+            _FINGERPRINT,
+            cron_repo=cron_repo,
+            auth_repo=auth_repo,
+            secrets_repo=secrets_repo,
+            host_root=tmp_path,
+            public_url=_PUBLIC_URL,
+            local_hostname=_HOST,
+            who="test",
+            ip=None,
+            log=_null_log(),
+        )
+
+    cron_repo.set_wrapper_format_version.assert_awaited_once_with(
+        _FINGERPRINT, WRAPPER_FORMAT_VERSION
+    )
+
+
+@pytest.mark.asyncio
+async def test_wrapper_env_op_content(tmp_path: Path) -> None:
+    """WriteWrapperEnvOp.content == 'HEARTBEAT_URL_BASE=<public_url>\\n'."""
+    _make_crontab(tmp_path)
+    cron = _make_cron_record()
+    cron_repo, auth_repo, secrets_repo = _make_fake_repos(cron)
+
+    mock_submit = AsyncMock(return_value=_ok_result())
+
+    with (
+        patch(
+            "homelab_monitor.kernel.cron.install.ensure_heartbeat_wrapper_token",
+            new=AsyncMock(return_value="t"),
+        ),
+        patch("homelab_monitor.kernel.cron.install.submit_and_wait", mock_submit),
+    ):
+        await install_wrapper_local(
+            _FINGERPRINT,
+            cron_repo=cron_repo,
+            auth_repo=auth_repo,
+            secrets_repo=secrets_repo,
+            host_root=tmp_path,
+            public_url=_PUBLIC_URL,
+            local_hostname=_HOST,
+            who="test",
+            ip=None,
+            log=_null_log(),
+        )
+
+    _, kwargs = mock_submit.call_args
+    env_op = kwargs["operations"][2]
+    assert isinstance(env_op, WriteWrapperEnvOp)
+    assert env_op.content == f"HEARTBEAT_URL_BASE={_PUBLIC_URL}\n"
+
+
+@pytest.mark.asyncio
+async def test_wrap_op_new_line_uses_fingerprint_prefix(tmp_path: Path) -> None:
+    """WrapCrontabOp.new_line uses build_invocation_prefix(fingerprint) + command."""
+    _make_crontab(tmp_path)
+    cron = _make_cron_record()
+    cron_repo, auth_repo, secrets_repo = _make_fake_repos(cron)
+
+    mock_submit = AsyncMock(return_value=_ok_result())
+
+    with (
+        patch(
+            "homelab_monitor.kernel.cron.install.ensure_heartbeat_wrapper_token",
+            new=AsyncMock(return_value="t"),
+        ),
+        patch("homelab_monitor.kernel.cron.install.submit_and_wait", mock_submit),
+    ):
+        await install_wrapper_local(
+            _FINGERPRINT,
+            cron_repo=cron_repo,
+            auth_repo=auth_repo,
+            secrets_repo=secrets_repo,
+            host_root=tmp_path,
+            public_url=_PUBLIC_URL,
+            local_hostname=_HOST,
+            who="test",
+            ip=None,
+            log=_null_log(),
+        )
+
+    _, kwargs = mock_submit.call_args
+    wrap_op = kwargs["operations"][3]
+    assert isinstance(wrap_op, WrapCrontabOp)
+    expected_prefix = build_invocation_prefix(_FINGERPRINT)
+    assert wrap_op.new_line.endswith(expected_prefix + _COMMAND)

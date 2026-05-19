@@ -31,8 +31,10 @@ from homelab_monitor.kernel.cron.install import (
 from homelab_monitor.kernel.cron.repository import CronRecord
 from homelab_monitor.kernel.cron.wrapper_constants import (
     TOKEN_FILE_PATH,
-    WRAPPER_INVOCATION_PREFIX,
     WRAPPER_PATH,
+    WRAPPER_SEPARATOR,
+    build_invocation_prefix,
+    is_legacy_wrapped,
     is_wrapped,
 )
 
@@ -70,6 +72,7 @@ def _make_cron_record(  # noqa: PLR0913 -- test factory mirrors every CronRecord
     soft_deleted_at: str | None = None,
     log_match_key: str | None = None,
     wrapper_installed: bool = False,
+    wrapper_format_version: str | None = None,
 ) -> CronRecord:
     """Build a minimal CronRecord for testing."""
     return CronRecord(
@@ -92,6 +95,7 @@ def _make_cron_record(  # noqa: PLR0913 -- test factory mirrors every CronRecord
         soft_deleted_at=soft_deleted_at,
         log_match_key=log_match_key,
         wrapper_installed=wrapper_installed,
+        wrapper_format_version=wrapper_format_version,
     )
 
 
@@ -132,7 +136,7 @@ def test_resolve_unrecognized_raises() -> None:
 
 def test_find_matching_line_system_crontab() -> None:
     content = f"# comment\n{_SCHEDULE} root {_COMMAND}\n"
-    idx, _raw, sched, inner = _find_matching_line(
+    idx, _raw_line, sched, inner, _line_is_wrapped, _raw_command = _find_matching_line(
         content=content,
         host=_HOST,
         source_path=_SOURCE_PATH,
@@ -152,7 +156,7 @@ def test_find_matching_line_user_crontab() -> None:
         command=_COMMAND,
     )
     content = f"# comment\n{_SCHEDULE} {_COMMAND}\n"
-    idx, _raw, _sched, inner = _find_matching_line(
+    idx, _raw_line, _sched, inner, _line_is_wrapped, _raw_command = _find_matching_line(
         content=content,
         host=_HOST,
         source_path=source_path,
@@ -167,7 +171,7 @@ def test_find_matching_line_iterates_past_non_matching() -> None:
     # Two valid job lines; only the second matches the fingerprint
     # The first line is parseable but fingerprint != _FINGERPRINT
     content = f"{_SCHEDULE} root /usr/bin/other\n{_SCHEDULE} root {_COMMAND}\n"
-    idx, _raw, _sched, inner = _find_matching_line(
+    idx, _raw_line, _sched, inner, _line_is_wrapped, _raw_command = _find_matching_line(
         content=content,
         host=_HOST,
         source_path=_SOURCE_PATH,
@@ -189,16 +193,16 @@ def test_find_matching_line_not_found_raises() -> None:
 
 def test_find_matching_line_finds_wrapped_via_unwrap() -> None:
     """_find_matching_line finds a wrapped line by matching the inner fingerprint."""
-    wrapped_cmd = WRAPPER_INVOCATION_PREFIX + _COMMAND
+    wrapped_cmd = build_invocation_prefix(_FINGERPRINT) + _COMMAND
     content = f"# comment\n{_SCHEDULE} root {wrapped_cmd}\n"
-    _idx, raw, _sched, inner = _find_matching_line(
+    _idx, raw_line, _sched, inner, _line_is_wrapped, _raw_command = _find_matching_line(
         content=content,
         host=_HOST,
         source_path=_SOURCE_PATH,
         fingerprint=_FINGERPRINT,
     )
     assert inner == _COMMAND
-    assert is_wrapped(raw.split(None, 2)[-1]) or wrapped_cmd in raw
+    assert is_wrapped(raw_line.split(None, 2)[-1]) or wrapped_cmd in raw_line
 
 
 # ---------------------------------------------------------------------------
@@ -207,17 +211,18 @@ def test_find_matching_line_finds_wrapped_via_unwrap() -> None:
 
 
 def test_rewrite_line_system_crontab() -> None:
+    """_rewrite_line inserts the fingerprint-prefixed invocation before the command."""
     raw = f"{_SCHEDULE} root {_COMMAND}"
-    new = _rewrite_line(raw, _SCHEDULE, _COMMAND, CronSourceKind.SYSTEM_WITH_USER_FIELD)
-    assert new.endswith(WRAPPER_INVOCATION_PREFIX + _COMMAND)
+    new = _rewrite_line(raw, _COMMAND, _FINGERPRINT)
+    assert new.endswith(build_invocation_prefix(_FINGERPRINT) + _COMMAND)
     # Prefix of line (schedule + user) preserved
     assert new.startswith(f"{_SCHEDULE} root ")
 
 
 def test_rewrite_line_user_crontab() -> None:
     raw = f"{_SCHEDULE} {_COMMAND}"
-    new = _rewrite_line(raw, _SCHEDULE, _COMMAND, CronSourceKind.USER_CRONTAB)
-    assert new.endswith(WRAPPER_INVOCATION_PREFIX + _COMMAND)
+    new = _rewrite_line(raw, _COMMAND, _FINGERPRINT)
+    assert new.endswith(build_invocation_prefix(_FINGERPRINT) + _COMMAND)
     assert new.startswith(f"{_SCHEDULE} ")
 
 
@@ -226,9 +231,8 @@ def test_rewrite_line_command_not_in_raw_raises() -> None:
     with pytest.raises(WrapperInstallError, match="internal"):
         _rewrite_line(
             "* * * * * root /other/command",
-            _SCHEDULE,
-            _COMMAND,
-            CronSourceKind.SYSTEM_WITH_USER_FIELD,
+            _COMMAND,  # _COMMAND is not in this raw line
+            _FINGERPRINT,
         )
 
 
@@ -251,20 +255,21 @@ async def test_build_install_kit_produces_correct_diff(tmp_path: Path) -> None:
         cron,
         host_root=tmp_path,
         public_url="https://monitor.example.com",
-        install_date="2024-01-15",
     )
 
     assert kit.fingerprint == _FINGERPRINT
     assert kit.wrapper_path == WRAPPER_PATH
     assert kit.token_file_path == TOKEN_FILE_PATH
-    assert _FINGERPRINT in kit.wrapper_content
-    assert "https://monitor.example.com" in kit.wrapper_content
-    assert "2024-01-15" in kit.wrapper_content
+    # STAGE-002-012: generic wrapper — fingerprint and public URL NOT baked in
+    assert _FINGERPRINT not in kit.wrapper_content
+    assert "https://monitor.example.com" not in kit.wrapper_content
+    # The format version IS baked in (constant placeholder substitution)
+    assert "1.0.0" in kit.wrapper_content
 
     diff = kit.crontab_diff
     assert diff.source_path == _SOURCE_PATH
     assert diff.old_line.strip().endswith(_COMMAND)
-    assert WRAPPER_INVOCATION_PREFIX in diff.new_line
+    assert build_invocation_prefix(_FINGERPRINT) in diff.new_line
     assert _COMMAND in diff.new_line
     assert diff.line_index == 1
 
@@ -294,10 +299,9 @@ async def test_build_install_kit_user_crontab(
         cron,
         host_root=tmp_path,
         public_url="https://monitor.example.com",
-        install_date="2024-01-15",
     )
     assert kit.fingerprint == fp
-    assert WRAPPER_INVOCATION_PREFIX in kit.crontab_diff.new_line
+    assert build_invocation_prefix(fp) in kit.crontab_diff.new_line
 
 
 @pytest.mark.asyncio
@@ -309,7 +313,6 @@ async def test_build_install_kit_file_not_found_raises(tmp_path: Path) -> None:
             cron,
             host_root=tmp_path,
             public_url="https://monitor.example.com",
-            install_date="2024-01-15",
         )
 
 
@@ -327,7 +330,6 @@ async def test_build_install_kit_line_not_found_raises(tmp_path: Path) -> None:
             cron,
             host_root=tmp_path,
             public_url="https://monitor.example.com",
-            install_date="2024-01-15",
         )
 
 
@@ -336,7 +338,7 @@ async def test_build_install_kit_already_wrapped_raises(tmp_path: Path) -> None:
     """build_install_kit raises AlreadyWrappedError if line is already wrapped."""
     etc_dir = tmp_path / "etc"
     etc_dir.mkdir()
-    wrapped_cmd = WRAPPER_INVOCATION_PREFIX + _COMMAND
+    wrapped_cmd = build_invocation_prefix(_FINGERPRINT) + _COMMAND
     crontab_file = etc_dir / "crontab"
     crontab_file.write_text(f"{_SCHEDULE} root {wrapped_cmd}\n")
 
@@ -346,7 +348,6 @@ async def test_build_install_kit_already_wrapped_raises(tmp_path: Path) -> None:
             cron,
             host_root=tmp_path,
             public_url="https://monitor.example.com",
-            install_date="2024-01-15",
         )
 
 
@@ -359,7 +360,7 @@ def test_parse_one_line_unwraps_wrapped_command() -> None:
     """parse_one_line returns the INNER (unwrapped) command for a wrapped line."""
     from homelab_monitor.plugins.discoverers.cron_parser import parse_one_line  # noqa: PLC0415
 
-    wrapped_cmd = WRAPPER_INVOCATION_PREFIX + _COMMAND
+    wrapped_cmd = build_invocation_prefix(_FINGERPRINT) + _COMMAND
     # System crontab line: schedule + user + wrapped_cmd
     raw_line = f"{_SCHEDULE} root {wrapped_cmd}"
     result = parse_one_line(line=raw_line, source_kind=CronSourceKind.SYSTEM_WITH_USER_FIELD)
@@ -384,7 +385,7 @@ def test_fingerprint_round_trip_wrapped_equals_unwrapped() -> None:
     )
 
     # Simulate the wrapped crontab line
-    wrapped_cmd = WRAPPER_INVOCATION_PREFIX + inner_command
+    wrapped_cmd = build_invocation_prefix(_FINGERPRINT) + inner_command
     raw_line = f"{_SCHEDULE} root {wrapped_cmd}"
 
     # Parse via discoverer (same path as cron discovery)
@@ -410,7 +411,6 @@ async def test_build_install_kit_source_path_none_raises(tmp_path: Path) -> None
             cron,
             host_root=tmp_path,
             public_url="https://monitor.example.com",
-            install_date="2024-01-15",
         )
 
 
@@ -424,7 +424,7 @@ def test_fingerprint_round_trip_user_crontab() -> None:
         host=_HOST, source_path=source_path, schedule=_SCHEDULE, command=inner_command
     )
 
-    wrapped_cmd = WRAPPER_INVOCATION_PREFIX + inner_command
+    wrapped_cmd = build_invocation_prefix(_FINGERPRINT) + inner_command
     raw_line = f"{_SCHEDULE} {wrapped_cmd}"
 
     result = parse_one_line(line=raw_line, source_kind=CronSourceKind.USER_CRONTAB)
@@ -435,3 +435,108 @@ def test_fingerprint_round_trip_user_crontab() -> None:
         host=_HOST, source_path=source_path, schedule=parsed_schedule, command=parsed_command
     )
     assert fp_after == fp_original
+
+
+# ---------------------------------------------------------------------------
+# LEGACY-format support (STAGE-002-012 format-migration)
+# ---------------------------------------------------------------------------
+
+
+def test_find_matching_line_legacy_wrapped() -> None:
+    """_find_matching_line finds a legacy-wrapped line by matching the inner fingerprint."""
+    legacy_cmd = f"{WRAPPER_PATH} {WRAPPER_SEPARATOR} {_COMMAND}"
+    content = f"# comment\n{_SCHEDULE} root {legacy_cmd}\n"
+    _idx, _raw_line, _sched, inner, _line_is_wrapped, raw_cmd = _find_matching_line(
+        content=content,
+        host=_HOST,
+        source_path=_SOURCE_PATH,
+        fingerprint=_FINGERPRINT,
+    )
+    assert inner == _COMMAND
+    assert is_legacy_wrapped(raw_cmd)
+    assert raw_cmd == legacy_cmd
+
+
+def test_rewrite_line_legacy_wrapped() -> None:
+    """_rewrite_line replaces LEGACY-format segment with NEW format."""
+    legacy_cmd = f"{WRAPPER_PATH} {WRAPPER_SEPARATOR} {_COMMAND}"
+    raw = f"{_SCHEDULE} root {legacy_cmd}"
+    new = _rewrite_line(raw, _COMMAND, _FINGERPRINT)
+    # Should NOT contain the legacy `-- ` prefix
+    assert f"{WRAPPER_PATH} {WRAPPER_SEPARATOR}" not in new
+    # Should contain the NEW format prefix
+    assert build_invocation_prefix(_FINGERPRINT) in new
+    # Should end with the NEW-format wrapped command
+    assert new.endswith(build_invocation_prefix(_FINGERPRINT) + _COMMAND)
+    # Prefix of line (schedule + user) preserved
+    assert new.startswith(f"{_SCHEDULE} root ")
+    # No double-wrapper
+    assert new.count(WRAPPER_PATH) == 1
+
+
+@pytest.mark.asyncio
+async def test_build_install_kit_legacy_wrapped_allowed(tmp_path: Path) -> None:
+    """build_install_kit allows re-wrapping a LEGACY-format wrapped line (format-migration)."""
+    etc_dir = tmp_path / "etc"
+    etc_dir.mkdir()
+    legacy_cmd = f"{WRAPPER_PATH} {WRAPPER_SEPARATOR} {_COMMAND}"
+    crontab_file = etc_dir / "crontab"
+    crontab_file.write_text(f"{_SCHEDULE} root {legacy_cmd}\n")
+
+    cron = _make_cron_record()
+    # Should NOT raise AlreadyWrappedError (legacy re-wrap is allowed)
+    kit = await build_install_kit(
+        cron,
+        host_root=tmp_path,
+        public_url="https://monitor.example.com",
+    )
+
+    assert kit.fingerprint == _FINGERPRINT
+    diff = kit.crontab_diff
+    # old_line is the legacy-wrapped version
+    assert legacy_cmd in diff.old_line
+    # new_line is the NEW-format wrapped version
+    assert build_invocation_prefix(_FINGERPRINT) in diff.new_line
+    assert _COMMAND in diff.new_line
+    # No double wrapper
+    assert diff.new_line.count(WRAPPER_PATH) == 1
+
+
+@pytest.mark.asyncio
+async def test_build_install_kit_new_format_wrapped_still_raises(tmp_path: Path) -> None:
+    """build_install_kit still raises AlreadyWrappedError for NEW-format wrapped (regression)."""
+    etc_dir = tmp_path / "etc"
+    etc_dir.mkdir()
+    wrapped_cmd = build_invocation_prefix(_FINGERPRINT) + _COMMAND
+    crontab_file = etc_dir / "crontab"
+    crontab_file.write_text(f"{_SCHEDULE} root {wrapped_cmd}\n")
+
+    cron = _make_cron_record()
+    # Should raise AlreadyWrappedError (genuinely already wrapped)
+    with pytest.raises(AlreadyWrappedError):
+        await build_install_kit(
+            cron,
+            host_root=tmp_path,
+            public_url="https://monitor.example.com",
+        )
+
+
+@pytest.mark.asyncio
+async def test_build_install_kit_unwrapped_still_works(tmp_path: Path) -> None:
+    """build_install_kit works for unwrapped crons (regression)."""
+    etc_dir = tmp_path / "etc"
+    etc_dir.mkdir()
+    crontab_file = etc_dir / "crontab"
+    crontab_file.write_text(f"{_SCHEDULE} root {_COMMAND}\n")
+
+    cron = _make_cron_record()
+    kit = await build_install_kit(
+        cron,
+        host_root=tmp_path,
+        public_url="https://monitor.example.com",
+    )
+
+    assert kit.fingerprint == _FINGERPRINT
+    diff = kit.crontab_diff
+    assert diff.old_line.strip().endswith(_COMMAND)
+    assert build_invocation_prefix(_FINGERPRINT) in diff.new_line

@@ -160,9 +160,7 @@ async def _cmd_install_wrapper(fingerprint: str, confirm: bool) -> int:  # noqa:
 
         # Dry-run: build install kit and print preview
         if not confirm:
-            kit = await build_install_kit(
-                cron, host_root=host_root, public_url=public_url, install_date=""
-            )
+            kit = await build_install_kit(cron, host_root=host_root, public_url=public_url)
             print("=== Wrapper script ===")
             print(kit.wrapper_content)
             print("\n=== Crontab diff ===")

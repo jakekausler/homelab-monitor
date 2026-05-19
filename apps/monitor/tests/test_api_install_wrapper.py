@@ -28,7 +28,10 @@ from httpx import AsyncClient
 from sqlalchemy import text
 
 from homelab_monitor.kernel.cron.fingerprint import compute_fingerprint
-from homelab_monitor.kernel.cron.wrapper_constants import WRAPPER_INVOCATION_PREFIX
+from homelab_monitor.kernel.cron.wrapper_constants import (
+    WRAPPER_PATH,
+    build_invocation_prefix,
+)
 from homelab_monitor.kernel.db.repository import SqliteRepository
 from homelab_monitor.kernel.db.time import utc_now_iso
 
@@ -42,6 +45,10 @@ _SCHEDULE = "*/5 * * * *"
 _COMMAND = "/usr/bin/backup.sh --full"
 _SOURCE_PATH = "/etc/crontab"
 _PUBLIC_URL = "https://monitor.example.com"
+# Pre-computed fingerprint matching the default _seed_cron args
+_FP = compute_fingerprint(
+    host=_HOST, source_path=_SOURCE_PATH, schedule=_SCHEDULE, command=_COMMAND
+)
 
 
 def _csrf(client: AsyncClient) -> dict[str, str]:
@@ -236,7 +243,7 @@ async def test_install_wrapper_dry_run_already_wrapped(
     monkeypatch.setenv("HM_CRON_HOST_ROOT", str(tmp_path))
     monkeypatch.setenv("HM_HOST_HOSTNAME", _HOST)
 
-    wrapped_cmd = WRAPPER_INVOCATION_PREFIX + _COMMAND
+    wrapped_cmd = build_invocation_prefix(_FP) + _COMMAND
     (tmp_path / "etc").mkdir(exist_ok=True)
     (tmp_path / "etc" / "crontab").write_text(f"{_SCHEDULE} root {wrapped_cmd}\n")
 
@@ -279,10 +286,10 @@ async def test_install_wrapper_dry_run_preview(
     assert resp.status_code == 200  # noqa: PLR2004
     data = resp.json()
     assert data["fingerprint"] == fp
-    assert WRAPPER_INVOCATION_PREFIX in data["crontab_diff"]["new_line"]
+    assert WRAPPER_PATH in data["crontab_diff"]["new_line"]
     assert _COMMAND in data["crontab_diff"]["old_line"]
     assert data["wrapper_path"] is not None
-    assert _PUBLIC_URL in data["wrapper_content"]
+    assert data["wrapper_content"].startswith("#!/bin/sh")
 
     # No wrapper_last_seen_at should be set yet (dry-run)
     row = await repo.fetch_one(
@@ -339,6 +346,7 @@ async def test_install_wrapper_confirm_success(
         soft_deleted_at=None,
         log_match_key=None,
         wrapper_installed=True,
+        wrapper_format_version=None,
     )
 
     with patch(
@@ -814,6 +822,7 @@ async def test_install_wrapper_confirm_result_wrapper_last_seen_at_is_null(
         soft_deleted_at=None,
         log_match_key=None,
         wrapper_installed=False,
+        wrapper_format_version=None,
     )
 
     with patch(
@@ -841,16 +850,15 @@ async def test_install_wrapper_confirm_result_wrapper_last_seen_at_is_null(
 async def test_get_wrapper_template_200_text_plain(
     api_token_client: AsyncClient,
 ) -> None:
-    """GET /wrapper-template with HEARTBEAT_WRITE token → 200 text/plain with all 4 placeholders."""
+    """GET /wrapper-template with HEARTBEAT_WRITE token → 200 text/plain with all 3 placeholders."""
     resp = await api_token_client.get("/api/crons/wrapper-template")
     assert resp.status_code == 200  # noqa: PLR2004
     assert "text/plain" in resp.headers.get("content-type", "")
     body = resp.text
-    # All four placeholders must be present (unsubstituted — raw template)
-    assert "{{INSTALL_DATE}}" in body
-    assert "{{FINGERPRINT}}" in body
-    assert "{{HEARTBEAT_URL_BASE}}" in body
+    # All three placeholders must be present (unsubstituted — raw template)
+    assert "{{WRAPPER_FORMAT_VERSION}}" in body
     assert "{{TOKEN_FILE_PATH}}" in body
+    assert "{{WRAPPER_ENV_PATH}}" in body
 
 
 @pytest.mark.asyncio
@@ -914,7 +922,7 @@ async def test_wrapper_template_route_not_shadowed_by_fingerprint(
     # Must be 200 — not 404 (which would indicate route shadowing)
     assert resp.status_code == 200  # noqa: PLR2004
     # Content must be the template text, not a JSON error
-    assert "{{FINGERPRINT}}" in resp.text
+    assert "{{WRAPPER_FORMAT_VERSION}}" in resp.text
 
 
 # ===========================================================================
@@ -929,7 +937,10 @@ def _make_fake_wrapped_crontab(
     etc = tmp_path / "etc"
     etc.mkdir(exist_ok=True)
     ct = etc / "crontab"
-    wrapped_cmd = WRAPPER_INVOCATION_PREFIX + command
+    fp = compute_fingerprint(
+        host=_HOST, source_path=_SOURCE_PATH, schedule=schedule, command=command
+    )
+    wrapped_cmd = build_invocation_prefix(fp) + command
     ct.write_text(f"# header\n{schedule} root {wrapped_cmd}\n")
     return tmp_path
 
@@ -1086,8 +1097,8 @@ async def test_uninstall_wrapper_dry_run_returns_preview(
     assert "old_line" in diff
     assert "new_line" in diff
     # old_line contains the wrapper prefix; new_line does not
-    assert WRAPPER_INVOCATION_PREFIX in diff["old_line"]
-    assert WRAPPER_INVOCATION_PREFIX not in diff["new_line"]
+    assert WRAPPER_PATH in diff["old_line"]
+    assert WRAPPER_PATH not in diff["new_line"]
 
 
 # ---------------------------------------------------------------------------
@@ -1324,6 +1335,7 @@ async def test_uninstall_wrapper_confirm_success_returns_200(
         soft_deleted_at=None,
         log_match_key=None,
         wrapper_installed=False,
+        wrapper_format_version=None,
     )
 
     with patch(

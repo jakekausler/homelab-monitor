@@ -7,7 +7,9 @@ import pytest
 from homelab_monitor.kernel.cron.discovery_types import CronSourceKind
 from homelab_monitor.kernel.cron.fingerprint import compute_fingerprint
 from homelab_monitor.kernel.cron.wrapper_constants import (
-    WRAPPER_INVOCATION_PREFIX,
+    WRAPPER_PATH,
+    WRAPPER_SEPARATOR,
+    build_invocation_prefix,
 )
 from homelab_monitor.plugins.discoverers.cron_parser import (
     parse_cron_file,
@@ -252,7 +254,7 @@ def test_fingerprint_unchanged_after_install_and_uninstall() -> None:
 
     # Simulate parsing a WRAPPED line — parser calls unwrap_command internally.
     # parse_one_line returns (schedule, command) tuple — not a named object.
-    wrapped_command = WRAPPER_INVOCATION_PREFIX + bare_command
+    wrapped_command = build_invocation_prefix(fp_before) + bare_command
     wrapped_line = f"{schedule} root {wrapped_command}"
     parsed = parse_one_line(line=wrapped_line, source_kind=CronSourceKind.SYSTEM_WITH_USER_FIELD)
     assert parsed is not None, "Parser returned None for wrapped line"
@@ -272,3 +274,66 @@ def test_fingerprint_unchanged_after_install_and_uninstall() -> None:
     assert fp_before == fp_after, (
         f"Fingerprint changed after uninstall: {fp_before!r} != {fp_after!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# LEGACY-format discovery (STAGE-002-012 format-migration)
+# ---------------------------------------------------------------------------
+
+
+def test_parse_cron_file_legacy_wrapped_line() -> None:
+    """parse_cron_file recognizes LEGACY-wrapped line, is_wrapped=True."""
+    from homelab_monitor.plugins.discoverers.cron_parser import parse_cron_file  # noqa: PLC0415
+
+    bare_command = "/usr/bin/myjob.sh"
+    legacy_wrapped = f"{WRAPPER_PATH} {WRAPPER_SEPARATOR} {bare_command}"
+    schedule = "*/10 * * * *"
+    content = f"{schedule} root {legacy_wrapped}\n"
+
+    entries, errors = parse_cron_file(
+        content=content,
+        source_kind=CronSourceKind.SYSTEM_WITH_USER_FIELD,
+        host=HOST,
+        host_source_path="/etc/crontab",
+    )
+
+    assert len(errors) == 0
+    assert len(entries) == 1
+    assert entries[0].command == bare_command  # unwrapped
+    assert entries[0].is_wrapped is True  # was wrapped on disk
+
+
+def test_parse_one_line_legacy_wrapped_with_unwrap_false() -> None:
+    """parse_one_line with unwrap=False returns raw legacy-wrapped command."""
+    from homelab_monitor.plugins.discoverers.cron_parser import parse_one_line  # noqa: PLC0415
+
+    bare_command = "/bin/test.sh"
+    legacy_wrapped = f"{WRAPPER_PATH} {WRAPPER_SEPARATOR} {bare_command}"
+    schedule = "*/5 * * * *"
+    line = f"{schedule} root {legacy_wrapped}"
+
+    result = parse_one_line(
+        line=line, source_kind=CronSourceKind.SYSTEM_WITH_USER_FIELD, unwrap=False
+    )
+    assert result is not None
+    parsed_schedule, parsed_command = result
+    assert parsed_schedule == schedule
+    assert parsed_command == legacy_wrapped  # raw, not unwrapped
+
+
+def test_parse_one_line_legacy_wrapped_with_unwrap_true() -> None:
+    """parse_one_line with unwrap=True (default) unwraps legacy-wrapped command."""
+    from homelab_monitor.plugins.discoverers.cron_parser import parse_one_line  # noqa: PLC0415
+
+    bare_command = "/bin/test.sh"
+    legacy_wrapped = f"{WRAPPER_PATH} {WRAPPER_SEPARATOR} {bare_command}"
+    schedule = "*/5 * * * *"
+    line = f"{schedule} root {legacy_wrapped}"
+
+    result = parse_one_line(
+        line=line, source_kind=CronSourceKind.SYSTEM_WITH_USER_FIELD, unwrap=True
+    )
+    assert result is not None
+    parsed_schedule, parsed_command = result
+    assert parsed_schedule == schedule
+    assert parsed_command == bare_command  # unwrapped

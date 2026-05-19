@@ -540,6 +540,7 @@ async def test_crons_columns_present_at_head(db_engine: AsyncEngine) -> None:
         "source_path",
         "wrapper_last_seen_at",
         "wrapper_installed",
+        "wrapper_format_version",
         "last_discovered_at",
         "soft_deleted_at",
         "log_match_key",
@@ -879,5 +880,63 @@ async def test_migration_0015_round_trip(db_url: str) -> None:
         async with engine.connect() as conn:
             tables = await conn.run_sync(_tables_at_head)
         assert "cron_runs" in tables
+    finally:
+        await engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# Migration 0016 — crons.wrapper_format_version column
+# ---------------------------------------------------------------------------
+
+
+async def test_migration_0016_adds_wrapper_format_version(db_engine: AsyncEngine) -> None:
+    """After head, crons table has wrapper_format_version column (TEXT, nullable)."""
+
+    def _get_crons_cols(sync_conn: object) -> set[str]:
+        ins = inspect(sync_conn)
+        assert ins is not None
+        return {c["name"] for c in ins.get_columns("crons")}
+
+    async with db_engine.connect() as conn:
+        cols = await conn.run_sync(_get_crons_cols)
+
+    assert "wrapper_format_version" in cols
+
+
+async def test_migration_0016_round_trip(db_url: str) -> None:
+    """upgrade head -> downgrade 0015 -> upgrade head: column absent then present."""
+    cfg = Config()
+    cfg.set_main_option("script_location", str(ALEMBIC_DIR))
+    cfg.set_main_option("sqlalchemy.url", db_url)
+    command.upgrade(cfg, "head")
+    command.downgrade(cfg, "0015")
+
+    engine = get_engine(url=db_url)
+    try:
+
+        def _cols_at_0015(sync_conn: object) -> set[str]:
+            ins = inspect(sync_conn)
+            assert ins is not None
+            return {c["name"] for c in ins.get_columns("crons")}
+
+        async with engine.connect() as conn:
+            cols = await conn.run_sync(_cols_at_0015)
+        assert "wrapper_format_version" not in cols
+    finally:
+        await engine.dispose()
+
+    # Re-upgrade: column should be back
+    command.upgrade(cfg, "head")
+    engine = get_engine(url=db_url)
+    try:
+
+        def _cols_at_head(sync_conn: object) -> set[str]:
+            ins = inspect(sync_conn)
+            assert ins is not None
+            return {c["name"] for c in ins.get_columns("crons")}
+
+        async with engine.connect() as conn:
+            cols = await conn.run_sync(_cols_at_head)
+        assert "wrapper_format_version" in cols
     finally:
         await engine.dispose()

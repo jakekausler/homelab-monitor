@@ -27,8 +27,18 @@ import pytest
 _SCRIPT = Path(__file__).parents[4] / "scripts" / "hm-cron-apply.sh"
 assert _SCRIPT.exists(), f"apply script not found at {_SCRIPT}"
 
-# The apply script hard-codes this prefix for wrap-crontab re-derivation.
-_WRAPPER_PREFIX = "/usr/local/bin/cron-with-heartbeat.sh -- "
+# The wrapped crontab command shape is `<base> <fingerprint> -- <command>`
+# (STAGE-002-012): the fingerprint is a positional argument, so the wrapper
+# prefix is no longer a single fixed string.
+_WRAPPER_BASE = "/usr/local/bin/cron-with-heartbeat.sh"
+# A whitespace-free fingerprint token used to build wrapped lines in tests.
+_TEST_FP = "abc123def456"
+
+
+def _wrap_prefix(fp: str = _TEST_FP) -> str:
+    """Return the wrapper prefix for a given fingerprint:
+    ``<base> <fingerprint> -- `` (trailing space included)."""
+    return f"{_WRAPPER_BASE} {fp} -- "
 
 
 def _run_script(
@@ -111,6 +121,7 @@ def test_wrap_user_crontab(tmp_path: Path) -> None:
                 "target_crontab": "crontab:alice",
                 "old_line": old_line,
                 "command": "/usr/bin/task.sh --arg",
+                "new_line": "*/10 * * * * " + _wrap_prefix() + "/usr/bin/task.sh --arg",
             }
         ],
     )
@@ -120,7 +131,7 @@ def test_wrap_user_crontab(tmp_path: Path) -> None:
     result = _read_result(res, req_id)
     assert result["status"] == "ok", result
     new_content = ct.read_text(encoding="utf-8")
-    assert _WRAPPER_PREFIX + "/usr/bin/task.sh --arg" in new_content
+    assert _wrap_prefix() + "/usr/bin/task.sh --arg" in new_content
     assert oct(ct.stat().st_mode & 0o777) == oct(0o600)
 
 
@@ -142,6 +153,7 @@ def test_wrap_system_crontab(tmp_path: Path) -> None:
                 "target_crontab": "/etc/crontab",
                 "old_line": old_line,
                 "command": "/usr/bin/backup.sh --full",
+                "new_line": ("*/5 * * * * root " + _wrap_prefix() + "/usr/bin/backup.sh --full"),
             }
         ],
     )
@@ -153,7 +165,7 @@ def test_wrap_system_crontab(tmp_path: Path) -> None:
     new_content = etc_ct.read_text(encoding="utf-8")
     assert "root" in new_content  # USER field preserved
     assert "*/5 * * * *" in new_content  # schedule preserved
-    assert _WRAPPER_PREFIX + "/usr/bin/backup.sh --full" in new_content
+    assert _wrap_prefix() + "/usr/bin/backup.sh --full" in new_content
 
 
 @pytest.mark.slow
@@ -176,6 +188,7 @@ def test_wrap_cron_d(tmp_path: Path) -> None:
                 "target_crontab": "/etc/cron.d/foo",
                 "old_line": old_line,
                 "command": "/usr/sbin/cleanup",
+                "new_line": "0 3 * * * root " + _wrap_prefix() + "/usr/sbin/cleanup",
             }
         ],
     )
@@ -184,7 +197,7 @@ def test_wrap_cron_d(tmp_path: Path) -> None:
 
     result = _read_result(res, req_id)
     assert result["status"] == "ok", result
-    assert _WRAPPER_PREFIX + "/usr/sbin/cleanup" in cron_file.read_text(encoding="utf-8")
+    assert _wrap_prefix() + "/usr/sbin/cleanup" in cron_file.read_text(encoding="utf-8")
 
 
 @pytest.mark.slow
@@ -272,14 +285,16 @@ def test_reject_line_not_present(tmp_path: Path) -> None:
     etc_ct.write_text("# nothing matching\n", encoding="utf-8")
     original = etc_ct.read_text(encoding="utf-8")
 
+    missing_old = "*/5 * * * * root /usr/bin/missing.sh"
     req_id = _write_request(
         req,
         [
             {
                 "operation": "wrap-crontab",
                 "target_crontab": "/etc/crontab",
-                "old_line": "*/5 * * * * root /usr/bin/missing.sh",
+                "old_line": missing_old,
                 "command": "/usr/bin/missing.sh",
+                "new_line": "*/5 * * * * root " + _wrap_prefix() + "/usr/bin/missing.sh",
             }
         ],
     )
@@ -299,7 +314,7 @@ def test_reject_already_wrapped(tmp_path: Path) -> None:
     root = _make_root(tmp_path)
 
     etc_ct = root / "etc" / "crontab"
-    old_line = f"*/5 * * * * root {_WRAPPER_PREFIX}/usr/bin/task.sh"
+    old_line = f"*/5 * * * * root {_wrap_prefix()}/usr/bin/task.sh"
     etc_ct.write_text(old_line + "\n", encoding="utf-8")
 
     req_id = _write_request(
@@ -339,6 +354,9 @@ def test_command_not_in_old_line(tmp_path: Path) -> None:
                 "target_crontab": "/etc/crontab",
                 "old_line": old_line,
                 "command": "/usr/bin/other.sh",  # NOT in old_line
+                # new_line wraps a DIFFERENT command — stripping the wrapper
+                # shape does not yield old_line → verify_wrap fails.
+                "new_line": "*/5 * * * * root " + _wrap_prefix() + "/usr/bin/other.sh",
             }
         ],
     )
@@ -370,6 +388,7 @@ def test_only_target_line_changed(tmp_path: Path) -> None:
                 "target_crontab": "/etc/crontab",
                 "old_line": line2,
                 "command": "/usr/bin/job2.sh",
+                "new_line": "0 2 * * * root " + _wrap_prefix() + "/usr/bin/job2.sh",
             }
         ],
     )
@@ -380,7 +399,7 @@ def test_only_target_line_changed(tmp_path: Path) -> None:
     assert result["status"] == "ok", result
     lines = etc_ct.read_text(encoding="utf-8").splitlines()
     assert lines[0] == line1
-    assert _WRAPPER_PREFIX + "/usr/bin/job2.sh" in lines[1]
+    assert _wrap_prefix() + "/usr/bin/job2.sh" in lines[1]
     assert lines[2] == line3
 
 
@@ -555,8 +574,8 @@ def test_reject_token_op_missing_content(tmp_path: Path) -> None:
 
 
 @pytest.mark.slow
-def test_full_install_three_ops(tmp_path: Path) -> None:
-    """Full 3-op list → status=ok; all three files in expected state."""
+def test_full_install_four_ops(tmp_path: Path) -> None:
+    """Full 4-op list → status=ok; all files in expected state."""
     ipc, req, res = _make_ipc(tmp_path)
     root = _make_root(tmp_path)
 
@@ -572,11 +591,13 @@ def test_full_install_three_ops(tmp_path: Path) -> None:
         [
             {"operation": "write-wrapper-script", "content": wrapper_content},
             {"operation": "write-token", "content": token_content},
+            {"operation": "write-wrapper-env", "content": "HEARTBEAT_URL_BASE=https://x\n"},
             {
                 "operation": "wrap-crontab",
                 "target_crontab": "/etc/crontab",
                 "old_line": old_line,
                 "command": "/usr/bin/backup.sh",
+                "new_line": "*/5 * * * * root " + _wrap_prefix() + "/usr/bin/backup.sh",
             },
         ],
     )
@@ -591,7 +612,7 @@ def test_full_install_three_ops(tmp_path: Path) -> None:
     # printf '%s' strips trailing newline from content
     assert wrapper_dest.read_text(encoding="utf-8") == wrapper_content.rstrip("\n")
     assert token_dest.read_text(encoding="utf-8") == token_content
-    assert _WRAPPER_PREFIX + "/usr/bin/backup.sh" in etc_ct.read_text(encoding="utf-8")
+    assert _wrap_prefix() + "/usr/bin/backup.sh" in etc_ct.read_text(encoding="utf-8")
 
 
 @pytest.mark.slow
@@ -603,6 +624,7 @@ def test_rollback_when_third_op_fails(tmp_path: Path) -> None:
     etc_ct = root / "etc" / "crontab"
     etc_ct.write_text("# empty\n", encoding="utf-8")  # no matching old_line
 
+    nothere_old = "*/5 * * * * root /usr/bin/nothere.sh"
     req_id = _write_request(
         req,
         [
@@ -611,8 +633,9 @@ def test_rollback_when_third_op_fails(tmp_path: Path) -> None:
             {
                 "operation": "wrap-crontab",
                 "target_crontab": "/etc/crontab",
-                "old_line": "*/5 * * * * root /usr/bin/nothere.sh",
+                "old_line": nothere_old,
                 "command": "/usr/bin/nothere.sh",
+                "new_line": "*/5 * * * * root " + _wrap_prefix() + "/usr/bin/nothere.sh",
             },
         ],
     )
@@ -703,7 +726,7 @@ def test_rollback_deletes_fresh_wrapper(tmp_path: Path) -> None:
 
 @pytest.mark.slow
 def test_ok_result_message_names_op_count(tmp_path: Path) -> None:
-    """Successful 3-op run → result message mentions operation count."""
+    """Successful 4-op run → result message mentions operation count."""
     ipc, req, res = _make_ipc(tmp_path)
     root = _make_root(tmp_path)
 
@@ -716,11 +739,13 @@ def test_ok_result_message_names_op_count(tmp_path: Path) -> None:
         [
             {"operation": "write-wrapper-script", "content": "#!/bin/bash\n"},
             {"operation": "write-token", "content": "tok"},
+            {"operation": "write-wrapper-env", "content": "HEARTBEAT_URL_BASE=https://x\n"},
             {
                 "operation": "wrap-crontab",
                 "target_crontab": "/etc/crontab",
                 "old_line": old_line,
                 "command": "/usr/bin/job.sh",
+                "new_line": "0 1 * * * root " + _wrap_prefix() + "/usr/bin/job.sh",
             },
         ],
     )
@@ -729,7 +754,7 @@ def test_ok_result_message_names_op_count(tmp_path: Path) -> None:
 
     result = _read_result(res, req_id)
     assert result["status"] == "ok", result
-    assert "3" in result["message"]
+    assert "4" in result["message"]
 
 
 # ---------------------------------------------------------------------------
@@ -877,7 +902,7 @@ def test_wrap_crontab_correct_new_line_accepted(tmp_path: Path) -> None:
     old_line = "*/10 * * * * /usr/bin/backup.sh"
     ct.write_text(old_line + "\n", encoding="utf-8")
 
-    expected_new_line = "*/10 * * * * " + _WRAPPER_PREFIX + "/usr/bin/backup.sh"
+    expected_new_line = "*/10 * * * * " + _wrap_prefix() + "/usr/bin/backup.sh"
     req_id = _write_request(
         req,
         [
@@ -910,7 +935,8 @@ def test_wrap_crontab_wrong_new_line_returns_bad_request(tmp_path: Path) -> None
     ct.write_text(old_line + "\n", encoding="utf-8")
     original_content = ct.read_text(encoding="utf-8")
 
-    wrong_new_line = "*/10 * * * * /WRONG/wrapper -- /usr/bin/task.sh"
+    # Wrapper-shaped, but stripping the prefix does not yield old_line.
+    wrong_new_line = "*/10 * * * * " + _wrap_prefix() + "/WRONG/path/task.sh"
     req_id = _write_request(
         req,
         [
@@ -934,8 +960,10 @@ def test_wrap_crontab_wrong_new_line_returns_bad_request(tmp_path: Path) -> None
 
 
 @pytest.mark.slow
-def test_wrap_crontab_absent_new_line_still_ok(tmp_path: Path) -> None:
-    """wrap-crontab without new_line field → ok (backward-compat, no cross-check)."""
+def test_wrap_crontab_absent_new_line_rejected(tmp_path: Path) -> None:
+    """wrap-crontab without new_line field → bad_request (new_line is now
+    MANDATORY for wrap; the executor cannot re-derive it without the
+    fingerprint, so it VERIFIES a supplied new_line — STAGE-002-012)."""
     ipc, req, res = _make_ipc(tmp_path)
     root = _make_root(tmp_path)
 
@@ -943,6 +971,7 @@ def test_wrap_crontab_absent_new_line_still_ok(tmp_path: Path) -> None:
     ct = spool / "carol"
     old_line = "0 3 * * * /usr/bin/cleanup.sh"
     ct.write_text(old_line + "\n", encoding="utf-8")
+    original_content = ct.read_text(encoding="utf-8")
 
     # new_line key is deliberately absent from the request
     req_id = _write_request(
@@ -961,8 +990,11 @@ def test_wrap_crontab_absent_new_line_still_ok(tmp_path: Path) -> None:
     _run_script(ipc, root)
 
     result = _read_result(res, req_id)
-    assert result["status"] == "ok", result
-    assert _WRAPPER_PREFIX + "/usr/bin/cleanup.sh" in ct.read_text(encoding="utf-8")
+    assert result["status"] == "error", result
+    assert result["error_code"] == "bad_request"
+    assert "new_line" in result["message"]
+    # Crontab must be unchanged
+    assert ct.read_text(encoding="utf-8") == original_content
 
 
 # ---------------------------------------------------------------------------
@@ -1030,7 +1062,7 @@ def test_unwrap_user_crontab(tmp_path: Path) -> None:
     # The line in its wrapped form
     bare_cmd = "/usr/bin/task.sh --arg"
     schedule = "*/10 * * * *"
-    old_line = f"{schedule} {_WRAPPER_PREFIX}{bare_cmd}"
+    old_line = f"{schedule} {_wrap_prefix()}{bare_cmd}"
     # The expected new_line after unwrap: schedule + bare command
     expected_new_line = f"{schedule} {bare_cmd}"
     ct.write_text(old_line + "\n", encoding="utf-8")
@@ -1053,8 +1085,8 @@ def test_unwrap_user_crontab(tmp_path: Path) -> None:
     result = _read_result(res, req_id)
     assert result["status"] == "ok", result
     new_content = ct.read_text(encoding="utf-8")
-    # Wrapper prefix must be gone
-    assert _WRAPPER_PREFIX not in new_content
+    # Wrapper base must be gone
+    assert _WRAPPER_BASE not in new_content
     # The bare command must be present
     assert bare_cmd in new_content
     # Byte-exact match of the expected new line
@@ -1105,7 +1137,7 @@ def test_unwrap_wrong_new_line_returns_bad_request(tmp_path: Path) -> None:
     ct = spool / "bob"
     bare_cmd = "/usr/bin/task.sh"
     schedule = "*/10 * * * *"
-    old_line = f"{schedule} {_WRAPPER_PREFIX}{bare_cmd}"
+    old_line = f"{schedule} {_wrap_prefix()}{bare_cmd}"
     ct.write_text(old_line + "\n", encoding="utf-8")
     original_content = ct.read_text(encoding="utf-8")
 
@@ -1143,7 +1175,7 @@ def test_unwrap_absent_new_line_still_ok(tmp_path: Path) -> None:
     ct = spool / "carol"
     bare_cmd = "/usr/bin/cleanup.sh"
     schedule = "0 3 * * *"
-    old_line = f"{schedule} {_WRAPPER_PREFIX}{bare_cmd}"
+    old_line = f"{schedule} {_wrap_prefix()}{bare_cmd}"
     ct.write_text(old_line + "\n", encoding="utf-8")
 
     # new_line key is deliberately absent
@@ -1164,7 +1196,7 @@ def test_unwrap_absent_new_line_still_ok(tmp_path: Path) -> None:
     result = _read_result(res, req_id)
     assert result["status"] == "ok", result
     new_content = ct.read_text(encoding="utf-8")
-    assert _WRAPPER_PREFIX not in new_content
+    assert _WRAPPER_BASE not in new_content
     assert bare_cmd in new_content
 
 
@@ -1180,7 +1212,7 @@ def test_unwrap_rollback_restores_wrapped_line(tmp_path: Path) -> None:
     ct = spool / "dave"
     bare_cmd = "/usr/bin/dave-job.sh"
     schedule = "0 4 * * *"
-    old_line = f"{schedule} {_WRAPPER_PREFIX}{bare_cmd}"
+    old_line = f"{schedule} {_wrap_prefix()}{bare_cmd}"
     ct.write_text(old_line + "\n", encoding="utf-8")
     original_content = ct.read_text(encoding="utf-8")
 
@@ -1239,6 +1271,7 @@ def test_wrap_refreshes_user_crontab_snapshot(tmp_path: Path) -> None:
                 "target_crontab": "crontab:alice",
                 "old_line": old_line,
                 "command": "/usr/bin/task.sh --arg",
+                "new_line": "*/10 * * * * " + _wrap_prefix() + "/usr/bin/task.sh --arg",
             }
         ],
     )
@@ -1251,7 +1284,7 @@ def test_wrap_refreshes_user_crontab_snapshot(tmp_path: Path) -> None:
     snapshot = root / "var" / "lib" / "homelab-monitor" / "crontab-snapshot" / "alice"
     assert snapshot.exists(), "snapshot file not created by inline refresh"
     snap_content = snapshot.read_text(encoding="utf-8")
-    assert _WRAPPER_PREFIX + "/usr/bin/task.sh --arg" in snap_content
+    assert _wrap_prefix() + "/usr/bin/task.sh --arg" in snap_content
     assert snap_content == ct.read_text(encoding="utf-8")
 
 
@@ -1266,7 +1299,7 @@ def test_unwrap_refreshes_user_crontab_snapshot(tmp_path: Path) -> None:
     ct = spool / "alice"
     bare_cmd = "/usr/bin/task.sh --arg"
     schedule = "*/10 * * * *"
-    old_line = f"{schedule} {_WRAPPER_PREFIX}{bare_cmd}"
+    old_line = f"{schedule} {_wrap_prefix()}{bare_cmd}"
     expected_new_line = f"{schedule} {bare_cmd}"
     ct.write_text(old_line + "\n", encoding="utf-8")
     ct.chmod(0o600)
@@ -1291,7 +1324,7 @@ def test_unwrap_refreshes_user_crontab_snapshot(tmp_path: Path) -> None:
     snapshot = root / "var" / "lib" / "homelab-monitor" / "crontab-snapshot" / "alice"
     assert snapshot.exists(), "snapshot file not created by inline refresh after unwrap"
     snap_content = snapshot.read_text(encoding="utf-8")
-    assert _WRAPPER_PREFIX not in snap_content
+    assert _WRAPPER_BASE not in snap_content
     assert bare_cmd in snap_content
     assert snap_content == ct.read_text(encoding="utf-8")
 
@@ -1327,6 +1360,7 @@ def test_snapshot_refresh_reflects_double_toggle(tmp_path: Path) -> None:
                 "target_crontab": "crontab:alice",
                 "old_line": plain_line,
                 "command": bare_cmd,
+                "new_line": f"{schedule} {_wrap_prefix()}{bare_cmd}",
             }
         ],
     )
@@ -1335,7 +1369,7 @@ def test_snapshot_refresh_reflects_double_toggle(tmp_path: Path) -> None:
     assert result1["status"] == "ok", result1
     assert snapshot.exists(), "snapshot must exist after first wrap"
     wrapped_line = ct.read_text(encoding="utf-8").strip()
-    assert _WRAPPER_PREFIX + bare_cmd in wrapped_line
+    assert _wrap_prefix() + bare_cmd in wrapped_line
     assert snapshot.read_text(encoding="utf-8") == ct.read_text(encoding="utf-8")
 
     # Pass 2: unwrap using the now-wrapped line
@@ -1354,7 +1388,7 @@ def test_snapshot_refresh_reflects_double_toggle(tmp_path: Path) -> None:
     _run_script(ipc, root)
     result2 = _read_result(res, req_id2)
     assert result2["status"] == "ok", result2
-    assert _WRAPPER_PREFIX not in snapshot.read_text(encoding="utf-8")
+    assert _WRAPPER_BASE not in snapshot.read_text(encoding="utf-8")
     assert bare_cmd in snapshot.read_text(encoding="utf-8")
     assert snapshot.read_text(encoding="utf-8") == ct.read_text(encoding="utf-8")
 
@@ -1378,6 +1412,7 @@ def test_system_crontab_wrap_does_not_create_snapshot(tmp_path: Path) -> None:
                 "target_crontab": "/etc/crontab",
                 "old_line": old_line,
                 "command": "/usr/bin/backup.sh --full",
+                "new_line": ("*/5 * * * * root " + _wrap_prefix() + "/usr/bin/backup.sh --full"),
             }
         ],
     )

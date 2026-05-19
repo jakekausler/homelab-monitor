@@ -1,9 +1,10 @@
-"""Tests for cron_apply_constants (STAGE-002-009).
+"""Tests for cron_apply_constants (STAGE-002-012 additions).
 
 Covers:
 - is_valid_target_crontab accepts valid targets, rejects invalid ones
 - get_ipc_dir returns env-var value when set, /host-ipc default otherwise
 - Fixed-path constants have expected values (regression guard)
+- STAGE-002-012 additions: OP_WRITE_WRAPPER_ENV, WRAPPER_ENV_HOST_PATH
 """
 
 from __future__ import annotations
@@ -11,7 +12,9 @@ from __future__ import annotations
 import pytest
 
 from homelab_monitor.kernel.cron.cron_apply_constants import (
+    OP_WRITE_WRAPPER_ENV,
     TOKEN_HOST_PATH,
+    WRAPPER_ENV_HOST_PATH,
     WRAPPER_SCRIPT_HOST_PATH,
     get_ipc_dir,
     is_valid_target_crontab,
@@ -105,7 +108,7 @@ def test_get_ipc_dir_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Fixed-path constant regression guards
+# Fixed-path constant regression guards (pre-existing)
 # ---------------------------------------------------------------------------
 
 
@@ -117,3 +120,18 @@ def test_wrapper_script_host_path() -> None:
 def test_token_host_path() -> None:
     """TOKEN_HOST_PATH must match the bash apply-script constant."""
     assert TOKEN_HOST_PATH == "/etc/homelab-monitor/heartbeat.token"
+
+
+# ---------------------------------------------------------------------------
+# STAGE-002-012 new constants
+# ---------------------------------------------------------------------------
+
+
+def test_op_write_wrapper_env_value() -> None:
+    """OP_WRITE_WRAPPER_ENV must match the bash apply-script op kind string."""
+    assert OP_WRITE_WRAPPER_ENV == "write-wrapper-env"
+
+
+def test_wrapper_env_host_path_value() -> None:
+    """WRAPPER_ENV_HOST_PATH must match the bash apply-script fixed path."""
+    assert WRAPPER_ENV_HOST_PATH == "/etc/homelab-monitor/wrapper.env"

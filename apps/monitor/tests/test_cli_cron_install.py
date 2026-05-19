@@ -36,13 +36,13 @@ _PUBLIC_URL = "https://monitor.example.com"
 
 class TestGetWrapperTemplate:
     def test_prints_template_to_stdout(self, capsys: pytest.CaptureFixture[str]) -> None:
-        """_cmd_get_wrapper_template prints the template (contains {{FINGERPRINT}})."""
+        """_cmd_get_wrapper_template prints the template (contains {{WRAPPER_FORMAT_VERSION}})."""
         rc = _cmd_get_wrapper_template()
         captured = capsys.readouterr()
         assert rc == 0
-        assert "{{FINGERPRINT}}" in captured.out
-        assert "{{HEARTBEAT_URL_BASE}}" in captured.out
+        assert "{{WRAPPER_FORMAT_VERSION}}" in captured.out
         assert "{{TOKEN_FILE_PATH}}" in captured.out
+        assert "{{WRAPPER_ENV_PATH}}" in captured.out
 
     def test_handle_dispatches_get_wrapper_template(self) -> None:
         """_handle with cron_cmd='get-wrapper-template' calls _cmd_get_wrapper_template."""

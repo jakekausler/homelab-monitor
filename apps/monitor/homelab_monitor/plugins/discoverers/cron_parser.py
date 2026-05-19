@@ -41,11 +41,16 @@ _NICKNAMES = frozenset(
 )
 
 
-def parse_one_line(*, line: str, source_kind: CronSourceKind) -> tuple[str, str] | None:
+def parse_one_line(
+    *, line: str, source_kind: CronSourceKind, unwrap: bool = True
+) -> tuple[str, str] | None:
     """Parse a single raw crontab line → (schedule, command), or None if the
     line is blank / a comment / an env-var / unparseable.
 
-    The command is UNWRAPPED if it is a wrapper invocation.
+    By default the command is UNWRAPPED if it is a wrapper invocation. Pass
+    ``unwrap=False`` to get the command EXACTLY as it appears on the line —
+    callers that need to test ``is_wrapped`` on the genuine pre-unwrap command
+    (e.g. the wrapper installer's line matcher) rely on this.
     Returns None for skip-lines (blank, comment, env-var) and on parse errors.
     Does NOT validate the schedule via croniter (caller handles that).
     """
@@ -62,8 +67,9 @@ def parse_one_line(*, line: str, source_kind: CronSourceKind) -> tuple[str, str]
     except ValueError:
         return None
 
-    # Unwrap the command if it's a wrapper invocation
-    command = unwrap_command(command)
+    # Unwrap the command if it's a wrapper invocation (unless caller opted out).
+    if unwrap:
+        command = unwrap_command(command)
     return schedule, command
 
 

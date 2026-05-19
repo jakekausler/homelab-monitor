@@ -68,12 +68,26 @@ The script:
   approach was retired because an ACL on a spool file makes vixie-cron reject
   the crontab as `INSECURE MODE`.
 
-**Run this script ONCE per machine.** The `.path` watchers and `.timer`s keep
-the snapshot fresh and process cron-apply requests automatically. No operator
-action is needed after the initial run. (On a host without `systemd`, the
-watchers and timers cannot be installed — manually run `hm-crontab-snapshot`
-after each `crontab -e`; the cron-apply executor / wrapper-install feature
-requires systemd.)
+**Run this script ONCE per machine** for initial setup. The `.path` watchers
+and `.timer`s keep the snapshot fresh and process cron-apply requests
+automatically. No operator action is needed in steady state. (On a host without
+`systemd`, the watchers and timers cannot be installed — manually run
+`hm-crontab-snapshot` after each `crontab -e`; the cron-apply executor /
+wrapper-install feature requires systemd.)
+
+> **Re-run after upgrades that change the host scripts.** `host-setup.sh` is
+> also the **deploy mechanism** for the non-containerized host scripts — a
+> `docker compose up --build` does **not** update them. After pulling a new
+> version of the repo, re-run the script if `scripts/hm-cron-apply.sh` or
+> `scripts/hm-crontab-snapshot.sh` changed (these are installed to
+> `/usr/local/sbin/hm-cron-apply` and `/usr/local/sbin/hm-crontab-snapshot`
+> respectively). The script is idempotent: it uses a content-diff (`cmp`)
+> before each install step and skips files whose content is already current,
+> so re-running it on an unchanged host is a no-op.
+>
+> ```bash
+> sudo bash scripts/host-setup.sh
+> ```
 
 ### 2. Update your env
 

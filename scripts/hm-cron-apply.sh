@@ -62,7 +62,15 @@ readonly SNAPSHOT_DIR="${_ROOT}/var/lib/homelab-monitor/crontab-snapshot"
 readonly WRAPPER_SCRIPT_PATH="${_ROOT}/usr/local/bin/cron-with-heartbeat.sh"
 readonly TOKEN_DIR="${_ROOT}/etc/homelab-monitor"
 readonly TOKEN_PATH="${TOKEN_DIR}/heartbeat.token"
-readonly WRAPPER_PREFIX="/usr/local/bin/cron-with-heartbeat.sh -- "
+readonly WRAPPER_BASE="/usr/local/bin/cron-with-heartbeat.sh"
+# A wrapped command starts with `<WRAPPER_BASE> <fingerprint> -- `. The
+# fingerprint is a single whitespace-free token. This grep BRE matches the shape.
+readonly WRAPPER_SHAPE_RE='/usr/local/bin/cron-with-heartbeat\.sh [^ ]* -- '
+# A LEGACY-wrapped command starts with `<WRAPPER_BASE> -- ` (no fingerprint argument).
+# Used for format-migration detection.
+readonly LEGACY_WRAPPER_SHAPE_RE='/usr/local/bin/cron-with-heartbeat\.sh -- '
+readonly WRAPPER_ENV_DIR="${_ROOT}/etc/homelab-monitor"
+readonly WRAPPER_ENV_PATH="${WRAPPER_ENV_DIR}/wrapper.env"
 readonly SCHEMA_VERSION=1
 readonly RESULT_RETENTION_SECONDS=3600
 
@@ -234,6 +242,8 @@ process_request() {
                 apply_write_file "$op_json" "$WRAPPER_SCRIPT_PATH" 0755 || { err_code="$RC_CODE"; err_msg="$RC_MSG"; break; } ;;
             write-token)
                 apply_write_file "$op_json" "$TOKEN_PATH" 0644 || { err_code="$RC_CODE"; err_msg="$RC_MSG"; break; } ;;
+            write-wrapper-env)
+                apply_write_file "$op_json" "$WRAPPER_ENV_PATH" 0644 || { err_code="$RC_CODE"; err_msg="$RC_MSG"; break; } ;;
             *)
                 err_code="bad_request"; err_msg="unknown operation: $op_kind"; break ;;
         esac
@@ -253,6 +263,39 @@ process_request() {
 RC_CODE=""; RC_MSG=""
 _fail() { RC_CODE="$1"; RC_MSG="$2"; return 1; }
 
+# verify_wrap <old_line> <command> <new_line> → 0 if new_line is old_line with
+# exactly the NEW format `<WRAPPER_BASE> <token> -- ` inserted before <command>;
+# or if old_line is LEGACY-wrapped and new_line is the format-migrated version;
+# non-zero otherwise. <token> = a single whitespace-free fingerprint.
+verify_wrap() {
+    local old_line="$1" command="$2" new_line="$3"
+
+    # Case 1: NEW-format wrap (unwrapped source line or re-wrap of new format).
+    # Strip the NEW wrapper shape from new_line and compare to old_line.
+    local stripped
+    stripped="$(printf '%s' "$new_line" | sed -E "s#${WRAPPER_SHAPE_RE}##")"
+    if [ "$stripped" = "$old_line" ]; then
+        # Verify new_line actually contains the wrapper shape.
+        printf '%s' "$new_line" | grep -qE "$WRAPPER_SHAPE_RE" && return 0
+    fi
+
+    # Case 2: LEGACY-format wrap (format-migration re-wrap).
+    # old_line is legacy-wrapped; new_line has the legacy segment replaced with new format.
+    if printf '%s' "$old_line" | grep -qE "$LEGACY_WRAPPER_SHAPE_RE"; then
+        # Strip legacy shape from old_line and new shape from new_line.
+        # Both should reduce to the same unwrapped command.
+        local old_stripped new_stripped
+        old_stripped="$(printf '%s' "$old_line" | sed -E "s#${LEGACY_WRAPPER_SHAPE_RE}##")"
+        new_stripped="$(printf '%s' "$new_line" | sed -E "s#${WRAPPER_SHAPE_RE}##")"
+        if [ "$old_stripped" = "$new_stripped" ]; then
+            # Verify new_line actually contains the NEW wrapper shape.
+            printf '%s' "$new_line" | grep -qE "$WRAPPER_SHAPE_RE" && return 0
+        fi
+    fi
+
+    return 1
+}
+
 # apply_wrap_crontab <operation-json> — rewrite one crontab line.
 apply_wrap_crontab() {
     local op="$1"
@@ -269,25 +312,14 @@ apply_wrap_crontab() {
     [[ -n "$file" ]] || { _fail "bad_path" "disallowed target: $target"; return 1; }
     [[ -f "$file" ]] || { _fail "crontab_missing" "crontab not found: $file"; return 1; }
 
-    case "$old_line" in
-        *"$WRAPPER_PREFIX"*)
-            _fail "already_wrapped" "line already wrapped"; return 1 ;;
-    esac
-    # Re-derive: replace the LAST occurrence of `command` in `old_line` with
-    # WRAPPER_PREFIX + command. Mirrors install.py's _rewrite_line rfind+insert.
-    # This RE-DERIVED value is authoritative — the request's new_line (if any)
-    # is only a cross-check below.
-    new_line="$(replace_last "$old_line" "$command" "${WRAPPER_PREFIX}${command}")" \
-        || { _fail "bad_request" "command not found in old_line"; return 1; }
-
-    # Defense-in-depth cross-check: if the request supplied a new_line, it MUST
-    # equal the executor's independently re-derived value. A mismatch means the
-    # monitor and executor disagree about the rewrite — reject rather than
-    # silently applying the (authoritative) re-derived line.
-    if [[ -n "$supplied_new_line" && "$supplied_new_line" != "$new_line" ]]; then
-        _fail "bad_request" "supplied new_line disagrees with re-derived new_line"
-        return 1
+    if printf '%s' "$old_line" | grep -qE "$WRAPPER_SHAPE_RE"; then
+        _fail "already_wrapped" "line already wrapped"; return 1
     fi
+
+    [[ -n "$supplied_new_line" ]] || { _fail "bad_request" "missing new_line"; return 1; }
+    new_line="$supplied_new_line"
+    verify_wrap "$old_line" "$command" "$new_line" \
+        || { _fail "bad_request" "new_line is not a valid wrap of old_line"; return 1; }
 
     # old_line must exist VERBATIM as a full line in the file.
     grep -qxF -- "$old_line" "$file" \
@@ -310,7 +342,7 @@ apply_wrap_crontab() {
 
 # apply_unwrap_crontab <operation-json> — strip the wrapper prefix from one
 # crontab line. The inverse of apply_wrap_crontab: it carries NO `command`
-# field; new_line is RE-DERIVED here by removing WRAPPER_PREFIX from old_line.
+# field; new_line is RE-DERIVED here by removing the wrapper-shape prefix from old_line.
 apply_unwrap_crontab() {
     local op="$1"
     local target old_line file new_line snap supplied_new_line
@@ -324,18 +356,14 @@ apply_unwrap_crontab() {
     [[ -n "$file" ]] || { _fail "bad_path" "disallowed target: $target"; return 1; }
     [[ -f "$file" ]] || { _fail "crontab_missing" "crontab not found: $file"; return 1; }
 
-    # Inverse of the wrap guard: REFUSE a line that is NOT wrapped.
-    case "$old_line" in
-        *"$WRAPPER_PREFIX"*) : ;;  # ok — wrapped
-        *) _fail "not_wrapped" "line is not wrapped"; return 1 ;;
-    esac
-
-    # Re-derive: remove the FIRST (only) occurrence of WRAPPER_PREFIX from
-    # old_line. The wrapper prefix appears exactly once in a single-layer wrap.
-    # This RE-DERIVED value is authoritative — the request's new_line (if any)
-    # is only a cross-check below. Mirrors install.py's byte-exact unwrap_command.
-    new_line="$(replace_first "$old_line" "$WRAPPER_PREFIX" "")" \
-        || { _fail "bad_request" "wrapper prefix not found in old_line"; return 1; }
+    if ! printf '%s' "$old_line" | grep -qE "$WRAPPER_SHAPE_RE"; then
+        _fail "not_wrapped" "line is not wrapped"; return 1
+    fi
+    # Re-derive: strip the FIRST wrapper-shape occurrence.
+    new_line="$(printf '%s' "$old_line" | sed -E "s#${WRAPPER_SHAPE_RE}##")"
+    if [[ "$new_line" == "$old_line" ]]; then
+        _fail "bad_request" "wrapper prefix not found in old_line"; return 1
+    fi
 
     # Defense-in-depth cross-check: a supplied new_line MUST equal the
     # executor's independently re-derived value.
@@ -399,35 +427,6 @@ apply_write_file() {
     return 0
 }
 
-# replace_last <haystack> <needle> <replacement> → echo result; non-zero if
-# the needle is absent. Splices the replacement in at the LAST occurrence of
-# the needle — mirrors Python str.rfind()+slice, the same rule install.py's
-# _rewrite_line uses, guaranteeing byte-identical wrapped lines.
-replace_last() {
-    local h="$1" n="$2" r="$3" idx=-1 i
-    local hlen=${#h} nlen=${#n}
-    if (( nlen == 0 )); then printf '' ; return 1; fi
-    for (( i=0; i<=hlen-nlen; i++ )); do
-        if [[ "${h:i:nlen}" == "$n" ]]; then idx=$i; fi
-    done
-    if (( idx < 0 )); then printf '' ; return 1; fi
-    printf '%s%s%s' "${h:0:idx}" "$r" "${h:idx+nlen}"
-}
-
-# replace_first <haystack> <needle> <replacement> → echo result; non-zero if
-# the needle is absent. Splices the replacement in at the FIRST occurrence of
-# the needle. Used by apply_unwrap_crontab to strip the (single) wrapper prefix.
-replace_first() {
-    local h="$1" n="$2" r="$3" idx=-1 i
-    local hlen=${#h} nlen=${#n}
-    if (( nlen == 0 )); then printf '' ; return 1; fi
-    for (( i=0; i<=hlen-nlen; i++ )); do
-        if [[ "${h:i:nlen}" == "$n" ]]; then idx=$i; break; fi
-    done
-    if (( idx < 0 )); then printf '' ; return 1; fi
-    printf '%s%s%s' "${h:0:idx}" "$r" "${h:idx+nlen}"
-}
-
 # apply_line_replace <file> <old_line> <new_line>
 # Replace exactly the one matching line; preserve mode + ownership.
 apply_line_replace() {
@@ -472,13 +471,14 @@ mkdir -p "$RESULTS_DIR"
 
 # Sweep any leftover temp files from an interrupted previous run, mirroring
 # hm-crontab-snapshot.sh's temp sweep. mktemp-created files are:
-#   * <dest>.hmtmp.* beside the wrapper script + token (fixed paths)
+#   * <dest>.hmtmp.* beside the wrapper script + token + wrapper.env (fixed paths)
 #   * .snap.* rollback snapshots in RESULTS_DIR
 shopt -s nullglob
 for stray in \
     "$RESULTS_DIR"/.snap.* \
     "${WRAPPER_SCRIPT_PATH}".hmtmp.* \
     "${TOKEN_PATH}".hmtmp.* \
+    "${WRAPPER_ENV_PATH}".hmtmp.* \
     "$SNAPSHOT_DIR"/.*.snaptmp.*; do
     [[ -e "$stray" ]] || continue
     rm -f "$stray" && log "swept stray temp file: $stray"

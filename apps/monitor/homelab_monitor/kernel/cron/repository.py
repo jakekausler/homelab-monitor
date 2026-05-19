@@ -75,6 +75,7 @@ def _cron_to_audit_after(record: CronRecord) -> dict[str, Any]:
         "soft_deleted_at": record.soft_deleted_at,
         "log_match_key": record.log_match_key,
         "wrapper_installed": record.wrapper_installed,
+        "wrapper_format_version": record.wrapper_format_version,
     }
 
 
@@ -106,6 +107,7 @@ class CronRecord:
     soft_deleted_at: str | None
     log_match_key: str | None
     wrapper_installed: bool
+    wrapper_format_version: str | None
 
 
 @dataclass(slots=True, frozen=True)
@@ -178,6 +180,9 @@ def _row_to_cron(row: Row[Any]) -> CronRecord:
         soft_deleted_at=(None if row.soft_deleted_at is None else str(row.soft_deleted_at)),
         log_match_key=(None if row.log_match_key is None else str(row.log_match_key)),
         wrapper_installed=bool(row.wrapper_installed),
+        wrapper_format_version=(
+            None if row.wrapper_format_version is None else str(row.wrapper_format_version)
+        ),
     )
 
 
@@ -211,7 +216,7 @@ _CRON_COLS = (
     "fingerprint, name, host, command, schedule, schedule_canonical, "
     "cadence_seconds, expected_grace_seconds, enabled, last_seen_state, "
     "created_at, updated_at, hidden_at, source_path, wrapper_last_seen_at, "
-    "last_discovered_at, soft_deleted_at, log_match_key, wrapper_installed"
+    "last_discovered_at, soft_deleted_at, log_match_key, wrapper_installed, wrapper_format_version"
 )
 
 _SELECT_BY_FINGERPRINT_SQL = text(
@@ -223,12 +228,14 @@ _INSERT_CRON_SQL = text(
     "  fingerprint, name, host, command, schedule, schedule_canonical, "
     "  cadence_seconds, expected_grace_seconds, enabled, last_seen_state, "
     "  created_at, updated_at, hidden_at, source_path, wrapper_last_seen_at, "
-    "  last_discovered_at, soft_deleted_at, log_match_key, wrapper_installed"
+    "  last_discovered_at, soft_deleted_at, log_match_key, wrapper_installed, "
+    "  wrapper_format_version"
     ") VALUES ("
     "  :fingerprint, :name, :host, :command, :schedule, :schedule_canonical, "
     "  :cadence_seconds, :expected_grace_seconds, :enabled, :last_seen_state, "
     "  :created_at, :updated_at, :hidden_at, :source_path, :wrapper_last_seen_at, "
-    "  :last_discovered_at, :soft_deleted_at, :log_match_key, :wrapper_installed"
+    "  :last_discovered_at, :soft_deleted_at, :log_match_key, :wrapper_installed, "
+    "  :wrapper_format_version"
     ")"
 )
 
@@ -627,6 +634,7 @@ class CronRepo:
                     # this from the actual crontab line on the next tick and is the
                     # authoritative owner.
                     "wrapper_installed": 1 if payload.wrapper else 0,
+                    "wrapper_format_version": None,
                 }
                 await conn.execute(_INSERT_CRON_SQL, new_record_params)
 
@@ -803,6 +811,24 @@ class CronRepo:
                 when=now,
             )
 
+    async def set_wrapper_format_version(self, fingerprint: str, version: str) -> None:
+        """Set the crons.wrapper_format_version column for a cron.
+
+        Called by the install path after a successful wrapper install — records
+        which WRAPPER_FORMAT_VERSION was installed. No audit row: the install
+        itself is already audited by record_wrapper_installed; this is a derived
+        marker. updated_at is bumped so the registry freshness reflects it.
+        """
+        now = utc_now_iso()
+        async with self._db.transaction() as conn:
+            await conn.execute(
+                text(
+                    "UPDATE crons SET wrapper_format_version = :v, updated_at = :now "
+                    "WHERE fingerprint = :fingerprint"
+                ),
+                {"v": version, "now": now, "fingerprint": fingerprint},
+            )
+
     async def upsert_discovered(  # noqa: PLR0915, PLR0913
         self,
         *,
@@ -881,6 +907,7 @@ class CronRepo:
                     "soft_deleted_at": None,
                     "log_match_key": _log_match_key_or_none(command),
                     "wrapper_installed": 1 if is_wrapped else 0,
+                    "wrapper_format_version": None,
                 }
                 await conn.execute(_INSERT_CRON_SQL, params)
                 inserted_row = (

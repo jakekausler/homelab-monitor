@@ -26,7 +26,7 @@ if TYPE_CHECKING:
     from homelab_monitor.kernel.cron.repository import CronRecord
 
 LastSeenState = Literal["unknown", "running", "ok", "failed", "late"]
-WrapperHealth = Literal["ok", "stale", "unknown"]
+WrapperHealth = Literal["ok", "stale", "unknown", "format_outdated"]
 
 
 # ---------- Query params ----------

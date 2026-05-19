@@ -25,6 +25,7 @@ from homelab_monitor.kernel.cron.cron_apply_constants import (
     OP_UNWRAP_CRONTAB,
     OP_WRAP_CRONTAB,
     OP_WRITE_TOKEN,
+    OP_WRITE_WRAPPER_ENV,
     OP_WRITE_WRAPPER_SCRIPT,
     REQUEST_SCHEMA_VERSION,
     REQUESTS_SUBDIR,
@@ -110,7 +111,21 @@ class WriteTokenOp:
         return {"operation": OP_WRITE_TOKEN, "content": self.content}
 
 
-CronApplyOp = WrapCrontabOp | UnwrapCrontabOp | WriteWrapperScriptOp | WriteTokenOp
+@dataclass(frozen=True, slots=True)
+class WriteWrapperEnvOp:
+    """A write-wrapper-env operation: the executor writes a FIXED path
+    (/etc/homelab-monitor/wrapper.env) with `content`. Mode 644 — the file holds
+    only a non-secret HEARTBEAT_URL_BASE line."""
+
+    content: str
+
+    def to_payload(self) -> dict[str, object]:
+        return {"operation": OP_WRITE_WRAPPER_ENV, "content": self.content}
+
+
+CronApplyOp = (
+    WrapCrontabOp | UnwrapCrontabOp | WriteWrapperScriptOp | WriteTokenOp | WriteWrapperEnvOp
+)
 
 
 class CronApplyError(Exception):
@@ -180,7 +195,7 @@ async def submit_and_wait(
                 f"invalid target_crontab: {op.target_crontab!r}",
                 error_code="bad_path",
             )
-        if isinstance(op, (WriteWrapperScriptOp, WriteTokenOp)):
+        if isinstance(op, (WriteWrapperScriptOp, WriteTokenOp, WriteWrapperEnvOp)):
             content_bytes = len(op.content.encode("utf-8"))
             if content_bytes > _MAX_OP_CONTENT_BYTES:
                 raise CronApplyRejectedError(
@@ -281,6 +296,7 @@ __all__ = [
     "UnwrapCrontabOp",
     "WrapCrontabOp",
     "WriteTokenOp",
+    "WriteWrapperEnvOp",
     "WriteWrapperScriptOp",
     "submit_and_wait",
 ]

@@ -60,7 +60,7 @@ if err == null && is_object(parsed) {
 type = "filter"
 inputs = ["parse_json"]
 condition = '''
-.message != null && .message != ""
+.message != null && .message != "" && .SYSLOG_IDENTIFIER != "hmrun"
 '''
 
 [transforms.throttle]
@@ -72,8 +72,8 @@ key_field = "service"
 
 [sinks.vl]
 type = "http"
-inputs = ["throttle"]
-uri = "http://victorialogs:9428/insert/jsonline"
+inputs = ["throttle", "hmrun_shaped"]
+uri = "http://victorialogs:9428/insert/jsonline?_msg_field=message"
 encoding.codec = "json"
 framing.method = "newline_delimited"
 
@@ -188,6 +188,48 @@ when_full = "block"
 
 [sinks.cron_events.acknowledgements]
 enabled = true
+
+# HMRUN RUN-CAPTURE PIPELINE
+# ==========================
+# A-mode cron wrapper output. The cron-with-heartbeat.sh wrapper logs every
+# captured output line under SYSLOG_IDENTIFIER=hmrun, each line prefixed
+# `HM_RUN=<uuid> `. It also emits HM_RUN_START / HM_RUN_END boundary markers
+# (same identifier, no HM_RUN= prefix — they pass through unmodified).
+#
+# This branch parses the HM_RUN=<uuid> prefix into a REGULAR `run_id` field
+# (NOT a stream field — one stream per run would explode stream cardinality;
+# VictoriaLogs warns against that) and strips the prefix from the message body.
+# It does NOT collide with the cron-events branch: that branch filters
+# SYSLOG_IDENTIFIER == "CRON"/"crond"; this one filters == "hmrun".
+
+[transforms.hmrun_filter]
+type = "filter"
+inputs = ["journald"]
+condition = '''
+.SYSLOG_IDENTIFIER == "hmrun"
+'''
+
+[transforms.hmrun_shaped]
+type = "remap"
+inputs = ["hmrun_filter"]
+source = '''
+# NOTE: sets .host to the Vector container hostname (single-host homelab).
+# The cron_event_shape branch instead preserves the journald _HOSTNAME source
+# host; revisit if hmrun ingestion ever spans multiple hosts.
+.host = get_hostname!()
+.service = "hmrun"
+if !exists(.severity) || is_null(.severity) {
+  .severity = .PRIORITY || "info"
+}
+# Parse the `HM_RUN=<uuid> ` line prefix. Boundary markers (HM_RUN_START /
+# HM_RUN_END) do NOT carry the prefix, so the regex simply does not match and
+# the line passes through with run_id unset.
+matched, err = parse_regex(.message, r'^HM_RUN=(?P<run_id>[0-9a-fA-F-]{36}) (?P<body>.*)$')
+if err == null && matched != null {
+  .run_id = matched.run_id
+  .message = matched.body
+}
+'''
 
 # NON-SYSTEMD FALLBACK: cron_syslog source
 # ==========================================

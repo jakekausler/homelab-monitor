@@ -1,11 +1,8 @@
 """Standalone remote CLI for installing/uninstalling the heartbeat wrapper on a foreign host.
 
 This module is distributed as a standalone script (EPIC-019 will PyInstaller it).
-It imports ONLY stdlib — NO homelab_monitor.kernel.* imports — so it runs on any
-host with just python3.
-
-It reproduces the fingerprint algorithm and wrapper invocation format in isolation,
-with comments pointing to kernel modules as the source of truth.
+It imports from homelab_monitor.kernel.cron.wrapper_constants for the canonical
+wrapper constants and functions.
 
 Usage:
     python3 install_wrapper_remote.py \
@@ -19,7 +16,6 @@ from __future__ import annotations
 
 import argparse
 import contextlib
-import datetime
 import hashlib
 import json
 import os
@@ -31,12 +27,17 @@ from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-# ===== Constants (must match kernel/cron/wrapper_constants.py) =====
-WRAPPER_PATH = "/usr/local/bin/cron-with-heartbeat.sh"
-WRAPPER_SEPARATOR = "--"
-WRAPPER_INVOCATION_PREFIX = f"{WRAPPER_PATH} {WRAPPER_SEPARATOR} "
-TOKEN_FILE_PATH = "/etc/homelab-monitor/heartbeat.token"
-TOKEN_FILE_DIR = "/etc/homelab-monitor"
+from homelab_monitor.kernel.cron.wrapper_constants import (
+    TOKEN_FILE_DIR,
+    TOKEN_FILE_PATH,
+    WRAPPER_ENV_PATH,
+    WRAPPER_FORMAT_VERSION,
+    WRAPPER_PATH,
+    build_invocation_prefix,
+    is_wrapped,
+    unwrap_command,
+    wrapped_fingerprint,
+)
 
 # Minimum whitespace-separated fields a crontab job line must have:
 # 5 schedule fields + (user +) command.
@@ -44,14 +45,6 @@ _MIN_CRONTAB_FIELDS = 6
 # Inclusive-exclusive bounds of the HTTP 2xx success range.
 _HTTP_OK_MIN = 200
 _HTTP_OK_MAX = 300
-
-
-def unwrap_command(command: str) -> str:
-    """Strip the wrapper prefix if present. Source of truth:
-    kernel/cron/wrapper_constants.py unwrap_command()."""
-    if command.startswith(WRAPPER_INVOCATION_PREFIX):
-        return command[len(WRAPPER_INVOCATION_PREFIX) :]
-    return command
 
 
 def compute_fingerprint(
@@ -366,17 +359,37 @@ def _run_uninstall(  # noqa: PLR0913
     NEVER touched (D1/D2). Implements its own atomic temp+rename rewrite with
     rollback (the standalone installer has no host-side executor).
     """
-    if WRAPPER_INVOCATION_PREFIX not in old_line:
+    if not is_wrapped(command):
         print(
             f"ERROR: crontab line is not wrapped; nothing to remove: {old_line}",
             file=sys.stderr,
         )
         return 1
 
-    idx = old_line.find(WRAPPER_INVOCATION_PREFIX)
-    new_line = old_line[:idx] + old_line[idx + len(WRAPPER_INVOCATION_PREFIX) :]
+    # STAGE-012: the fingerprint is the wrapper's positional argument — it is
+    # ground truth in the line itself. Extract it directly (mirrors the kernel
+    # uninstall path, which uses the STORED fingerprint, not a recompute).
+    # Recomputing via compute_fingerprint would assume a perfect round-trip of
+    # host/source/schedule/command, which need not hold; the embedded value is
+    # exactly what the install baked in.
     inner_command = unwrap_command(command)
-    fingerprint = compute_fingerprint(host, crontab_spec, schedule, inner_command)
+    fingerprint = wrapped_fingerprint(command)
+    if fingerprint is None:
+        # is_wrapped() already passed, so the regex matched — defensive only.
+        print(
+            f"ERROR: could not extract fingerprint from crontab line: {old_line}",
+            file=sys.stderr,
+        )
+        return 1
+    prefix = build_invocation_prefix(fingerprint)
+    idx = old_line.find(prefix)
+    if idx < 0:
+        print(
+            f"ERROR: wrapper prefix not found in crontab line: {old_line}",
+            file=sys.stderr,
+        )
+        return 1
+    new_line = old_line[:idx] + old_line[idx + len(prefix) :]
 
     reg_payload: dict[str, object] = {
         "host": host,
@@ -498,30 +511,28 @@ def main() -> int:  # noqa: PLR0911, PLR0912, PLR0915 -- CLI entry point: linear
 
     # Compute fingerprint and fetch wrapper template
     fingerprint = compute_fingerprint(host, crontab_spec, schedule, command)
-    install_date = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%d")
     try:
         template_text = fetch_wrapper_template(monitor_url, token)
     except Exception as exc:
         print(f"ERROR: failed to fetch wrapper template: {exc}", file=sys.stderr)
         return 1
-    # Substitute the 4 placeholders. Order + values must match
+    # Substitute the 3 constant placeholders. Order + values must match
     # kernel/cron/install.py:_build_wrapper_content() so the produced
     # wrapper is byte-identical to the server-side installer's output.
+    # The wrapper is now generic (fingerprint is a runtime argument, not baked).
     wrapper_content = (
-        template_text.replace("{{FINGERPRINT}}", fingerprint)
-        .replace("{{HEARTBEAT_URL_BASE}}", monitor_url)
-        .replace("{{TOKEN_FILE_PATH}}", TOKEN_FILE_PATH)
-        .replace("{{INSTALL_DATE}}", install_date)
+        template_text.replace("{{TOKEN_FILE_PATH}}", TOKEN_FILE_PATH)
+        .replace("{{WRAPPER_ENV_PATH}}", WRAPPER_ENV_PATH)
+        .replace("{{WRAPPER_FORMAT_VERSION}}", WRAPPER_FORMAT_VERSION)
     )
     # Splice the wrapper prefix in at the LAST occurrence of `command`, mirroring
-    # install.py:_rewrite_line (rfind) and hm-cron-apply.sh:replace_last. A
-    # command can contain its own schedule-like substrings, so first-occurrence
-    # replace would rewrite the wrong span.
+    # install.py:_rewrite_line (rfind). A command can contain its own
+    # schedule-like substrings, so first-occurrence replace would rewrite the wrong span.
     _idx = old_line.rfind(command)
     if _idx < 0:
         print(f"ERROR: command not found in crontab line: {old_line}", file=sys.stderr)
         return 1
-    new_line = old_line[:_idx] + WRAPPER_INVOCATION_PREFIX + command
+    new_line = old_line[:_idx] + build_invocation_prefix(fingerprint) + command
 
     reg_payload: dict[str, object] = {
         "host": host,

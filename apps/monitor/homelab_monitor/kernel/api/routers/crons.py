@@ -87,17 +87,62 @@ def _client_ip(request: Request) -> str | None:
 
 
 _WRAPPER_STALE_THRESHOLD = 3
+# semver = major.minor.patch
+_SEMVER_PART_COUNT = 3
+
+
+def _parse_semver(value: str) -> tuple[int, int, int] | None:
+    """Parse a `MAJOR.MINOR.PATCH` semver string into a comparable int tuple.
+
+    Returns None if the string is not a clean 3-part numeric semver — callers
+    treat an unparseable version as "outdated" (defensive: a malformed stored
+    value should not read as up-to-date)."""
+    parts = value.split(".")
+    if len(parts) != _SEMVER_PART_COUNT:
+        return None
+    try:
+        return (int(parts[0]), int(parts[1]), int(parts[2]))
+    except ValueError:
+        return None
+
+
+def _wrapper_format_is_current(stored: str | None) -> bool:
+    """True iff `stored` is a semver >= the current WRAPPER_FORMAT_VERSION.
+
+    NULL (legacy baked-fingerprint wrapper, or never-installed) → not current.
+    An unparseable stored value → not current."""
+    from homelab_monitor.kernel.cron.wrapper_constants import (  # noqa: PLC0415
+        WRAPPER_FORMAT_VERSION,
+    )
+
+    if stored is None:
+        return False
+    stored_t = _parse_semver(stored)
+    current_t = _parse_semver(WRAPPER_FORMAT_VERSION)
+    if stored_t is None or current_t is None:  # pragma: no cover -- constant is valid
+        return False
+    return stored_t >= current_t
 
 
 def _compute_wrapper_health(joined: CronWithState) -> WrapperHealth:
-    """Derive the wrapper-health enum (D5).
+    """Derive the wrapper-health enum.
 
-    "unknown" when the wrapper is not installed; "stale" when log-scrape
-    evidence outpaces heartbeat evidence by >=3 runs (consistent with the
-    WrapperPossiblyStale vmalert rule); "ok" otherwise.
+    - "unknown"          — the wrapper is not installed.
+    - "format_outdated"  — wrapper IS installed but its wrapper_format_version is
+                           missing or predates the run-log-capable format
+                           (WRAPPER_FORMAT_VERSION). The user must re-install.
+    - "stale"            — log-scrape evidence outpaces heartbeat evidence by
+                           >=3 runs.
+    - "ok"               — otherwise.
+
+    format_outdated is checked BEFORE stale: an outdated wrapper cannot produce
+    run logs at all, so prompting re-install takes precedence over a staleness
+    signal.
     """
     if not joined.cron.wrapper_installed:
         return "unknown"
+    if not _wrapper_format_is_current(joined.cron.wrapper_format_version):
+        return "format_outdated"
     if (
         joined.state is not None
         and joined.state.logscrape_runs_since_heartbeat >= _WRAPPER_STALE_THRESHOLD
@@ -225,9 +270,9 @@ async def get_wrapper_template(
     carries no secrets; HEARTBEAT_WRITE scope is required for uniform API
     authentication (the remote installer already holds that token).
 
-    The four placeholders ({{INSTALL_DATE}}, {{FINGERPRINT}},
-    {{HEARTBEAT_URL_BASE}}, {{TOKEN_FILE_PATH}}) are substituted by the
-    caller, identically to install.py:_build_wrapper_content().
+    The three placeholders ({{TOKEN_FILE_PATH}}, {{WRAPPER_ENV_PATH}},
+    {{WRAPPER_FORMAT_VERSION}}) are substituted by the caller (the wrapper is
+    generic; additional substitution occurs downstream in install.py).
     """
     template_text = (
         _resource_files("homelab_monitor")
@@ -346,16 +391,13 @@ async def install_wrapper(  # noqa: PLR0912 -- explicit per-exception-type HTTP 
             detail=f"cron is on remote host {cron.host!r}; remote wrapping ships in EPIC-017",
         )
 
-    # Resolve host root and install date
+    # Resolve host root
     host_root = Path(os.environ.get("HM_CRON_HOST_ROOT", "/host"))
-    install_date = utc_now_iso()[:10]
 
     # Dry-run path (confirm=false)
     if not payload.confirm:
         try:
-            kit = await build_install_kit(
-                cron, host_root=host_root, public_url=public_url, install_date=install_date
-            )
+            kit = await build_install_kit(cron, host_root=host_root, public_url=public_url)
         except CronLineNotFoundError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except AlreadyWrappedError as exc:

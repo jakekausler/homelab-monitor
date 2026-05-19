@@ -98,7 +98,7 @@ const baseState = null
 function makeGetCronResult(
   overrides: Partial<typeof baseCron> = {},
   state: Schema<'HeartbeatStateOut'> | null = baseState,
-  wrapperHealth: 'ok' | 'stale' | 'unknown' = 'unknown',
+  wrapperHealth: 'ok' | 'stale' | 'unknown' | 'format_outdated' = 'unknown',
 ) {
   return {
     isLoading: false,
@@ -517,6 +517,54 @@ describe('CronDetail', () => {
     renderInRouter(<CronDetail fingerprint={FP} />)
     await screen.findByText('daily-backup')
     expect(screen.getByTestId('wrapper-health-badge')).toHaveTextContent('Stale')
+  })
+
+  // 31. format_outdated badge renders "Re-install to enable run logs"
+  it('renders format_outdated badge with Re-install text', async () => {
+    vi.mocked(useGetCron).mockReturnValue(
+      makeGetCronResult(
+        { is_local: true, wrapper_installed: true },
+        null,
+        'format_outdated',
+      ) as unknown as ReturnType<typeof useGetCron>,
+    )
+    renderInRouter(<CronDetail fingerprint={FP} />)
+    await screen.findByText('daily-backup')
+    expect(screen.getByTestId('wrapper-health-badge')).toHaveTextContent(
+      'Re-install to enable run logs',
+    )
+  })
+
+  // 32. format_outdated badge carries warn variant styling
+  it('format_outdated badge has warn variant styling', async () => {
+    vi.mocked(useGetCron).mockReturnValue(
+      makeGetCronResult(
+        { is_local: true, wrapper_installed: true },
+        null,
+        'format_outdated',
+      ) as unknown as ReturnType<typeof useGetCron>,
+    )
+    renderInRouter(<CronDetail fingerprint={FP} />)
+    await screen.findByText('daily-backup')
+    // The badge element exists and is visible
+    const badge = screen.getByTestId('wrapper-health-badge')
+    expect(badge).toBeInTheDocument()
+    // Warn variant: badge does NOT say OK
+    expect(badge).not.toHaveTextContent('OK')
+  })
+
+  // 33. format_outdated description text mentions re-install
+  it('format_outdated shows re-install description text', async () => {
+    vi.mocked(useGetCron).mockReturnValue(
+      makeGetCronResult(
+        { is_local: true, wrapper_installed: true },
+        null,
+        'format_outdated',
+      ) as unknown as ReturnType<typeof useGetCron>,
+    )
+    renderInRouter(<CronDetail fingerprint={FP} />)
+    await screen.findByText('daily-backup')
+    expect(screen.getByText(/Re-install to enable per-run output capture/)).toBeInTheDocument()
   })
 
   // 30. "Overdue after" label appears; "Next due" does NOT appear

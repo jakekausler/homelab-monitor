@@ -1169,3 +1169,74 @@ async def test_upsert_discovered_wrapper_installed_true_to_false(
     after_diff = json.loads(audit_row[1])
     assert before_diff["wrapper_installed"] is True
     assert after_diff["wrapper_installed"] is False
+
+
+# ---------------------------------------------------------------------------
+# STAGE-002-012: wrapper_format_version column
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_cron_record_carries_wrapper_format_version(repo: SqliteRepository) -> None:
+    """CronRecord.wrapper_format_version is None by default after _seed_cron."""
+    cron_repo = CronRepo(repo)
+    fp = await _seed_cron(repo, name="wfv-test")
+    record = await cron_repo.get_cron(fp)
+    assert record is not None
+    assert record.wrapper_format_version is None
+
+
+@pytest.mark.asyncio
+async def test_set_wrapper_format_version(repo: SqliteRepository) -> None:
+    """set_wrapper_format_version sets the column; updated_at is bumped."""
+    cron_repo = CronRepo(repo)
+    fp = await _seed_cron(repo, name="wfv-set")
+
+    # Record updated_at before
+    row_before = await repo.fetch_one(
+        text("SELECT updated_at FROM crons WHERE fingerprint = :fp"),
+        {"fp": fp},
+    )
+    assert row_before is not None
+    updated_before = row_before[0]
+
+    import asyncio  # noqa: PLC0415
+
+    await asyncio.sleep(0.01)  # ensure clock advances
+
+    await cron_repo.set_wrapper_format_version(fp, "1.0.0")
+
+    record = await cron_repo.get_cron(fp)
+    assert record is not None
+    assert record.wrapper_format_version == "1.0.0"
+
+    row_after = await repo.fetch_one(
+        text("SELECT updated_at FROM crons WHERE fingerprint = :fp"),
+        {"fp": fp},
+    )
+    assert row_after is not None
+    # updated_at should have advanced
+    assert row_after[0] >= updated_before
+
+
+@pytest.mark.asyncio
+async def test_register_cron_wrapper_format_version_null(repo: SqliteRepository) -> None:
+    """register_cron inserts a row with wrapper_format_version=None."""
+    crepo = CronRepo(repo)
+    record, _created = await crepo.register_cron(_REG_BODY, url_fingerprint=_REG_FP, who=WHO, ip=IP)
+    assert record.wrapper_format_version is None
+
+
+@pytest.mark.asyncio
+async def test_upsert_discovered_wrapper_format_version_null(repo: SqliteRepository) -> None:
+    """upsert_discovered inserts a row with wrapper_format_version=None."""
+    crepo = CronRepo(repo)
+    record, _inserted, _updated = await crepo.upsert_discovered(
+        host="disc-host",
+        source_path="/etc/crontab",
+        schedule="*/15 * * * *",
+        command="/usr/bin/disc-cmd.sh",
+        is_wrapped=False,
+        now=utc_now_iso(),
+    )
+    assert record.wrapper_format_version is None

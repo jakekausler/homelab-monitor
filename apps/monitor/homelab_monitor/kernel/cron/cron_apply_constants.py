@@ -32,11 +32,13 @@ CRON_D_PREFIX: Final[str] = "/etc/cron.d/"
 
 #: Operation kinds carried in a request's `operations` list. The executor
 #: rejects any other value with `bad_request`. `unwrap-crontab` is implemented
-#: and emitted by the uninstall path (STAGE-002-009A).
+#: and emitted by the uninstall path (STAGE-002-009A). `write-wrapper-env` is
+#: added in STAGE-002-012 for the generic wrapper URL-base config file.
 OP_WRAP_CRONTAB: Final[str] = "wrap-crontab"
 OP_WRITE_WRAPPER_SCRIPT: Final[str] = "write-wrapper-script"
 OP_WRITE_TOKEN: Final[str] = "write-token"
 OP_UNWRAP_CRONTAB: Final[str] = "unwrap-crontab"
+OP_WRITE_WRAPPER_ENV: Final[str] = "write-wrapper-env"
 
 #: Fixed host destinations for the file-write operations. These are the
 #: canonical paths the executor validates against — the request NEVER carries
@@ -44,6 +46,8 @@ OP_UNWRAP_CRONTAB: Final[str] = "unwrap-crontab"
 #: constants; keep the two in sync.
 WRAPPER_SCRIPT_HOST_PATH: Final[str] = "/usr/local/bin/cron-with-heartbeat.sh"
 TOKEN_HOST_PATH: Final[str] = "/etc/homelab-monitor/heartbeat.token"
+#: Fixed host destination for the wrapper.env file (mode 644 — non-secret URL base).
+WRAPPER_ENV_HOST_PATH: Final[str] = "/etc/homelab-monitor/wrapper.env"
 
 
 def get_ipc_dir() -> Path:
@@ -73,6 +77,7 @@ __all__ = [
     "OP_UNWRAP_CRONTAB",
     "OP_WRAP_CRONTAB",
     "OP_WRITE_TOKEN",
+    "OP_WRITE_WRAPPER_ENV",
     "OP_WRITE_WRAPPER_SCRIPT",
     "REQUESTS_SUBDIR",
     "REQUEST_SCHEMA_VERSION",
@@ -82,6 +87,7 @@ __all__ = [
     "SYSTEM_CRONTAB_PATH",
     "TOKEN_HOST_PATH",
     "USER_CRONTAB_PREFIX",
+    "WRAPPER_ENV_HOST_PATH",
     "WRAPPER_SCRIPT_HOST_PATH",
     "get_ipc_dir",
     "is_valid_target_crontab",

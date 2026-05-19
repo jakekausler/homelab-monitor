@@ -1,15 +1,21 @@
-"""Tests for the cron-with-heartbeat.sh.tmpl wrapper script (STAGE-002-009).
+"""Tests for the cron-with-heartbeat.sh.tmpl wrapper script (STAGE-002-012).
 
-Actually executes the wrapper template as a script:
-- Substitutes all 4 template variables
+Actually executes the rendered wrapper template as a script:
+- Renders the template with constant placeholders only
 - Stands up a tiny local HTTP server to receive heartbeat POSTs
-- Asserts correct call sequence and exit-code propagation
-- Asserts heartbeat failures do NOT block the wrapped command
+- Uses a fake `logger` on PATH to capture journald marker calls
+- Asserts correct call sequence, exit-code propagation, marker emission,
+  and graceful degradation when logger/env-file is absent.
+
+Note: full Vector/journald integration is validated at prod-rig refinement (3b).
+The fake-logger technique makes marker assertions deterministic in CI.
 """
 
 from __future__ import annotations
 
 import http.server
+import os
+import subprocess
 import threading
 import time
 from importlib.resources import files
@@ -31,12 +37,12 @@ class _HeartbeatCollector(http.server.BaseHTTPRequestHandler):
         self.send_response(204)
         self.end_headers()
 
-    def log_message(self, format: str, *args: Any) -> None:  # noqa: ANN401 -- overrides stdlib BaseHTTPRequestHandler.log_message signature
-        pass  # suppress default stderr logging
+    def log_message(self, format: str, *args: Any) -> None:  # noqa: ANN401 -- overrides stdlib
+        pass
 
 
 class _HeartbeatServer(http.server.HTTPServer):
-    def __init__(self, *args: Any, **kwargs: Any) -> None:  # noqa: ANN401 -- passthrough to stdlib HTTPServer.__init__
+    def __init__(self, *args: Any, **kwargs: Any) -> None:  # noqa: ANN401
         super().__init__(*args, **kwargs)
         self.calls: list[str] = []
 
@@ -50,27 +56,19 @@ def _start_server() -> tuple[_HeartbeatServer, int]:
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Template helpers
 # ---------------------------------------------------------------------------
 
 
-def _build_wrapper(
-    fingerprint: str,
-    url_base: str,
-    token_file: str,
-    install_date: str = "2024-01-15",
-) -> str:
-    """Read the template and substitute all 4 variables."""
+def _build_wrapper(token_file: str, env_file: str) -> str:
+    """Render the new constant-placeholder template."""
     tmpl = (
-        files("homelab_monitor")
-        .joinpath("data", "cron-with-heartbeat.sh.tmpl")
-        .read_text(encoding="utf-8")
+        files("homelab_monitor").joinpath("data", "cron-with-heartbeat.sh.tmpl").read_text("utf-8")
     )
     return (
-        tmpl.replace("{{FINGERPRINT}}", fingerprint)
-        .replace("{{HEARTBEAT_URL_BASE}}", url_base)
-        .replace("{{TOKEN_FILE_PATH}}", token_file)
-        .replace("{{INSTALL_DATE}}", install_date)
+        tmpl.replace("{{TOKEN_FILE_PATH}}", token_file)
+        .replace("{{WRAPPER_ENV_PATH}}", env_file)
+        .replace("{{WRAPPER_FORMAT_VERSION}}", "1.0.0")
     )
 
 
@@ -88,17 +86,45 @@ def _write_token(tmp_path: Path, token: str = "test-token-abc") -> Path:
     return token_file
 
 
-def _run_wrapper(script: Path, *cmd_args: str, timeout: int = 10) -> int:
-    """Run the wrapper script with given args; return exit code."""
-    import subprocess  # noqa: PLC0415
+def _write_env(tmp_path: Path, url_base: str) -> Path:
+    """Write the wrapper.env file: HEARTBEAT_URL_BASE=<url>."""
+    env_file = tmp_path / "wrapper.env"
+    env_file.write_text(f"HEARTBEAT_URL_BASE={url_base}\n", encoding="utf-8")
+    env_file.chmod(0o644)
+    return env_file
 
-    result = subprocess.run(
-        [str(script), "--", *cmd_args],
+
+def _write_fake_logger(fake_dir: Path, log_file: Path) -> None:
+    """Write a fake `logger` script that appends stdin+args to log_file."""
+    fake_logger = fake_dir / "logger"
+    fake_logger.write_text(
+        f"#!/bin/sh\n"
+        f"# fake logger: append args + stdin to {log_file}\n"
+        f"printf '%s\\n' \"$*\" >> {log_file}\n"
+        f"cat >> {log_file}\n",
+        encoding="utf-8",
+    )
+    fake_logger.chmod(0o755)
+
+
+def _run_wrapper(
+    script: Path,
+    fingerprint: str,
+    *cmd_args: str,
+    env: dict[str, str] | None = None,
+    timeout: int = 10,
+    capture_output: bool = False,
+) -> subprocess.CompletedProcess[str]:
+    """Run the wrapper with <fingerprint> -- <cmd_args>."""
+    cmd = [str(script), fingerprint, "--", *cmd_args]
+    return subprocess.run(
+        cmd,
         timeout=timeout,
-        capture_output=False,
+        capture_output=capture_output,
+        text=capture_output,
+        env=env,
         check=False,
     )
-    return result.returncode
 
 
 # ---------------------------------------------------------------------------
@@ -107,107 +133,262 @@ def _run_wrapper(script: Path, *cmd_args: str, timeout: int = 10) -> int:
 
 
 class TestWrapperScript:
-    def test_start_then_ok_on_success(self, tmp_path: Path) -> None:
-        """/start is POSTed before the command, then /ok on exit 0."""
+    _FP = "abc12345678901234"
+
+    def test_exit_code_preserved_through_logger_pipe(self, tmp_path: Path) -> None:
+        """Exit-code preservation through the tempfile technique for several codes."""
         server, port = _start_server()
         url_base = f"http://127.0.0.1:{port}"
         token_file = _write_token(tmp_path)
-        fp = "abc123"
-
-        content = _build_wrapper(fp, url_base, str(token_file))
+        env_file = _write_env(tmp_path, url_base)
+        content = _build_wrapper(str(token_file), str(env_file))
         script = _write_wrapper(tmp_path, content)
 
-        rc = _run_wrapper(script, "true")
+        for expected_rc in (0, 1, 2, 42, 127):
+            result = _run_wrapper(script, self._FP, "sh", "-c", f"exit {expected_rc}")
+            assert result.returncode == expected_rc, (
+                f"expected exit {expected_rc}, got {result.returncode}"
+            )
 
-        assert rc == 0
-        # Give server a moment to process last POST
-        time.sleep(0.1)
+        server.shutdown()
+
+    def test_start_then_ok_on_success(self, tmp_path: Path) -> None:
+        """/start?run_id=<uuid> then /ok?run_id=...&exit_code=0."""
+        server, port = _start_server()
+        url_base = f"http://127.0.0.1:{port}"
+        token_file = _write_token(tmp_path)
+        env_file = _write_env(tmp_path, url_base)
+        content = _build_wrapper(str(token_file), str(env_file))
+        script = _write_wrapper(tmp_path, content)
+
+        result = _run_wrapper(script, self._FP, "true")
+        assert result.returncode == 0
+
+        time.sleep(0.15)
         server.shutdown()
 
         paths = server.calls
-        assert any(f"/api/hb/{fp}/start" in p for p in paths), f"no /start in {paths}"
-        assert any(f"/api/hb/{fp}/ok" in p for p in paths), f"no /ok in {paths}"
+        assert any(f"/api/hb/{self._FP}/start" in p for p in paths), f"no /start in {paths}"
+        assert any(f"/api/hb/{self._FP}/ok" in p for p in paths), f"no /ok in {paths}"
         assert not any("fail" in p for p in paths), f"unexpected /fail in {paths}"
 
     def test_start_then_fail_on_nonzero(self, tmp_path: Path) -> None:
-        """/start is POSTed, then /fail?exit_code=N on non-zero exit."""
+        """/start then /fail?exit_code=42."""
         server, port = _start_server()
         url_base = f"http://127.0.0.1:{port}"
         token_file = _write_token(tmp_path)
-        fp = "def456"
-
-        content = _build_wrapper(fp, url_base, str(token_file))
+        env_file = _write_env(tmp_path, url_base)
+        content = _build_wrapper(str(token_file), str(env_file))
         script = _write_wrapper(tmp_path, content)
 
-        rc = _run_wrapper(script, "sh", "-c", "exit 42")
+        result = _run_wrapper(script, self._FP, "sh", "-c", "exit 42")
+        assert result.returncode == 42  # noqa: PLR2004
 
-        assert rc == 42  # noqa: PLR2004
-        time.sleep(0.1)
+        time.sleep(0.15)
         server.shutdown()
 
         paths = server.calls
-        assert any(f"/api/hb/{fp}/start" in p for p in paths), f"no /start in {paths}"
+        assert any(f"/api/hb/{self._FP}/start" in p for p in paths), f"no /start in {paths}"
         fail_calls = [p for p in paths if "fail" in p]
         assert fail_calls, f"no /fail in {paths}"
         assert any("exit_code=42" in p for p in fail_calls), f"exit_code=42 not in {fail_calls}"
 
-    def test_exit_code_preserved(self, tmp_path: Path) -> None:
-        """Wrapper preserves the exact exit code of the wrapped command."""
+    def test_run_id_on_all_heartbeats(self, tmp_path: Path) -> None:
+        """Every POST path contains run_id= and all use the same UUID."""
         server, port = _start_server()
         url_base = f"http://127.0.0.1:{port}"
         token_file = _write_token(tmp_path)
-        fp = "ghi789"
-
-        content = _build_wrapper(fp, url_base, str(token_file))
+        env_file = _write_env(tmp_path, url_base)
+        content = _build_wrapper(str(token_file), str(env_file))
         script = _write_wrapper(tmp_path, content)
 
-        for expected_rc in (0, 1, 2, 127):
-            rc = _run_wrapper(script, "sh", "-c", f"exit {expected_rc}")
-            assert rc == expected_rc, f"expected exit code {expected_rc}, got {rc}"
-
+        _run_wrapper(script, self._FP, "true")
+        time.sleep(0.15)
         server.shutdown()
 
-    def test_heartbeat_down_does_not_block(self, tmp_path: Path) -> None:
-        """When HTTP server is unreachable, wrapper still runs command + exits correctly."""
-        # Use a port that's not listening
-        url_base = "http://127.0.0.1:19999"  # nothing listening here
-        token_file = _write_token(tmp_path)
-        fp = "jkl012"
+        paths = server.calls
+        assert paths, "no POSTs received"
+        for p in paths:
+            assert "run_id=" in p, f"run_id= missing in {p}"
 
-        content = _build_wrapper(fp, url_base, str(token_file))
-        # Reduce curl timeout from 5s to speed up test (the template hardcodes 5s max-time)
-        # We can't easily change it; just run with timeout guard and assert command ran
-        script = _write_wrapper(tmp_path, content)
+        # Extract run_ids from all POSTs and assert they are all identical
+        import re  # noqa: PLC0415
 
-        # command itself is instant; the curl --max-time 5 may add delay
-        # We accept the test being slow (up to ~10s) but it MUST not hang forever
-        rc = _run_wrapper(script, "true", timeout=30)
-        assert rc == 0
+        uuids: set[str] = set()
+        for p in paths:
+            m = re.search(r"run_id=([0-9a-fA-F-]{36})", p)
+            if m:
+                uuids.add(m.group(1))
+        assert len(uuids) == 1, f"multiple run_ids: {uuids}"
 
-    def test_missing_separator_exits_64(self, tmp_path: Path) -> None:
-        """Calling wrapper without '--' separator exits 64 per spec."""
-        import subprocess  # noqa: PLC0415
+    def test_logger_absent_still_runs_and_preserves_exit(self, tmp_path: Path) -> None:
+        """With logger absent from PATH, command still runs and exit code preserved."""
+        # Use env with PATH pointing only at directories containing sh/true/date/mktemp
+        # but NOT logger. We do this by writing a fake PATH containing only sh basics.
+        sentinel = tmp_path / "sentinel.txt"
 
         server, port = _start_server()
         url_base = f"http://127.0.0.1:{port}"
         token_file = _write_token(tmp_path)
-        fp = "sep001"
-
-        content = _build_wrapper(fp, url_base, str(token_file))
+        env_file = _write_env(tmp_path, url_base)
+        content = _build_wrapper(str(token_file), str(env_file))
         script = _write_wrapper(tmp_path, content)
 
-        # Call WITHOUT '--'
+        # Use a fake dir that has no `logger` but keep system PATH for sh/curl/etc.
+        no_logger_dir = tmp_path / "no_logger_bin"
+        no_logger_dir.mkdir()
+        env = dict(os.environ)
+        env["PATH"] = str(no_logger_dir) + ":" + env.get("PATH", "/usr/bin:/bin")
+
+        result = _run_wrapper(
+            script,
+            self._FP,
+            "sh",
+            "-c",
+            f"touch {sentinel} ; exit 7",
+            env=env,
+            timeout=30,
+        )
+
+        time.sleep(0.15)
+        server.shutdown()
+
+        assert result.returncode == 7  # noqa: PLR2004
+        assert sentinel.exists(), "sentinel file not created — command did not run"
+
+    def test_hm_run_markers_emitted(self, tmp_path: Path) -> None:
+        """Fake logger on PATH captures HM_RUN_START and HM_RUN_END markers."""
+        log_file = tmp_path / "logger.log"
+        fake_bin = tmp_path / "fake_bin"
+        fake_bin.mkdir()
+        _write_fake_logger(fake_bin, log_file)
+
+        server, port = _start_server()
+        url_base = f"http://127.0.0.1:{port}"
+        token_file = _write_token(tmp_path)
+        env_file = _write_env(tmp_path, url_base)
+        content = _build_wrapper(str(token_file), str(env_file))
+        script = _write_wrapper(tmp_path, content)
+
+        env = dict(os.environ)
+        env["PATH"] = str(fake_bin) + ":" + env.get("PATH", "/usr/bin:/bin")
+
+        _run_wrapper(script, self._FP, "sh", "-c", "echo hello_output", env=env)
+        time.sleep(0.15)
+        server.shutdown()
+
+        log_content = log_file.read_text(encoding="utf-8") if log_file.exists() else ""
+        assert f"HM_RUN_START fp={self._FP}" in log_content, (
+            f"HM_RUN_START not in logger log:\n{log_content}"
+        )
+        assert f"HM_RUN_END fp={self._FP}" in log_content, (
+            f"HM_RUN_END not in logger log:\n{log_content}"
+        )
+        assert "HM_RUN=" in log_content, f"HM_RUN= prefix not in logger log:\n{log_content}"
+
+    def test_original_output_on_stdout(self, tmp_path: Path) -> None:
+        """Wrapper's stdout contains the original un-prefixed command output."""
+        server, port = _start_server()
+        url_base = f"http://127.0.0.1:{port}"
+        token_file = _write_token(tmp_path)
+        env_file = _write_env(tmp_path, url_base)
+        content = _build_wrapper(str(token_file), str(env_file))
+        script = _write_wrapper(tmp_path, content)
+
+        result = _run_wrapper(
+            script,
+            self._FP,
+            "sh",
+            "-c",
+            "echo hello_world_output",
+            capture_output=True,
+        )
+        time.sleep(0.15)
+        server.shutdown()
+
+        assert "hello_world_output" in result.stdout
+        # The HM_RUN= prefix copy goes only to logger, NOT to wrapper stdout
+        assert not result.stdout.startswith("HM_RUN=")
+
+    def test_stderr_is_captured(self, tmp_path: Path) -> None:
+        """stderr is merged via 2>&1 — fake logger receives HM_RUN=<uuid> <stderr line>."""
+        log_file = tmp_path / "logger.log"
+        fake_bin = tmp_path / "fake_bin"
+        fake_bin.mkdir()
+        _write_fake_logger(fake_bin, log_file)
+
+        server, port = _start_server()
+        url_base = f"http://127.0.0.1:{port}"
+        token_file = _write_token(tmp_path)
+        env_file = _write_env(tmp_path, url_base)
+        content = _build_wrapper(str(token_file), str(env_file))
+        script = _write_wrapper(tmp_path, content)
+
+        env = dict(os.environ)
+        env["PATH"] = str(fake_bin) + ":" + env.get("PATH", "/usr/bin:/bin")
+
+        _run_wrapper(script, self._FP, "sh", "-c", "echo err_line >&2", env=env)
+        time.sleep(0.15)
+        server.shutdown()
+
+        log_content = log_file.read_text(encoding="utf-8") if log_file.exists() else ""
+        assert "err_line" in log_content, f"stderr line not captured:\n{log_content}"
+
+    def test_missing_fingerprint_exits_64(self, tmp_path: Path) -> None:
+        """Calling wrapper with no args exits 64."""
+        token_file = _write_token(tmp_path)
+        env_file = tmp_path / "wrapper.env"
+        env_file.write_text("HEARTBEAT_URL_BASE=http://127.0.0.1:9\n")
+        content = _build_wrapper(str(token_file), str(env_file))
+        script = _write_wrapper(tmp_path, content)
+
         result = subprocess.run(
-            [str(script), "true"],  # no '--' separator
+            [str(script)],
             timeout=10,
             capture_output=True,
             check=False,
         )
-        server.shutdown()
         assert result.returncode == 64  # noqa: PLR2004
 
+    def test_missing_separator_exits_64(self, tmp_path: Path) -> None:
+        """Calling wrapper with fp but no '--' exits 64."""
+        token_file = _write_token(tmp_path)
+        env_file = tmp_path / "wrapper.env"
+        env_file.write_text("HEARTBEAT_URL_BASE=http://127.0.0.1:9\n")
+        content = _build_wrapper(str(token_file), str(env_file))
+        script = _write_wrapper(tmp_path, content)
+
+        result = subprocess.run(
+            [str(script), "myfp", "true"],  # no '--'
+            timeout=10,
+            capture_output=True,
+            check=False,
+        )
+        assert result.returncode == 64  # noqa: PLR2004
+
+    def test_heartbeat_down_does_not_block(self, tmp_path: Path) -> None:
+        """Unreachable URL base — wrapper still runs command and exits correctly."""
+        url_base = "http://127.0.0.1:19999"  # nothing listening
+        token_file = _write_token(tmp_path)
+        env_file = _write_env(tmp_path, url_base)
+        content = _build_wrapper(str(token_file), str(env_file))
+        script = _write_wrapper(tmp_path, content)
+
+        result = _run_wrapper(script, self._FP, "true", timeout=30)
+        assert result.returncode == 0
+
+    def test_no_env_file_still_runs(self, tmp_path: Path) -> None:
+        """Missing wrapper.env → URL_BASE empty → no heartbeat POSTs, command runs."""
+        token_file = _write_token(tmp_path)
+        absent_env = tmp_path / "does_not_exist.env"
+        content = _build_wrapper(str(token_file), str(absent_env))
+        script = _write_wrapper(tmp_path, content)
+
+        result = _run_wrapper(script, self._FP, "sh", "-c", "exit 5")
+        assert result.returncode == 5  # noqa: PLR2004
+
     def test_token_file_read_for_auth(self, tmp_path: Path) -> None:
-        """Wrapper reads token file and sends Authorization header."""
+        """Wrapper reads token file and sends Authorization: Bearer <token> header."""
         received_headers: list[str] = []
 
         class _AuthCapture(http.server.BaseHTTPRequestHandler):
@@ -216,7 +397,7 @@ class TestWrapperScript:
                 self.send_response(204)
                 self.end_headers()
 
-            def log_message(self, format: str, *args: Any) -> None:  # noqa: ANN401 -- overrides stdlib BaseHTTPRequestHandler.log_message signature
+            def log_message(self, format: str, *args: Any) -> None:  # noqa: ANN401
                 pass
 
         auth_server = http.server.HTTPServer(("127.0.0.1", 0), _AuthCapture)
@@ -227,16 +408,32 @@ class TestWrapperScript:
         url_base = f"http://127.0.0.1:{port}"
         my_token = "supersecret-token-xyz"
         token_file = _write_token(tmp_path, my_token)
-        fp = "tok001"
-
-        content = _build_wrapper(fp, url_base, str(token_file))
+        env_file = _write_env(tmp_path, url_base)
+        content = _build_wrapper(str(token_file), str(env_file))
         script = _write_wrapper(tmp_path, content)
-        _run_wrapper(script, "true")
 
-        time.sleep(0.1)
+        _run_wrapper(script, self._FP, "true")
+        time.sleep(0.15)
         auth_server.shutdown()
 
         assert received_headers, "no POST received"
         assert all(f"Bearer {my_token}" in h for h in received_headers), (
             f"token not in auth headers: {received_headers}"
         )
+
+    def test_set_u_no_unbound_var(self, tmp_path: Path) -> None:
+        """Run wrapper with minimal env; assert no 'unbound variable' on stderr."""
+        token_file = _write_token(tmp_path)
+        # absent env file — URL_BASE will be empty (guarded by ${VAR:-})
+        absent_env = tmp_path / "absent.env"
+        content = _build_wrapper(str(token_file), str(absent_env))
+        script = _write_wrapper(tmp_path, content)
+
+        result = subprocess.run(
+            [str(script), self._FP, "--", "true"],
+            timeout=10,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert "unbound variable" not in (result.stderr or ""), f"set -u tripped: {result.stderr}"

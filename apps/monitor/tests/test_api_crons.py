@@ -851,6 +851,9 @@ async def _seed_wrapper_cron(
 ) -> str:
     """Seed a cron with wrapper_installed set and return its fingerprint."""
     from homelab_monitor.kernel.cron.fingerprint import compute_fingerprint  # noqa: PLC0415
+    from homelab_monitor.kernel.cron.wrapper_constants import (  # noqa: PLC0415
+        WRAPPER_FORMAT_VERSION,
+    )
 
     fp = compute_fingerprint(
         host="host-a",
@@ -861,15 +864,17 @@ async def _seed_wrapper_cron(
     now = utc_now_iso()
     wi_int = 1 if wrapper_installed else 0
     wlsa = now if wrapper_installed else None
+    wfv = WRAPPER_FORMAT_VERSION if wrapper_installed else None
     async with repo.engine.begin() as conn:
         await conn.execute(
             text(
                 "INSERT INTO crons (fingerprint, name, host, command, schedule, "
                 "schedule_canonical, cadence_seconds, expected_grace_seconds, "
                 "enabled, last_seen_state, created_at, updated_at, hidden_at, "
-                "source_path, wrapper_last_seen_at, wrapper_installed, soft_deleted_at) VALUES ("
+                "source_path, wrapper_last_seen_at, wrapper_installed, "
+                "wrapper_format_version, soft_deleted_at) VALUES ("
                 ":fp, :name, 'host-a', :cmd, '*/5 * * * *', '*/5 * * * *', 0, "
-                "300, 1, 'unknown', :now, :now, NULL, '/etc/crontab', :wlsa, :wi, NULL)"
+                "300, 1, 'unknown', :now, :now, NULL, '/etc/crontab', :wlsa, :wi, :wfv, NULL)"
             ),
             {
                 "fp": fp,
@@ -878,6 +883,7 @@ async def _seed_wrapper_cron(
                 "now": now,
                 "wlsa": wlsa,
                 "wi": wi_int,
+                "wfv": wfv,
             },
         )
     return fp
@@ -962,3 +968,181 @@ async def test_with_state_to_out_both_branches_covered(
     assert resp2.status_code == 200  # noqa: PLR2004
     assert resp2.json()["state"] is not None
     assert resp2.json()["wrapper_health"] == "ok"
+
+
+# ---------------------------------------------------------------------------
+# T5b — wrapper_health format_outdated (STAGE-002-012)
+# ---------------------------------------------------------------------------
+
+
+async def _seed_wrapper_cron_with_version(
+    repo: SqliteRepository,
+    *,
+    name: str,
+    wrapper_installed: bool,
+    wrapper_format_version: str | None,
+) -> str:
+    """Seed a cron with wrapper_installed + wrapper_format_version set."""
+    from homelab_monitor.kernel.cron.fingerprint import compute_fingerprint  # noqa: PLC0415
+
+    fp = compute_fingerprint(
+        host="host-a",
+        source_path="/etc/crontab",
+        schedule="*/5 * * * *",
+        command=f"/cmd-wfv-{name}",
+    )
+    now = utc_now_iso()
+    wi_int = 1 if wrapper_installed else 0
+    wlsa = now if wrapper_installed else None
+    async with repo.engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO crons (fingerprint, name, host, command, schedule, "
+                "schedule_canonical, cadence_seconds, expected_grace_seconds, "
+                "enabled, last_seen_state, created_at, updated_at, hidden_at, "
+                "source_path, wrapper_last_seen_at, wrapper_installed, soft_deleted_at, "
+                "wrapper_format_version) VALUES ("
+                ":fp, :name, 'host-a', :cmd, '*/5 * * * *', '*/5 * * * *', 0, "
+                "300, 1, 'unknown', :now, :now, NULL, '/etc/crontab', :wlsa, :wi, NULL, :wfv)"
+            ),
+            {
+                "fp": fp,
+                "name": name,
+                "cmd": f"/cmd-wfv-{name}",
+                "now": now,
+                "wlsa": wlsa,
+                "wi": wi_int,
+                "wfv": wrapper_format_version,
+            },
+        )
+    return fp
+
+
+@pytest.mark.asyncio
+async def test_wrapper_health_format_outdated_when_version_null(
+    authenticated_client: AsyncClient, repo: SqliteRepository
+) -> None:
+    """wrapper_installed=True, wrapper_format_version=None → 'format_outdated'."""
+    fp = await _seed_wrapper_cron_with_version(
+        repo, name="fo-null", wrapper_installed=True, wrapper_format_version=None
+    )
+    resp = await authenticated_client.get(f"/api/crons/{fp}")
+    assert resp.status_code == 200  # noqa: PLR2004
+    assert resp.json()["wrapper_health"] == "format_outdated"
+
+
+@pytest.mark.asyncio
+async def test_wrapper_health_format_outdated_when_version_old(
+    authenticated_client: AsyncClient, repo: SqliteRepository
+) -> None:
+    """wrapper_installed=True, wrapper_format_version='0.9.0' → 'format_outdated'."""
+    fp = await _seed_wrapper_cron_with_version(
+        repo, name="fo-old", wrapper_installed=True, wrapper_format_version="0.9.0"
+    )
+    resp = await authenticated_client.get(f"/api/crons/{fp}")
+    assert resp.status_code == 200  # noqa: PLR2004
+    assert resp.json()["wrapper_health"] == "format_outdated"
+
+
+@pytest.mark.asyncio
+async def test_wrapper_health_ok_when_version_current(
+    authenticated_client: AsyncClient, repo: SqliteRepository
+) -> None:
+    """wrapper_installed=True, wrapper_format_version='1.0.0' (and not stale) → 'ok'."""
+    fp = await _seed_wrapper_cron_with_version(
+        repo, name="fo-current", wrapper_installed=True, wrapper_format_version="1.0.0"
+    )
+    resp = await authenticated_client.get(f"/api/crons/{fp}")
+    assert resp.status_code == 200  # noqa: PLR2004
+    assert resp.json()["wrapper_health"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_wrapper_health_format_outdated_precedes_stale(
+    authenticated_client: AsyncClient, repo: SqliteRepository
+) -> None:
+    """format_outdated takes priority over stale: version NULL + logscrape>=3 → format_outdated."""
+    fp = await _seed_wrapper_cron_with_version(
+        repo, name="fo-vs-stale", wrapper_installed=True, wrapper_format_version=None
+    )
+    await _seed_state(repo, fingerprint=fp, logscrape_runs_since_heartbeat=5)
+    resp = await authenticated_client.get(f"/api/crons/{fp}")
+    assert resp.status_code == 200  # noqa: PLR2004
+    assert resp.json()["wrapper_health"] == "format_outdated"
+
+
+@pytest.mark.asyncio
+async def test_wrapper_health_unknown_regression(
+    authenticated_client: AsyncClient, repo: SqliteRepository
+) -> None:
+    """Regression: wrapper_installed=False → 'unknown' (unchanged behavior)."""
+    fp = await _seed_wrapper_cron_with_version(
+        repo, name="fo-unknown", wrapper_installed=False, wrapper_format_version=None
+    )
+    resp = await authenticated_client.get(f"/api/crons/{fp}")
+    assert resp.status_code == 200  # noqa: PLR2004
+    assert resp.json()["wrapper_health"] == "unknown"
+
+
+# ---------------------------------------------------------------------------
+# Direct unit tests for _parse_semver and _wrapper_format_is_current
+# ---------------------------------------------------------------------------
+
+
+def test_parse_semver_valid_3_part() -> None:
+    from homelab_monitor.kernel.api.routers.crons import (  # noqa: PLC0415
+        _parse_semver,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    assert _parse_semver("1.0.0") == (1, 0, 0)
+    assert _parse_semver("2.3.4") == (2, 3, 4)
+    assert _parse_semver("0.0.0") == (0, 0, 0)
+
+
+def test_parse_semver_2_part_returns_none() -> None:
+    from homelab_monitor.kernel.api.routers.crons import (  # noqa: PLC0415
+        _parse_semver,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    assert _parse_semver("1.0") is None
+
+
+def test_parse_semver_non_numeric_returns_none() -> None:
+    from homelab_monitor.kernel.api.routers.crons import (  # noqa: PLC0415
+        _parse_semver,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    assert _parse_semver("1.0.abc") is None
+    assert _parse_semver("v1.0.0") is None
+
+
+def test_wrapper_format_is_current_none_is_false() -> None:
+    from homelab_monitor.kernel.api.routers.crons import (  # noqa: PLC0415
+        _wrapper_format_is_current,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    assert _wrapper_format_is_current(None) is False
+
+
+def test_wrapper_format_is_current_old_is_false() -> None:
+    from homelab_monitor.kernel.api.routers.crons import (  # noqa: PLC0415
+        _wrapper_format_is_current,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    assert _wrapper_format_is_current("0.9.0") is False
+
+
+def test_wrapper_format_is_current_equal_is_true() -> None:
+    from homelab_monitor.kernel.api.routers.crons import (  # noqa: PLC0415
+        _wrapper_format_is_current,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    assert _wrapper_format_is_current("1.0.0") is True
+
+
+def test_wrapper_format_is_current_newer_is_true() -> None:
+    from homelab_monitor.kernel.api.routers.crons import (  # noqa: PLC0415
+        _wrapper_format_is_current,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    assert _wrapper_format_is_current("2.0.0") is True

@@ -628,7 +628,7 @@ def test_main_dry_run_prints_preview(tmp_path: Path, capsys: pytest.CaptureFixtu
         patch("sys.argv", ["prog", *argv]),
         patch(
             "homelab_monitor.cli.install_wrapper_remote.fetch_wrapper_template",
-            return_value="#!/bin/sh\n# {{FINGERPRINT}}\n",
+            return_value="#!/bin/sh\n# {{WRAPPER_FORMAT_VERSION}}\n",
         ),
     ):
         rc = main()
@@ -769,7 +769,7 @@ def test_main_prompt_lists_spool_files(
         patch("builtins.input", side_effect=[str(user_ct), "1"]),
         patch(
             "homelab_monitor.cli.install_wrapper_remote.fetch_wrapper_template",
-            return_value="#!/bin/sh\n# {{FINGERPRINT}}\n",
+            return_value="#!/bin/sh\n# {{WRAPPER_FORMAT_VERSION}}\n",
         ),
     ):
         rc = main()
@@ -805,7 +805,7 @@ def test_main_prompt_spool_dir_not_listed(
         patch("builtins.input", side_effect=[str(user_ct), "1"]),
         patch(
             "homelab_monitor.cli.install_wrapper_remote.fetch_wrapper_template",
-            return_value="#!/bin/sh\n# {{FINGERPRINT}}\n",
+            return_value="#!/bin/sh\n# {{WRAPPER_FORMAT_VERSION}}\n",
         ),
     ):
         rc = main()
@@ -903,7 +903,7 @@ def test_main_prompt_for_line_number(tmp_path: Path, capsys: pytest.CaptureFixtu
         patch("builtins.input", return_value="1"),
         patch(
             "homelab_monitor.cli.install_wrapper_remote.fetch_wrapper_template",
-            return_value="#!/bin/sh\n# {{FINGERPRINT}}\n",
+            return_value="#!/bin/sh\n# {{WRAPPER_FORMAT_VERSION}}\n",
         ),
     ):
         rc = main()
@@ -964,7 +964,7 @@ def _make_urlopen_resp(body: str, status: int = 200) -> MagicMock:
 
 def test_fetch_wrapper_template_returns_body_on_200() -> None:
     """fetch_wrapper_template returns the decoded body when HTTP status is 200."""
-    tmpl = "#!/bin/sh\n# {{FINGERPRINT}}\n"
+    tmpl = "#!/bin/sh\n# {{WRAPPER_FORMAT_VERSION}}\n"
     mock_resp = _make_urlopen_resp(tmpl, status=200)
 
     with patch("homelab_monitor.cli.install_wrapper_remote.urlopen", return_value=mock_resp):
@@ -992,20 +992,19 @@ def test_fetch_wrapper_template_raises_on_non_2xx() -> None:
 def test_remote_installer_substitution_byte_identical_to_kernel(tmp_path: Path) -> None:
     """The remote installer's substituted wrapper == install.py:_build_wrapper_content().
 
-    Both must produce exactly the same bytes for the same (fingerprint, url, date).
+    Post-STAGE-012 the wrapper is GENERIC: byte-identical for every cron. The
+    fingerprint is a runtime argument and the heartbeat URL is read at runtime
+    from wrapper.env, so neither is baked in. The only substitutions are three
+    fixed constants — both installers must produce exactly the same bytes.
     """
-    import datetime  # noqa: PLC0415
-
     from homelab_monitor.kernel.cron.install import (  # noqa: PLC0415
         _build_wrapper_content,  # pyright: ignore[reportPrivateUsage]
     )
 
-    fp = "a" * 64
     monitor_url = "https://monitor.example.com"
-    install_date = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%d")
 
-    # Kernel side: call _build_wrapper_content directly
-    kernel_content = _build_wrapper_content(fp, monitor_url, install_date)
+    # Kernel side: call _build_wrapper_content directly (zero-arg — generic wrapper)
+    kernel_content = _build_wrapper_content()
 
     # Remote-installer side: fetch template from API (mocked), then substitute
     # Read the real template to simulate the fetch
@@ -1021,11 +1020,12 @@ def test_remote_installer_substitution_byte_identical_to_kernel(tmp_path: Path) 
     with patch("homelab_monitor.cli.install_wrapper_remote.urlopen", return_value=mock_resp):
         template_text = fetch_wrapper_template(monitor_url, "tok")
 
+    # Substitute exactly the three constant placeholders the generic template
+    # has, with the same values install.py:_build_wrapper_content() uses.
     remote_content = (
-        template_text.replace("{{FINGERPRINT}}", fp)
-        .replace("{{HEARTBEAT_URL_BASE}}", monitor_url)
-        .replace("{{TOKEN_FILE_PATH}}", iwr.TOKEN_FILE_PATH)
-        .replace("{{INSTALL_DATE}}", install_date)
+        template_text.replace("{{TOKEN_FILE_PATH}}", iwr.TOKEN_FILE_PATH)
+        .replace("{{WRAPPER_ENV_PATH}}", iwr.WRAPPER_ENV_PATH)
+        .replace("{{WRAPPER_FORMAT_VERSION}}", iwr.WRAPPER_FORMAT_VERSION)
     )
 
     assert remote_content == kernel_content
@@ -1091,7 +1091,7 @@ def test_write_files_rfind_splice_last_occurrence(
     # Compute the expected new_line: rfind replaces only the last occurrence
     _idx = old_line.rfind(command)
     assert _idx >= 0
-    expected_new_line = old_line[:_idx] + iwr.WRAPPER_INVOCATION_PREFIX + command
+    expected_new_line = old_line[:_idx] + build_invocation_prefix("fp") + command
 
     mock_resp = _make_urlopen_resp("ok", status=200)
     with patch("homelab_monitor.cli.install_wrapper_remote.urlopen", return_value=mock_resp):
@@ -1438,7 +1438,7 @@ def test_main_command_not_found_in_line_returns_1(
         patch("sys.argv", ["prog", *argv]),
         patch(
             "homelab_monitor.cli.install_wrapper_remote.fetch_wrapper_template",
-            return_value="#!/bin/sh\n# {{FINGERPRINT}}\n",
+            return_value="#!/bin/sh\n# {{WRAPPER_FORMAT_VERSION}}\n",
         ),
         patch(
             "homelab_monitor.cli.install_wrapper_remote._parse_job_line",
@@ -1541,8 +1541,11 @@ from homelab_monitor.cli.install_wrapper_remote import (  # noqa: E402
     _run_uninstall,  # pyright: ignore[reportPrivateUsage]
     unwrap_command,
 )
+from homelab_monitor.kernel.cron.wrapper_constants import (  # noqa: E402
+    build_invocation_prefix,
+)
 
-_WRAPPER_PREFIX = iwr.WRAPPER_INVOCATION_PREFIX
+_WRAPPER_PREFIX = build_invocation_prefix("test-fingerprint-uninstall")
 
 
 # ---------------------------------------------------------------------------
@@ -1749,6 +1752,92 @@ def test_run_uninstall_confirm_no_trailing_newline(
     assert not new_content.endswith("\n")
     assert _WRAPPER_PREFIX not in new_content
     assert bare_cmd in new_content
+
+
+def test_run_uninstall_wrapped_fingerprint_none_returns_error(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Defensive guard: wrapped_fingerprint returns None even though is_wrapped passed.
+
+    Covers install_wrapper_remote.py lines 379-383 (fingerprint is None branch).
+    In production both functions use the same regex so this path is unreachable;
+    we patch wrapped_fingerprint to force the branch.
+    """
+    ct = tmp_path / "crontab"
+    bare_cmd = "/usr/bin/myjob.sh"
+    schedule = "0 4 * * *"
+    old_line = f"{schedule} {_WRAPPER_PREFIX}{bare_cmd}"
+    ct.write_text(old_line + "\n", encoding="utf-8")
+    wrapped_command = f"{_WRAPPER_PREFIX}{bare_cmd}"
+
+    with patch(
+        "homelab_monitor.cli.install_wrapper_remote.wrapped_fingerprint",
+        return_value=None,
+    ):
+        rc = _run_uninstall(
+            monitor_url="http://monitor.example.com",
+            token="tok",
+            host="testhost",
+            crontab_spec="/etc/crontab",
+            crontab_file=ct,
+            crontab_content=ct.read_text(encoding="utf-8"),
+            line_index=0,
+            old_line=old_line,
+            schedule=schedule,
+            command=wrapped_command,
+            confirm=False,
+        )
+
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "could not extract fingerprint" in err
+
+
+def test_run_uninstall_prefix_not_in_old_line_returns_error(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Prefix built from fingerprint is not found in old_line.
+
+    Covers install_wrapper_remote.py lines 387-391 (idx < 0 branch).
+    This can occur when old_line was stored with a different fingerprint than
+    what is embedded in command.  We construct command with fingerprint-A but
+    provide an old_line that uses fingerprint-B so find() returns -1.
+    """
+    from homelab_monitor.kernel.cron.wrapper_constants import (  # noqa: PLC0415
+        WRAPPER_PATH,
+        WRAPPER_SEPARATOR,
+    )
+
+    fingerprint_a = "fp-aaaa"
+    fingerprint_b = "fp-bbbb"
+    bare_cmd = "/usr/bin/other.sh"
+    schedule = "0 5 * * *"
+
+    # command carries fingerprint_a — that's what wrapped_fingerprint() will return
+    command_with_a = f"{WRAPPER_PATH} {fingerprint_a} {WRAPPER_SEPARATOR} {bare_cmd}"
+    # old_line was written with fingerprint_b — prefix for a is absent
+    old_line_with_b = f"{schedule} {WRAPPER_PATH} {fingerprint_b} {WRAPPER_SEPARATOR} {bare_cmd}"
+
+    ct = tmp_path / "crontab"
+    ct.write_text(old_line_with_b + "\n", encoding="utf-8")
+
+    rc = _run_uninstall(
+        monitor_url="http://monitor.example.com",
+        token="tok",
+        host="testhost",
+        crontab_spec="/etc/crontab",
+        crontab_file=ct,
+        crontab_content=ct.read_text(encoding="utf-8"),
+        line_index=0,
+        old_line=old_line_with_b,
+        schedule=schedule,
+        command=command_with_a,
+        confirm=False,
+    )
+
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "wrapper prefix not found" in err
 
 
 def test_main_uninstall_flag_routes_to_run_uninstall(
