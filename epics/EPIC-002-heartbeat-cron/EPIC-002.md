@@ -51,13 +51,13 @@ After EPIC-002 is complete, EPIC-003+ can rely on: an authoritative cron registr
 | STAGE-002-009 | Wrapper helpers — REWORKED to embed fingerprint at install time, call /register first, "Install heartbeat" UI button local-host only (was 005) | Complete |
 | STAGE-002-009A | Wrapper removal helpers — uninstall wrapper, restore original crontab line; Install/Remove UI toggle | Complete |
 | STAGE-002-010 | vmalert rules — REWORKED to include wrapper-health alert via separate monitoring-health channel (was 006) | Complete |
-| STAGE-002-011 | `cron_runs` table + per-run history schema + heartbeat `run_id` threading | Not Started |
+| STAGE-002-011 | `cron_runs` table + per-run history schema + heartbeat `run_id` threading | Complete |
 | STAGE-002-012 | Wrapper rewrite — generic shared script, run-UUID capture, per-line tagging, Vector transform | Not Started |
 | STAGE-002-013 | VictoriaLogsClient + CronRunReconciler + B-mode log-scrape run rows | Not Started |
 | STAGE-002-014 | Run-history API + narrow run-log endpoint + anomaly heuristics v1 | Not Started |
 | STAGE-002-015 | Run-history UI — teaser panel + run-history list route + run-log viewer route | Not Started |
 
-## Current Stage: STAGE-002-011
+## Current Stage: STAGE-002-012
 ## Current Phase: Design
 
 ## Cross-stage acceptance criteria

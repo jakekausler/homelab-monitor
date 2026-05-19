@@ -165,3 +165,13 @@ When making changes to the cron inventory UI, re-verify:
 - [ ] The full alert loop (monitor `/metrics` → vmagent → VictoriaMetrics → vmalert → Alertmanager → POST `/api/alerts/ingest` → GET `/api/alerts`) delivers alerts with correct routing; Alertmanager webhook URL uses the compose service name `monitor`, not hostname.
 - [ ] The cron-detail API response carries a wrapper_health enum (ok/stale/unknown); the CronDetail wrapper-health badge renders it only when wrapper_installed is true; the heartbeat-state panel labels expected_next_at as "Overdue after".
 - [ ] vmalert-metrics requires `-remoteWrite.url` (base URL, no `/api/v1/write` suffix) for recording rules; both vmalert healthchecks use `/-/healthy` endpoint.
+
+## STAGE-002-011 (cron_runs table + heartbeat run_id threading) regression items
+
+- [ ] alembic migration 0015 creates the `cron_runs` table with 16 columns + 3 indexes (`ix_cron_runs_fingerprint_started`, the partial `ix_cron_runs_enrich_queue`, `ix_cron_runs_fingerprint_state`); migration round-trips (up/down).
+- [ ] `POST /api/hb/{fp}/start?run_id=<uuid>` then `/ok?run_id=<uuid>&duration=<s>` produces exactly one `cron_runs` row transitioning `running`→`ok` with `exit_code=0` and `vl_window_*` populated.
+- [ ] `/ok` or `/fail` with a `run_id` and no prior `/start` (lost-start) produces one closed row via UPSERT, with `started_at` and `vl_window_start` derived as `ended_at - duration_seconds`.
+- [ ] A heartbeat call WITHOUT `run_id` creates NO `cron_runs` row and leaves existing heartbeat / `heartbeats_state` behavior byte-for-byte unchanged.
+- [ ] A `run_id` violating the charset `[A-Za-z0-9._-]` or exceeding 64 chars is rejected with HTTP 422 and creates no row.
+- [ ] Duplicate `/start` with the same `run_id` is idempotent (INSERT OR IGNORE — one row, no error).
+- [ ] `CronRunRepository.list_runs` paginates by cursor and filters by state.
