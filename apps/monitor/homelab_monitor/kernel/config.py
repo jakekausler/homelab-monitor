@@ -240,14 +240,81 @@ def load_cron_run_reconciler_config() -> CronRunReconcilerConfig:
     )
 
 
+@dataclass(frozen=True, slots=True)
+class CronAnomalyConfig:
+    """Tunables for the rule-based anomaly evaluator (STAGE-002-014).
+
+    Every rule is gated on at least ``min_history`` completed runs of the
+    same cron. ``rolling_window`` caps how many recent completed runs the
+    evaluator considers as the baseline. ``duration_k`` is the
+    duration_outlier multiplier above p95. ``output_band`` is the
+    fractional ±-band around the rolling median used by
+    output_size_spike / output_size_drop (0.5 → ±50%).
+    """
+
+    min_history: int = 10
+    rolling_window: int = 20
+    duration_k: float = 4.0
+    output_band: float = 0.5
+
+
+def load_cron_anomaly_config() -> CronAnomalyConfig:
+    """Load CronAnomalyConfig from env (HOMELAB_MONITOR_CRON_ANOMALY_*).
+
+    Clamped to min_history ≥ 2 because rolling-stats helpers (p95, median)
+    need at least 2 values to be meaningful; min_history=1 produces degenerate
+    thresholds.
+    """
+    defaults = CronAnomalyConfig()
+    min_history = defaults.min_history
+    rolling_window = defaults.rolling_window
+    duration_k = defaults.duration_k
+    output_band = defaults.output_band
+    raw_min = os.environ.get("HOMELAB_MONITOR_CRON_ANOMALY_MIN_HISTORY")
+    if raw_min is not None:
+        min_history = int(raw_min)
+    raw_window = os.environ.get("HOMELAB_MONITOR_CRON_ANOMALY_ROLLING_WINDOW")
+    if raw_window is not None:
+        rolling_window = int(raw_window)
+    raw_k = os.environ.get("HOMELAB_MONITOR_CRON_ANOMALY_DURATION_K")
+    if raw_k is not None:
+        duration_k = float(raw_k)
+    raw_band = os.environ.get("HOMELAB_MONITOR_CRON_ANOMALY_OUTPUT_BAND")
+    if raw_band is not None:
+        output_band = float(raw_band)
+    min_history = max(min_history, 2)
+    return CronAnomalyConfig(
+        min_history=min_history,
+        rolling_window=rolling_window,
+        duration_k=duration_k,
+        output_band=output_band,
+    )
+
+
+def load_vl_retention_days() -> int:
+    """Return the configured VictoriaLogs retention (days).
+
+    Carries from VL's own ``-retentionPeriod`` default of 30 days. Read by
+    the narrow run-log endpoint to decide whether a closed run's vl_window
+    has aged out (log_status='expired'). A single global env override.
+    """
+    raw = os.environ.get("HOMELAB_MONITOR_VL_RETENTION_DAYS")
+    if raw is None:
+        return 30
+    return int(raw)
+
+
 __all__ = [
+    "CronAnomalyConfig",
     "CronRunReconcilerConfig",
     "DiskBudgetConfig",
     "LogStreamBudgetConfig",
     "VlQueryLimits",
     "get_public_url",
+    "load_cron_anomaly_config",
     "load_cron_run_reconciler_config",
     "load_disk_budget_config",
     "load_log_stream_budget_config",
     "load_vl_query_limits",
+    "load_vl_retention_days",
 ]

@@ -822,6 +822,147 @@
         "title": "CronOut",
         "type": "object"
       },
+      "CronRunListResponse": {
+        "additionalProperties": false,
+        "description": "Cursor-paginated list payload for ``GET /api/crons/{fp}/runs``.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/CronRunOut"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "title": "CronRunListResponse",
+        "type": "object"
+      },
+      "CronRunOut": {
+        "additionalProperties": false,
+        "description": "Public projection of one ``cron_runs`` row.\n\nEXCLUDES the internal-only fields ``content_digest``, ``vl_window_start``,\n``vl_window_end``, and ``enriched_at`` (the timestamp). The boolean\n``enriched`` derives from ``enriched_at IS NOT NULL`` \u2014 clients only\nneed to know if enrichment ran, not when. ``content_digest`` is reserved\nfor EPIC-004 (not surfaced in v1).",
+        "properties": {
+          "anomaly_flags": {
+            "title": "Anomaly Flags",
+            "type": "string"
+          },
+          "byte_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Byte Count"
+          },
+          "duration_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Seconds"
+          },
+          "ended_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ended At"
+          },
+          "enriched": {
+            "title": "Enriched",
+            "type": "boolean"
+          },
+          "exit_code": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exit Code"
+          },
+          "line_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Line Count"
+          },
+          "overlapping": {
+            "title": "Overlapping",
+            "type": "boolean"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "started_at": {
+            "title": "Started At",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "running",
+              "ok",
+              "fail",
+              "unknown"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "state",
+          "started_at",
+          "ended_at",
+          "duration_seconds",
+          "exit_code",
+          "source",
+          "overlapping",
+          "line_count",
+          "byte_count",
+          "anomaly_flags",
+          "enriched"
+        ],
+        "title": "CronRunOut",
+        "type": "object"
+      },
       "CronUpdate": {
         "additionalProperties": false,
         "description": "Body for ``PATCH /api/crons/{fingerprint}``. Editable fields only.\n\nPer the derived-state model, the user can only edit policy fields. The\ncron's identity (host/source_path/schedule/command) is read-only \u2014 to\nchange identity, the user edits the underlying crontab and rediscovery\ncreates a new fingerprinted row.",
@@ -1606,6 +1747,124 @@
           "requested_at"
         ],
         "title": "RetryResponse",
+        "type": "object"
+      },
+      "RunLogLine": {
+        "additionalProperties": false,
+        "description": "One log line returned by the narrow run-log endpoint.",
+        "properties": {
+          "fields": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Fields",
+            "type": "object"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "stream": {
+            "title": "Stream",
+            "type": "string"
+          },
+          "timestamp": {
+            "title": "Timestamp",
+            "type": "string"
+          }
+        },
+        "required": [
+          "timestamp",
+          "message",
+          "stream",
+          "fields"
+        ],
+        "title": "RunLogLine",
+        "type": "object"
+      },
+      "RunLogResponse": {
+        "additionalProperties": false,
+        "description": "Response body for ``GET /api/crons/{fp}/runs/{run_id}/log``.\n\nSingle model with a ``log_status`` discriminator field. The 503\n``vl_unavailable`` error case is NOT this shape \u2014 it uses the standard\nHttpProblem error envelope (the endpoint raises before constructing\nthis body).\n\nlog_status values:\n  - \"available\": run is closed AND VL returned data. entries populated.\n  - \"running\": run is still in flight; VL queried over [vl_window_start, now].\n    entries reflect output so far.\n  - \"expired\": closed run whose vl_window_end is older than VL retention;\n    OR defensively for a malformed closed-row state. entries=[].",
+        "properties": {
+          "anomaly_flags": {
+            "title": "Anomaly Flags",
+            "type": "string"
+          },
+          "byte_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Byte Count"
+          },
+          "duration_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Seconds"
+          },
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/RunLogLine"
+            },
+            "title": "Entries",
+            "type": "array"
+          },
+          "line_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Line Count"
+          },
+          "log_status": {
+            "enum": [
+              "available",
+              "running",
+              "expired"
+            ],
+            "title": "Log Status",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "running",
+              "ok",
+              "fail",
+              "unknown"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "log_status",
+          "state",
+          "duration_seconds",
+          "line_count",
+          "byte_count",
+          "anomaly_flags",
+          "entries",
+          "truncated"
+        ],
+        "title": "RunLogResponse",
         "type": "object"
       },
       "Severity": {
@@ -2888,6 +3147,155 @@
           }
         },
         "summary": "Preview Runs Saved",
+        "tags": [
+          "crons"
+        ]
+      }
+    },
+    "/api/crons/{fingerprint}/runs": {
+      "get": {
+        "description": "Paginated run history for one cron. Pure SQLite \u2014 never touches VL.\n\nSession-auth (D-AUTH). Hidden crons are returned (include_hidden=True)\nso admin can view history of a hidden cron. Soft-deleted crons return\n404 \u2014 consistent with the existing list-cron filter semantics.\n\nPagination: opaque ``cursor`` carries (started_at, run_id) \u2014 see\nCronRunRepository.list_runs. The cursor is round-tripped verbatim;\na malformed cursor returns 400.",
+        "operationId": "list_cron_runs_api_crons__fingerprint__runs_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "fingerprint",
+            "required": true,
+            "schema": {
+              "title": "Fingerprint",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "running",
+                    "ok",
+                    "fail",
+                    "unknown"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "State"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CronRunListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Cron Runs",
+        "tags": [
+          "crons"
+        ]
+      }
+    },
+    "/api/crons/{fingerprint}/runs/{run_id}/log": {
+      "get": {
+        "description": "Fetch a single run's log lines from VictoriaLogs.\n\nFour response shapes (three 200 + one 503):\n  - available: closed run, VL returned data.\n  - running:   in-flight run; VL queried over [vl_window_start, now()].\n  - expired:   closed run whose vl_window_end is older than VL retention.\n  - 503:       VictoriaLogs unreachable/timeout/non-200.\n\nAUTH: session (D-AUTH). The frontend never sees LogsQL.\n\n503 (vl_unavailable) vs 502 (upstream_unavailable) on /logs/query:\nintentional asymmetry per spec \u00a78.2. The generic LogsQL proxy is a\ntransient passthrough (502 fits the upstream-failure family); the\nnarrow run-log endpoint is a higher-level operation surfaced to UI\nas \"logs temporarily unavailable\" (503 fits the\n\"service-currently-unavailable\" semantics). Do NOT \"normalize\" them.",
+        "operationId": "get_cron_run_log_api_crons__fingerprint__runs__run_id__log_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "fingerprint",
+            "required": true,
+            "schema": {
+              "title": "Fingerprint",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunLogResponse"
+                }
+              }
+            },
+            "description": "Run log (available / running / expired shapes)"
+          },
+          "404": {
+            "description": "Cron or run not found, or run belongs to a different cron"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "description": "VictoriaLogs temporarily unavailable"
+          }
+        },
+        "summary": "Get Cron Run Log",
         "tags": [
           "crons"
         ]

@@ -962,3 +962,508 @@ async def test_prune_runs_returns_zero_when_nothing_to_prune(
     )
 
     assert deleted == 0
+
+
+# ---------------------------------------------------------------------------
+# STAGE-002-014: Compound cursor helpers
+# ---------------------------------------------------------------------------
+
+
+def test_encode_decode_cursor_round_trip() -> None:
+    """_decode_runs_cursor(_encode_runs_cursor(s, r)) returns original (s, r)."""
+    from homelab_monitor.kernel.cron.run_repository import (  # noqa: PLC0415
+        _decode_runs_cursor,  # pyright: ignore[reportPrivateUsage]
+        _encode_runs_cursor,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    started_at = "2026-05-19T12:34:56.123456+00:00"
+    run_id = "abc-def-123"
+    encoded = _encode_runs_cursor(started_at, run_id)
+    decoded_s, decoded_r = _decode_runs_cursor(encoded)
+    assert decoded_s == started_at
+    assert decoded_r == run_id
+
+
+def test_decode_cursor_rejects_invalid_base64() -> None:
+    """Malformed base64 raises InvalidCursorError."""
+    from homelab_monitor.kernel.cron.run_repository import (  # noqa: PLC0415
+        InvalidCursorError,
+        _decode_runs_cursor,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    with pytest.raises(InvalidCursorError):
+        _decode_runs_cursor("!!!not-base64!!!")
+
+
+def test_decode_cursor_rejects_malformed_json() -> None:
+    """Valid base64 of invalid JSON raises InvalidCursorError."""
+    import base64  # noqa: PLC0415
+
+    from homelab_monitor.kernel.cron.run_repository import (  # noqa: PLC0415
+        InvalidCursorError,
+        _decode_runs_cursor,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    bad = base64.urlsafe_b64encode(b"not-json").rstrip(b"=").decode()
+    with pytest.raises(InvalidCursorError):
+        _decode_runs_cursor(bad)
+
+
+def test_decode_cursor_rejects_missing_keys() -> None:
+    """JSON object missing 's'/'r' keys raises InvalidCursorError."""
+    import base64  # noqa: PLC0415
+    import json  # noqa: PLC0415
+
+    from homelab_monitor.kernel.cron.run_repository import (  # noqa: PLC0415
+        InvalidCursorError,
+        _decode_runs_cursor,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    raw = json.dumps({"x": "foo"}).encode()
+    encoded = base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
+    with pytest.raises(InvalidCursorError):
+        _decode_runs_cursor(encoded)
+
+
+def test_decode_cursor_rejects_wrong_value_types() -> None:
+    """'s' or 'r' values that are not strings raise InvalidCursorError."""
+    import base64  # noqa: PLC0415
+    import json  # noqa: PLC0415
+
+    from homelab_monitor.kernel.cron.run_repository import (  # noqa: PLC0415
+        InvalidCursorError,
+        _decode_runs_cursor,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    raw = json.dumps({"s": 123, "r": "run-id"}).encode()
+    encoded = base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
+    with pytest.raises(InvalidCursorError):
+        _decode_runs_cursor(encoded)
+
+
+def test_decode_cursor_rejects_non_object_json() -> None:
+    """JSON array (not object) raises InvalidCursorError."""
+    import base64  # noqa: PLC0415
+    import json  # noqa: PLC0415
+
+    from homelab_monitor.kernel.cron.run_repository import (  # noqa: PLC0415
+        InvalidCursorError,
+        _decode_runs_cursor,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    raw = json.dumps(["s", "r"]).encode()
+    encoded = base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
+    with pytest.raises(InvalidCursorError):
+        _decode_runs_cursor(encoded)
+
+
+# ---------------------------------------------------------------------------
+# STAGE-002-014: Compound cursor regression — same started_at, different run_id
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_list_runs_compound_cursor_does_not_drop_same_started_at(
+    repo: SqliteRepository,
+) -> None:
+    """Two runs with identical started_at but different run_ids must not straddle
+    a page boundary — the compound (started_at, run_id) keyset must return both.
+
+    This is the STAGE-002-011 review carry-forward regression test.
+    """
+    run_repo = CronRunRepository(repo)
+    fp = "fp-cursor-regression"
+    shared_ts = "2026-05-19T10:00:00+00:00"
+
+    # Insert two runs with IDENTICAL started_at (simulates lost-/start UPSERT path)
+    # run-Z has a higher run_id lexicographically → comes first in DESC order
+    await run_repo.insert_run(
+        run_id="run-Z",
+        cron_fingerprint=fp,
+        source="wrapper",
+        started_at=shared_ts,
+        vl_window_start=shared_ts,
+    )
+    await run_repo.insert_run(
+        run_id="run-A",
+        cron_fingerprint=fp,
+        source="wrapper",
+        started_at=shared_ts,
+        vl_window_start=shared_ts,
+    )
+
+    # Page 1: limit=1 → should return run-Z (DESC by run_id)
+    page1 = await run_repo.list_runs(cron_fingerprint=fp, limit=1)
+    assert len(page1.items) == 1
+    assert page1.items[0].run_id == "run-Z"
+    assert page1.next_cursor is not None
+
+    # Page 2: using the cursor → must return run-A (not dropped)
+    page2 = await run_repo.list_runs(cron_fingerprint=fp, limit=1, cursor=page1.next_cursor)
+    assert len(page2.items) == 1
+    assert page2.items[0].run_id == "run-A"
+
+
+# ---------------------------------------------------------------------------
+# STAGE-002-014: list_runs state_filter
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_list_runs_state_filter_running(repo: SqliteRepository) -> None:
+    """state_filter='running' returns only running rows."""
+    run_repo = CronRunRepository(repo)
+    fp = "fp-sf-running"
+    now = "2026-05-19T00:00:00+00:00"
+
+    await run_repo.insert_run(
+        run_id="r-running",
+        cron_fingerprint=fp,
+        source="wrapper",
+        started_at=now,
+        vl_window_start=now,
+    )
+    await run_repo.close_run(
+        run_id="r-ok",
+        cron_fingerprint=fp,
+        source="wrapper",
+        state="ok",
+        ended_at=now,
+        duration_seconds=1.0,
+        exit_code=0,
+        vl_window_end=now,
+    )
+
+    page = await run_repo.list_runs(cron_fingerprint=fp, limit=10, state_filter="running")
+    assert all(r.state == "running" for r in page.items)
+    run_ids = {r.run_id for r in page.items}
+    assert "r-running" in run_ids
+    assert "r-ok" not in run_ids
+
+
+@pytest.mark.asyncio
+async def test_list_runs_state_filter_ok(repo: SqliteRepository) -> None:
+    """state_filter='ok' returns only ok rows."""
+    run_repo = CronRunRepository(repo)
+    fp = "fp-sf-ok"
+    now = "2026-05-19T00:00:00+00:00"
+
+    await run_repo.insert_run(
+        run_id="r-running2",
+        cron_fingerprint=fp,
+        source="wrapper",
+        started_at=now,
+        vl_window_start=now,
+    )
+    await run_repo.close_run(
+        run_id="r-ok2",
+        cron_fingerprint=fp,
+        source="wrapper",
+        state="ok",
+        ended_at=now,
+        duration_seconds=1.0,
+        exit_code=0,
+        vl_window_end=now,
+    )
+    await run_repo.close_run(
+        run_id="r-fail2",
+        cron_fingerprint=fp,
+        source="wrapper",
+        state="fail",
+        ended_at=now,
+        duration_seconds=1.0,
+        exit_code=1,
+        vl_window_end=now,
+    )
+
+    page = await run_repo.list_runs(cron_fingerprint=fp, limit=10, state_filter="ok")
+    assert all(r.state == "ok" for r in page.items)
+    assert any(r.run_id == "r-ok2" for r in page.items)
+
+
+@pytest.mark.asyncio
+async def test_list_runs_state_filter_fail(repo: SqliteRepository) -> None:
+    """state_filter='fail' returns only fail rows."""
+    run_repo = CronRunRepository(repo)
+    fp = "fp-sf-fail"
+    now = "2026-05-19T00:00:00+00:00"
+
+    await run_repo.close_run(
+        run_id="r-ok3",
+        cron_fingerprint=fp,
+        source="wrapper",
+        state="ok",
+        ended_at=now,
+        duration_seconds=1.0,
+        exit_code=0,
+        vl_window_end=now,
+    )
+    await run_repo.close_run(
+        run_id="r-fail3",
+        cron_fingerprint=fp,
+        source="wrapper",
+        state="fail",
+        ended_at=now,
+        duration_seconds=1.0,
+        exit_code=1,
+        vl_window_end=now,
+    )
+
+    page = await run_repo.list_runs(cron_fingerprint=fp, limit=10, state_filter="fail")
+    assert all(r.state == "fail" for r in page.items)
+    assert any(r.run_id == "r-fail3" for r in page.items)
+
+
+@pytest.mark.asyncio
+async def test_list_runs_state_filter_unknown(repo: SqliteRepository) -> None:
+    """state_filter='unknown' returns only unknown rows."""
+    run_repo = CronRunRepository(repo)
+    fp = "fp-sf-unknown"
+    now = "2026-05-19T00:00:00+00:00"
+
+    await run_repo.close_run(
+        run_id="r-unk",
+        cron_fingerprint=fp,
+        source="wrapper",
+        state="unknown",
+        ended_at=now,
+        duration_seconds=1.0,
+        exit_code=None,
+        vl_window_end=now,
+    )
+    await run_repo.close_run(
+        run_id="r-ok4",
+        cron_fingerprint=fp,
+        source="wrapper",
+        state="ok",
+        ended_at=now,
+        duration_seconds=1.0,
+        exit_code=0,
+        vl_window_end=now,
+    )
+
+    page = await run_repo.list_runs(cron_fingerprint=fp, limit=10, state_filter="unknown")
+    assert all(r.state == "unknown" for r in page.items)
+    assert any(r.run_id == "r-unk" for r in page.items)
+
+
+# ---------------------------------------------------------------------------
+# STAGE-002-014: list_recent_completed
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_list_recent_completed_excludes_running_state(
+    repo: SqliteRepository,
+) -> None:
+    """list_recent_completed never returns state='running' rows."""
+    run_repo = CronRunRepository(repo)
+    fp = "fp-lrc"
+    now = "2026-05-19T00:00:00+00:00"
+
+    await run_repo.insert_run(
+        run_id="lrc-running",
+        cron_fingerprint=fp,
+        source="wrapper",
+        started_at=now,
+        vl_window_start=now,
+    )
+    await run_repo.close_run(
+        run_id="lrc-ok",
+        cron_fingerprint=fp,
+        source="wrapper",
+        state="ok",
+        ended_at=now,
+        duration_seconds=1.0,
+        exit_code=0,
+        vl_window_end=now,
+    )
+
+    results = await run_repo.list_recent_completed(
+        cron_fingerprint=fp,
+        limit=10,
+        exclude_run_id="other",
+    )
+    assert all(r.state != "running" for r in results)
+    assert any(r.run_id == "lrc-ok" for r in results)
+    assert not any(r.run_id == "lrc-running" for r in results)
+
+
+@pytest.mark.asyncio
+async def test_list_recent_completed_respects_exclude_run_id(
+    repo: SqliteRepository,
+) -> None:
+    """list_recent_completed excludes the specified run_id."""
+    run_repo = CronRunRepository(repo)
+    fp = "fp-lrc-excl"
+    now = "2026-05-19T00:00:00+00:00"
+
+    await run_repo.close_run(
+        run_id="lrc-target",
+        cron_fingerprint=fp,
+        source="wrapper",
+        state="ok",
+        ended_at=now,
+        duration_seconds=1.0,
+        exit_code=0,
+        vl_window_end=now,
+    )
+    await run_repo.close_run(
+        run_id="lrc-other",
+        cron_fingerprint=fp,
+        source="wrapper",
+        state="ok",
+        ended_at=now,
+        duration_seconds=1.0,
+        exit_code=0,
+        vl_window_end=now,
+    )
+
+    results = await run_repo.list_recent_completed(
+        cron_fingerprint=fp,
+        limit=10,
+        exclude_run_id="lrc-target",
+    )
+    ids = {r.run_id for r in results}
+    assert "lrc-target" not in ids
+    assert "lrc-other" in ids
+
+
+@pytest.mark.asyncio
+async def test_list_recent_completed_respects_limit(
+    repo: SqliteRepository,
+) -> None:
+    """list_recent_completed returns at most `limit` rows."""
+    run_repo = CronRunRepository(repo)
+    fp = "fp-lrc-limit"
+    for i in range(5):
+        ts = f"2026-05-19T00:00:0{i}+00:00"
+        await run_repo.close_run(
+            run_id=f"lrc-lim-{i}",
+            cron_fingerprint=fp,
+            source="wrapper",
+            state="ok",
+            ended_at=ts,
+            duration_seconds=1.0,
+            exit_code=0,
+            vl_window_end=ts,
+        )
+
+    results = await run_repo.list_recent_completed(
+        cron_fingerprint=fp,
+        limit=3,
+        exclude_run_id="other",
+    )
+    assert len(results) == 3  # noqa: PLR2004
+
+
+@pytest.mark.asyncio
+async def test_list_recent_completed_ordering_newest_first(
+    repo: SqliteRepository,
+) -> None:
+    """list_recent_completed returns rows in (started_at DESC, run_id DESC) order."""
+    run_repo = CronRunRepository(repo)
+    fp = "fp-lrc-order"
+
+    ts_a = "2026-05-19T00:00:01+00:00"
+    ts_b = "2026-05-19T00:00:02+00:00"
+    await run_repo.close_run(
+        run_id="lrc-a",
+        cron_fingerprint=fp,
+        source="wrapper",
+        state="ok",
+        ended_at=ts_a,
+        duration_seconds=1.0,
+        exit_code=0,
+        vl_window_end=ts_a,
+    )
+    await run_repo.close_run(
+        run_id="lrc-b",
+        cron_fingerprint=fp,
+        source="wrapper",
+        state="ok",
+        ended_at=ts_b,
+        duration_seconds=1.0,
+        exit_code=0,
+        vl_window_end=ts_b,
+    )
+
+    results = await run_repo.list_recent_completed(
+        cron_fingerprint=fp,
+        limit=10,
+        exclude_run_id="other",
+    )
+    assert results[0].run_id == "lrc-b"  # newer first
+    assert results[1].run_id == "lrc-a"
+
+
+# ---------------------------------------------------------------------------
+# STAGE-002-014: set_anomaly_flags
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_set_anomaly_flags_writes_flags(repo: SqliteRepository) -> None:
+    """set_anomaly_flags persists the given flags string."""
+    run_repo = CronRunRepository(repo)
+    fp = "fp-flags"
+    now = "2026-05-19T00:00:00+00:00"
+
+    await run_repo.insert_run(
+        run_id="flags-run",
+        cron_fingerprint=fp,
+        source="wrapper",
+        started_at=now,
+        vl_window_start=now,
+    )
+    await run_repo.set_anomaly_flags(
+        run_id="flags-run",
+        anomaly_flags="duration_outlier,new_failure",
+    )
+
+    row = await run_repo.get_run("flags-run")
+    assert row is not None
+    assert row.anomaly_flags == "duration_outlier,new_failure"
+
+
+@pytest.mark.asyncio
+async def test_set_anomaly_flags_allows_empty_string(repo: SqliteRepository) -> None:
+    """set_anomaly_flags with empty string is valid (no anomalies)."""
+    run_repo = CronRunRepository(repo)
+    fp = "fp-flags-empty"
+    now = "2026-05-19T00:00:00+00:00"
+
+    await run_repo.insert_run(
+        run_id="flags-empty-run",
+        cron_fingerprint=fp,
+        source="wrapper",
+        started_at=now,
+        vl_window_start=now,
+    )
+    await run_repo.set_anomaly_flags(run_id="flags-empty-run", anomaly_flags="")
+
+    row = await run_repo.get_run("flags-empty-run")
+    assert row is not None
+    assert row.anomaly_flags == ""
+
+
+@pytest.mark.asyncio
+async def test_set_anomaly_flags_is_idempotent(repo: SqliteRepository) -> None:
+    """Calling set_anomaly_flags twice keeps the last value (UPSERT idempotent)."""
+    run_repo = CronRunRepository(repo)
+    fp = "fp-flags-idem"
+    now = "2026-05-19T00:00:00+00:00"
+
+    await run_repo.insert_run(
+        run_id="flags-idem-run",
+        cron_fingerprint=fp,
+        source="wrapper",
+        started_at=now,
+        vl_window_start=now,
+    )
+    await run_repo.set_anomaly_flags(run_id="flags-idem-run", anomaly_flags="duration_outlier")
+    await run_repo.set_anomaly_flags(run_id="flags-idem-run", anomaly_flags="new_failure")
+
+    row = await run_repo.get_run("flags-idem-run")
+    assert row is not None
+    assert row.anomaly_flags == "new_failure"

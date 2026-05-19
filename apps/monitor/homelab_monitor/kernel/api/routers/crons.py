@@ -22,10 +22,12 @@ from __future__ import annotations
 import asyncio
 import os
 import time as _time
+from datetime import UTC, datetime, timedelta
 from importlib.resources import files as _resource_files
 from pathlib import Path
 from typing import Annotated
 
+import httpx
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request
 from starlette.responses import PlainTextResponse
@@ -33,18 +35,28 @@ from starlette.responses import Response as _FastApiResponse
 
 from homelab_monitor.kernel.api.dependencies import (
     get_cron_repo,
+    get_cron_run_repo,
+    get_http_client,
+    get_vl_url,
     require_session,
     require_token_scope,
 )
 from homelab_monitor.kernel.api.errors import (
     DependencyUnavailableProblem,
+    HttpProblem,
     NotFoundProblem,
     TooManyRequestsProblem,
 )
 from homelab_monitor.kernel.auth.models import ApiToken, User
 from homelab_monitor.kernel.auth.scopes import Scope
+from homelab_monitor.kernel.config import load_vl_query_limits, load_vl_retention_days
 from homelab_monitor.kernel.cron.discovery_types import CronScanResult
 from homelab_monitor.kernel.cron.repository import CronRepo, CronWithState
+from homelab_monitor.kernel.cron.run_repository import (
+    CronRunRecord,
+    CronRunRepository,
+    InvalidCursorError,
+)
 from homelab_monitor.kernel.cron.schedule import (
     InvalidCronExpression,
     compute_next_runs,
@@ -53,6 +65,8 @@ from homelab_monitor.kernel.cron.schemas import (
     CronListQuery,
     CronListResponse,
     CronOut,
+    CronRunListResponse,
+    CronRunsListQuery,
     CrontabDiffOut,
     CronUpdate,
     CronWithStateOut,
@@ -62,14 +76,24 @@ from homelab_monitor.kernel.cron.schemas import (
     InstallWrapperResult,
     PreviewRunsQuery,
     PreviewRunsResponse,
+    RunLogLine,
+    RunLogResponse,
+    RunLogStatus,
     UninstallWrapperPreview,
     UninstallWrapperRequest,
     UninstallWrapperResult,
     WrapperHealth,
     cron_record_to_out,
+    cron_run_record_to_out,
 )
 from homelab_monitor.kernel.db.time import utc_now_iso
 from homelab_monitor.kernel.heartbeat.schemas import query_model
+from homelab_monitor.kernel.logs.victorialogs_client import (
+    VictoriaLogsClient,
+    VictoriaLogsClientError,
+    build_amode_query,
+    build_bmode_query,
+)
 from homelab_monitor.plugins.discoverers.cron_discoverer import resolve_hostname
 
 router = APIRouter(prefix="/crons", tags=["crons"])
@@ -280,6 +304,194 @@ async def get_wrapper_template(
         .read_text(encoding="utf-8")
     )
     return PlainTextResponse(content=template_text)
+
+
+@router.get("/{fingerprint}/runs", response_model=CronRunListResponse)
+async def list_cron_runs(
+    fingerprint: str,
+    _user: Annotated[User, Depends(require_session())],
+    cron_repo: Annotated[CronRepo, Depends(get_cron_repo)],
+    run_repo: Annotated[CronRunRepository, Depends(get_cron_run_repo)],
+    query: Annotated[CronRunsListQuery, Depends(query_model(CronRunsListQuery))],
+) -> CronRunListResponse:
+    """Paginated run history for one cron. Pure SQLite — never touches VL.
+
+    Session-auth (D-AUTH). Hidden crons are returned (include_hidden=True)
+    so admin can view history of a hidden cron. Soft-deleted crons return
+    404 — consistent with the existing list-cron filter semantics.
+
+    Pagination: opaque ``cursor`` carries (started_at, run_id) — see
+    CronRunRepository.list_runs. The cursor is round-tripped verbatim;
+    a malformed cursor returns 400.
+    """
+    cron = await cron_repo.get_cron(fingerprint, include_hidden=True)
+    if cron is None or cron.soft_deleted_at is not None:
+        raise NotFoundProblem(message=f"cron not found: {fingerprint}")
+    try:
+        page = await run_repo.list_runs(
+            cron_fingerprint=fingerprint,
+            limit=query.limit,
+            cursor=query.cursor,
+            state_filter=query.state,
+        )
+    except InvalidCursorError as exc:
+        raise HttpProblem(
+            status_code=400,
+            code="invalid_cursor",
+            message=str(exc),
+        ) from exc
+    return CronRunListResponse(
+        items=[cron_run_record_to_out(r) for r in page.items],
+        next_cursor=page.next_cursor,
+    )
+
+
+@router.get(
+    "/{fingerprint}/runs/{run_id}/log",
+    response_model=RunLogResponse,
+    responses={
+        200: {"description": "Run log (available / running / expired shapes)"},
+        404: {"description": "Cron or run not found, or run belongs to a different cron"},
+        503: {"description": "VictoriaLogs temporarily unavailable"},
+    },
+)
+async def get_cron_run_log(  # noqa: PLR0913 -- explicit dependency injection per FastAPI idiom
+    fingerprint: str,
+    run_id: str,
+    _user: Annotated[User, Depends(require_session())],
+    cron_repo: Annotated[CronRepo, Depends(get_cron_repo)],
+    run_repo: Annotated[CronRunRepository, Depends(get_cron_run_repo)],
+    http_client: Annotated[httpx.AsyncClient, Depends(get_http_client)],
+    vl_url: Annotated[str, Depends(get_vl_url)],
+) -> RunLogResponse:
+    """Fetch a single run's log lines from VictoriaLogs.
+
+    Four response shapes (three 200 + one 503):
+      - available: closed run, VL returned data.
+      - running:   in-flight run; VL queried over [vl_window_start, now()].
+      - expired:   closed run whose vl_window_end is older than VL retention.
+      - 503:       VictoriaLogs unreachable/timeout/non-200.
+
+    AUTH: session (D-AUTH). The frontend never sees LogsQL.
+
+    503 (vl_unavailable) vs 502 (upstream_unavailable) on /logs/query:
+    intentional asymmetry per spec §8.2. The generic LogsQL proxy is a
+    transient passthrough (502 fits the upstream-failure family); the
+    narrow run-log endpoint is a higher-level operation surfaced to UI
+    as "logs temporarily unavailable" (503 fits the
+    "service-currently-unavailable" semantics). Do NOT "normalize" them.
+    """
+    run = await run_repo.get_run(run_id)
+    if run is None or run.cron_fingerprint != fingerprint:
+        raise NotFoundProblem(
+            message=f"run not found: {run_id}",
+        )
+    cron = await cron_repo.get_cron(fingerprint, include_hidden=True)
+    if cron is None or cron.soft_deleted_at is not None:
+        raise NotFoundProblem(message=f"cron not found: {fingerprint}")
+
+    # In-flight: substitute now() as the upper bound and tag log_status='running'.
+    if run.state == "running":
+        window_start = run.vl_window_start or run.started_at
+        window_end = utc_now_iso()
+        return await _query_run_log(
+            run=run,
+            cron_command=cron.command,
+            window_start=window_start,
+            window_end=window_end,
+            log_status="running",
+            vl_url=vl_url,
+            http_client=http_client,
+        )
+
+    # Closed run: decide expired vs available based on vl_window_end + retention.
+    if run.vl_window_end is None:
+        # Defensive: closed row with no vl_window_end is malformed (shouldn't
+        # happen in current code paths). Return 'expired' rather than 500 so
+        # the UI degrades gracefully.
+        return _expired_response(run)
+
+    retention_days = load_vl_retention_days()
+    retention_cutoff = datetime.now(UTC) - timedelta(days=retention_days)
+    window_end_dt = datetime.fromisoformat(run.vl_window_end)
+    if window_end_dt.tzinfo is None:
+        window_end_dt = window_end_dt.replace(tzinfo=UTC)
+    if window_end_dt < retention_cutoff:
+        return _expired_response(run)
+
+    window_start = run.vl_window_start or run.started_at
+    window_end = run.vl_window_end
+    return await _query_run_log(
+        run=run,
+        cron_command=cron.command,
+        window_start=window_start,
+        window_end=window_end,
+        log_status="available",
+        vl_url=vl_url,
+        http_client=http_client,
+    )
+
+
+def _expired_response(run: CronRunRecord) -> RunLogResponse:
+    """Build an expired-log response with empty entries."""
+    return RunLogResponse(
+        log_status="expired",
+        state=run.state,  # type: ignore[arg-type]
+        duration_seconds=run.duration_seconds,
+        line_count=run.line_count,
+        byte_count=run.byte_count,
+        anomaly_flags=run.anomaly_flags,
+        entries=[],
+        truncated=False,
+    )
+
+
+async def _query_run_log(  # noqa: PLR0913
+    *,
+    run: CronRunRecord,
+    cron_command: str,
+    window_start: str,
+    window_end: str,
+    log_status: RunLogStatus,
+    vl_url: str,
+    http_client: httpx.AsyncClient,
+) -> RunLogResponse:
+    """Build the LogsQL query, call VL, and assemble a RunLogResponse.
+
+    Raises HttpProblem(503, 'vl_unavailable') on VictoriaLogsClientError.
+    """
+    if run.source == "wrapper":
+        expr = build_amode_query(run.run_id)
+    else:
+        expr = build_bmode_query(cron_command)
+    limits = load_vl_query_limits()
+    client = VictoriaLogsClient(vl_url=vl_url, http_client=http_client, limits=limits)
+    try:
+        result = await client.query(expr=expr, start=window_start, end=window_end)
+    except VictoriaLogsClientError as exc:
+        raise HttpProblem(
+            status_code=503,
+            code="vl_unavailable",
+            message="logs temporarily unavailable",
+        ) from exc
+    return RunLogResponse(
+        log_status=log_status,
+        state=run.state,  # type: ignore[arg-type]
+        duration_seconds=run.duration_seconds,
+        line_count=run.line_count,
+        byte_count=run.byte_count,
+        anomaly_flags=run.anomaly_flags,
+        entries=[
+            RunLogLine(
+                timestamp=line.timestamp,
+                message=line.message,
+                stream=line.stream,
+                fields=line.fields,
+            )
+            for line in result.lines
+        ],
+        truncated=result.truncated,
+    )
 
 
 @router.get("/{fingerprint}", response_model=CronWithStateOut)

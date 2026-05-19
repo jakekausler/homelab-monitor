@@ -49,7 +49,9 @@ def _ctx(repo: SqliteRepository, http: httpx.AsyncClient) -> CollectorContext:
         http=http,
         ssh=None,  # pyright: ignore[reportArgumentType]
         secrets=None,  # pyright: ignore[reportArgumentType]
-        log=structlog.get_logger().bind(collector="cron_run_reconciler"),  # pyright: ignore[reportArgumentType]
+        log=structlog.get_logger().bind(
+            collector="cron_run_reconciler",
+        ),  # pyright: ignore[reportArgumentType]
         ha=None,
     )
 
@@ -732,10 +734,18 @@ async def test_window_finalize_exception_recorded_in_errors(
     """Generic exception in _window_finalize sets result.ok=False and records error."""
     monkeypatch.setenv("HOMELAB_MONITOR_VL_URL", "http://vl-test:9428")
 
-    async def _raising_stub(self: object, *args: object, **kwargs: object) -> None:  # pyright: ignore[reportPrivateUsage]
+    async def _raising_stub(
+        self: object,
+        *args: object,
+        **kwargs: object,
+    ) -> None:  # pyright: ignore[reportPrivateUsage]
         raise RuntimeError("boom")
 
-    monkeypatch.setattr(CronRunReconciler, "_window_finalize", _raising_stub)  # pyright: ignore[reportPrivateUsage]
+    monkeypatch.setattr(
+        CronRunReconciler,
+        "_window_finalize",
+        _raising_stub,
+    )  # pyright: ignore[reportPrivateUsage]
 
     async with httpx.AsyncClient() as http:
         result = await CronRunReconciler().run(_ctx(repo, http))
@@ -760,10 +770,18 @@ async def test_enrich_exception_recorded_in_errors(
         repo, run_id="enrich-exc-run", cron_fingerprint="fp-enrich-exc", ended_at=ended_at
     )
 
-    async def _raising_stub(self: object, *args: object, **kwargs: object) -> None:  # pyright: ignore[reportPrivateUsage]
+    async def _raising_stub(
+        self: object,
+        *args: object,
+        **kwargs: object,
+    ) -> None:  # pyright: ignore[reportPrivateUsage]
         raise RuntimeError("boom")
 
-    monkeypatch.setattr(CronRunReconciler, "_enrich", _raising_stub)  # pyright: ignore[reportPrivateUsage]
+    monkeypatch.setattr(
+        CronRunReconciler,
+        "_enrich",
+        _raising_stub,
+    )  # pyright: ignore[reportPrivateUsage]
 
     async with httpx.AsyncClient() as http:
         result = await CronRunReconciler().run(_ctx(repo, http))
@@ -781,10 +799,18 @@ async def test_prune_exception_recorded_in_errors(
     """Generic exception in _prune sets result.ok=False and records error."""
     monkeypatch.setenv("HOMELAB_MONITOR_VL_URL", "http://vl-test:9428")
 
-    async def _raising_stub(self: object, *args: object, **kwargs: object) -> None:  # pyright: ignore[reportPrivateUsage]
+    async def _raising_stub(
+        self: object,
+        *args: object,
+        **kwargs: object,
+    ) -> None:  # pyright: ignore[reportPrivateUsage]
         raise RuntimeError("boom")
 
-    monkeypatch.setattr(CronRunReconciler, "_prune", _raising_stub)  # pyright: ignore[reportPrivateUsage]
+    monkeypatch.setattr(
+        CronRunReconciler,
+        "_prune",
+        _raising_stub,
+    )  # pyright: ignore[reportPrivateUsage]
 
     async with httpx.AsyncClient() as http:
         result = await CronRunReconciler().run(_ctx(repo, http))
@@ -1027,3 +1053,216 @@ async def test_enrich_skips_run_with_null_ended_at(
     assert result.ok is True
     # No VL request should have been made (httpx_mock has no responses registered;
     # any attempt to call VL would raise an unregistered-request error from pytest_httpx)
+
+
+# ---------------------------------------------------------------------------
+# STAGE-002-014: anomaly evaluation wiring in _enrich
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_enrich_sets_anomaly_flags_when_rule_trips(
+    repo: SqliteRepository,
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """After enrich, anomaly_flags is written when a rule fires.
+
+    Strategy: seed 10 ok history runs with line_count=100, then enrich a run
+    with line_count=0 (VL returns empty body). The unexpected_empty rule trips.
+    """
+    monkeypatch.setenv("HOMELAB_MONITOR_VL_URL", "http://vl-test:9428")
+    monkeypatch.setenv("HOMELAB_MONITOR_CRON_RUN_ENRICH_GRACE_SECONDS", "5")
+    # Set min_history=10 (default) — we'll seed exactly 10 history rows.
+    monkeypatch.setenv("HOMELAB_MONITOR_CRON_ANOMALY_MIN_HISTORY", "10")
+
+    fp = "fp-anomaly-wire"
+    await _insert_cron(repo, fingerprint=fp, command="/usr/bin/backup.sh")
+
+    # Seed 10 already-enriched history runs with line_count=100 each
+    for i in range(10):
+        ts = f"2026-05-01T00:00:0{i}+00:00"
+        hist_id = f"hist-run-{i}"
+        run_repo_hist = CronRunRepository(repo)
+        await run_repo_hist.close_run(
+            run_id=hist_id,
+            cron_fingerprint=fp,
+            source="wrapper",
+            state="ok",
+            ended_at=ts,
+            duration_seconds=5.0,
+            exit_code=0,
+            vl_window_end=ts,
+        )
+        # Mark as enriched with line_count=100
+        async with repo.engine.begin() as conn:
+            from sqlalchemy import text as _text  # noqa: PLC0415
+
+            await conn.execute(
+                _text(
+                    "UPDATE cron_runs SET line_count=100, byte_count=500, "
+                    "anomaly_flags='', enriched_at=:ea WHERE run_id=:rid"
+                ),
+                {"ea": utc_now_iso(), "rid": hist_id},
+            )
+
+    # Seed the run-under-test: closed, not enriched, old enough to pass grace
+    run_id = "anomaly-test-run"
+    ended_at = (datetime.now(UTC) - timedelta(seconds=60)).isoformat()
+    run_repo = CronRunRepository(repo)
+    await run_repo.close_run(
+        run_id=run_id,
+        cron_fingerprint=fp,
+        source="wrapper",
+        state="ok",
+        ended_at=ended_at,
+        duration_seconds=5.0,
+        exit_code=0,
+        vl_window_end=ended_at,
+    )
+
+    # VL returns empty body → line_count=0 → unexpected_empty fires
+    httpx_mock.add_response(method="GET", text="", is_reusable=True)
+
+    async with httpx.AsyncClient() as http:
+        result = await CronRunReconciler().run(_ctx(repo, http))
+
+    assert result.ok is True
+
+    row = await run_repo.get_run(run_id)
+    assert row is not None
+    assert row.enriched_at is not None
+    assert "unexpected_empty" in row.anomaly_flags
+
+
+@pytest.mark.asyncio
+async def test_enrich_anomaly_flags_empty_with_insufficient_history(
+    repo: SqliteRepository,
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With < min_history completed runs, anomaly_flags stays empty (min-history gate)."""
+    monkeypatch.setenv("HOMELAB_MONITOR_VL_URL", "http://vl-test:9428")
+    monkeypatch.setenv("HOMELAB_MONITOR_CRON_RUN_ENRICH_GRACE_SECONDS", "5")
+    monkeypatch.setenv("HOMELAB_MONITOR_CRON_ANOMALY_MIN_HISTORY", "10")
+
+    fp = "fp-no-history"
+    # Only 2 history runs (< min_history=10)
+    run_repo = CronRunRepository(repo)
+    for i in range(2):
+        ts = f"2026-05-01T00:00:0{i}+00:00"
+        await run_repo.close_run(
+            run_id=f"nh-hist-{i}",
+            cron_fingerprint=fp,
+            source="wrapper",
+            state="ok",
+            ended_at=ts,
+            duration_seconds=5.0,
+            exit_code=0,
+            vl_window_end=ts,
+        )
+        async with repo.engine.begin() as conn:
+            from sqlalchemy import text as _text  # noqa: PLC0415
+
+            await conn.execute(
+                _text("UPDATE cron_runs SET line_count=100, enriched_at=:ea WHERE run_id=:rid"),
+                {"ea": utc_now_iso(), "rid": f"nh-hist-{i}"},
+            )
+
+    run_id = "nh-test-run"
+    ended_at = (datetime.now(UTC) - timedelta(seconds=60)).isoformat()
+    await run_repo.close_run(
+        run_id=run_id,
+        cron_fingerprint=fp,
+        source="wrapper",
+        state="ok",
+        ended_at=ended_at,
+        duration_seconds=5.0,
+        exit_code=0,
+        vl_window_end=ended_at,
+    )
+
+    # VL returns empty → line_count=0, but gate fires first
+    httpx_mock.add_response(method="GET", text="", is_reusable=True)
+
+    async with httpx.AsyncClient() as http:
+        result = await CronRunReconciler().run(_ctx(repo, http))
+
+    assert result.ok is True
+    row = await run_repo.get_run(run_id)
+    assert row is not None
+    assert row.enriched_at is not None
+    assert row.anomaly_flags == ""  # min_history gate suppressed all flags
+
+
+@pytest.mark.asyncio
+async def test_enrich_evaluator_exception_is_isolated(
+    repo: SqliteRepository,
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If evaluate_run raises, the per-run try/except catches it; other runs process."""
+    monkeypatch.setenv("HOMELAB_MONITOR_VL_URL", "http://vl-test:9428")
+    monkeypatch.setenv("HOMELAB_MONITOR_CRON_RUN_ENRICH_GRACE_SECONDS", "5")
+
+    fp_bad = "fp-eval-exc"
+    fp_good = "fp-eval-good"
+
+    ended_at = (datetime.now(UTC) - timedelta(seconds=60)).isoformat()
+
+    run_repo = CronRunRepository(repo)
+
+    # Run that will trigger the mocked evaluate_run failure
+    await run_repo.close_run(
+        run_id="eval-bad-run",
+        cron_fingerprint=fp_bad,
+        source="wrapper",
+        state="ok",
+        ended_at=ended_at,
+        duration_seconds=5.0,
+        exit_code=0,
+        vl_window_end=ended_at,
+    )
+    # Second run (different fingerprint) that should still succeed
+    await run_repo.close_run(
+        run_id="eval-good-run",
+        cron_fingerprint=fp_good,
+        source="wrapper",
+        state="ok",
+        ended_at=ended_at,
+        duration_seconds=5.0,
+        exit_code=0,
+        vl_window_end=ended_at,
+    )
+
+    # Monkeypatch evaluate_run to raise on the bad fingerprint's run
+    from homelab_monitor.kernel.config import CronAnomalyConfig as _CAC  # noqa: PLC0415
+    from homelab_monitor.kernel.cron import run_anomaly as _ra  # noqa: PLC0415
+    from homelab_monitor.kernel.cron.run_repository import CronRunRecord as _CRR  # noqa: PLC0415
+
+    original_evaluate = _ra.evaluate_run
+
+    def _patched_evaluate(run: _CRR, history: object, config: _CAC) -> str:
+        if run.run_id == "eval-bad-run":
+            raise RuntimeError("simulated evaluator crash")
+        return original_evaluate(run, history, config)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(_ra, "evaluate_run", _patched_evaluate)
+
+    # Also patch it in the reconciler module namespace
+    from homelab_monitor.kernel.metrics import cron_run_reconciler as _rcr  # noqa: PLC0415
+
+    monkeypatch.setattr(_rcr, "evaluate_run", _patched_evaluate)
+
+    httpx_mock.add_response(method="GET", text="line one\n", is_reusable=True)
+
+    async with httpx.AsyncClient() as http:
+        result = await CronRunReconciler().run(_ctx(repo, http))
+
+    # Tick must still be ok
+    assert result.ok is True
+
+    # The good run must have been enriched
+    good_row = await run_repo.get_run("eval-good-run")
+    assert good_row is not None
+    assert good_row.enriched_at is not None

@@ -17,9 +17,11 @@ run_id is the TEXT PRIMARY KEY:
 
 from __future__ import annotations
 
+import base64
+import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy import text
 from sqlalchemy.engine import Row
@@ -199,6 +201,19 @@ _PRUNE_BY_COUNT_SQL = text(
 # Distinct fingerprints (for the per-cron count-prune pass).
 _DISTINCT_FINGERPRINTS_SQL = text("SELECT DISTINCT cron_fingerprint FROM cron_runs")
 
+# List recent completed runs (not state='running') for anomaly evaluation.
+# Ordered newest-first. Excludes the current run being evaluated.
+_SELECT_RECENT_COMPLETED_RUNS_SQL = text(
+    f"SELECT {_RUN_COLS} FROM cron_runs "
+    "WHERE cron_fingerprint = :fp AND state != 'running' AND run_id != :exclude_run_id "
+    "ORDER BY started_at DESC, run_id DESC LIMIT :limit"
+)
+
+# Write anomaly_flags for a run (used after evaluation).
+_SET_ANOMALY_FLAGS_SQL = text(
+    "UPDATE cron_runs SET anomaly_flags = :anomaly_flags WHERE run_id = :run_id"
+)
+
 
 def _derive_started_at(ended_at: str, duration_seconds: float | None) -> str:
     """Best-effort started_at for the lost-/start UPSERT INSERT branch.
@@ -213,6 +228,50 @@ def _derive_started_at(ended_at: str, duration_seconds: float | None) -> str:
     if duration_seconds is None:
         return ended_at
     return (end_dt - timedelta(seconds=duration_seconds)).isoformat()
+
+
+def _encode_runs_cursor(started_at: str, run_id: str) -> str:
+    """Encode (started_at, run_id) as an opaque base64url-encoded JSON cursor.
+
+    Format: base64url(JSON {"s": started_at, "r": run_id})
+    Used for pagination in list_runs. The cursor is opaque to the client;
+    only the backend interprets it.
+    """
+    payload: dict[str, str] = {"s": started_at, "r": run_id}
+    json_str = json.dumps(payload, separators=(",", ":"), ensure_ascii=True)
+    b64_bytes = base64.urlsafe_b64encode(json_str.encode("utf-8"))
+    return b64_bytes.decode("ascii")
+
+
+class InvalidCursorError(ValueError):
+    """Raised when a cursor cannot be decoded or parsed."""
+
+    pass
+
+
+def _decode_runs_cursor(cursor: str) -> tuple[str, str]:
+    """Decode an opaque base64url-encoded JSON cursor.
+
+    Returns: (started_at, run_id)
+    Raises InvalidCursorError if the cursor is malformed.
+    """
+    try:
+        # base64url_decode requires padding to be present; add it if needed.
+        padding = (4 - len(cursor) % 4) % 4
+        padded = cursor + "=" * padding
+        json_bytes = base64.urlsafe_b64decode(padded)
+        json_str = json_bytes.decode("utf-8")
+        payload: Any = json.loads(json_str)
+        if not isinstance(payload, dict):
+            raise InvalidCursorError("cursor payload is not a JSON object")
+        payload_dict = cast(dict[str, Any], payload)
+        started_at = payload_dict.get("s")
+        run_id = payload_dict.get("r")
+        if not isinstance(started_at, str) or not isinstance(run_id, str):
+            raise InvalidCursorError("cursor missing or invalid 's' or 'r' fields")
+        return (started_at, run_id)
+    except (ValueError, TypeError, UnicodeDecodeError) as exc:
+        raise InvalidCursorError(f"invalid cursor format: {exc}") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -310,11 +369,15 @@ class CronRunRepository:
     ) -> CronRunListPage:
         """Paginated run history for one cron, newest-first.
 
-        Ordered by (started_at DESC, run_id DESC). The cursor is the
-        ``started_at`` of the last item of the previous page; rows strictly
-        older than the cursor are returned. ``next_cursor`` is the started_at of
-        the last item of THIS page, or None when fewer than ``limit`` rows
-        remain. ``state_filter`` (when given) restricts to that state.
+        Ordered by (started_at DESC, run_id DESC). The cursor is an opaque
+        base64-encoded JSON {"s": started_at, "r": run_id} — rows with
+        (started_at, run_id) < (cursor_started_at, cursor_run_id) are returned
+        (lexicographic comparison, newest-first). ``next_cursor`` is the encoded
+        (started_at, run_id) of the last item of THIS page, or None when fewer
+        than ``limit`` rows remain. ``state_filter`` (when given) restricts to
+        that state.
+
+        Raises InvalidCursorError if the cursor cannot be decoded.
         """
         where = ["cron_fingerprint = :fp"]
         params: dict[str, Any] = {"fp": cron_fingerprint, "limit": limit + 1}
@@ -322,8 +385,12 @@ class CronRunRepository:
             where.append("state = :state")
             params["state"] = state_filter
         if cursor is not None:
-            where.append("started_at < :cursor")
-            params["cursor"] = cursor
+            cursor_started_at, cursor_run_id = _decode_runs_cursor(cursor)
+            where.append(
+                "(started_at < :cursor_s OR (started_at = :cursor_s AND run_id < :cursor_r))"
+            )
+            params["cursor_s"] = cursor_started_at
+            params["cursor_r"] = cursor_run_id
         where_sql = " AND ".join(where)
         # Fetch limit+1 to detect whether a further page exists.
         sql = text(
@@ -335,7 +402,8 @@ class CronRunRepository:
         next_cursor: str | None = None
         if len(items) > limit:
             items = items[:limit]
-            next_cursor = items[-1].started_at
+            last_item = items[-1]
+            next_cursor = _encode_runs_cursor(last_item.started_at, last_item.run_id)
         return CronRunListPage(items=items, next_cursor=next_cursor)
 
     async def list_open_bmode_runs(self) -> list[CronRunRecord]:
@@ -441,6 +509,40 @@ class CronRunRepository:
                 },
             )
 
+    async def list_recent_completed(
+        self,
+        *,
+        cron_fingerprint: str,
+        limit: int,
+        exclude_run_id: str,
+    ) -> list[CronRunRecord]:
+        """Return the most recent completed (closed) runs for anomaly evaluation.
+
+        "Completed" means ``state != 'running'`` (i.e. ``ok``, ``fail``, or
+        ``unknown``). ``exclude_run_id`` is the run currently being evaluated;
+        it is excluded so the evaluator never compares a run against itself.
+
+        Newest-first matches the evaluator's expectation: rules like
+        ``new_failure`` ("ALL recent runs were ok") naturally scan the head.
+        """
+        rows = await self._db.fetch_all(
+            _SELECT_RECENT_COMPLETED_RUNS_SQL,
+            {"fp": cron_fingerprint, "exclude_run_id": exclude_run_id, "limit": limit},
+        )
+        return [_row_to_cron_run(r) for r in rows]
+
+    async def set_anomaly_flags(self, *, run_id: str, anomaly_flags: str) -> None:
+        """Write the comma-separated anomaly_flags string for a run.
+
+        Called by the reconciler enrich phase after the evaluator computes
+        flags. Passing the empty string is valid — means "no anomalies".
+        """
+        async with self._db.transaction() as conn:
+            await conn.execute(
+                _SET_ANOMALY_FLAGS_SQL,
+                {"run_id": run_id, "anomaly_flags": anomaly_flags},
+            )
+
     async def prune_runs(self, *, retention_cutoff: str, max_rows_per_cron: int) -> int:
         """Prune cron_runs by age AND per-cron row cap. Returns rows deleted.
 
@@ -479,4 +581,5 @@ __all__ = [
     "CronRunListPage",
     "CronRunRecord",
     "CronRunRepository",
+    "InvalidCursorError",
 ]

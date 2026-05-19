@@ -317,3 +317,125 @@ def test_cron_run_reconciler_config_all_env_overrides(monkeypatch: pytest.Monkey
     assert cfg.max_rows_per_cron == 200  # noqa: PLR2004
     assert cfg.bmode_timeout_hours == 2  # noqa: PLR2004
     assert cfg.enrich_grace_seconds == 30  # noqa: PLR2004
+
+
+# ---------------------------------------------------------------------------
+# STAGE-002-014: CronAnomalyConfig + load_vl_retention_days
+# ---------------------------------------------------------------------------
+
+
+def test_load_cron_anomaly_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    """load_cron_anomaly_config returns documented defaults when no env vars set."""
+    from homelab_monitor.kernel.config import (  # noqa: PLC0415
+        CronAnomalyConfig,
+        load_cron_anomaly_config,
+    )
+
+    for var in (
+        "HOMELAB_MONITOR_CRON_ANOMALY_MIN_HISTORY",
+        "HOMELAB_MONITOR_CRON_ANOMALY_ROLLING_WINDOW",
+        "HOMELAB_MONITOR_CRON_ANOMALY_DURATION_K",
+        "HOMELAB_MONITOR_CRON_ANOMALY_OUTPUT_BAND",
+    ):
+        monkeypatch.delenv(var, raising=False)
+
+    cfg = load_cron_anomaly_config()
+    defaults = CronAnomalyConfig()
+    assert cfg.min_history == defaults.min_history
+    assert cfg.rolling_window == defaults.rolling_window
+    assert cfg.duration_k == defaults.duration_k
+    assert cfg.output_band == defaults.output_band
+
+    # Verify the documented values per spec
+    assert cfg.min_history == 10  # noqa: PLR2004
+    assert cfg.rolling_window == 20  # noqa: PLR2004
+    assert cfg.duration_k == 4.0  # noqa: PLR2004
+    assert cfg.output_band == 0.5  # noqa: PLR2004
+
+
+def test_load_cron_anomaly_config_min_history_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    """HOMELAB_MONITOR_CRON_ANOMALY_MIN_HISTORY overrides min_history only."""
+    from homelab_monitor.kernel.config import load_cron_anomaly_config  # noqa: PLC0415
+
+    monkeypatch.setenv("HOMELAB_MONITOR_CRON_ANOMALY_MIN_HISTORY", "5")
+    monkeypatch.delenv("HOMELAB_MONITOR_CRON_ANOMALY_ROLLING_WINDOW", raising=False)
+    monkeypatch.delenv("HOMELAB_MONITOR_CRON_ANOMALY_DURATION_K", raising=False)
+    monkeypatch.delenv("HOMELAB_MONITOR_CRON_ANOMALY_OUTPUT_BAND", raising=False)
+
+    cfg = load_cron_anomaly_config()
+    assert cfg.min_history == 5  # noqa: PLR2004
+    assert cfg.rolling_window == 20  # noqa: PLR2004  -- default unchanged
+
+
+def test_load_cron_anomaly_config_rolling_window_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    """HOMELAB_MONITOR_CRON_ANOMALY_ROLLING_WINDOW overrides rolling_window only."""
+    from homelab_monitor.kernel.config import load_cron_anomaly_config  # noqa: PLC0415
+
+    monkeypatch.delenv("HOMELAB_MONITOR_CRON_ANOMALY_MIN_HISTORY", raising=False)
+    monkeypatch.setenv("HOMELAB_MONITOR_CRON_ANOMALY_ROLLING_WINDOW", "50")
+    monkeypatch.delenv("HOMELAB_MONITOR_CRON_ANOMALY_DURATION_K", raising=False)
+    monkeypatch.delenv("HOMELAB_MONITOR_CRON_ANOMALY_OUTPUT_BAND", raising=False)
+
+    cfg = load_cron_anomaly_config()
+    assert cfg.rolling_window == 50  # noqa: PLR2004
+    assert cfg.min_history == 10  # noqa: PLR2004  -- default unchanged
+
+
+def test_load_cron_anomaly_config_duration_k_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    """HOMELAB_MONITOR_CRON_ANOMALY_DURATION_K overrides duration_k only."""
+    from homelab_monitor.kernel.config import load_cron_anomaly_config  # noqa: PLC0415
+
+    monkeypatch.delenv("HOMELAB_MONITOR_CRON_ANOMALY_MIN_HISTORY", raising=False)
+    monkeypatch.delenv("HOMELAB_MONITOR_CRON_ANOMALY_ROLLING_WINDOW", raising=False)
+    monkeypatch.setenv("HOMELAB_MONITOR_CRON_ANOMALY_DURATION_K", "2.5")
+    monkeypatch.delenv("HOMELAB_MONITOR_CRON_ANOMALY_OUTPUT_BAND", raising=False)
+
+    cfg = load_cron_anomaly_config()
+    assert cfg.duration_k == 2.5  # noqa: PLR2004
+    assert cfg.output_band == 0.5  # noqa: PLR2004  -- default unchanged
+
+
+def test_load_cron_anomaly_config_output_band_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    """HOMELAB_MONITOR_CRON_ANOMALY_OUTPUT_BAND overrides output_band only."""
+    from homelab_monitor.kernel.config import load_cron_anomaly_config  # noqa: PLC0415
+
+    monkeypatch.delenv("HOMELAB_MONITOR_CRON_ANOMALY_MIN_HISTORY", raising=False)
+    monkeypatch.delenv("HOMELAB_MONITOR_CRON_ANOMALY_ROLLING_WINDOW", raising=False)
+    monkeypatch.delenv("HOMELAB_MONITOR_CRON_ANOMALY_DURATION_K", raising=False)
+    monkeypatch.setenv("HOMELAB_MONITOR_CRON_ANOMALY_OUTPUT_BAND", "0.25")
+
+    cfg = load_cron_anomaly_config()
+    assert cfg.output_band == 0.25  # noqa: PLR2004
+    assert cfg.duration_k == 4.0  # noqa: PLR2004  -- default unchanged
+
+
+def test_load_cron_anomaly_config_all_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
+    """All four CRON_ANOMALY env vars override all four fields simultaneously."""
+    from homelab_monitor.kernel.config import load_cron_anomaly_config  # noqa: PLC0415
+
+    monkeypatch.setenv("HOMELAB_MONITOR_CRON_ANOMALY_MIN_HISTORY", "3")
+    monkeypatch.setenv("HOMELAB_MONITOR_CRON_ANOMALY_ROLLING_WINDOW", "15")
+    monkeypatch.setenv("HOMELAB_MONITOR_CRON_ANOMALY_DURATION_K", "3.0")
+    monkeypatch.setenv("HOMELAB_MONITOR_CRON_ANOMALY_OUTPUT_BAND", "0.75")
+
+    cfg = load_cron_anomaly_config()
+    assert cfg.min_history == 3  # noqa: PLR2004
+    assert cfg.rolling_window == 15  # noqa: PLR2004
+    assert cfg.duration_k == 3.0  # noqa: PLR2004
+    assert cfg.output_band == 0.75  # noqa: PLR2004
+
+
+def test_load_vl_retention_days_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """load_vl_retention_days returns 30 when env var is absent."""
+    from homelab_monitor.kernel.config import load_vl_retention_days  # noqa: PLC0415
+
+    monkeypatch.delenv("HOMELAB_MONITOR_VL_RETENTION_DAYS", raising=False)
+    assert load_vl_retention_days() == 30  # noqa: PLR2004
+
+
+def test_load_vl_retention_days_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    """HOMELAB_MONITOR_VL_RETENTION_DAYS overrides the default."""
+    from homelab_monitor.kernel.config import load_vl_retention_days  # noqa: PLC0415
+
+    monkeypatch.setenv("HOMELAB_MONITOR_VL_RETENTION_DAYS", "14")
+    assert load_vl_retention_days() == 14  # noqa: PLR2004

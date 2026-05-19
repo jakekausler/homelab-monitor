@@ -29,12 +29,15 @@ import httpx
 import structlog
 
 from homelab_monitor.kernel.config import (
+    CronAnomalyConfig,
     CronRunReconcilerConfig,
     VlQueryLimits,
+    load_cron_anomaly_config,
     load_cron_run_reconciler_config,
     load_vl_query_limits,
 )
 from homelab_monitor.kernel.cron.repository import CronRepo
+from homelab_monitor.kernel.cron.run_anomaly import evaluate_run
 from homelab_monitor.kernel.cron.run_repository import CronRunRecord, CronRunRepository
 from homelab_monitor.kernel.db.repository import SqliteRepository
 from homelab_monitor.kernel.db.time import utc_now_iso
@@ -123,6 +126,7 @@ class CronRunReconciler(BaseCollector):
 
         cfg = load_cron_run_reconciler_config()
         vl_limits = load_vl_query_limits()
+        anomaly_cfg = load_cron_anomaly_config()
         run_repo = CronRunRepository(ctx.db)
         cron_repo = CronRepo(ctx.db)
 
@@ -134,7 +138,9 @@ class CronRunReconciler(BaseCollector):
 
         # Phase 2: enrich (needs VL; skipped on VL failure).
         try:
-            await self._enrich(ctx.db, ctx.http, run_repo, cron_repo, now, cfg, vl_limits, ctx.log)
+            await self._enrich(
+                ctx.db, ctx.http, run_repo, cron_repo, now, cfg, vl_limits, anomaly_cfg, ctx.log
+            )
         except Exception as exc:
             errors.append(f"enrich: {exc}")
 
@@ -216,6 +222,7 @@ class CronRunReconciler(BaseCollector):
         now: datetime,
         cfg: CronRunReconcilerConfig,
         vl_limits: VlQueryLimits,
+        anomaly_cfg: CronAnomalyConfig,
         log: structlog.BoundLogger,
     ) -> None:
         """Enrich closed, un-enriched runs past the grace delay with VL fields."""
@@ -261,13 +268,48 @@ class CronRunReconciler(BaseCollector):
                 )
                 messages = [line.message for line in result.lines]
                 byte_count = sum(len(m.encode("utf-8")) for m in messages)
+                line_count = len(messages)
+                digest = compute_content_digest(messages)
+                now_iso = utc_now_iso()
                 await run_repo.set_enrichment(
                     run_id=run.run_id,
-                    line_count=len(messages),
+                    line_count=line_count,
                     byte_count=byte_count,
-                    content_digest=compute_content_digest(messages),
-                    enriched_at=utc_now_iso(),
+                    content_digest=digest,
+                    enriched_at=now_iso,
                 )
+                # Anomaly evaluation — inside the same per-run try/except so a buggy
+                # evaluator or a DB hiccup writing flags does not poison the enrich
+                # phase. We hydrate an updated CronRunRecord with the just-computed
+                # line_count/byte_count so the evaluator sees the same row the rest of
+                # the system will see (a re-fetch via get_run would also work but
+                # costs an extra DB round trip).
+                updated_run = CronRunRecord(
+                    run_id=run.run_id,
+                    cron_fingerprint=run.cron_fingerprint,
+                    source=run.source,
+                    state=run.state,
+                    started_at=run.started_at,
+                    ended_at=run.ended_at,
+                    duration_seconds=run.duration_seconds,
+                    exit_code=run.exit_code,
+                    vl_window_start=run.vl_window_start,
+                    vl_window_end=run.vl_window_end,
+                    overlapping=run.overlapping,
+                    enriched_at=now_iso,
+                    line_count=line_count,
+                    byte_count=byte_count,
+                    content_digest=digest,
+                    anomaly_flags="",
+                )
+                history = await run_repo.list_recent_completed(
+                    cron_fingerprint=run.cron_fingerprint,
+                    limit=anomaly_cfg.rolling_window,
+                    exclude_run_id=run.run_id,
+                )
+                flags = evaluate_run(updated_run, history, anomaly_cfg)
+                if flags:
+                    await run_repo.set_anomaly_flags(run_id=run.run_id, anomaly_flags=flags)
             except Exception as exc:  # per-run isolation, see STAGE-013 BUG-2
                 log.warning(
                     "cron_run_reconciler.enrich_run_skipped",

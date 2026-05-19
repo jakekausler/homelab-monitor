@@ -24,9 +24,12 @@ from homelab_monitor.kernel.cron.schedule import (
 
 if TYPE_CHECKING:
     from homelab_monitor.kernel.cron.repository import CronRecord
+    from homelab_monitor.kernel.cron.run_repository import CronRunRecord
 
 LastSeenState = Literal["unknown", "running", "ok", "failed", "late"]
 WrapperHealth = Literal["ok", "stale", "unknown", "format_outdated"]
+RunState = Literal["running", "ok", "fail", "unknown"]
+RunLogStatus = Literal["available", "running", "expired"]
 
 
 # ---------- Query params ----------
@@ -270,6 +273,101 @@ class UninstallWrapperResult(BaseModel):
     cron: CronOut
 
 
+# ---------- Run history (STAGE-002-014) ----------
+
+
+class CronRunsListQuery(BaseModel):
+    """Query params for ``GET /api/crons/{fingerprint}/runs``.
+
+    ``limit`` is the page size (default 50, cap 200). ``cursor`` is the
+    opaque pagination cursor returned by the previous page (None for the
+    first page). ``state`` (optional) filters by run state.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    limit: int = Field(default=50, ge=1, le=200)
+    cursor: str | None = Field(default=None, min_length=1, max_length=256)
+    state: RunState | None = None
+
+
+class CronRunOut(BaseModel):
+    """Public projection of one ``cron_runs`` row.
+
+    EXCLUDES the internal-only fields ``content_digest``, ``vl_window_start``,
+    ``vl_window_end``, and ``enriched_at`` (the timestamp). The boolean
+    ``enriched`` derives from ``enriched_at IS NOT NULL`` — clients only
+    need to know if enrichment ran, not when. ``content_digest`` is reserved
+    for EPIC-004 (not surfaced in v1).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: str
+    state: RunState
+    started_at: str
+    ended_at: str | None
+    duration_seconds: float | None
+    exit_code: int | None
+    source: str
+    overlapping: bool
+    line_count: int | None
+    byte_count: int | None
+    anomaly_flags: str
+    enriched: bool
+
+
+class CronRunListResponse(BaseModel):
+    """Cursor-paginated list payload for ``GET /api/crons/{fp}/runs``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[CronRunOut]
+    next_cursor: str | None
+
+
+# ---------- Run log (STAGE-002-014) ----------
+
+
+class RunLogLine(BaseModel):
+    """One log line returned by the narrow run-log endpoint."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    timestamp: str
+    message: str
+    stream: str
+    fields: dict[str, str]
+
+
+class RunLogResponse(BaseModel):
+    """Response body for ``GET /api/crons/{fp}/runs/{run_id}/log``.
+
+    Single model with a ``log_status`` discriminator field. The 503
+    ``vl_unavailable`` error case is NOT this shape — it uses the standard
+    HttpProblem error envelope (the endpoint raises before constructing
+    this body).
+
+    log_status values:
+      - "available": run is closed AND VL returned data. entries populated.
+      - "running": run is still in flight; VL queried over [vl_window_start, now].
+        entries reflect output so far.
+      - "expired": closed run whose vl_window_end is older than VL retention;
+        OR defensively for a malformed closed-row state. entries=[].
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    log_status: RunLogStatus
+    state: RunState
+    duration_seconds: float | None
+    line_count: int | None
+    byte_count: int | None
+    anomaly_flags: str
+    entries: list[RunLogLine]
+    truncated: bool
+
+
 # ---------- Helpers ----------
 
 
@@ -302,4 +400,26 @@ def cron_record_to_out(rec: CronRecord, *, local_hostname: str | None = None) ->
         soft_deleted_at=rec.soft_deleted_at,
         is_local=(local_hostname is not None and rec.host == local_hostname),
         wrapper_installed=rec.wrapper_installed,
+    )
+
+
+def cron_run_record_to_out(rec: CronRunRecord) -> CronRunOut:
+    """Convert CronRunRecord → CronRunOut.
+
+    Drops internal-only columns and computes ``enriched`` from
+    ``enriched_at IS NOT NULL``.
+    """
+    return CronRunOut(
+        run_id=rec.run_id,
+        state=rec.state,  # type: ignore[arg-type]
+        started_at=rec.started_at,
+        ended_at=rec.ended_at,
+        duration_seconds=rec.duration_seconds,
+        exit_code=rec.exit_code,
+        source=rec.source,
+        overlapping=rec.overlapping,
+        line_count=rec.line_count,
+        byte_count=rec.byte_count,
+        anomaly_flags=rec.anomaly_flags,
+        enriched=rec.enriched_at is not None,
     )
