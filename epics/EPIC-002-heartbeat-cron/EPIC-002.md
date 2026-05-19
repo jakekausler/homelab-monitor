@@ -1,6 +1,8 @@
 # EPIC-002: Heartbeat receiver + cron registry + cron auto-discovery
 
-## Status: Complete
+## Status: In Progress
+
+**(Re-opened 2026-05-19. The original 12 stages STAGE-002-001 … 010 are Complete. Five appended stages STAGE-002-011 … 015 add cron run history & run-log viewing — see `docs/superpowers/specs/2026-05-19-cron-run-logs-design.md`. EPIC-002 will be 17 stages when complete.)**
 
 ## Overview
 
@@ -49,9 +51,14 @@ After EPIC-002 is complete, EPIC-003+ can rely on: an authoritative cron registr
 | STAGE-002-009 | Wrapper helpers — REWORKED to embed fingerprint at install time, call /register first, "Install heartbeat" UI button local-host only (was 005) | Complete |
 | STAGE-002-009A | Wrapper removal helpers — uninstall wrapper, restore original crontab line; Install/Remove UI toggle | Complete |
 | STAGE-002-010 | vmalert rules — REWORKED to include wrapper-health alert via separate monitoring-health channel (was 006) | Complete |
+| STAGE-002-011 | `cron_runs` table + per-run history schema + heartbeat `run_id` threading | Not Started |
+| STAGE-002-012 | Wrapper rewrite — generic shared script, run-UUID capture, per-line tagging, Vector transform | Not Started |
+| STAGE-002-013 | VictoriaLogsClient + CronRunReconciler + B-mode log-scrape run rows | Not Started |
+| STAGE-002-014 | Run-history API + narrow run-log endpoint + anomaly heuristics v1 | Not Started |
+| STAGE-002-015 | Run-history UI — teaser panel + run-history list route + run-log viewer route | Not Started |
 
-## Current Stage: — (EPIC-002 complete — all 12 stages done)
-## Current Phase: — (EPIC-002 complete)
+## Current Stage: STAGE-002-011
+## Current Phase: Design
 
 ## Cross-stage acceptance criteria
 
@@ -103,3 +110,11 @@ Plus EPIC-002-specific criteria:
   - `/storage/scripts/cron/backup.sh` — discovered + tracked in `observe` mode in public release; the host-overrides repo will flip this to `heartbeat` mode and inject the wrapper. That edit is NOT made by this epic.
 - **The `homelab-monitor-overrides` repo wiring is NOT required for EPIC-002 completion.** EPIC-002 ships the public-safe defaults; the overrides repo is wired into a later epic (likely EPIC-008 or EPIC-014).
 - **Heartbeat receiver is reusable beyond crons.** The receiver accepts any `<id>` registered in the `crons` table. EPIC-014 (self-monitor + local-watchdog) will register `local-watchdog` itself as a "cron" with cadence `1m` and use the same receiver to detect monitor death.
+
+## Cross-epic carry-forward → EPIC-004
+
+The cron run history & run-log work (STAGE-002-011 … 015, design spec `docs/superpowers/specs/2026-05-19-cron-run-logs-design.md`) defers three capabilities to EPIC-004. When EPIC-004 (Logs Pipeline) is designed, the following MUST be added as explicit EPIC-004 acceptance criteria:
+
+- **STAGE-004-002 (Drain clustering + error-keyword work)** must apply to **cron run logs**, not only generic service logs — anomaly detection v2/v3 (error-keyword scan, Drain content clustering) is backfilled onto the `cron_runs` history produced by EPIC-002.
+- **STAGE-004-005 (logs explorer)** must explicitly include **live-tail of in-flight cron runs** as in-scope.
+- The generic `/api/logs` LogsQL proxy (EPIC-004) must be built on top of the `VictoriaLogsClient` module introduced in STAGE-002-013.
