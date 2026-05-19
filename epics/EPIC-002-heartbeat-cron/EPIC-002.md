@@ -53,11 +53,11 @@ After EPIC-002 is complete, EPIC-003+ can rely on: an authoritative cron registr
 | STAGE-002-010 | vmalert rules — REWORKED to include wrapper-health alert via separate monitoring-health channel (was 006) | Complete |
 | STAGE-002-011 | `cron_runs` table + per-run history schema + heartbeat `run_id` threading | Complete |
 | STAGE-002-012 | Wrapper rewrite — generic shared script, run-UUID capture, per-line tagging, Vector transform | Complete |
-| STAGE-002-013 | VictoriaLogsClient + CronRunReconciler + B-mode log-scrape run rows | Not Started |
+| STAGE-002-013 | VictoriaLogsClient + CronRunReconciler + B-mode log-scrape run rows | Complete |
 | STAGE-002-014 | Run-history API + narrow run-log endpoint + anomaly heuristics v1 | Not Started |
 | STAGE-002-015 | Run-history UI — teaser panel + run-history list route + run-log viewer route | Not Started |
 
-## Current Stage: STAGE-002-013
+## Current Stage: STAGE-002-014
 ## Current Phase: Design
 
 ## Cross-stage acceptance criteria

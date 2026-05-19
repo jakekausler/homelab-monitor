@@ -187,3 +187,15 @@ When making changes to the cron inventory UI, re-verify:
 - [ ] A cron whose wrapper predates the run-log format reports `wrapper_health: "format_outdated"`; the CronDetail badge renders that state as "Re-install to enable run logs" (amber); after a format-migration re-install it returns to `ok`.
 - [ ] alembic migration 0016 adds the `wrapper_format_version` column to `crons`.
 - [ ] DEPLOYMENT: after pulling code that changes `scripts/hm-cron-apply.sh`, re-run `sudo bash scripts/host-setup.sh` on the host — the host executor `/usr/local/sbin/hm-cron-apply` is NOT containerized and `docker compose up --build` does not update it.
+
+## STAGE-002-013 — VictoriaLogsClient + CronRunReconciler + B-mode run rows
+
+- [ ] `make verify` green: 100% kernel coverage, all backend + UI tests pass.
+- [ ] VictoriaLogsClient: a bounded LogsQL query (explicit time range, max-lines/max-bytes caps) returns the `truncated` flag correctly; VL unreachable raises `VictoriaLogsClientError` and callers degrade gracefully.
+- [ ] `build_bmode_query` correctly escapes cron commands containing backslashes and quotes (regression: the real `certbot` cron with `\!` previously produced LogsQL that VictoriaLogs rejected with HTTP 400). Verify `_logsql_quote_phrase` doubles `\` and escapes `"`.
+- [ ] CronRunReconciler: registered in `lifespan.py`, ticks every 30s, emits `homelab_collector_run_*` self-metrics; the three phases (window-finalize / enrich / prune) each run independently and a phase exception does not crash the tick.
+- [ ] Enrich per-run isolation (regression: BUG-2): one cron's failing VL query must NOT abort the enrich phase — it is logged as `cron_run_reconciler.enrich_run_skipped` and the remaining runs still enrich. Verify the closed-but-unenriched backlog drains across ticks.
+- [ ] B-mode ingest: an unwrapped cron's `CMD` syslog line creates a `cron_runs` row (`source=logscrape`, `state=running`); a later `exit=` line closes it; a replayed event (same `journal_cursor`) creates no duplicate row.
+- [ ] `/api/logs/query` (refactored onto VictoriaLogsClient) returns the same response shape as before; bad input → 400, VL error → 502/degraded.
+- [ ] Prune respects the 30-day / 50k-per-cron retention bounds and does not delete recent rows.
+- [ ] Prod-rig (3b): rebuild the prod stack and confirm the reconciler enriches real B-mode `cron_runs` rows from the live Vector→VictoriaLogs pipeline (`line_count > 0` for crons that produce output).
