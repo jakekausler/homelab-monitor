@@ -175,3 +175,15 @@ When making changes to the cron inventory UI, re-verify:
 - [ ] A `run_id` violating the charset `[A-Za-z0-9._-]` or exceeding 64 chars is rejected with HTTP 422 and creates no row.
 - [ ] Duplicate `/start` with the same `run_id` is idempotent (INSERT OR IGNORE — one row, no error).
 - [ ] `CronRunRepository.list_runs` paginates by cursor and filters by state.
+
+## STAGE-002-012 (wrapper rewrite — generic shared script, run-UUID capture, Vector transform) regression items
+
+- [ ] The generic wrapper, when a wrapped cron runs, emits `HM_RUN_START`/`HM_RUN_END` boundary markers + per-line `HM_RUN=<uuid>`-prefixed output to journald under `SYSLOG_IDENTIFIER=hmrun`.
+- [ ] The Vector `hmrun` transform parses the `HM_RUN=<uuid>` prefix into a `run_id` field and strips it from the stored message body; events reach VictoriaLogs (the `[sinks.vl]` URI must keep `?_msg_field=message` — without it VictoriaLogs silently discards all events).
+- [ ] The wrapper preserves the real command's exit code through the `logger` pipe (the tempfile technique) — a non-zero-exiting command yields that same exit code from the wrapper.
+- [ ] `is_wrapped` / `unwrap_command` recognize BOTH the new `<fingerprint> --` wrapper format AND the legacy `<base> -- ` (baked-fingerprint) format; `is_legacy_wrapped` is true only for the legacy format.
+- [ ] A legacy-wrapped cron is discovered with its BARE command (correct fingerprint), not soft-deleted, and no phantom full-invocation cron is created.
+- [ ] install-wrapper on a legacy-wrapped cron RE-WRAPS it onto the new convention (single wrap — no double `cron-with-heartbeat.sh`); install-wrapper on a current-format-wrapped cron still raises AlreadyWrappedError.
+- [ ] A cron whose wrapper predates the run-log format reports `wrapper_health: "format_outdated"`; the CronDetail badge renders that state as "Re-install to enable run logs" (amber); after a format-migration re-install it returns to `ok`.
+- [ ] alembic migration 0016 adds the `wrapper_format_version` column to `crons`.
+- [ ] DEPLOYMENT: after pulling code that changes `scripts/hm-cron-apply.sh`, re-run `sudo bash scripts/host-setup.sh` on the host — the host executor `/usr/local/sbin/hm-cron-apply` is NOT containerized and `docker compose up --build` does not update it.
