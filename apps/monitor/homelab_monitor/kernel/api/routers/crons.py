@@ -49,7 +49,11 @@ from homelab_monitor.kernel.api.errors import (
 )
 from homelab_monitor.kernel.auth.models import ApiToken, User
 from homelab_monitor.kernel.auth.scopes import Scope
-from homelab_monitor.kernel.config import load_vl_query_limits, load_vl_retention_days
+from homelab_monitor.kernel.config import (
+    load_cron_run_reconciler_config,
+    load_vl_query_limits,
+    load_vl_retention_days,
+)
 from homelab_monitor.kernel.cron.discovery_types import CronScanResult
 from homelab_monitor.kernel.cron.repository import CronRepo, CronWithState
 from homelab_monitor.kernel.cron.run_repository import (
@@ -421,6 +425,15 @@ async def get_cron_run_log(  # noqa: PLR0913 -- explicit dependency injection pe
 
     window_start = run.vl_window_start or run.started_at
     window_end = run.vl_window_end
+    # Widen the upper bound of the VL query to bridge the gap between when
+    # the wrapper posts /ok (stored as vl_window_end) and when the captured
+    # hmrun lines actually appear in VictoriaLogs (journald → Vector → VL
+    # ingest latency). This matches the reconciler's _enrich widening.
+    if run.source == "wrapper":
+        cfg = load_cron_run_reconciler_config()
+        if cfg.enrich_window_slack_seconds > 0:
+            widened = window_end_dt + timedelta(seconds=cfg.enrich_window_slack_seconds)
+            window_end = widened.isoformat()
     return await _query_run_log(
         run=run,
         cron_command=cron.command,

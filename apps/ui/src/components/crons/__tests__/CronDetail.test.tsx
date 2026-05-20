@@ -42,7 +42,16 @@ vi.mock('@/api/crons', () => ({
   })),
   usePreviewSavedCron: vi.fn(() => ({ isLoading: false, error: null, data: { runs: [] } })),
   usePreviewExpr: vi.fn(() => ({ isLoading: false, error: null, data: null })),
-  cronQueryKeys: { all: ['crons'] },
+  useListCronRuns: vi.fn(() => ({
+    isLoading: false,
+    error: null,
+    data: { items: [], next_cursor: null },
+  })),
+  cronQueryKeys: {
+    all: ['crons'],
+    runs: () => ['crons', 'runs'],
+    runLog: () => ['crons', 'run-log'],
+  },
 }))
 
 vi.mock('@/lib/relativeTime', () => ({

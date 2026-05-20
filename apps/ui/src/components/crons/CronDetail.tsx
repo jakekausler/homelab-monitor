@@ -12,6 +12,7 @@ import { StateBadge } from '@/components/crons/badges'
 import { CronForm } from '@/components/crons/CronForm'
 import { InstallHeartbeatModal } from '@/components/crons/InstallHeartbeatModal'
 import { RemoveHeartbeatModal } from '@/components/crons/RemoveHeartbeatModal'
+import { RecentRunsPanel } from '@/components/crons/RecentRunsPanel'
 import { formatAbsolute, formatRelative } from '@/lib/relativeTime'
 
 type CronUpdate = Schema<'CronUpdate'>
@@ -119,6 +120,8 @@ export function CronDetail({ fingerprint }: CronDetailProps) {
           onInstallWrapper={() => setInstallModalOpen(true)}
           onRemoveWrapper={() => setRemoveModalOpen(true)}
         />
+        {/* 5th panel: span-full row at the bottom. */}
+        <RecentRunsPanel fingerprint={fingerprint} />
       </div>
 
       <InstallHeartbeatModal

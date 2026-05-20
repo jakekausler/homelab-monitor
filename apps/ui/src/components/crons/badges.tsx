@@ -17,5 +17,22 @@ export function StateBadge({ state }: { state: 'unknown' | 'running' | 'ok' | 'f
   )
 }
 
+export type RunState = 'running' | 'ok' | 'fail' | 'unknown'
+
+const RUN_STATE_VARIANT = {
+  running: 'default',
+  ok: 'ok',
+  fail: 'critical',
+  unknown: 'muted',
+} as const
+
+export function RunStateBadge({ state }: { state: RunState }) {
+  return (
+    <Badge variant={RUN_STATE_VARIANT[state]} aria-label={`Run state ${state}`}>
+      {titleCase(state)}
+    </Badge>
+  )
+}
+
 // Re-exported for backward-compatible imports from the crons module.
 export { titleCase }

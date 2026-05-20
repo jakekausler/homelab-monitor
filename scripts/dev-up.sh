@@ -267,24 +267,24 @@ up_hybrid() {
 
   ensure_admin_user
 
-  _log "starting host backend on 127.0.0.1:${HM_DEV_BACKEND_PORT}..."
+  _log "starting host backend on ${HM_DEV_BIND_HOST:-127.0.0.1}:${HM_DEV_BACKEND_PORT}..."
   nohup bash -c "
     cd ${REPO_ROOT}/apps/monitor
     set -a; source ${DEV_ENV_FILE}; set +a
     exec uv run uvicorn homelab_monitor.kernel.api.app:create_app \
-      --factory --host 127.0.0.1 --port ${HM_DEV_BACKEND_PORT}
+      --factory --host ${HM_DEV_BIND_HOST:-127.0.0.1} --port ${HM_DEV_BACKEND_PORT}
   " > "${LOG_DIR}/backend.log" 2>&1 &
   disown
   echo $! > "${LOG_DIR}/backend.pid"
 
   wait_for_url "http://127.0.0.1:${HM_DEV_BACKEND_PORT}/api/healthz" "backend" 60 || true
 
-  _log "starting host UI dev server on 127.0.0.1:${HM_DEV_UI_PORT}..."
+  _log "starting host UI dev server on ${HM_DEV_BIND_HOST:-127.0.0.1}:${HM_DEV_UI_PORT}..."
   nohup bash -c "
     cd ${REPO_ROOT}
     VITE_API_PROXY_TARGET=http://127.0.0.1:${HM_DEV_BACKEND_PORT} \
     VITE_DEV_PORT=${HM_DEV_UI_PORT} \
-    VITE_DEV_HOST=127.0.0.1 \
+    VITE_DEV_HOST=${HM_DEV_BIND_HOST:-127.0.0.1} \
     pnpm --filter ui run dev
   " > "${LOG_DIR}/ui-dev.log" 2>&1 &
   disown
@@ -334,8 +334,8 @@ print_banner() {
     backend_url="http://127.0.0.1:${HOMELAB_MONITOR_PORT:-9090}"
     ui_url="${backend_url}"   # prod monitor serves the UI itself
   else
-    backend_url="http://127.0.0.1:${HM_DEV_BACKEND_PORT}"
-    ui_url="http://127.0.0.1:${HM_DEV_UI_PORT}"
+    backend_url="http://${HM_DEV_BIND_HOST:-127.0.0.1}:${HM_DEV_BACKEND_PORT}"
+    ui_url="http://${HM_DEV_BIND_HOST:-127.0.0.1}:${HM_DEV_UI_PORT}"
   fi
 
   cat <<EOF

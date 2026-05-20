@@ -231,6 +231,13 @@ class CronRunReconciler(BaseCollector):
         if not pending:
             return
 
+        # Bound per-tick work to keep the tick well inside the 20s timeout.
+        # A large backlog drains over successive ticks; enrichment is idempotent
+        # per §6.3 so retries are cheap. list_runs_needing_enrich orders oldest-
+        # first, so this slice drains the oldest rows on every tick.
+        if len(pending) > cfg.enrich_max_per_tick:
+            pending = pending[: cfg.enrich_max_per_tick]
+
         vl_url = os.environ.get("HOMELAB_MONITOR_VL_URL", "http://victorialogs:9428")
         client = VictoriaLogsClient(vl_url=vl_url, http_client=http, limits=vl_limits)
 
@@ -247,6 +254,16 @@ class CronRunReconciler(BaseCollector):
                 continue
             window_end = run.vl_window_end or run.ended_at
             if run.source == "wrapper":
+                # Widen the upper bound of the VL query to bridge the gap between
+                # when the wrapper posts /ok (stored as vl_window_end/ended_at) and
+                # when the captured hmrun marker lines actually appear in
+                # VictoriaLogs (journald → Vector → VL ingest latency). This slack
+                # is wrapper-only: logscrape runs have no hmrun markers to wait for.
+                if cfg.enrich_window_slack_seconds > 0:
+                    window_end_dt = _parse_iso(window_end) + timedelta(
+                        seconds=cfg.enrich_window_slack_seconds
+                    )
+                    window_end = window_end_dt.isoformat()
                 expr = build_amode_query(run.run_id)
             else:
                 # B-mode: need the cron's command for the canonical-key query.

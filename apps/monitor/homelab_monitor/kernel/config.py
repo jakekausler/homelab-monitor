@@ -205,12 +205,25 @@ def load_vl_query_limits() -> VlQueryLimits:
 
 @dataclass(frozen=True, slots=True)
 class CronRunReconcilerConfig:
-    """Runtime tunables for CronRunReconciler (env-only)."""
+    """Runtime tunables for CronRunReconciler (env-only).
+
+    ``enrich_max_per_tick`` caps the number of runs enriched per tick,
+    preventing large backlogs from exceeding the collector's 20s timeout.
+    A large backlog drains over successive ticks; enrichment is idempotent
+    per §6.3 so retries are cheap.
+    ``enrich_window_slack_seconds`` extra seconds to add to the VL query upper
+    bound during enrichment. Bridges the gap between when the wrapper posts /ok
+    (ended_at) and when the captured hmrun lines actually appear in VictoriaLogs
+    (journald → Vector → VL ingest latency, typically 1-5s; allow up to 30s
+    headroom for slow pipelines).
+    """
 
     retention_days: int = 30
     max_rows_per_cron: int = 50_000
     bmode_timeout_hours: int = 6
     enrich_grace_seconds: int = 15
+    enrich_max_per_tick: int = 200
+    enrich_window_slack_seconds: int = 30
 
 
 def load_cron_run_reconciler_config() -> CronRunReconcilerConfig:
@@ -220,6 +233,8 @@ def load_cron_run_reconciler_config() -> CronRunReconcilerConfig:
     max_rows_per_cron = defaults.max_rows_per_cron
     bmode_timeout_hours = defaults.bmode_timeout_hours
     enrich_grace_seconds = defaults.enrich_grace_seconds
+    enrich_max_per_tick = defaults.enrich_max_per_tick
+    enrich_window_slack_seconds = defaults.enrich_window_slack_seconds
     raw_days = os.environ.get("HOMELAB_MONITOR_CRON_RUN_RETENTION_DAYS")
     if raw_days is not None:
         retention_days = int(raw_days)
@@ -232,11 +247,19 @@ def load_cron_run_reconciler_config() -> CronRunReconcilerConfig:
     raw_grace = os.environ.get("HOMELAB_MONITOR_CRON_RUN_ENRICH_GRACE_SECONDS")
     if raw_grace is not None:
         enrich_grace_seconds = int(raw_grace)
+    raw_enrich_max = os.environ.get("HOMELAB_MONITOR_CRON_RUN_ENRICH_MAX_PER_TICK")
+    if raw_enrich_max is not None:
+        enrich_max_per_tick = int(raw_enrich_max)
+    raw_slack = os.environ.get("HOMELAB_MONITOR_CRON_RUN_ENRICH_WINDOW_SLACK_SECONDS")
+    if raw_slack is not None:
+        enrich_window_slack_seconds = int(raw_slack)
     return CronRunReconcilerConfig(
         retention_days=retention_days,
         max_rows_per_cron=max_rows_per_cron,
         bmode_timeout_hours=bmode_timeout_hours,
         enrich_grace_seconds=enrich_grace_seconds,
+        enrich_max_per_tick=enrich_max_per_tick,
+        enrich_window_slack_seconds=enrich_window_slack_seconds,
     )
 
 

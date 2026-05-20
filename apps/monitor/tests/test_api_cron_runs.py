@@ -768,3 +768,126 @@ async def test_list_cron_runs_404_soft_deleted_cron(
     assert resp.status_code == 404  # noqa: PLR2004
     body = resp.json()
     assert body["error"]["code"] == "not_found"
+
+
+# ---------------------------------------------------------------------------
+# VL query window slack widening (STAGE-002-015)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_run_log_widens_vl_query_with_slack(
+    authenticated_client: AsyncClient,
+    repo: SqliteRepository,
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Closed wrapper run: VL query end is widened by enrich_window_slack_seconds.
+
+    Validates that the run-log endpoint applies the same slack widening as the
+    reconciler's _enrich, ensuring the query window includes log lines that
+    arrive after the wrapper's ended_at due to journald → Vector → VL ingest
+    latency.
+    """
+    monkeypatch.setenv("HOMELAB_MONITOR_VL_URL", "http://vl-test:9428")
+    monkeypatch.setenv("HOMELAB_MONITOR_CRON_RUN_ENRICH_WINDOW_SLACK_SECONDS", "60")
+
+    fp = await _seed_cron(repo, name="log-slack-test")
+    base_ts = "2026-05-19T00:00:00+00:00"
+    await _seed_run(
+        repo,
+        run_id="slack-test-run",
+        cron_fingerprint=fp,
+        source="wrapper",
+        state="ok",
+        started_at=base_ts,
+        ended_at=base_ts,
+        vl_window_start=base_ts,
+        vl_window_end=base_ts,
+        line_count=1,
+        byte_count=10,
+        enriched_at=utc_now_iso(),
+    )
+
+    httpx_mock.add_response(
+        method="GET",
+        text=_make_ndjson("a log line"),
+        is_reusable=True,
+    )
+
+    resp = await authenticated_client.get(f"/api/crons/{fp}/runs/slack-test-run/log")
+    assert resp.status_code == 200  # noqa: PLR2004
+    body = resp.json()
+    assert body["log_status"] == "available"
+
+    # Verify the VL request's 'end' param includes the slack
+    requests = httpx_mock.get_requests()
+    assert len(requests) >= 1
+    end_param = requests[-1].url.params.get("end", "")
+
+    # Parse the end timestamp and verify it's approximately base_ts + 60s
+    end_dt = datetime.fromisoformat(end_param.replace("Z", "+00:00"))
+    base_dt = datetime.fromisoformat(base_ts)
+    slack_seconds = (end_dt - base_dt).total_seconds()
+
+    # Allow ±2s tolerance for parsing/serialization precision
+    assert 58 <= slack_seconds <= 62, f"Expected slack ~60s, got {slack_seconds}s"  # noqa: PLR2004
+
+
+@pytest.mark.asyncio
+async def test_get_run_log_no_slack_when_disabled(
+    authenticated_client: AsyncClient,
+    repo: SqliteRepository,
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Closed wrapper run: VL query end is NOT widened when slack is 0.
+
+    Validates that when HOMELAB_MONITOR_CRON_RUN_ENRICH_WINDOW_SLACK_SECONDS=0
+    the run-log endpoint issues a VL query whose 'end' param equals the stored
+    vl_window_end (no slack added), mirroring the reconciler behaviour tested
+    in test_enrich_query_no_slack_when_disabled.
+    """
+    monkeypatch.setenv("HOMELAB_MONITOR_VL_URL", "http://vl-test:9428")
+    monkeypatch.setenv("HOMELAB_MONITOR_CRON_RUN_ENRICH_WINDOW_SLACK_SECONDS", "0")
+
+    fp = await _seed_cron(repo, name="log-noslack-test")
+    base_ts = "2026-05-19T00:00:00+00:00"
+    await _seed_run(
+        repo,
+        run_id="noslack-test-run",
+        cron_fingerprint=fp,
+        source="wrapper",
+        state="ok",
+        started_at=base_ts,
+        ended_at=base_ts,
+        vl_window_start=base_ts,
+        vl_window_end=base_ts,
+        line_count=1,
+        byte_count=10,
+        enriched_at=utc_now_iso(),
+    )
+
+    httpx_mock.add_response(
+        method="GET",
+        text=_make_ndjson("a log line"),
+        is_reusable=True,
+    )
+
+    resp = await authenticated_client.get(f"/api/crons/{fp}/runs/noslack-test-run/log")
+    assert resp.status_code == 200  # noqa: PLR2004
+    body = resp.json()
+    assert body["log_status"] == "available"
+
+    # Verify the VL request's 'end' param equals base_ts (no slack widening)
+    requests = httpx_mock.get_requests()
+    assert len(requests) >= 1
+    end_param = requests[-1].url.params.get("end", "")
+    assert end_param, "end query parameter must be present"
+
+    end_dt = datetime.fromisoformat(end_param.replace("Z", "+00:00"))
+    base_dt = datetime.fromisoformat(base_ts)
+    delta = abs((end_dt - base_dt).total_seconds())
+
+    # Allow ±2s tolerance for parsing/serialization precision; slack must be ~0
+    assert delta < 2, f"Expected no slack, but end param differs from base_ts by {delta}s"  # noqa: PLR2004

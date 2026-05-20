@@ -28,6 +28,7 @@ from homelab_monitor.kernel.db.time import utc_now_iso
 from homelab_monitor.kernel.metrics.cron_run_reconciler import (
     CronRunReconciler,
     _normalize_for_digest,  # pyright: ignore[reportPrivateUsage]
+    _parse_iso,  # pyright: ignore[reportPrivateUsage]
     compute_content_digest,
 )
 from homelab_monitor.kernel.plugins.context import CollectorContext
@@ -1266,3 +1267,197 @@ async def test_enrich_evaluator_exception_is_isolated(
     good_row = await run_repo.get_run("eval-good-run")
     assert good_row is not None
     assert good_row.enriched_at is not None
+
+
+@pytest.mark.asyncio
+async def test_enrich_respects_max_per_tick_bound(
+    repo: SqliteRepository,
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Enrich phase limits work per tick to enrich_max_per_tick."""
+    monkeypatch.setenv("HOMELAB_MONITOR_VL_URL", "http://vl-test:9428")
+    monkeypatch.setenv("HOMELAB_MONITOR_CRON_RUN_ENRICH_MAX_PER_TICK", "2")
+    monkeypatch.setenv("HOMELAB_MONITOR_CRON_RUN_ENRICH_GRACE_SECONDS", "0")
+
+    fp = "fp-max-per-tick"
+    base_time = datetime.now(UTC) - timedelta(hours=1)
+
+    # Seed 5 closed, un-enriched runs (all well past grace cutoff).
+    for i in range(5):
+        ended_at = (base_time - timedelta(minutes=i)).isoformat()
+        await _insert_closed_run(
+            repo,
+            run_id=f"run-{i}",
+            cron_fingerprint=fp,
+            source="wrapper",
+            state="ok",
+            ended_at=ended_at,
+        )
+
+    # Mock VL to return one line for every query.
+    httpx_mock.add_response(method="GET", text="log line\n", is_reusable=True)
+
+    async with httpx.AsyncClient() as http:
+        result = await CronRunReconciler().run(_ctx(repo, http))
+
+    assert result.ok is True
+
+    run_repo = CronRunRepository(repo)
+
+    # Only 2 runs should have been enriched (max_per_tick=2).
+    enriched_count = 0
+    for i in range(5):
+        row = await run_repo.get_run(f"run-{i}")
+        assert row is not None
+        if row.enriched_at is not None:
+            enriched_count += 1
+
+    assert enriched_count == 2  # noqa: PLR2004
+
+
+@pytest.mark.asyncio
+async def test_enrich_query_window_includes_slack(
+    repo: SqliteRepository,
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Enrich: VL query end time is extended by enrich_window_slack_seconds.
+
+    Seed a closed A-mode run with ended_at = T. Set enrich_window_slack_seconds
+    to 60. After running one reconciler tick, inspect the actual VL request URL
+    and assert the end query param is approximately T + 60s (not T).
+    """
+    monkeypatch.setenv("HOMELAB_MONITOR_VL_URL", "http://vl-test:9428")
+    monkeypatch.setenv("HOMELAB_MONITOR_CRON_RUN_ENRICH_GRACE_SECONDS", "5")
+    monkeypatch.setenv("HOMELAB_MONITOR_CRON_RUN_ENRICH_WINDOW_SLACK_SECONDS", "60")
+
+    run_id = "slack-test-run"
+    ended_at = (datetime.now(UTC) - timedelta(seconds=60)).isoformat()
+
+    await _insert_closed_run(repo, run_id=run_id, cron_fingerprint="fp-slack", ended_at=ended_at)
+
+    # Mock VL to return one line
+    httpx_mock.add_response(method="GET", text=_ndjson_line("test line") + "\n")
+
+    async with httpx.AsyncClient() as http:
+        result = await CronRunReconciler().run(_ctx(repo, http))
+
+    assert result.ok is True
+
+    # Inspect the VL request to verify the end time includes slack
+    requests = httpx_mock.get_requests()
+    assert len(requests) >= 1
+
+    end_param = requests[0].url.params.get("end", "")
+    assert end_param, "end query parameter must be present"
+
+    # Parse the end time and the original ended_at to compare
+    expected_end_dt = _parse_iso(ended_at) + timedelta(seconds=60)
+    actual_end_dt = _parse_iso(end_param)
+
+    # Allow small tolerance for timing (up to 2 seconds)
+    delta = abs((actual_end_dt - expected_end_dt).total_seconds())
+    assert delta < 2, f"end param should be approximately {expected_end_dt}, got {actual_end_dt}"  # noqa: PLR2004
+
+
+@pytest.mark.asyncio
+async def test_enrich_query_no_slack_when_disabled(
+    repo: SqliteRepository,
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Enrich: VL query end time is NOT extended when slack is 0.
+
+    Set enrich_window_slack_seconds to 0 and verify the VL query end time
+    remains unchanged (equals ended_at, not ended_at + slack).
+    """
+    monkeypatch.setenv("HOMELAB_MONITOR_VL_URL", "http://vl-test:9428")
+    monkeypatch.setenv("HOMELAB_MONITOR_CRON_RUN_ENRICH_GRACE_SECONDS", "5")
+    monkeypatch.setenv("HOMELAB_MONITOR_CRON_RUN_ENRICH_WINDOW_SLACK_SECONDS", "0")
+
+    run_id = "no-slack-test-run"
+    ended_at = (datetime.now(UTC) - timedelta(seconds=60)).isoformat()
+
+    await _insert_closed_run(repo, run_id=run_id, cron_fingerprint="fp-noslack", ended_at=ended_at)
+
+    # Mock VL to return one line
+    httpx_mock.add_response(method="GET", text=_ndjson_line("test line") + "\n")
+
+    async with httpx.AsyncClient() as http:
+        result = await CronRunReconciler().run(_ctx(repo, http))
+
+    assert result.ok is True
+
+    # Inspect the VL request to verify the end time does NOT include slack
+    requests = httpx_mock.get_requests()
+    assert len(requests) >= 1
+
+    end_param = requests[0].url.params.get("end", "")
+    assert end_param, "end query parameter must be present"
+
+    # Parse the end time — should equal ended_at (no slack added)
+    expected_end_dt = _parse_iso(ended_at)
+    actual_end_dt = _parse_iso(end_param)
+
+    # Allow small tolerance for timing (up to 2 seconds)
+    delta = abs((actual_end_dt - expected_end_dt).total_seconds())
+    assert delta < 2, f"end param should be approximately {expected_end_dt}, got {actual_end_dt}"  # noqa: PLR2004
+
+
+@pytest.mark.asyncio
+async def test_enrich_query_no_slack_for_logscrape(
+    repo: SqliteRepository,
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Enrich B-mode: VL query end time is NOT extended by slack even when slack > 0.
+
+    B-mode (logscrape) runs should NOT have slack applied to the query window,
+    regardless of the enrich_window_slack_seconds setting. Slack is a wrapper-only
+    feature to account for clock skew in A-mode.
+
+    Seed a closed B-mode run with ended_at = T. Set enrich_window_slack_seconds
+    to 60. After running one reconciler tick, inspect the actual VL request URL
+    and assert the end query param is approximately T (not T + 60s).
+    """
+    monkeypatch.setenv("HOMELAB_MONITOR_VL_URL", "http://vl-test:9428")
+    monkeypatch.setenv("HOMELAB_MONITOR_CRON_RUN_ENRICH_GRACE_SECONDS", "5")
+    monkeypatch.setenv("HOMELAB_MONITOR_CRON_RUN_ENRICH_WINDOW_SLACK_SECONDS", "60")
+
+    command = "/usr/bin/backup.sh"
+    fp = "fp-bmode-noslack"
+    await _insert_cron(repo, fingerprint=fp, command=command)
+
+    run_id = "bmode-slack-test-run"
+    ended_at = (datetime.now(UTC) - timedelta(seconds=60)).isoformat()
+
+    await _insert_closed_run(
+        repo, run_id=run_id, cron_fingerprint=fp, source="logscrape", ended_at=ended_at
+    )
+
+    # Mock VL to return one line
+    httpx_mock.add_response(method="GET", text=_ndjson_line("test line") + "\n")
+
+    async with httpx.AsyncClient() as http:
+        result = await CronRunReconciler().run(_ctx(repo, http))
+
+    assert result.ok is True
+
+    # Inspect the VL request to verify the end time does NOT include slack
+    requests = httpx_mock.get_requests()
+    assert len(requests) >= 1
+
+    end_param = requests[0].url.params.get("end", "")
+    assert end_param, "end query parameter must be present"
+
+    # Parse the end time — should equal ended_at (no slack added for B-mode)
+    expected_end_dt = _parse_iso(ended_at)
+    actual_end_dt = _parse_iso(end_param)
+
+    # Allow small tolerance for timing (up to 2 seconds)
+    delta = abs((actual_end_dt - expected_end_dt).total_seconds())
+    assert delta < 2, (  # noqa: PLR2004
+        f"end param should be approximately {expected_end_dt} (no slack for B-mode), "
+        f"got {actual_end_dt}"
+    )

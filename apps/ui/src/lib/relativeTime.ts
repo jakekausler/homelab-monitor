@@ -39,3 +39,25 @@ export function formatAbsolute(iso: string | null | undefined): string {
   if (Number.isNaN(t)) return iso
   return new Date(t).toLocaleString()
 }
+
+/**
+ * Format a duration in seconds as a compact human-readable string.
+ *
+ * Returns "—" for null. Under 10s shows 3 decimals (e.g. "1.234s").
+ * 10–59s shows 1 decimal (e.g. "10.0s"). 60–3599s shows "Xm Ys". 3600+ shows
+ * "Xh Ym". Negative inputs are treated as 0.
+ */
+export function formatDuration(seconds: number | null): string {
+  if (seconds === null) return '—'
+  const s = Math.max(0, seconds)
+  if (s < 10) return `${s.toFixed(3)}s`
+  if (s < 60) return `${s.toFixed(1)}s`
+  if (s < 3600) {
+    const m = Math.floor(s / 60)
+    const r = Math.floor(s % 60)
+    return `${m}m ${r}s`
+  }
+  const h = Math.floor(s / 3600)
+  const m = Math.floor((s % 3600) / 60)
+  return `${h}h ${m}m`
+}

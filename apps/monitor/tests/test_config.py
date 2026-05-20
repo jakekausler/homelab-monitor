@@ -248,12 +248,16 @@ def test_cron_run_reconciler_config_defaults(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.delenv("HOMELAB_MONITOR_CRON_RUN_MAX_ROWS_PER_CRON", raising=False)
     monkeypatch.delenv("HOMELAB_MONITOR_CRON_RUN_BMODE_TIMEOUT_HOURS", raising=False)
     monkeypatch.delenv("HOMELAB_MONITOR_CRON_RUN_ENRICH_GRACE_SECONDS", raising=False)
+    monkeypatch.delenv("HOMELAB_MONITOR_CRON_RUN_ENRICH_MAX_PER_TICK", raising=False)
+    monkeypatch.delenv("HOMELAB_MONITOR_CRON_RUN_ENRICH_WINDOW_SLACK_SECONDS", raising=False)
     cfg = load_cron_run_reconciler_config()
     assert cfg == CronRunReconcilerConfig()
     assert cfg.retention_days == 30  # noqa: PLR2004
     assert cfg.max_rows_per_cron == 50_000  # noqa: PLR2004
     assert cfg.bmode_timeout_hours == 6  # noqa: PLR2004
     assert cfg.enrich_grace_seconds == 15  # noqa: PLR2004
+    assert cfg.enrich_max_per_tick == 200  # noqa: PLR2004
+    assert cfg.enrich_window_slack_seconds == 30  # noqa: PLR2004
 
 
 def test_cron_run_reconciler_config_env_retention_days(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -305,18 +309,65 @@ def test_cron_run_reconciler_config_env_enrich_grace(monkeypatch: pytest.MonkeyP
 
 
 def test_cron_run_reconciler_config_all_env_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
-    """All four reconciler env vars override all fields simultaneously."""
+    """All six reconciler env vars override all fields simultaneously."""
     from homelab_monitor.kernel.config import load_cron_run_reconciler_config  # noqa: PLC0415
 
     monkeypatch.setenv("HOMELAB_MONITOR_CRON_RUN_RETENTION_DAYS", "14")
     monkeypatch.setenv("HOMELAB_MONITOR_CRON_RUN_MAX_ROWS_PER_CRON", "200")
     monkeypatch.setenv("HOMELAB_MONITOR_CRON_RUN_BMODE_TIMEOUT_HOURS", "2")
     monkeypatch.setenv("HOMELAB_MONITOR_CRON_RUN_ENRICH_GRACE_SECONDS", "30")
+    monkeypatch.setenv("HOMELAB_MONITOR_CRON_RUN_ENRICH_MAX_PER_TICK", "100")
+    monkeypatch.setenv("HOMELAB_MONITOR_CRON_RUN_ENRICH_WINDOW_SLACK_SECONDS", "45")
     cfg = load_cron_run_reconciler_config()
     assert cfg.retention_days == 14  # noqa: PLR2004
     assert cfg.max_rows_per_cron == 200  # noqa: PLR2004
     assert cfg.bmode_timeout_hours == 2  # noqa: PLR2004
     assert cfg.enrich_grace_seconds == 30  # noqa: PLR2004
+    assert cfg.enrich_max_per_tick == 100  # noqa: PLR2004
+    assert cfg.enrich_window_slack_seconds == 45  # noqa: PLR2004
+
+
+def test_load_cron_run_reconciler_config_enrich_max_per_tick_default_and_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Default and env override for enrich_max_per_tick."""
+    from homelab_monitor.kernel.config import load_cron_run_reconciler_config  # noqa: PLC0415
+
+    # Test default: env var not set
+    monkeypatch.delenv("HOMELAB_MONITOR_CRON_RUN_ENRICH_MAX_PER_TICK", raising=False)
+    monkeypatch.delenv("HOMELAB_MONITOR_CRON_RUN_RETENTION_DAYS", raising=False)
+    monkeypatch.delenv("HOMELAB_MONITOR_CRON_RUN_MAX_ROWS_PER_CRON", raising=False)
+    monkeypatch.delenv("HOMELAB_MONITOR_CRON_RUN_BMODE_TIMEOUT_HOURS", raising=False)
+    monkeypatch.delenv("HOMELAB_MONITOR_CRON_RUN_ENRICH_GRACE_SECONDS", raising=False)
+    cfg = load_cron_run_reconciler_config()
+    assert cfg.enrich_max_per_tick == 200  # noqa: PLR2004
+
+    # Test override: env var set
+    monkeypatch.setenv("HOMELAB_MONITOR_CRON_RUN_ENRICH_MAX_PER_TICK", "50")
+    cfg = load_cron_run_reconciler_config()
+    assert cfg.enrich_max_per_tick == 50  # noqa: PLR2004
+
+
+def test_load_cron_run_reconciler_config_enrich_window_slack_seconds_default_and_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Default and env override for enrich_window_slack_seconds."""
+    from homelab_monitor.kernel.config import load_cron_run_reconciler_config  # noqa: PLC0415
+
+    # Test default: env var not set
+    monkeypatch.delenv("HOMELAB_MONITOR_CRON_RUN_ENRICH_WINDOW_SLACK_SECONDS", raising=False)
+    monkeypatch.delenv("HOMELAB_MONITOR_CRON_RUN_RETENTION_DAYS", raising=False)
+    monkeypatch.delenv("HOMELAB_MONITOR_CRON_RUN_MAX_ROWS_PER_CRON", raising=False)
+    monkeypatch.delenv("HOMELAB_MONITOR_CRON_RUN_BMODE_TIMEOUT_HOURS", raising=False)
+    monkeypatch.delenv("HOMELAB_MONITOR_CRON_RUN_ENRICH_GRACE_SECONDS", raising=False)
+    monkeypatch.delenv("HOMELAB_MONITOR_CRON_RUN_ENRICH_MAX_PER_TICK", raising=False)
+    cfg = load_cron_run_reconciler_config()
+    assert cfg.enrich_window_slack_seconds == 30  # noqa: PLR2004
+
+    # Test override: env var set
+    monkeypatch.setenv("HOMELAB_MONITOR_CRON_RUN_ENRICH_WINDOW_SLACK_SECONDS", "90")
+    cfg = load_cron_run_reconciler_config()
+    assert cfg.enrich_window_slack_seconds == 90  # noqa: PLR2004
 
 
 # ---------------------------------------------------------------------------

@@ -143,6 +143,33 @@ Cause: most likely the backend's same-origin check is rejecting because of misma
 
 For the full STAGE-019 lessons-learned on Karma proxying, see `epics/EPIC-001-foundation/STAGE-001-019.md`.
 
+### Accessing the dev rig from a LAN device (e.g. mobile browser)
+
+By default the dev rig binds the backend and UI to `127.0.0.1` (localhost only).
+To expose both to other devices on the same local network:
+
+1. Set `HM_DEV_BIND_HOST=0.0.0.0` in `deploy/dev/dev.env`.
+2. Restart the rig:
+   ```bash
+   make dev-down
+   make dev
+   ```
+3. Access the UI from any device on the same network:
+   ```
+   http://<host-LAN-IP>:5180
+   ```
+   Find your host's LAN IP with `ip route get 1` or `hostname -I`.
+
+**Security caveat:** The dev rig has no TLS and uses a shared dev password.
+Only enable `0.0.0.0` binding on trusted private networks. Revert to
+`HM_DEV_BIND_HOST=127.0.0.1` (or remove the line — it is the default) when
+done.
+
+Note: The Vite→backend proxy still routes over loopback internally — only the
+listen address changes. Sidecar ports (Alertmanager, Karma, Grafana, etc.)
+remain bound to `127.0.0.1` via the docker-compose dev override and are NOT
+exposed to the LAN by this setting.
+
 ### Grafana iframe is blank or shows "Origin not allowed"
 
 Cause: `GF_SERVER_ROOT_URL` mismatch with the URL the browser is actually using. The dev rig sets `GRAFANA_PUBLIC_URL=http://127.0.0.1:9090/api/grafana/` for prod mode and `http://127.0.0.1:3000/` direct in hybrid mode (Grafana is direct on its own port in hybrid mode — the monitor proxy still works but the iframe URL changes).

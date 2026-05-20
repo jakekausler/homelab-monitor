@@ -4,6 +4,7 @@ import type { QueryClient } from '@tanstack/react-query'
 import { apiClient } from '@/api/client'
 import { queryKeys } from '@/api/queries'
 import type { Schema } from '@/api/types'
+import type { RunSearchSchema } from '@/routes/inventory/types'
 import { Route as rootRoute } from '@/routes/__root'
 import { AlertsPage } from '@/routes/Alerts'
 import { LoginPage } from '@/routes/Login'
@@ -12,6 +13,8 @@ import { OverviewPage } from '@/routes/Overview'
 import { InventoryLayout } from '@/routes/inventory/Inventory'
 import { CronsListPage } from '@/routes/inventory/CronsList'
 import { CronDetailPage } from '@/routes/inventory/CronDetailPage'
+import { CronRunsListPage } from '@/routes/inventory/CronRunsList'
+import { CronRunLogViewerPage } from '@/routes/inventory/CronRunLogViewer'
 import { AppShell } from '@/components/AppShell'
 import { ErrorDisplay } from '@/components/ErrorDisplay'
 
@@ -153,6 +156,28 @@ const cronDetailRoute = createRoute({
   component: CronDetailPage,
 })
 
+const cronRunsListRoute = createRoute({
+  getParentRoute: () => inventoryLayoutRoute,
+  path: '/crons/$fingerprint/runs',
+  component: CronRunsListPage,
+  validateSearch: (search: Record<string, unknown>): RunSearchSchema => ({
+    cursor: typeof search.cursor === 'string' ? search.cursor : undefined,
+    state:
+      search.state === 'running' ||
+      search.state === 'ok' ||
+      search.state === 'fail' ||
+      search.state === 'unknown'
+        ? search.state
+        : undefined,
+  }),
+})
+
+const cronRunLogViewerRoute = createRoute({
+  getParentRoute: () => inventoryLayoutRoute,
+  path: '/crons/$fingerprint/runs/$run_id',
+  component: CronRunLogViewerPage,
+})
+
 const routeTree = rootRoute.addChildren([
   loginRoute,
   protectedLayoutRoute.addChildren([
@@ -160,7 +185,13 @@ const routeTree = rootRoute.addChildren([
     overviewRoute,
     alertsRoute,
     metricsRoute,
-    inventoryLayoutRoute.addChildren([inventoryIndexRoute, cronsListRoute, cronDetailRoute]),
+    inventoryLayoutRoute.addChildren([
+      inventoryIndexRoute,
+      cronsListRoute,
+      cronDetailRoute,
+      cronRunsListRoute,
+      cronRunLogViewerRoute,
+    ]),
   ]),
 ])
 

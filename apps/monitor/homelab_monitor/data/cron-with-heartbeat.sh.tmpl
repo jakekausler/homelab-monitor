@@ -91,7 +91,7 @@ log_marker() {
 }
 
 # --- Start boundary ---------------------------------------------------------
-START_EPOCH=$(date +%s)
+START_EPOCH=$(date +%s.%N)
 log_marker "HM_RUN_START fp=$FINGERPRINT run=$RUN_ID"
 if [ -n "$RUN_ID" ]; then
 	hb_post "start?run_id=$RUN_ID"
@@ -139,8 +139,9 @@ else
 fi
 
 # --- End boundary -----------------------------------------------------------
-END_EPOCH=$(date +%s)
-DURATION=$((END_EPOCH - START_EPOCH))
+END_EPOCH=$(date +%s.%N)
+# POSIX $((...)) is integer-only; use awk so the fractional delta is preserved.
+DURATION=$(awk "BEGIN { printf \"%.3f\", $END_EPOCH - $START_EPOCH }")
 log_marker "HM_RUN_END fp=$FINGERPRINT run=$RUN_ID exit=$EXIT_CODE duration=$DURATION"
 
 # --- Report ok/fail ---------------------------------------------------------
