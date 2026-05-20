@@ -1,6 +1,6 @@
 # EPIC-002: Heartbeat receiver + cron registry + cron auto-discovery
 
-## Status: In Progress
+## Status: Complete
 
 **(Re-opened 2026-05-19. The original 12 stages STAGE-002-001 … 010 are Complete. Five appended stages STAGE-002-011 … 015 add cron run history & run-log viewing — see `docs/superpowers/specs/2026-05-19-cron-run-logs-design.md`. EPIC-002 will be 17 stages when complete.)**
 
@@ -55,10 +55,10 @@ After EPIC-002 is complete, EPIC-003+ can rely on: an authoritative cron registr
 | STAGE-002-012 | Wrapper rewrite — generic shared script, run-UUID capture, per-line tagging, Vector transform | Complete |
 | STAGE-002-013 | VictoriaLogsClient + CronRunReconciler + B-mode log-scrape run rows | Complete |
 | STAGE-002-014 | Run-history API + narrow run-log endpoint + anomaly heuristics v1 | Complete |
-| STAGE-002-015 | Run-history UI — teaser panel + run-history list route + run-log viewer route | Not Started |
+| STAGE-002-015 | Run-history UI — teaser panel + run-history list route + run-log viewer route | Complete |
 
-## Current Stage: STAGE-002-015
-## Current Phase: Design
+## Current Stage: (complete)
+## Epic Status: Complete — all 17 stages finished
 
 ## Cross-stage acceptance criteria
 
