@@ -29,3 +29,31 @@
 3. Opt-out test: set `VECTOR_DOCKER_EXCLUDE=<container-name>` in `.env`, restart `monitor` and `vector` containers (vector restart MUST be explicit), confirm new logs from that container stop arriving within 30s.
 
 **Known gotcha:** Vector container must be explicitly restarted after monitor rebuild — `docker compose up -d monitor vector` will NOT restart vector if its image/env hasn't changed.
+
+## STAGE-003-003: Docker drill-down UI skeleton
+
+**Sanity check (run after any change touching `apps/ui/src/routes/integrations/`, `apps/ui/src/router.tsx`, or `apps/ui/src/components/SidebarNav.tsx`):**
+
+1. With dev rig running (`make dev`), open the UI in a browser. Sidebar should show "Integrations" as a non-clickable section label with "Docker" as an indented clickable item below.
+
+2. Navigate to `/integrations/docker`. Verify:
+   - Heading "Docker integration" visible
+   - Table with 10 column headers (Name, Status, Image, CPU, RAM, Image Update, Healthcheck, Probes, Logs, Actions) always visible, even when no containers exist
+   - Empty state "No containers discovered yet." appears as a single centered row inside the table body (NOT replacing the table)
+   - "Pending suggestions" and "Recent actions" panels each show their empty state
+   - No browser console errors
+
+3. Navigate to `/integrations/docker/containers/some-name/logs`. Verify:
+   - Renders `ContainerLogsPlaceholder` (NOT the parent Docker page)
+   - Shows "Log viewer for `some-name` not yet implemented."
+   - Back-link to `/integrations/docker` works
+
+4. Resize browser below `md` breakpoint (768px). Verify:
+   - Desktop table hidden (`hidden md:block`)
+   - Mobile card-based empty state visible (`md:hidden`)
+   - Panels still render
+
+**Known gotchas:**
+- The log-viewer placeholder route is a flat sibling under `protectedLayoutRoute`, NOT nested under `dockerIntegrationRoute`. If you nest it, you must add `<Outlet />` to `DockerIntegrationPage`, which would also show the parent grid alongside the log viewer.
+- The empty-state row uses `colSpan={10}` — if columns are added/removed, update this.
+- Mobile cards do NOT show field labels (intentional per Design phase T-VIEWPORT-SWAP).
