@@ -18,8 +18,7 @@
 
 [sources.docker_logs]
 type = "docker_logs"
-include_containers = []
-exclude_containers = []
+exclude_containers = ${VECTOR_DOCKER_EXCLUDE}
 auto_partial_merge = true
 
 [sources.journald]

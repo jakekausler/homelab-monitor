@@ -21,10 +21,12 @@ import pytest
 _TEMPLATE_PATH = Path(__file__).parents[3] / "deploy" / "vector" / "vector.toml.template"
 
 
-def _render_template() -> str:
-    """Substitute the single token placeholder with a dummy value."""
+def _render_template(docker_exclude: str = "[]") -> str:
+    """Substitute template placeholders with dummy values."""
     text = _TEMPLATE_PATH.read_text(encoding="utf-8")
-    return text.replace("${CRON_EVENTS_INGEST_TOKEN}", "dummy-token-for-test")
+    text = text.replace("${CRON_EVENTS_INGEST_TOKEN}", "dummy-token-for-test")
+    text = text.replace("${VECTOR_DOCKER_EXCLUDE}", docker_exclude)
+    return text
 
 
 @pytest.fixture(scope="module")
@@ -88,3 +90,29 @@ def test_hmrun_shaped_source_has_uuid_pattern(parsed_config: dict[str, Any]) -> 
     hmrun_shaped = transforms.get("hmrun_shaped", {})
     source = hmrun_shaped.get("source", "")
     assert "{36}" in source, "36-char uuid pattern not found in hmrun_shaped source"
+
+
+def test_docker_logs_source_has_no_include_containers(parsed_config: dict[str, Any]) -> None:
+    """[sources.docker_logs] must NOT have include_containers (we removed it)."""
+    sources = parsed_config.get("sources", {})
+    docker_logs = sources.get("docker_logs", {})
+    assert "include_containers" not in docker_logs, (
+        "include_containers should have been removed from docker_logs source"
+    )
+
+
+def test_docker_logs_source_exclude_containers_is_list(parsed_config: dict[str, Any]) -> None:
+    """[sources.docker_logs].exclude_containers must parse as a list."""
+    sources = parsed_config.get("sources", {})
+    docker_logs = sources.get("docker_logs", {})
+    assert "exclude_containers" in docker_logs, "exclude_containers missing from docker_logs"
+    assert isinstance(docker_logs["exclude_containers"], list), (
+        f"exclude_containers must be a list, got {type(docker_logs['exclude_containers'])}"
+    )
+
+
+def test_docker_logs_source_exclude_containers_with_values() -> None:
+    """exclude_containers substitution receives a populated list correctly."""
+    rendered = _render_template(docker_exclude='["foo", "bar"]')
+    cfg = tomllib.loads(rendered)
+    assert cfg["sources"]["docker_logs"]["exclude_containers"] == ["foo", "bar"]

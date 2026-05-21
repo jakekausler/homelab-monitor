@@ -35,6 +35,7 @@ services:
       HM_CRON_DISCOVERY_INTERVAL_SECONDS: ${HM_CRON_DISCOVERY_INTERVAL_SECONDS:-300}
       HM_HOST_HOSTNAME: ${HM_HOST_HOSTNAME:-}
       HM_CRON_APPLY_IPC_DIR: /host-ipc
+      VECTOR_DOCKER_EXCLUDE: ${VECTOR_DOCKER_EXCLUDE:-}
     volumes:
       - data_monitor:/data
       - data_vm:/var/vm-data:ro

@@ -19,6 +19,7 @@ from homelab_monitor.kernel.cron.log_ingest_token import (
 )
 from homelab_monitor.kernel.cron.render import (
     TEMPLATE_PLACEHOLDER,
+    VectorRenderContext,
     render_config,
     render_on_boot,
 )
@@ -40,7 +41,7 @@ def test_render_config_substitutes_placeholder(tmp_path: Path) -> None:
     render_config(
         template_path=template_file,
         output_path=output_file,
-        token=token,
+        context=VectorRenderContext(cron_events_token=token, docker_exclude_csv=""),
         log=log,  # type: ignore[arg-type]
     )
 
@@ -60,7 +61,7 @@ def test_render_config_template_missing_raises(tmp_path: Path) -> None:
         render_config(
             template_path=template_file,
             output_path=output_file,
-            token="token",
+            context=VectorRenderContext(cron_events_token="token", docker_exclude_csv=""),
             log=log,  # type: ignore[arg-type]
         )
 
@@ -77,7 +78,7 @@ def test_render_config_creates_parent_dirs(tmp_path: Path) -> None:
     render_config(
         template_path=template_file,
         output_path=output_file,
-        token="test_token",
+        context=VectorRenderContext(cron_events_token="test_token", docker_exclude_csv=""),
         log=log,  # type: ignore[arg-type]
     )
 
@@ -102,7 +103,7 @@ def test_render_config_group_missing(tmp_path: Path) -> None:
         render_config(
             template_path=template_file,
             output_path=output_file,
-            token="test-token",
+            context=VectorRenderContext(cron_events_token="test-token", docker_exclude_csv=""),
             log=log,  # type: ignore[arg-type]
         )
 
@@ -130,7 +131,7 @@ def test_render_config_group_present_chowns_file(tmp_path: Path) -> None:
         render_config(
             template_path=template_file,
             output_path=output_file,
-            token="test-token",
+            context=VectorRenderContext(cron_events_token="test-token", docker_exclude_csv=""),
             log=log,  # type: ignore[arg-type]
         )
 
@@ -162,7 +163,9 @@ def test_render_config_chown_oserror_logged(tmp_path: Path) -> None:
         render_config(
             template_path=template_file,
             output_path=output_file,
-            token="test-token-chown-fail",
+            context=VectorRenderContext(
+                cron_events_token="test-token-chown-fail", docker_exclude_csv=""
+            ),
             log=log,  # type: ignore[arg-type]
         )
 
@@ -184,7 +187,9 @@ def test_render_config_raises_on_write_failure(tmp_path: Path) -> None:
         render_config(
             template_path=template_file,
             output_path=output_file,
-            token="test-token-plaintext",
+            context=VectorRenderContext(
+                cron_events_token="test-token-plaintext", docker_exclude_csv=""
+            ),
             log=log,  # type: ignore[arg-type]
         )
 
@@ -217,7 +222,7 @@ def test_render_config_cleans_up_tmp_file_on_replace_failure(tmp_path: Path) -> 
         render_config(
             template_path=template_file,
             output_path=output_file,
-            token="test-token",
+            context=VectorRenderContext(cron_events_token="test-token", docker_exclude_csv=""),
             log=log,  # type: ignore[arg-type]
         )
 
