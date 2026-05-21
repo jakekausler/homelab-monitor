@@ -4,49 +4,114 @@
 
 ## Overview
 
-Deliver Docker-aware monitoring. Build a collector that reads the Docker socket for container-level metrics (running/exited/restart count/exit codes/healthcheck status), wires up cadvisor for resource metrics, drives label-based per-container probe configuration, and adds image-update detection (diun-style digest comparison) plus a dashboard "Pull & Restart" action per container. Notifications-only by default; auto-update is OFF.
+Deliver Docker-aware monitoring. Land cadvisor for container resource metrics, a Docker socket collector for inventory + status + healthcheck signals, a Docker discoverer that emits suggestions for newly-seen containers, label-based per-container probe auto-config (with a per-service file override), image-update detection for both registry-pulled and locally-built images, and a confirm-gated "Pull & Restart" action.
 
-This epic is the first to land *real* per-container monitoring on top of EPIC-001's foundation. It is also the first epic that exercises the discovery engine and the label-driven config pattern from spec §2 Q13 (A3 — labels primary, config override).
+EPIC-003 is the first epic to land per-container monitoring on top of EPIC-001's foundation and EPIC-002's heartbeat receiver. It exercises three subsystems live for the first time: the discoverer plugin contract (STAGE-001-006), the suggestion engine data flow (§4.6), and Docker write actions through the kernel (precursor to EPIC-009's auto-fix).
 
-## Source documents (read before starting any stage)
+The drill-down panel ("Docker" tab under Integrations) lands as a SKELETON early in the epic, and each subsequent stage fills its slots as new data becomes available — so every stage has user-visible Refinement sign-off. A final mop-up stage fills any unfilled skeleton sections and completes the in-epic suggestions stub (cross-referenced to EPIC-011 for the global Suggestions screen).
 
-- Spec §3.4 (discovered targets includes "All Docker containers"), §5.5 (plugin discovery with labels), §11 (compose), Q13 (label-based config).
-- Project memory `reference_docker_inventory.md` — the full container list. Pay attention to:
-  - Containers with `network_mode: host` (HA, Plex, Pi-hole, library-organizer, matter-server, music-assistant) — probe via host IP, not container IP.
-  - Locally-built images (`build: context: ...`) — diun digest comparison doesn't apply; use a different update-detection strategy (file checksum / source-repo mtime).
-  - Containers depending on `/rackstation/*` mounts (Plex, Frigate, podcast-feed) — mount-health probe is upstream of these.
-  - Host-native MariaDB and MySQL — out of scope here (covered in EPIC-018 service deep-dives).
+## Source documents (must be read by every session before working in this epic)
 
-## Stages (to decompose during epic Design phase)
+- **Spec:** `docs/superpowers/specs/2026-05-04-homelab-monitor-design.md` — relevant sections:
+  - §2 Q13 (Docker monitoring decision — labels primary, config-file override, diun-style updates, Pull & Restart, auto-update OFF)
+  - §3.4 (Discovered targets — "All Docker containers")
+  - §5.5 (Plugin discovery & install)
+  - §7.2 (Confirm-on-destructive — Pull & Restart belongs here)
+  - §7.4 (Auto-fix isolation — Pull & Restart is NOT a Claude runbook, but the audit/kill-switch/confirm patterns inform the design)
+  - §7.5 (Network model — outbound for registry digest checks)
+  - §9.2 (Integrations sub-page — Docker drill-down panel)
+  - §16 (Cross-cutting requirements — host-network alias rules, profiles handling)
+- **Project memory** at `/home/jakekausler/.claude/projects/-storage-programs-homelab-monitor/memory/`:
+  - `reference_docker_inventory.md` — full container list (host-network containers, locally-built images, `/rackstation/*` mounts, disabled-profile containers)
+  - `reference_homelab_inventory.md` — host topology
+  - `project_repo_tooling.md` — monorepo + CRG + workflow
+- **CLAUDE.md** at the repo root — verify command, status values, the `git add -A` rule, the `make uv` rule
+- **EPIC-001.md** at `epics/EPIC-001-foundation/EPIC-001.md` — cross-stage acceptance criteria are inherited
+- **EPIC-002.md** at `epics/EPIC-002-heartbeat-cron/EPIC-002.md` — heartbeat receiver is reused for per-container "synthetic heartbeat" probes (a container expected to call out periodically registers via `/register` like a cron)
 
-| Likely stage | Theme |
-|---|---|
-| STAGE-003-001 | Docker socket collector: container inventory, status, restart counts, exit codes, healthcheck status, basic resource metrics via Docker stats API |
-| STAGE-003-002 | cadvisor sidecar + scrape config update; richer resource metrics (CPU/RAM/IO/network per container/per cgroup); replaces overlapping pieces of 001 |
-| STAGE-003-003 | Docker discoverer: socket events emit suggestions for new containers; user accepts to create per-container probes |
-| STAGE-003-004 | Label-based probe config: containers with `homelab-monitor.http=...`, `homelab-monitor.metrics=...`, `homelab-monitor.tcp=port:host`, `homelab-monitor.exec=cmd` are auto-probed; per-service config file in `homelab-monitor.yaml` overrides labels |
-| STAGE-003-005 | Image-update detection (diun-style): periodic digest comparison against the image's registry; metric `homelab_image_update_available{container,current_digest,latest_digest}`; vmalert rule emits per-container alert at severity=info |
-| STAGE-003-006 | Update-detection for locally-built images: hash the build context's source tree; alert when source has changed but image hasn't been rebuilt |
-| STAGE-003-007 | "Pull & Restart" dashboard action: per-container button; orchestrates `docker compose pull && up -d <service>` (calling the user's compose file path, configurable); audit log; confirm-on-destructive |
-| STAGE-003-008 | Per-integration drill-down panel "Docker" in Integrations sidebar: container grid with status, image-update badge, last-restart, healthcheck status, action buttons |
+## Stages
+
+| Stage | Name | Status |
+| --- | --- | --- |
+| STAGE-003-001 | cadvisor sidecar + scrape config + first container metrics in VM | Complete |
+| STAGE-003-002 | Docker drill-down UI skeleton — Integrations sub-page, routes, empty states | Not Started |
+| STAGE-003-003 | Docker socket collector — container inventory + status + restart_count + exit_code + healthcheck | Not Started |
+| STAGE-003-004 | Docker discoverer + suggestions data — periodic + socket-event-driven, writes to `suggestions` table | Not Started |
+| STAGE-003-005 | Label-based probe auto-config — `homelab-monitor.<kind>.<name>=...` labels create probes | Not Started |
+| STAGE-003-006 | Per-service config-file override — YAML override under `/config/plugins/docker/` supersedes labels | Not Started |
+| STAGE-003-007 | Image-update detection (registry digest) — `homelab_image_update_available` metric + vmalert info-severity rule | Not Started |
+| STAGE-003-008 | Image-update detection (locally-built images) — build-context source hash | Not Started |
+| STAGE-003-009 | "Pull & Restart" action — confirm-gated compose-aware action + audit + new `compose_actions` table | Not Started |
+| STAGE-003-010 | Drill-down completion + in-epic suggestions stub (cross-ref EPIC-011) | Not Started |
+
+## Current Stage: STAGE-003-002
 
 ## Cross-stage acceptance criteria
 
-Same as EPIC-001 plus:
+Inherits all EPIC-001 cross-stage criteria (see `epics/EPIC-001-foundation/EPIC-001.md` §Cross-stage acceptance criteria):
 
-- **The user's compose file is read-only** by every collector and probe; only the explicit "Pull & Restart" action invokes `docker compose` write operations, and only with confirmation.
-- **Probe failure does not cause container restart.** A misbehaving probe alerts; the user decides if action is needed.
-- **Label collisions are detected** and surfaced as suggestions, not silently dropped.
+1. `make verify` green (full pipeline; `make test-fast` is for local iteration only).
+2. New tests for the stage's behavior; 100% kernel coverage gate maintained.
+3. Demoable vertical slice (UI change at the host backend port, API response, or deterministic integration test).
+4. No `git add -A` or `git add .` — specific paths only.
+5. Changelog entry in `changelog/$(date +%Y-%m-%d).changelog.md`; ADR for any architecture-changing decision.
 
-## Dependencies
+Plus EPIC-003-specific criteria:
 
-- EPIC-001 (kernel, API, alerts, dashboard).
-- EPIC-002 (heartbeat receiver — used for per-container "synthetic heartbeat" if a container should be calling out periodically).
-- The discoverer plugin kind is exercised live for the first time here — small refinements to the plugin contract from STAGE-001-006 may surface.
+6. **The user's compose file is read-only by every collector and probe.** Only the explicit "Pull & Restart" action (STAGE-003-009) invokes write operations, and only with session-confirm + audit. Compose file lives at `/storage/docker/compose/docker-compose.yml` on the user's host; the path is configurable; the public release does NOT assume this path.
+7. **Probe failure does NOT cause container restart.** A failing probe alerts; the user decides if action is needed. The monitor never restarts a container in response to its own probe.
+8. **Host-network containers probe via host IP, not container IP.** Per `reference_docker_inventory.md`, the following containers use `network_mode: host`: Home Assistant, Plex, Pi-hole (pihole-unbound), library-organizer, matter-server, music-assistant. Every probe code path MUST handle this — resolve target = host IP when `network_mode: host`, container IP otherwise.
+9. **Disabled containers (`profiles: ["disabled"]`) are listed in inventory but NOT probed.** The discoverer surfaces them as informational suggestions ("Frigate exists but is disabled — probe when enabled?"). No probe is created or scheduled for a disabled-profile container.
+10. **Multiple probes per container are supported.** Label syntax: `homelab-monitor.<kind>.<name>=<value>` where `<kind>` ∈ `{http, tcp, exec, metrics}` and `<name>` is a user-chosen identifier (defaults to `default`). File-override mirrors this. Examples in STAGE-003-005.
+11. **Label collisions are surfaced as suggestions, not silently dropped.** Two labels resolving to the same `(kind, name)` for the same container → suggestion + log + no probe created until resolved.
+12. **Every probe runs in a `concurrency_group` keyed by the target.** Per spec §5.4 — all probes hitting the same container share a group `docker.<container_name>` so one service is never DDOSed by parallel HTTP + TCP + exec probes.
+13. **Locally-built images use source-hash update-detection, not registry digest.** Containers whose compose entry has `build:` (not `image:`) get build-context source-tree hashing in STAGE-003-008.
+14. **`host.docker.internal:host-gateway` aliasing is preserved when resolving probe targets.** Several user containers use this alias; the resolver must not strip it.
+15. **Dev rig has a synthetic cadvisor seed CLI** — `hm dev seed-container-metrics` (or equivalent) generates fake `container_*` metric streams so frontend Refinement works without real cadvisor data. Lands in STAGE-003-001 alongside cadvisor.
+16. **Integration test rig uses real cadvisor against toy services.** `deploy/compose/docker-compose.test.yml` includes a cadvisor service scraping the test rig's deterministic toy containers. Same code path as prod.
+17. **Every stage gets dev rig (3a) AND prod (3b) Refinement sign-off WHERE THE STAGE HAS HOST-INTEGRATION CONCERNS** — desktop + mobile viewport approval on the drill-down UI. Frontend-only stages (e.g., STAGE-003-002, STAGE-003-010) are 3a only. Backend-only stages with no host delta also skip 3b. The drill-down skeleton lands in STAGE-003-002 so every subsequent backend stage has UI to sign off on.
+
+18. **The Docker socket mount widens from :ro to RW at STAGE-003-009.** Stages 001-008 use :ro; STAGE-003-009 widens because Pull & Restart needs the RW path. The security boundary is at the docker socket level either way — anyone with socket access has root-equivalent on the host. This widening is documented + accepted; STAGE-003-009's commit message includes the explicit acknowledgment.
+
+## Sequential dependency notes
+
+- **STAGE-003-001 (cadvisor sidecar)** is the foundation — adds cadvisor to prod compose, dev compose, and integration test compose. No code in `apps/monitor` apart from the dev seed CLI; deployment + scrape config work.
+- **STAGE-003-002 (UI skeleton)** depends on STAGE-003-001 — the skeleton renders cadvisor data immediately. Pure frontend stage; routes + empty-state components only.
+- **STAGE-003-003 (socket collector)** is independent of 001/002 but lands after them so the drill-down has somewhere to render status data. Fills the "Status" + "Restart Count" + "Healthcheck" columns of the grid.
+- **STAGE-003-004 (discoverer)** depends on STAGE-003-003 (reuses the same socket connection abstraction) and writes to `suggestions` table (reusing EPIC-011's pre-existing schema; no UI for suggestions globally yet — just the in-epic stub fills in STAGE-003-010).
+- **STAGE-003-005 (label-based config)** depends on STAGE-003-003 (uses inventory) and STAGE-003-004 (the discoverer is the entry point that creates probe-targets when labels are seen).
+- **STAGE-003-006 (file override)** depends on STAGE-003-005 — extends the same probe-config resolver with a higher-precedence source.
+- **STAGE-003-007 (registry digest)** is independent — runs as its own collector. Lands after the drill-down has settled because the "image update" badge column needs the grid in place.
+- **STAGE-003-008 (build-source hash)** depends on STAGE-003-007 (shares the `homelab_image_update_available` metric family + vmalert rule + UI badge).
+- **STAGE-003-009 (Pull & Restart)** depends on STAGE-003-007 + STAGE-003-008 (the action is "pull because update is available" — useless without update detection). Adds confirm-gated UI button + new `compose_actions` audit table.
+- **STAGE-003-010 (mop-up)** is last — fills any unfilled drill-down skeleton sections + completes the in-epic suggestions stub. Explicit forward reference to EPIC-011 for replacement.
+
+**Strict serial order: 001 → 002 → 003 → 004 → 005 → 006 → 007 → 008 → 009 → 010.**
 
 ## Notes
 
-- The compose file lives at `/storage/docker/compose/docker-compose.yml` on the user's host. The path is configurable; the public release does not assume this path.
-- `host.docker.internal: host-gateway` is used by several user containers — probes that resolve container hostnames must handle this.
-- The default probe set per discovered container is conservative: HTTP probe on declared label only, no `exec` probes by default (those require explicit user opt-in for safety).
-- Disabled containers (`profiles: ["disabled"]`) are listed but not probed; the discoverer surfaces them as informational suggestions ("Frigate exists but is disabled — probe when enabled?").
+- **The compose file path is configurable.** The public release does NOT hard-code `/storage/docker/compose/docker-compose.yml`. Config key `docker.compose_file_path` defaults to `/storage/docker/compose/docker-compose.yml` for this user's deployment via the host-overrides repo; public default is unset → "Pull & Restart" disabled until configured.
+- **`host.docker.internal:host-gateway` is used by several user containers** — probes that resolve container hostnames must handle this. Documented in STAGE-003-005 + the resolver tests.
+- **The default probe set per discovered container is conservative.** A discovered container with no `homelab-monitor.*` labels gets an HTTP probe ONLY if exposed ports + a healthcheck combine to suggest it; otherwise it is recorded in inventory and shown in the grid, but no probe is auto-created. `exec` probes are NEVER auto-created — they require explicit user opt-in for safety (an exec probe runs a command inside the container; high blast radius).
+- **Disabled containers (`profiles: ["disabled"]`) are listed but not probed.** The discoverer surfaces them as informational suggestions ("Frigate exists but is disabled — probe when enabled?"). When the user later enables the profile, the discoverer re-surfaces the suggestion.
+- **The Docker socket mount widens from read-only to read-write at STAGE-003-009.** Stages 001-008 read-only via `:ro`; STAGE-003-009 widens to RW so `docker compose pull && up -d <svc>` works. The security boundary is at the docker socket level either way — anyone with socket access has root-equivalent on the host. Documented in the STAGE-003-009 design.
+- **Host-native MariaDB and MySQL are out of scope here** — they are covered in EPIC-018 service deep-dives.
+- **`/rackstation/*` mount-health is upstream of Plex, Frigate, podcast-feed** — but mount monitoring belongs in EPIC-001 / EPIC-008 (Synology). This epic just lists them as containers; mount probes are not added here.
+
+## Cross-epic carry-forward → EPIC-011
+
+The in-epic suggestions UI stub (STAGE-003-002 skeleton + STAGE-003-010 completion) is a TEMPORARY in-epic surface. When EPIC-011 (Discovery & Suggestion engine UX) is built, the global Suggestions inbox MUST:
+
+- Render Docker discoverer suggestions alongside all other discoverer types in a single unified inbox.
+- Subsume the per-epic stub — the Docker drill-down's "Pending suggestions" panel can either link to the global inbox OR be removed entirely (to be decided in EPIC-011 Design).
+- Honor the existing `suggestions` table schema written by STAGE-003-004 — no schema rewrite required for EPIC-011 to take over rendering.
+
+This carry-forward MUST be added as an explicit EPIC-011 acceptance criterion when EPIC-011 is opened.
+
+## Cross-epic carry-forward → EPIC-009
+
+The "Pull & Restart" action (STAGE-003-009) introduces the FIRST kernel-driven Docker write operation in the project. EPIC-009 (auto-fix subsystem) will build the broader runbook orchestrator that may invoke `docker compose` (or `docker exec`) on a broader allow-list. When EPIC-009 is built:
+
+- The `compose_actions` audit table introduced in STAGE-003-009 SHOULD be either subsumed into `runbook_runs` OR kept separate and cross-referenced — to be decided in EPIC-009 Design.
+- The confirm-on-destructive UX from STAGE-003-009 SHOULD be the same component used for runbook real-runs.
+- The docker socket RW widening from STAGE-003-009 is a prerequisite for any EPIC-009 runbook that needs to invoke `docker` commands.
