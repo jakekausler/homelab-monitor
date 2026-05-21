@@ -34,7 +34,7 @@ The drill-down panel ("Docker" tab under Integrations) lands as a SKELETON early
 | Stage | Name | Status |
 | --- | --- | --- |
 | STAGE-003-001 | cadvisor sidecar + scrape config + first container metrics in VM | Complete |
-| STAGE-003-002 | Vector container-log ingestion fix + opt-out `exclude_containers` wiring | Not Started |
+| STAGE-003-002 | Vector container-log ingestion fix + opt-out `exclude_containers` wiring | Complete |
 | STAGE-003-003 | Docker drill-down UI skeleton — Integrations sub-page, routes, empty states, logs-route placeholder | Not Started |
 | STAGE-003-004 | Docker socket collector — container inventory + status + restart_count + exit_code + healthcheck | Not Started |
 | STAGE-003-005 | Docker discoverer + suggestions data — periodic + socket-event-driven, writes to `suggestions` table | Not Started |
@@ -46,7 +46,7 @@ The drill-down panel ("Docker" tab under Integrations) lands as a SKELETON early
 | STAGE-003-011 | Per-container log viewer route — `/integrations/docker/containers/$name/logs` (VL-backed, manual refresh) | Not Started |
 | STAGE-003-012 | Drill-down completion + in-epic suggestions stub (cross-ref EPIC-011) | Not Started |
 
-## Current Stage: STAGE-003-002
+## Current Stage: STAGE-003-003
 
 ## Cross-stage acceptance criteria
 
