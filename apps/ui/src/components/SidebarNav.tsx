@@ -6,6 +6,7 @@ import {
   CalendarRange,
   ClipboardList,
   Cog,
+  Container,
   FileText,
   Gauge,
   Layout,
@@ -22,13 +23,16 @@ interface NavItem {
   to?: string
   icon: typeof Layout
   disabledNote?: string
+  isSectionLabel?: boolean
+  indent?: boolean
 }
 
 const NAV_ITEMS: NavItem[] = [
   { label: 'Overview', to: '/overview', icon: Layout },
   { label: 'Alerts', to: '/alerts', icon: AlertTriangle },
   { label: 'Inventory', to: '/inventory/crons', icon: Boxes },
-  { label: 'Integrations', icon: Cable, disabledNote: 'Coming soon' },
+  { label: 'Integrations', icon: Cable, isSectionLabel: true },
+  { label: 'Docker', to: '/integrations/docker', icon: Container, indent: true },
   { label: 'Logs', icon: ScrollText, disabledNote: 'Coming soon' },
   { label: 'Metrics', to: '/metrics', icon: Gauge },
   { label: 'Runbooks', icon: FileText, disabledNote: 'Coming soon' },
@@ -70,6 +74,28 @@ export function SidebarNav({
       </div>
       {NAV_ITEMS.map((item) => {
         const Icon = item.icon
+        if (item.isSectionLabel) {
+          return (
+            <div
+              key={item.label}
+              className={cn(
+                'px-2 pt-3 pb-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground',
+                collapsed && 'hidden',
+              )}
+              role="heading"
+              aria-level={2}
+            >
+              {collapsed ? (
+                <Icon aria-hidden="true" className="size-4 shrink-0 mx-auto" />
+              ) : (
+                <span className="flex items-center gap-3">
+                  <Icon aria-hidden="true" className="size-4 shrink-0" />
+                  {item.label}
+                </span>
+              )}
+            </div>
+          )
+        }
         if (item.to !== undefined) {
           return (
             <Link
@@ -82,6 +108,7 @@ export function SidebarNav({
               className={cn(
                 'flex items-center gap-3 rounded-md px-2 py-2 text-sm text-foreground hover:bg-accent hover:text-accent-foreground',
                 collapsed && 'justify-center',
+                item.indent && 'pl-6',
               )}
             >
               <Icon className="size-4 shrink-0" />
@@ -100,7 +127,6 @@ export function SidebarNav({
                   'flex cursor-not-allowed items-center gap-3 rounded-md px-2 py-2 text-sm text-muted-foreground opacity-60',
                   collapsed && 'justify-center',
                 )}
-                data-tooltip={item.disabledNote ?? 'Coming soon'}
               >
                 <Icon className="size-4 shrink-0" />
                 {collapsed ? null : <span>{item.label}</span>}
