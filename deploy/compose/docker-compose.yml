@@ -36,6 +36,8 @@ services:
       HM_HOST_HOSTNAME: ${HM_HOST_HOSTNAME:-}
       HM_CRON_APPLY_IPC_DIR: /host-ipc
       VECTOR_DOCKER_EXCLUDE: ${VECTOR_DOCKER_EXCLUDE:-}
+    group_add:
+      - "${HM_HOST_DOCKER_GID:-999}"
     volumes:
       - data_monitor:/data
       - data_vm:/var/vm-data:ro
@@ -74,6 +76,7 @@ services:
       # /proc is mounted ro — /proc/stat btime is world-readable. Used for
       # @reboot cron lateness and a correct homelab_host_uptime_seconds.
       - /proc:/host/proc:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     depends_on:
       victoriametrics:
         condition: service_healthy

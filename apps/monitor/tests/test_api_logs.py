@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import cast
 
 import httpx
@@ -40,6 +41,13 @@ async def test_query_proxies_vl_success(
         ' "_time": "2026-05-07T00:00:00+00:00"}\n'
         '{"_stream_id": "svc.host", "_msg": "world",'
         ' "_time": "2026-05-07T00:00:01+00:00", "level": "info"}\n'
+    )
+    # Register permissive mock for lifespan startup request to VictoriaMetrics
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(r"http://victoriametrics:8428/.*"),
+        json={"data": {"resultType": "vector", "result": []}},
+        is_optional=True,
     )
     httpx_mock.add_response(
         url="http://vl-test:9428/select/logsql/query?query=%2A&start=2026-05-07T00%3A00%3A00Z&end=2026-05-07T01%3A00%3A00Z&limit=10001",
@@ -281,6 +289,13 @@ async def test_query_accepts_naive_timestamps(
 ) -> None:
     """Naive (tz-less) ISO timestamps are accepted and normalized to UTC."""
     monkeypatch.setenv("HOMELAB_MONITOR_VL_URL", "http://vl-test:9428")
+    # Register permissive mock for lifespan startup request to VictoriaMetrics
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(r"http://victoriametrics:8428/.*"),
+        json={"data": {"resultType": "vector", "result": []}},
+        is_optional=True,
+    )
     httpx_mock.add_response(method="GET", text="")
     resp = await authenticated_client.get(
         "/api/logs/query",

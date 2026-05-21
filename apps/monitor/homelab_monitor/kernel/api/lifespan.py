@@ -268,6 +268,27 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
         )
         degraded.append("cron_run_reconciler")
 
+    try:
+        from homelab_monitor.kernel.metrics.docker_socket_collector import (  # noqa: PLC0415
+            DockerSocketCollector,
+        )
+
+        loader.register(
+            DockerSocketCollector,
+            {
+                "name": "docker_socket",
+                "interval_seconds": int(DockerSocketCollector.interval.total_seconds()),
+                "timeout_seconds": int(DockerSocketCollector.timeout.total_seconds()),
+            },
+        )
+    except Exception as exc:  # pragma: no cover -- defensive
+        log.warning(
+            "lifespan.collector_register_failed",
+            name="docker_socket",
+            error=str(exc),
+        )
+        degraded.append("docker_socket")
+
     plugins_env = os.environ.get("HOMELAB_MONITOR_PLUGINS_DIR")
     if plugins_env is not None:
         plugins_dir: Path | None = Path(plugins_env)
@@ -369,6 +390,23 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
         if isinstance(c, CronDiscoverer):
             c.cron_repo = cron_repo
             app.state.cron_discoverer = c
+        # Wire DockerSocketClient into the DockerSocketCollector instance
+        from homelab_monitor.kernel.metrics.docker_socket_collector import (  # noqa: PLC0415
+            DockerSocketCollector,
+        )
+
+        if isinstance(c, DockerSocketCollector):
+            from homelab_monitor.kernel.docker.socket_client import (  # noqa: PLC0415
+                DockerSocketClient,
+            )
+
+            socket_path = os.environ.get("HOMELAB_MONITOR_DOCKER_SOCKET", "/var/run/docker.sock")
+            docker_client = DockerSocketClient(socket_path=socket_path, log=log)
+            c._client = docker_client  # pyright: ignore[reportPrivateUsage]
+            c._vm_url = os.environ.get(  # pyright: ignore[reportPrivateUsage]
+                "HOMELAB_MONITOR_VM_URL", "http://victoriametrics:8428"
+            )
+            app.state.docker_socket_client = docker_client
     scheduler = Scheduler(
         collectors,
         ctx_factory,
@@ -527,4 +565,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
         with contextlib.suppress(asyncio.CancelledError):
             await flusher_task
         await http_client.aclose()
+        docker_client = getattr(app.state, "docker_socket_client", None)
+        # Defensive guard: triggers only when DockerSocketCollector registration failed
+        # during startup (degraded path) and lifespan still tries to close the client
+        # during shutdown. Not exercised by tests since the degraded path isn't simulated.
+        if docker_client is not None:  # pragma: no branch
+            await docker_client.aclose()
         await dispose_engine()

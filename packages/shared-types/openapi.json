@@ -532,6 +532,137 @@
         "title": "CommentBody",
         "type": "object"
       },
+      "ContainerListResponse": {
+        "properties": {
+          "containers": {
+            "items": {
+              "$ref": "#/components/schemas/ContainerRow"
+            },
+            "title": "Containers",
+            "type": "array"
+          }
+        },
+        "required": [
+          "containers"
+        ],
+        "title": "ContainerListResponse",
+        "type": "object"
+      },
+      "ContainerRow": {
+        "description": "Mirrors apps/ui/src/routes/integrations/types.ts::ContainerRow.",
+        "properties": {
+          "cpu_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cpu Pct"
+          },
+          "exit_code": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exit Code"
+          },
+          "healthcheck": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Healthcheck"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "image": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image"
+          },
+          "labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "default": {},
+            "title": "Labels",
+            "type": "object"
+          },
+          "mem_mib": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mem Mib"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "network_mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Network Mode"
+          },
+          "restart_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Restart Count"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "title": "ContainerRow",
+        "type": "object"
+      },
       "CronEventItem": {
         "additionalProperties": false,
         "description": "One structured cron event in the ingest batch.",
@@ -3696,6 +3827,28 @@
           }
         },
         "summary": "Healthz"
+      }
+    },
+    "/api/integrations/docker/containers": {
+      "get": {
+        "description": "List all Docker containers from the targets table.\n\nRequires an authenticated session. Returns cached CPU/mem metrics from\nthe last collector tick; does not query VictoriaMetrics live.",
+        "operationId": "list_containers_api_integrations_docker_containers_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContainerListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Containers",
+        "tags": [
+          "docker"
+        ]
       }
     },
     "/api/internal/cron-events": {

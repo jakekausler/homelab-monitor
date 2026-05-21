@@ -9,8 +9,8 @@ afterEach(() => {
 })
 
 const MOCK_CONTAINERS: ContainerRow[] = [
-  { id: 'abc123', name: 'nginx' },
-  { id: 'def456', name: 'postgres', status: 'running', image: 'postgres:16' },
+  { id: 'abc123', name: 'nginx', labels: {} },
+  { id: 'def456', name: 'postgres', status: 'running', image: 'postgres:16', labels: {} },
   {
     id: 'ghi789',
     name: 'redis',
@@ -19,12 +19,13 @@ const MOCK_CONTAINERS: ContainerRow[] = [
     cpu_pct: 0.42,
     mem_mib: 128,
     restart_count: 0,
-    exit_code: undefined,
+    exit_code: null,
     healthcheck: 'healthy',
     image_update: 'available',
     probes: ['http'],
     logs_url: '/integrations/docker/containers/redis/logs',
     actions_available: true,
+    labels: {},
   },
 ]
 

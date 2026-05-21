@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import cast
 
 import pytest
@@ -254,6 +255,12 @@ async def test_range_handles_malformed_value_pair(
     """Value pairs that are not list/tuple or too short are skipped (branch 126->125)."""
     monkeypatch.setenv("HOMELAB_MONITOR_VM_URL", "http://vm-test:8428")
     httpx_mock.add_response(
+        method="GET",
+        url=re.compile(r"http://victoriametrics:8428/.*"),
+        json={"data": {"resultType": "vector", "result": []}},
+        is_optional=True,
+    )
+    httpx_mock.add_response(
         url="http://vm-test:8428/api/v1/query_range?query=up&start=a&end=b&step=10s",
         method="GET",
         json={
@@ -295,6 +302,12 @@ async def test_range_skips_unparseable_value_pair(
 ) -> None:
     """Value pairs with non-numeric timestamps are suppressed by contextlib.suppress."""
     monkeypatch.setenv("HOMELAB_MONITOR_VM_URL", "http://vm-test:8428")
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(r"http://victoriametrics:8428/.*"),
+        json={"data": {"resultType": "vector", "result": []}},
+        is_optional=True,
+    )
     httpx_mock.add_response(
         url="http://vm-test:8428/api/v1/query_range?query=up&start=a&end=b&step=10s",
         method="GET",
