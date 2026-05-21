@@ -41,6 +41,7 @@ secrets-master/
 # Dev-rig env (contains master key — see deploy/dev/dev.env.example)
 deploy/dev/dev.env
 deploy/dev/data/
+deploy/dev/logs/
 
 # Data
 data/
