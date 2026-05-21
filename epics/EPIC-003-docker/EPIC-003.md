@@ -34,15 +34,17 @@ The drill-down panel ("Docker" tab under Integrations) lands as a SKELETON early
 | Stage | Name | Status |
 | --- | --- | --- |
 | STAGE-003-001 | cadvisor sidecar + scrape config + first container metrics in VM | Complete |
-| STAGE-003-002 | Docker drill-down UI skeleton — Integrations sub-page, routes, empty states | Not Started |
-| STAGE-003-003 | Docker socket collector — container inventory + status + restart_count + exit_code + healthcheck | Not Started |
-| STAGE-003-004 | Docker discoverer + suggestions data — periodic + socket-event-driven, writes to `suggestions` table | Not Started |
-| STAGE-003-005 | Label-based probe auto-config — `homelab-monitor.<kind>.<name>=...` labels create probes | Not Started |
-| STAGE-003-006 | Per-service config-file override — YAML override under `/config/plugins/docker/` supersedes labels | Not Started |
-| STAGE-003-007 | Image-update detection (registry digest) — `homelab_image_update_available` metric + vmalert info-severity rule | Not Started |
-| STAGE-003-008 | Image-update detection (locally-built images) — build-context source hash | Not Started |
-| STAGE-003-009 | "Pull & Restart" action — confirm-gated compose-aware action + audit + new `compose_actions` table | Not Started |
-| STAGE-003-010 | Drill-down completion + in-epic suggestions stub (cross-ref EPIC-011) | Not Started |
+| STAGE-003-002 | Vector container-log ingestion fix + opt-out `exclude_containers` wiring | Not Started |
+| STAGE-003-003 | Docker drill-down UI skeleton — Integrations sub-page, routes, empty states, logs-route placeholder | Not Started |
+| STAGE-003-004 | Docker socket collector — container inventory + status + restart_count + exit_code + healthcheck | Not Started |
+| STAGE-003-005 | Docker discoverer + suggestions data — periodic + socket-event-driven, writes to `suggestions` table | Not Started |
+| STAGE-003-006 | Label-based probe auto-config — `homelab-monitor.<kind>.<name>=...` labels create probes | Not Started |
+| STAGE-003-007 | Per-service config-file override — YAML override under `/config/plugins/docker/` supersedes labels | Not Started |
+| STAGE-003-008 | Image-update detection (registry digest) — `homelab_image_update_available` metric + vmalert info-severity rule | Not Started |
+| STAGE-003-009 | Image-update detection (locally-built images) — build-context source hash | Not Started |
+| STAGE-003-010 | "Pull & Restart" action — confirm-gated compose-aware action + audit + new `compose_actions` table | Not Started |
+| STAGE-003-011 | Per-container log viewer route — `/integrations/docker/containers/$name/logs` (VL-backed, manual refresh) | Not Started |
+| STAGE-003-012 | Drill-down completion + in-epic suggestions stub (cross-ref EPIC-011) | Not Started |
 
 ## Current Stage: STAGE-003-002
 
@@ -58,35 +60,39 @@ Inherits all EPIC-001 cross-stage criteria (see `epics/EPIC-001-foundation/EPIC-
 
 Plus EPIC-003-specific criteria:
 
-6. **The user's compose file is read-only by every collector and probe.** Only the explicit "Pull & Restart" action (STAGE-003-009) invokes write operations, and only with session-confirm + audit. Compose file lives at `/storage/docker/compose/docker-compose.yml` on the user's host; the path is configurable; the public release does NOT assume this path.
+6. **The user's compose file is read-only by every collector and probe.** Only the explicit "Pull & Restart" action (STAGE-003-010) invokes write operations, and only with session-confirm + audit. Compose file lives at `/storage/docker/compose/docker-compose.yml` on the user's host; the path is configurable; the public release does NOT assume this path.
 7. **Probe failure does NOT cause container restart.** A failing probe alerts; the user decides if action is needed. The monitor never restarts a container in response to its own probe.
 8. **Host-network containers probe via host IP, not container IP.** Per `reference_docker_inventory.md`, the following containers use `network_mode: host`: Home Assistant, Plex, Pi-hole (pihole-unbound), library-organizer, matter-server, music-assistant. Every probe code path MUST handle this — resolve target = host IP when `network_mode: host`, container IP otherwise.
 9. **Disabled containers (`profiles: ["disabled"]`) are listed in inventory but NOT probed.** The discoverer surfaces them as informational suggestions ("Frigate exists but is disabled — probe when enabled?"). No probe is created or scheduled for a disabled-profile container.
-10. **Multiple probes per container are supported.** Label syntax: `homelab-monitor.<kind>.<name>=<value>` where `<kind>` ∈ `{http, tcp, exec, metrics}` and `<name>` is a user-chosen identifier (defaults to `default`). File-override mirrors this. Examples in STAGE-003-005.
+10. **Multiple probes per container are supported.** Label syntax: `homelab-monitor.<kind>.<name>=<value>` where `<kind>` ∈ `{http, tcp, exec, metrics}` and `<name>` is a user-chosen identifier (defaults to `default`). File-override mirrors this. Examples in STAGE-003-006.
 11. **Label collisions are surfaced as suggestions, not silently dropped.** Two labels resolving to the same `(kind, name)` for the same container → suggestion + log + no probe created until resolved.
 12. **Every probe runs in a `concurrency_group` keyed by the target.** Per spec §5.4 — all probes hitting the same container share a group `docker.<container_name>` so one service is never DDOSed by parallel HTTP + TCP + exec probes.
-13. **Locally-built images use source-hash update-detection, not registry digest.** Containers whose compose entry has `build:` (not `image:`) get build-context source-tree hashing in STAGE-003-008.
+13. **Locally-built images use source-hash update-detection, not registry digest.** Containers whose compose entry has `build:` (not `image:`) get build-context source-tree hashing in STAGE-003-009.
 14. **`host.docker.internal:host-gateway` aliasing is preserved when resolving probe targets.** Several user containers use this alias; the resolver must not strip it.
 15. **Dev rig has a synthetic cadvisor seed CLI** — `hm dev seed-container-metrics` (or equivalent) generates fake `container_*` metric streams so frontend Refinement works without real cadvisor data. Lands in STAGE-003-001 alongside cadvisor.
 16. **Integration test rig uses real cadvisor against toy services.** `deploy/compose/docker-compose.test.yml` includes a cadvisor service scraping the test rig's deterministic toy containers. Same code path as prod.
-17. **Every stage gets dev rig (3a) AND prod (3b) Refinement sign-off WHERE THE STAGE HAS HOST-INTEGRATION CONCERNS** — desktop + mobile viewport approval on the drill-down UI. Frontend-only stages (e.g., STAGE-003-002, STAGE-003-010) are 3a only. Backend-only stages with no host delta also skip 3b. The drill-down skeleton lands in STAGE-003-002 so every subsequent backend stage has UI to sign off on.
+17. **Every stage gets dev rig (3a) AND prod (3b) Refinement sign-off WHERE THE STAGE HAS HOST-INTEGRATION CONCERNS** — desktop + mobile viewport approval on the drill-down UI. Frontend-only stages (e.g., STAGE-003-003, STAGE-003-012) are 3a only. Backend-only stages with no host delta also skip 3b. The drill-down skeleton lands in STAGE-003-003 so every subsequent backend stage has UI to sign off on.
 
-18. **The Docker socket mount widens from :ro to RW at STAGE-003-009.** Stages 001-008 use :ro; STAGE-003-009 widens because Pull & Restart needs the RW path. The security boundary is at the docker socket level either way — anyone with socket access has root-equivalent on the host. This widening is documented + accepted; STAGE-003-009's commit message includes the explicit acknowledgment.
+18. **The Docker socket mount widens from :ro to RW at STAGE-003-010.** Stages 001-009 use :ro; STAGE-003-010 widens because Pull & Restart needs the RW path. The security boundary is at the docker socket level either way — anyone with socket access has root-equivalent on the host. This widening is documented + accepted; STAGE-003-010's commit message includes the explicit acknowledgment.
+
+19. **Container stdout/stderr MUST be ingested into VictoriaLogs by default.** STAGE-003-002 fixes the gap from STAGE-001-016 (where `include_containers = []` blocked all containers). Default behavior after STAGE-003-002: vector tails ALL containers on the docker socket; opt-out via `VECTOR_DOCKER_EXCLUDE` env var (CSV list). This is the prerequisite for STAGE-003-011 (log viewer) and EPIC-004 (log anomaly detection).
 
 ## Sequential dependency notes
 
 - **STAGE-003-001 (cadvisor sidecar)** is the foundation — adds cadvisor to prod compose, dev compose, and integration test compose. No code in `apps/monitor` apart from the dev seed CLI; deployment + scrape config work.
-- **STAGE-003-002 (UI skeleton)** depends on STAGE-003-001 — the skeleton renders cadvisor data immediately. Pure frontend stage; routes + empty-state components only.
-- **STAGE-003-003 (socket collector)** is independent of 001/002 but lands after them so the drill-down has somewhere to render status data. Fills the "Status" + "Restart Count" + "Healthcheck" columns of the grid.
-- **STAGE-003-004 (discoverer)** depends on STAGE-003-003 (reuses the same socket connection abstraction) and writes to `suggestions` table (reusing EPIC-011's pre-existing schema; no UI for suggestions globally yet — just the in-epic stub fills in STAGE-003-010).
-- **STAGE-003-005 (label-based config)** depends on STAGE-003-003 (uses inventory) and STAGE-003-004 (the discoverer is the entry point that creates probe-targets when labels are seen).
-- **STAGE-003-006 (file override)** depends on STAGE-003-005 — extends the same probe-config resolver with a higher-precedence source.
-- **STAGE-003-007 (registry digest)** is independent — runs as its own collector. Lands after the drill-down has settled because the "image update" badge column needs the grid in place.
-- **STAGE-003-008 (build-source hash)** depends on STAGE-003-007 (shares the `homelab_image_update_available` metric family + vmalert rule + UI badge).
-- **STAGE-003-009 (Pull & Restart)** depends on STAGE-003-007 + STAGE-003-008 (the action is "pull because update is available" — useless without update detection). Adds confirm-gated UI button + new `compose_actions` audit table.
-- **STAGE-003-010 (mop-up)** is last — fills any unfilled drill-down skeleton sections + completes the in-epic suggestions stub. Explicit forward reference to EPIC-011 for replacement.
+- **STAGE-003-002 (vector container-log fix)** is a prerequisite for STAGE-003-011 and for EPIC-004. Fixes the gap from STAGE-001-016 where `include_containers = []` blocked all container log ingestion. Render-on-boot substitution wires `VECTOR_DOCKER_EXCLUDE` env var.
+- **STAGE-003-003 (UI skeleton)** depends on STAGE-003-001 — the skeleton renders cadvisor data immediately. Pure frontend stage; routes + empty-state components only. ALSO scaffolds the per-container log viewer ROUTE + placeholder component (filled by STAGE-003-011) AND the "Logs" column placeholder in the grid (filled by STAGE-003-011).
+- **STAGE-003-004 (socket collector)** is independent of 001/002/003 but lands after them so the drill-down has somewhere to render status data. Fills the "Status" + "Restart Count" + "Healthcheck" columns of the grid.
+- **STAGE-003-005 (discoverer)** depends on STAGE-003-004 (reuses the same socket connection abstraction) and writes to `suggestions` table (reusing EPIC-011's pre-existing schema; no UI for suggestions globally yet — just the in-epic stub fills in STAGE-003-012).
+- **STAGE-003-006 (label-based config)** depends on STAGE-003-004 (uses inventory) and STAGE-003-005 (the discoverer is the entry point that creates probe-targets when labels are seen).
+- **STAGE-003-007 (file override)** depends on STAGE-003-006 — extends the same probe-config resolver with a higher-precedence source.
+- **STAGE-003-008 (registry digest)** is independent — runs as its own collector. Lands after the drill-down has settled because the "image update" badge column needs the grid in place.
+- **STAGE-003-009 (build-source hash)** depends on STAGE-003-008 (shares the `homelab_image_update_available` metric family + vmalert rule + UI badge).
+- **STAGE-003-010 (Pull & Restart)** depends on STAGE-003-008 + STAGE-003-009 (the action is "pull because update is available" — useless without update detection). Adds confirm-gated UI button + new `compose_actions` audit table.
+- **STAGE-003-011 (per-container log viewer)** depends on STAGE-003-002 (container logs in VL) + STAGE-003-003 (route + Logs column placeholder) + STAGE-003-004 (inventory tells us what containers exist). Reuses `VictoriaLogsClient` from STAGE-002-013. EPIC-004 adds anomaly / pattern / live-tail layers on top.
+- **STAGE-003-012 (mop-up)** is last — fills any unfilled drill-down skeleton sections + completes the in-epic suggestions stub. Explicit forward reference to EPIC-011 for replacement.
 
-**Strict serial order: 001 → 002 → 003 → 004 → 005 → 006 → 007 → 008 → 009 → 010.**
+**Strict serial order: 001 → 002 → 003 → 004 → 005 → 006 → 007 → 008 → 009 → 010 → 011 → 012.**
 
 ## Notes
 
