@@ -1,7 +1,7 @@
 # vmagent scrape configuration for the integration TEST rig only.
 # Mounted into the test rig's vmagent at /etc/vmagent/scrape.yaml.
-# Prod vmagent uses deploy/compose/vmagent/scrape.yaml (which does NOT
-# scrape fixture-host).
+# Prod vmagent uses deploy/compose/vmagent/scrape.yaml (which has the same
+# cadvisor relabel rules; this file mirrors them at 5s intervals).
 #
 # Intervals are compressed (5s) so the canonical e2e test fits in a 60s budget.
 
@@ -26,3 +26,18 @@ scrape_configs:
         labels:
           service: fixture-host
           host: fixture-host
+
+  - job_name: cadvisor
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - cadvisor:8080
+        labels:
+          service: cadvisor
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: container_(cpu_usage_seconds_total|cpu_cfs_throttled_seconds_total|memory_working_set_bytes|memory_usage_bytes|memory_rss|network_receive_bytes_total|network_transmit_bytes_total|network_receive_errors_total|network_transmit_errors_total|fs_reads_bytes_total|fs_writes_bytes_total|last_seen|start_time_seconds)
+        action: keep
+      - source_labels: [device]
+        regex: (overlay|tmpfs|shm|/dev/loop.*)
+        action: drop

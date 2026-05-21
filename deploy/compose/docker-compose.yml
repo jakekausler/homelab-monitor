@@ -156,10 +156,55 @@ services:
       - "-remoteWrite.tmpDataPath=/vmagentdata"
     volumes:
       - ./vmagent/scrape.yaml:/etc/vmagent/scrape.yaml:ro
+      - ./vmagent/targets.d:/etc/vmagent/targets.d:ro
       - data_vmagent:/vmagentdata
     depends_on:
       victoriametrics:
         condition: service_healthy
+
+  # cadvisor exposes per-container resource metrics (CPU, RAM, network, fs)
+  # on :8080/metrics. The vmagent scrape job `cadvisor` (in scrape.yaml) keeps
+  # a curated subset of the ~150 series cadvisor emits — see scrape.yaml
+  # header for the allowlist.
+  #
+  # Security posture (D-CADVISOR-LEAST-PRIV): NOT privileged; no extra
+  # capabilities. The /var/run/docker.sock mount is READ-ONLY in this stage
+  # and remains so through STAGE-003-008; STAGE-003-009 widens to RW for
+  # Pull & Restart. The :ro flag is the security boundary.
+  #
+  # CLI flags (D-CADVISOR-FLAGS):
+  #   --docker_only=true                 skip non-Docker cgroups + kernel threads
+  #   --store_container_labels=false     drop all container labels by default
+  #   --whitelisted_container_labels=... pass through only the labels we use
+  #
+  # The whitelisted label list MUST include `homelab-monitor.*` so STAGE-003-005's
+  # label-based probe discovery sees those labels as Prometheus labels. Those
+  # labels do not exist on any container yet (STAGE-003-001) — they begin
+  # appearing in STAGE-003-005.
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    container_name: homelab-cadvisor
+    restart: unless-stopped
+    networks:
+      - homelab-monitor-net
+    privileged: false
+    command:
+      - "--docker_only=true"
+      - "--store_container_labels=false"
+      - "--whitelisted_container_labels=homelab-monitor.*,org.label-schema.*,com.docker.compose.*"
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 
   # VictoriaLogs is intentionally NOT exposed to the host. All access goes
   # through the monitor's /api/logs/query endpoint (auth-required).

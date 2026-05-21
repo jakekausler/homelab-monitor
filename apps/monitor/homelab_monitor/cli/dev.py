@@ -1,17 +1,23 @@
-"""``hm dev`` subcommand group — DEV-ONLY helpers (seed/clear cron runs).
+"""``hm dev`` subcommand group — DEV-ONLY helpers.
 
-These commands write deterministic synthetic data to the local DB for
-manual Refinement-phase testing of the run-history UI. Refuses to run
-against a non-local cron unless --force is passed.
+These commands write deterministic synthetic data for manual Refinement-phase
+testing of the UI. Each subcommand refuses to run against a non-local target
+unless ``--force`` is passed.
 """
 
 from __future__ import annotations
 
 import argparse
 import asyncio
+import math
+import os
+import random
+import socket
 import sys
+import time
 from datetime import UTC, datetime, timedelta
 
+import httpx
 from sqlalchemy import text
 
 from homelab_monitor.kernel.cron.repository import CronRepo
@@ -36,6 +42,32 @@ _ANOMALY_ASSIGNMENTS: list[tuple[int, str]] = [
     (18, "duration_outlier,output_size_drop"),
     (25, "duration_outlier"),
 ]
+
+# ---------------------------------------------------------------------------
+# seed-container-metrics constants
+# ---------------------------------------------------------------------------
+
+# Dev-CLI default: host-published port (not docker-internal victoriametrics:8428)
+# because this CLI runs directly on the host, not inside the compose network.
+_DEFAULT_VM_URL = "http://127.0.0.1:18428"
+
+# Label that tags every synthetic series so --clear can target ONLY them.
+_SYNTH_LABEL_KEY = "homelab_synthetic"
+_SYNTH_LABEL_VAL = "true"
+
+# Default container count for seed-container-metrics.
+_DEFAULT_CONTAINER_COUNT = 5
+
+# Five distinct shape generators — idx % 5 selects which a container uses.
+# Each shape returns a (cpu_seconds, mem_bytes, net_rx_bytes, net_tx_bytes)
+# 4-tuple given the deterministic seed value.
+_SHAPE_NAMES: tuple[str, ...] = (
+    "cpu-sawtooth",
+    "memory-step",
+    "network-bursts",
+    "idle",
+    "spiky",
+)
 
 
 def add_subparser(
@@ -67,6 +99,39 @@ def add_subparser(
     p_clear.add_argument("--force", action="store_true")
     p_clear.set_defaults(func=_handle)
 
+    p_seed_containers = sub.add_parser(
+        "seed-container-metrics",
+        help=(
+            "DEV-ONLY: inject synthetic container_* metrics into VictoriaMetrics. "
+            "Mirrors the cadvisor exposition surface for UI Refinement."
+        ),
+    )
+    p_seed_containers.add_argument(
+        "--containers",
+        type=int,
+        default=_DEFAULT_CONTAINER_COUNT,
+        help=f"Number of fake containers to seed (default {_DEFAULT_CONTAINER_COUNT}).",
+    )
+    p_seed_containers.add_argument(
+        "--clear",
+        action="store_true",
+        help='Delete all synthetic series (homelab_synthetic="true") and exit.',
+    )
+    p_seed_containers.add_argument(
+        "--force",
+        action="store_true",
+        help="Allow running against a non-local hostname (use with caution).",
+    )
+    p_seed_containers.add_argument(
+        "--vm-url",
+        default=None,
+        help=(
+            "Override VictoriaMetrics URL "
+            "(flag > env HOMELAB_MONITOR_VM_URL > default http://127.0.0.1:18428)."
+        ),
+    )
+    p_seed_containers.set_defaults(func=_handle)
+
     dev.set_defaults(func=_handle)
 
 
@@ -76,7 +141,19 @@ def _handle(args: argparse.Namespace) -> int:
         return asyncio.run(_cmd_seed_cron_runs(args.fingerprint, force=bool(args.force)))
     if sub == "clear-cron-runs":
         return asyncio.run(_cmd_clear_cron_runs(args.fingerprint, force=bool(args.force)))
-    print("usage: hm dev {seed-cron-runs,clear-cron-runs}", file=sys.stderr)
+    if sub == "seed-container-metrics":
+        return asyncio.run(
+            _cmd_seed_container_metrics(
+                containers=int(args.containers),
+                clear=bool(args.clear),
+                force=bool(args.force),
+                vm_url=args.vm_url,
+            )
+        )
+    print(
+        "usage: hm dev {seed-cron-runs,clear-cron-runs,seed-container-metrics}",
+        file=sys.stderr,
+    )
     return 2
 
 
@@ -209,4 +286,190 @@ async def _cmd_clear_cron_runs(fingerprint: str, *, force: bool) -> int:
             {"fp": fingerprint},
         )
     print(f"deleted {result.rowcount} cron_runs rows for {fingerprint}")
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# seed-container-metrics implementation
+# ---------------------------------------------------------------------------
+
+
+def _resolve_vm_url(flag_value: str | None) -> str:
+    """Resolve VictoriaMetrics URL with flag > env > default precedence."""
+    if flag_value:
+        return flag_value.rstrip("/")
+    env_value = os.environ.get("HOMELAB_MONITOR_VM_URL")
+    if env_value:
+        return env_value.rstrip("/")
+    return _DEFAULT_VM_URL.rstrip("/")
+
+
+def _validate_local_hostname(force: bool) -> int:
+    """Refuse to run on a non-local host unless --force is passed."""
+    local = socket.gethostname()
+    host_env = os.environ.get("HM_HOST_HOSTNAME", "").strip()
+    # If HM_HOST_HOSTNAME is set AND differs from socket.gethostname(), refuse
+    # (the operator overrode the hostname; the running shell is somewhere else).
+    # If HM_HOST_HOSTNAME is unset, accept — the CLI talks to 127.0.0.1 by default
+    # and the only "remote" risk is a misconfigured HOMELAB_MONITOR_VM_URL, not
+    # a hostname mismatch.
+    if host_env and host_env != local and not force:
+        print(
+            f"ERROR: hostname mismatch — process is on {local!r}, "
+            f"HM_HOST_HOSTNAME={host_env!r}. Pass --force to override (DEV-ONLY).",
+            file=sys.stderr,
+        )
+        return 1
+    return 0
+
+
+def _shape_values(
+    shape: str, rng: random.Random, idx: int, now_epoch: int | None = None
+) -> tuple[float, float, float, float]:
+    """Generate a deterministic 4-tuple of (cpu_s, mem_bytes, net_rx_b, net_tx_b)
+    for the given shape and rng. The rng is already seeded by the caller so
+    repeated calls within a run cycle yield identical output.
+
+    If now_epoch is provided, use it for time-based calculations. Otherwise,
+    use the current time (for live CLI usage).
+    """
+    if now_epoch is None:
+        now_epoch = int(time.time())
+
+    if shape == "cpu-sawtooth":
+        cpu = float((idx * 17 + int(now_epoch // 60)) % 60) + rng.uniform(0, 0.5)
+        mem = 64.0 * 1024 * 1024 + rng.uniform(0, 4 * 1024 * 1024)
+        net_rx = 10_000.0 + rng.uniform(0, 1_000)
+        net_tx = 5_000.0 + rng.uniform(0, 500)
+    elif shape == "memory-step":
+        cpu = 1.0 + rng.uniform(0, 0.2)
+        # Step up every minute, capped at ~512 MiB.
+        mem = min(
+            512.0 * 1024 * 1024,
+            64.0 * 1024 * 1024 + (int(now_epoch // 60) % 16) * 16 * 1024 * 1024,
+        )
+        net_rx = 2_000.0
+        net_tx = 1_000.0
+    elif shape == "network-bursts":
+        cpu = 2.0
+        mem = 128.0 * 1024 * 1024
+        burst = 1.0 if (int(now_epoch // 10) % 3 == 0) else 0.05
+        net_rx = 100_000.0 * burst + rng.uniform(0, 1_000)
+        net_tx = 100_000.0 * burst + rng.uniform(0, 1_000)
+    elif shape == "idle":
+        cpu = 0.01
+        mem = 16.0 * 1024 * 1024
+        net_rx = 100.0
+        net_tx = 50.0
+    elif shape == "spiky":
+        # Use minute bucket for determinism within the same minute.
+        minute_bucket = now_epoch // 60
+        spike = math.sin(minute_bucket / 30.0)
+        cpu = 5.0 + 4.0 * spike + rng.uniform(0, 0.1)
+        mem = 256.0 * 1024 * 1024 + 32 * 1024 * 1024 * spike
+        net_rx = 50_000.0 + 25_000 * spike
+        net_tx = 25_000.0 + 12_500 * spike
+    else:  # pragma: no cover  -- guarded by _SHAPE_NAMES tuple
+        msg = f"unknown shape: {shape!r}"
+        raise ValueError(msg)
+    return cpu, mem, net_rx, net_tx
+
+
+def _build_exposition(containers: int, now_epoch: int) -> str:
+    """Build a Prometheus exposition-format payload for ``containers`` synthetic
+    containers. Deterministic on ``(containers, now_epoch // 60)`` — two runs in
+    the same minute with the same container count yield identical payloads.
+    """
+    # Seed the RNG on (containers, minute) so a same-minute re-run is identical.
+    minute_bucket = now_epoch // 60
+    rng = random.Random(f"hm-synth-{containers}-{minute_bucket}")
+
+    lines: list[str] = []
+    for idx in range(containers):
+        name = f"hm-synth-{idx}"
+        shape = _SHAPE_NAMES[idx % len(_SHAPE_NAMES)]
+        cpu, mem, net_rx, net_tx = _shape_values(shape, rng, idx, now_epoch)
+        labels = f'name="{name}",{_SYNTH_LABEL_KEY}="{_SYNTH_LABEL_VAL}",shape="{shape}"'
+        lines.append(f"container_cpu_usage_seconds_total{{{labels}}} {cpu}")
+        lines.append(f"container_memory_working_set_bytes{{{labels}}} {mem}")
+        lines.append(f"container_network_receive_bytes_total{{{labels}}} {net_rx}")
+        lines.append(f"container_network_transmit_bytes_total{{{labels}}} {net_tx}")
+        lines.append(f"container_last_seen{{{labels}}} {now_epoch}")
+    # Prometheus exposition requires a trailing newline.
+    return "\n".join(lines) + "\n"
+
+
+async def _cmd_seed_container_metrics(
+    *,
+    containers: int,
+    clear: bool,
+    force: bool,
+    vm_url: str | None,
+) -> int:
+    """Implementation for ``hm dev seed-container-metrics``.
+
+    With ``clear=True``: deletes only series labeled ``homelab_synthetic="true"``.
+    Otherwise: emits ``containers`` synthetic series in 5 distinct shapes.
+    """
+    rc = _validate_local_hostname(force)
+    if rc != 0:
+        return rc
+
+    resolved_url = _resolve_vm_url(vm_url)
+
+    if containers <= 0:
+        print("ERROR: --containers must be >= 1", file=sys.stderr)
+        return 1
+
+    async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=5.0)) as client:
+        if clear:
+            return await _clear_synthetic_series(client, resolved_url)
+        return await _post_synthetic_series(client, resolved_url, containers=containers)
+
+
+async def _post_synthetic_series(
+    client: httpx.AsyncClient,
+    vm_url: str,
+    *,
+    containers: int,
+) -> int:
+    """POST synthetic exposition data to VM /api/v1/import/prometheus."""
+    now_epoch = int(time.time())
+    payload = _build_exposition(containers, now_epoch)
+    url = f"{vm_url}/api/v1/import/prometheus"
+    try:
+        resp = await client.post(
+            url,
+            content=payload,
+            headers={"Content-Type": "text/plain"},
+        )
+    except httpx.HTTPError as exc:
+        print(f"ERROR: VM unreachable at {url}: {exc}", file=sys.stderr)
+        return 1
+    if resp.status_code >= 400:  # noqa: PLR2004
+        print(
+            f"ERROR: VM rejected import (status={resp.status_code}): {resp.text}",
+            file=sys.stderr,
+        )
+        return 1
+    print(f"seeded {containers} synthetic containers via {url}")
+    return 0
+
+
+async def _clear_synthetic_series(client: httpx.AsyncClient, vm_url: str) -> int:
+    """DELETE all series carrying homelab_synthetic="true" via VM admin API."""
+    url = f"{vm_url}/api/v1/admin/tsdb/delete_series"
+    params = {"match[]": f'{{{_SYNTH_LABEL_KEY}="{_SYNTH_LABEL_VAL}"}}'}
+    try:
+        resp = await client.post(url, params=params)
+    except httpx.HTTPError as exc:
+        print(f"ERROR: VM unreachable at {url}: {exc}", file=sys.stderr)
+        return 1
+    if resp.status_code >= 400:  # noqa: PLR2004
+        print(
+            f"ERROR: VM rejected delete_series (status={resp.status_code}): {resp.text}",
+            file=sys.stderr,
+        )
+        return 1
+    print(f"cleared all synthetic series ({_SYNTH_LABEL_KEY}={_SYNTH_LABEL_VAL}) via {url}")
     return 0

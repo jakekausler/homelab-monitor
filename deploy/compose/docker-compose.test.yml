@@ -68,6 +68,8 @@ services:
         condition: service_healthy
       fixture-host:
         condition: service_healthy
+      cadvisor:
+        condition: service_healthy
 
   vector:
     image: timberio/vector:0.41.1-debian
@@ -265,6 +267,35 @@ services:
       retries: 10
       start_period: 5s
 
+  # cadvisor sidecar for the integration test rig (D-CADVISOR-SIDECAR-EVERYWHERE).
+  # Scrapes the test rig's deterministic toy containers (fixture-host + noisy-logger
+  # serve as our toy workloads — D-TEST-RIG-TOYS satisfied by reusing existing
+  # fixtures instead of adding duplicates). Same image pin + flags + mounts as
+  # prod (deploy/compose/docker-compose.yml).
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    container_name: homelab-cadvisor-test
+    networks:
+      - homelab-monitor-test-net
+    privileged: false
+    command:
+      - "--docker_only=true"
+      - "--store_container_labels=false"
+      - "--whitelisted_container_labels=homelab-monitor.*,org.label-schema.*,com.docker.compose.*"
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1:8080/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
   shared-init:
     # Init container that chmods the shared_rig_secrets volume so the monitor
     # container (running as uid 1000) can write into it. Named volumes default
@@ -411,6 +442,8 @@ services:
       fixture-host:
         condition: service_healthy
       noisy-logger:
+        condition: service_healthy
+      cadvisor:
         condition: service_healthy
 
 networks:

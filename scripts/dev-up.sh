@@ -72,6 +72,14 @@ load_env() {
   # Tighten perms if previous run left it world-readable.
   chmod 600 "${DEV_ENV_FILE}"
 
+  if [[ "${MODE}" == "prod" ]]; then
+    # In prod mode, docker compose loads its own .env via --env-file.
+    # Sourcing dev.env here would export dev defaults (e.g. HOMELAB_MONITOR_PORT=9090)
+    # into the shell, which take precedence over --env-file (shell-env > --env-file).
+    # Prod-mode host-side vars (HM_DEV_ADMIN_*) have safe inline defaults in up_prod().
+    return 0
+  fi
+
   set -a
   # shellcheck disable=SC1090
   source "${DEV_ENV_FILE}"
@@ -82,6 +90,13 @@ load_env() {
 # assert_master_key_set: refuse to continue with the placeholder key.
 # ----------------------------------------------------------------------------
 assert_master_key_set() {
+  if [[ "${MODE}" == "prod" ]]; then
+    # In prod mode, the master key is in deploy/compose/.env and loaded by
+    # docker compose via --env-file (NOT exported to the shell). The
+    # assertion below would always fail because HOMELAB_MONITOR_MASTER_KEY
+    # is intentionally unset in the shell in prod mode.
+    return 0
+  fi
   if [[ "${HOMELAB_MONITOR_MASTER_KEY:-}" == "GENERATE_ME_WITH_SCRIPT" ]] \
     || [[ -z "${HOMELAB_MONITOR_MASTER_KEY:-}" ]]; then
     _die "HOMELAB_MONITOR_MASTER_KEY is the placeholder. Generate a real key:
@@ -99,11 +114,14 @@ assert_ports_free() {
     "${HM_DEV_BACKEND_PORT:-19090}"
     "${HM_DEV_VM_PORT:-18428}"
     "${HM_DEV_VL_PORT:-19428}"
+    "${HM_DEV_VMAGENT_PORT:-18429}"
     "${HM_DEV_AM_PORT:-19093}"
     "${HM_DEV_KARMA_PORT:-18080}"
     "${HM_DEV_GRAFANA_PORT:-13000}"
     "${HM_DEV_VMALERT_METRICS_PORT:-18880}"
     "${HM_DEV_VMALERT_LOGS_PORT:-18881}"
+    "${HM_DEV_CADVISOR_PORT:-18081}"
+    "${HM_DEV_VECTOR_PORT:-18686}"
   )
   local detector=""
   if command -v ss >/dev/null 2>&1; then detector="ss"
@@ -252,6 +270,7 @@ up_hybrid() {
     alertmanager \
     karma \
     kthxbye \
+    cadvisor \
     vmalert-metrics \
     vmalert-logs \
     vector \
@@ -311,14 +330,14 @@ up_prod() {
   fi
 
   _log "building + starting full prod stack..."
-  docker compose -f "${COMPOSE_FILE}" up -d --build \
+  docker compose --env-file "${REPO_ROOT}/deploy/compose/.env" -f "${COMPOSE_FILE}" up -d --build \
     || _die "docker compose up --build failed"
 
   wait_for_url "http://127.0.0.1:${HOMELAB_MONITOR_PORT:-9090}/api/healthz" "monitor" 90 || true
 
   # Bootstrap admin user inside the container (DB lives in the volume).
   _log "bootstrapping admin user inside the monitor container..."
-  docker compose -f "${COMPOSE_FILE}" exec -T monitor bash -c "
+  docker compose --env-file "${REPO_ROOT}/deploy/compose/.env" -f "${COMPOSE_FILE}" exec -T monitor bash -c "
     printf '%s\n%s\n' '${HM_DEV_ADMIN_PASSWORD:-admin-dev-password}' '${HM_DEV_ADMIN_PASSWORD:-admin-dev-password}' \
       | hm user create '${HM_DEV_ADMIN_USERNAME:-admin}' 2>/dev/null \
       || echo '[bootstrap] admin user already exists'

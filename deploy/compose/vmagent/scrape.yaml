@@ -1,9 +1,37 @@
 # vmagent scrape configuration for the homelab-monitor stack.
-# Single static job — scrapes the monitor's /metrics exposition endpoint.
-
-# TODO(multi-host): add external_labels (e.g., instance, deployment) when scaling
-# beyond a single homelab-monitor instance. Without external_labels, samples
-# from multiple instances would silently merge.
+#
+# Jobs:
+#   - monitor   : the FastAPI backend's /metrics exposition.
+#   - cadvisor  : per-container resource metrics (CPU/RAM/network/fs).
+#   - dynamic   : file_sd extension point — monitor-rendered targets land in
+#                 targets.d/*.yml (STAGE-003-005+ writes files here; this
+#                 stage ships the directory empty).
+#
+# cadvisor metric allowlist (D-CADVISOR-RELABEL-CURATED):
+#   container_cpu_usage_seconds_total
+#   container_cpu_cfs_throttled_seconds_total
+#   container_memory_working_set_bytes
+#   container_memory_usage_bytes
+#   container_memory_rss
+#   container_network_receive_bytes_total
+#   container_network_transmit_bytes_total
+#   container_network_receive_errors_total
+#   container_network_transmit_errors_total
+#   container_fs_reads_bytes_total
+#   container_fs_writes_bytes_total
+#   container_last_seen
+#   container_start_time_seconds
+#
+# To EXTEND the allowlist: add the metric family name to the `regex` clause
+# of the first metric_relabel_configs keep rule below. Series matching the
+# `device=~"overlay|tmpfs|shm|/dev/loop.*"` drop rule are filtered AFTER the
+# keep rule so filesystem noise is suppressed regardless of which families
+# you add.
+# NOTE: regex is anchored by default in Prometheus relabel rules (full-string match).
+#
+# TODO(multi-host): add external_labels (e.g., instance, deployment) when
+# scaling beyond a single homelab-monitor instance. Without external_labels,
+# samples from multiple instances would silently merge.
 
 global:
   scrape_interval: 15s
@@ -17,3 +45,27 @@ scrape_configs:
           - monitor:9090
         labels:
           service: homelab-monitor
+
+  - job_name: cadvisor
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - cadvisor:8080
+        labels:
+          service: cadvisor
+    metric_relabel_configs:
+      # Keep only the curated container_* metric families (see header comment).
+      - source_labels: [__name__]
+        regex: container_(cpu_usage_seconds_total|cpu_cfs_throttled_seconds_total|memory_working_set_bytes|memory_usage_bytes|memory_rss|network_receive_bytes_total|network_transmit_bytes_total|network_receive_errors_total|network_transmit_errors_total|fs_reads_bytes_total|fs_writes_bytes_total|last_seen|start_time_seconds)
+        action: keep
+      # Drop noisy filesystem series (overlay/tmpfs/shm/loop devices).
+      - source_labels: [device]
+        regex: (overlay|tmpfs|shm|/dev/loop.*)
+        action: drop
+
+  - job_name: dynamic
+    # Monitor-rendered targets land here. Empty in STAGE-003-001; STAGE-003-005
+    # writes the first files. vmagent reloads automatically on file change.
+    file_sd_configs:
+      - files:
+          - /etc/vmagent/targets.d/*.yml
