@@ -57,3 +57,32 @@
 - The log-viewer placeholder route is a flat sibling under `protectedLayoutRoute`, NOT nested under `dockerIntegrationRoute`. If you nest it, you must add `<Outlet />` to `DockerIntegrationPage`, which would also show the parent grid alongside the log viewer.
 - The empty-state row uses `colSpan={10}` — if columns are added/removed, update this.
 - Mobile cards do NOT show field labels (intentional per Design phase T-VIEWPORT-SWAP).
+
+## STAGE-003-004: Docker socket collector + container inventory API
+
+**Sanity check (run after any change touching `kernel/docker/`, `kernel/metrics/docker_socket_collector.py`, `kernel/api/routers/docker.py`, or `deploy/compose/docker-compose.yml`):**
+
+1. With prod stack running, login + query the docker endpoint:
+   ```
+   curl -c /tmp/cookies.txt -X POST 'http://127.0.0.1:29090/api/auth/login' \
+     -H 'Content-Type: application/json' \
+     -d '{"username":"admin","password":"<admin-password>"}'
+   curl -b /tmp/cookies.txt 'http://127.0.0.1:29090/api/integrations/docker/containers' | python3 -m json.tool | head -50
+   ```
+   Expect: `{"containers": [...]}` with at least one container per running host docker container.
+
+2. Confirm collector self-metric in VM:
+   ```
+   docker compose exec -T victoriametrics wget -qO- 'http://127.0.0.1:8428/api/v1/query?query=homelab_collector_run_success_total%7Bname%3D%22docker_socket%22%7D'
+   ```
+   Expect: value > 0.
+
+3. Confirm the monitor container has supplemental docker group:
+   ```
+   docker compose exec -T monitor id
+   ```
+   Expect: `groups=995,<DOCKER_GID>` where DOCKER_GID matches `HM_HOST_DOCKER_GID` in `.env`.
+
+**Known host-portability gotcha:**
+- The docker socket on the HOST is owned `root:<docker GID>`. The monitor container needs supplemental access via `group_add: ["${HM_HOST_DOCKER_GID:-999}"]`. Each homelab host MUST set `HM_HOST_DOCKER_GID` in `deploy/compose/.env` to that host's actual docker group GID. Find with: `getent group docker | cut -d: -f3`.
+- This is why a fresh `docker compose up` may fail with EACCES on a different host: GID 999 is a common default but not universal.
