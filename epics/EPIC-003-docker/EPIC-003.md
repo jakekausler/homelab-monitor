@@ -37,7 +37,7 @@ The drill-down panel ("Docker" tab under Integrations) lands as a SKELETON early
 | STAGE-003-002 | Vector container-log ingestion fix + opt-out `exclude_containers` wiring | Complete |
 | STAGE-003-003 | Docker drill-down UI skeleton — Integrations sub-page, routes, empty states, logs-route placeholder | Complete |
 | STAGE-003-004 | Docker socket collector — container inventory + status + restart_count + exit_code + healthcheck | Complete |
-| STAGE-003-005 | Docker discoverer + suggestions data — periodic + socket-event-driven, writes to `suggestions` table | Not Started |
+| STAGE-003-005 | Docker discoverer + suggestions data — periodic + socket-event-driven, writes to `suggestions` table | Complete |
 | STAGE-003-006 | Label-based probe auto-config — `homelab-monitor.<kind>.<name>=...` labels create probes | Not Started |
 | STAGE-003-007 | Per-service config-file override — YAML override under `/config/plugins/docker/` supersedes labels | Not Started |
 | STAGE-003-008 | Image-update detection (registry digest) — `homelab_image_update_available` metric + vmalert info-severity rule | Not Started |
@@ -46,7 +46,7 @@ The drill-down panel ("Docker" tab under Integrations) lands as a SKELETON early
 | STAGE-003-011 | Per-container log viewer route — `/integrations/docker/containers/$name/logs` (VL-backed, manual refresh) | Not Started |
 | STAGE-003-012 | Drill-down completion + in-epic suggestions stub (cross-ref EPIC-011) | Not Started |
 
-## Current Stage: STAGE-003-005
+## Current Stage: STAGE-003-006
 
 ## Cross-stage acceptance criteria
 
@@ -100,7 +100,7 @@ Plus EPIC-003-specific criteria:
 - **`host.docker.internal:host-gateway` is used by several user containers** — probes that resolve container hostnames must handle this. Documented in STAGE-003-005 + the resolver tests.
 - **The default probe set per discovered container is conservative.** A discovered container with no `homelab-monitor.*` labels gets an HTTP probe ONLY if exposed ports + a healthcheck combine to suggest it; otherwise it is recorded in inventory and shown in the grid, but no probe is auto-created. `exec` probes are NEVER auto-created — they require explicit user opt-in for safety (an exec probe runs a command inside the container; high blast radius).
 - **Disabled containers (`profiles: ["disabled"]`) are listed but not probed.** The discoverer surfaces them as informational suggestions ("Frigate exists but is disabled — probe when enabled?"). When the user later enables the profile, the discoverer re-surfaces the suggestion.
-- **The Docker socket mount widens from read-only to read-write at STAGE-003-009.** Stages 001-008 read-only via `:ro`; STAGE-003-009 widens to RW so `docker compose pull && up -d <svc>` works. The security boundary is at the docker socket level either way — anyone with socket access has root-equivalent on the host. Documented in the STAGE-003-009 design.
+- **The Docker socket mount widens from read-only to read-write at STAGE-003-010.** Stages 001-009 use :ro; STAGE-003-010 widens to RW so `docker compose pull && up -d <svc>` works (Pull & Restart action). The security boundary is at the docker socket level either way — anyone with socket access has root-equivalent on the host. Documented in the STAGE-003-010 design.
 - **Host-native MariaDB and MySQL are out of scope here** — they are covered in EPIC-018 service deep-dives.
 - **`/rackstation/*` mount-health is upstream of Plex, Frigate, podcast-feed** — but mount monitoring belongs in EPIC-001 / EPIC-008 (Synology). This epic just lists them as containers; mount probes are not added here.
 
@@ -116,8 +116,8 @@ This carry-forward MUST be added as an explicit EPIC-011 acceptance criterion wh
 
 ## Cross-epic carry-forward → EPIC-009
 
-The "Pull & Restart" action (STAGE-003-009) introduces the FIRST kernel-driven Docker write operation in the project. EPIC-009 (auto-fix subsystem) will build the broader runbook orchestrator that may invoke `docker compose` (or `docker exec`) on a broader allow-list. When EPIC-009 is built:
+The "Pull & Restart" action (STAGE-003-010) introduces the FIRST kernel-driven Docker write operation in the project. EPIC-009 (auto-fix subsystem) will build the broader runbook orchestrator that may invoke `docker compose` (or `docker exec`) on a broader allow-list. When EPIC-009 is built:
 
-- The `compose_actions` audit table introduced in STAGE-003-009 SHOULD be either subsumed into `runbook_runs` OR kept separate and cross-referenced — to be decided in EPIC-009 Design.
-- The confirm-on-destructive UX from STAGE-003-009 SHOULD be the same component used for runbook real-runs.
-- The docker socket RW widening from STAGE-003-009 is a prerequisite for any EPIC-009 runbook that needs to invoke `docker` commands.
+- The `compose_actions` audit table introduced in STAGE-003-010 SHOULD be either subsumed into `runbook_runs` OR kept separate and cross-referenced — to be decided in EPIC-009 Design.
+- The confirm-on-destructive UX from STAGE-003-010 SHOULD be the same component used for runbook real-runs.
+- The docker socket RW widening from STAGE-003-010 is a prerequisite for any EPIC-009 runbook that needs to invoke `docker` commands.
