@@ -5,6 +5,7 @@ STAGE-003-004: Tick algorithm, healthcheck normalization, VM merge, error handli
 
 from __future__ import annotations
 
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
@@ -250,7 +251,7 @@ async def test_tick_vm_merge_happy_path(repo: SqliteRepository) -> None:
 
     # Mock VM response with cpu and mem
     http_client = AsyncMock()
-    responses = [
+    responses: list[dict[str, Any]] = [
         {
             "data": {
                 "resultType": "vector",
@@ -271,6 +272,12 @@ async def test_tick_vm_merge_happy_path(repo: SqliteRepository) -> None:
                         "value": [1234, "128.0"],
                     }
                 ],
+            }
+        },
+        {
+            "data": {
+                "resultType": "vector",
+                "result": [],
             }
         },
     ]
@@ -712,3 +719,79 @@ async def test_query_vm_cpu_mem_mem_none_value_skipped(repo: SqliteRepository) -
 
     result = await collector._query_vm_cpu_mem(ctx, ["x"])  # pyright: ignore[reportPrivateUsage]
     assert result == {}
+
+
+@pytest.mark.asyncio
+async def test_query_vm_restart_count_24h_no_vm_url_returns_empty(repo: SqliteRepository) -> None:
+    """vm_url=None -> _query_vm_restart_count_24h returns {} immediately."""
+    writer = MemoryRetainingMetricsWriter()
+    http_client = AsyncMock(spec=httpx.AsyncClient)
+    collector = DockerSocketCollector(client=AsyncMock(spec=DockerSocketClient), vm_url=None)
+    ctx = _ctx(writer, repo, http_client)
+
+    result = await collector._query_vm_restart_count_24h(ctx)  # pyright: ignore[reportPrivateUsage]
+    assert result == {}
+    http_client.get.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_query_vm_restart_count_24h_returns_parsed_counts(repo: SqliteRepository) -> None:
+    """VM returns restart count entry -> parsed as int."""
+    writer = MemoryRetainingMetricsWriter()
+    client = AsyncMock(spec=DockerSocketClient)
+
+    response = MagicMock()
+    response.raise_for_status = MagicMock()
+    response.json = MagicMock(
+        return_value={
+            "data": {
+                "resultType": "vector",
+                "result": [{"metric": {"name": "foo"}, "value": [0, "3.0"]}],
+            }
+        }
+    )
+
+    http_client = AsyncMock(spec=httpx.AsyncClient)
+    http_client.get.return_value = response
+
+    collector = DockerSocketCollector(client=client, vm_url="http://vm:8428")
+    ctx = _ctx(writer, repo, http_client)
+
+    result = await collector._query_vm_restart_count_24h(ctx)  # pyright: ignore[reportPrivateUsage]
+    assert result == {"foo": 3}
+
+
+@pytest.mark.asyncio
+async def test_query_vm_restart_count_24h_skips_malformed_entries(
+    repo: SqliteRepository,
+) -> None:
+    """Entries missing 'name' label or 'value' field are skipped (defensive branch)."""
+    writer = MemoryRetainingMetricsWriter()
+    client = AsyncMock(spec=DockerSocketClient)
+
+    response = MagicMock()
+    response.raise_for_status = MagicMock()
+    response.json = MagicMock(
+        return_value={
+            "data": {
+                "resultType": "vector",
+                "result": [
+                    # Missing 'name' label → branch (366→361) taken
+                    {"metric": {}, "value": [0, "5.0"]},
+                    # Missing 'value' field → also skipped
+                    {"metric": {"name": "no_value"}, "value": [0, None]},
+                    # Valid entry to confirm the function still parses others
+                    {"metric": {"name": "valid"}, "value": [0, "7.0"]},
+                ],
+            }
+        }
+    )
+
+    http_client = AsyncMock(spec=httpx.AsyncClient)
+    http_client.get.return_value = response
+
+    collector = DockerSocketCollector(client=client, vm_url="http://vm:8428")
+    ctx = _ctx(writer, repo, http_client)
+
+    result = await collector._query_vm_restart_count_24h(ctx)  # pyright: ignore[reportPrivateUsage]
+    assert result == {"valid": 7}

@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import re
+
 import pytest
 from httpx import AsyncClient
+from pytest_httpx import HTTPXMock
+from sqlalchemy import text
 
 from homelab_monitor.kernel.db.repositories.targets_repository import TargetsRepository
 from homelab_monitor.kernel.db.repository import SqliteRepository
@@ -16,6 +20,38 @@ CPU_PCT_NGINX = 15.5
 MEM_MIB_256 = 256.0
 CPU_PCT_SINGLE = 45.2
 MEM_MIB_512 = 512.5
+
+
+@pytest.fixture(autouse=True)
+def _suppress_docker_socket_calls(httpx_mock: HTTPXMock) -> None:  # pyright: ignore[reportUnusedFunction]
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(r"http://victoriametrics:8428/.*"),
+        json={"data": {"resultType": "vector", "result": []}},
+        is_optional=True,
+        is_reusable=True,
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(r"http://localhost/events.*"),
+        content=b"",
+        is_optional=True,
+        is_reusable=True,
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(r"http://localhost/containers/json.*"),
+        json=[],
+        is_optional=True,
+        is_reusable=True,
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(r"http://victorialogs:9428/.*"),
+        json={},
+        is_optional=True,
+        is_reusable=True,
+    )
 
 
 async def _seed_docker_container(  # noqa: PLR0913
@@ -32,16 +68,24 @@ async def _seed_docker_container(  # noqa: PLR0913
     labels: dict[str, str] | None = None,
     cpu_pct: float | None = None,
     mem_mib: float | None = None,
-) -> None:
-    """Test helper: seed a docker container row using the production upsert path."""
+    compose_project: str | None = None,
+    compose_service: str | None = None,
+    compose_file_path: str | None = None,
+) -> str:
+    """Test helper: seed a docker container row using the production upsert path.
+
+    Returns the resolved targets.id UUID.
+    """
     if labels is None:
         labels = {}
     now = utc_now_iso()
 
     async with repo.transaction() as conn:
-        await TargetsRepository.upsert_docker_container_conn(
+        return await TargetsRepository.upsert_docker_container_conn(
             conn,
-            target_id=target_id,
+            container_id=target_id,
+            logical_key_kind="name",
+            logical_key=name,
             name=name,
             status=status,
             image=image or "",
@@ -53,6 +97,9 @@ async def _seed_docker_container(  # noqa: PLR0913
             now=now,
             cpu_pct=cpu_pct,
             mem_mib=mem_mib,
+            compose_project=compose_project,
+            compose_service=compose_service,
+            compose_file_path=compose_file_path,
         )
 
 
@@ -63,7 +110,7 @@ async def test_list_containers_returns_container_rows_with_all_fields(
 ) -> None:
     """Test that the endpoint returns ContainerRow shape with all fields."""
     # Seed a container with all fields populated
-    await _seed_docker_container(
+    resolved_id = await _seed_docker_container(
         repo,
         target_id="abc123def456",
         name="web-server",
@@ -89,7 +136,7 @@ async def test_list_containers_returns_container_rows_with_all_fields(
 
     # Verify all fields in the row
     row = data["containers"][0]
-    assert row["id"] == "abc123def456"
+    assert row["id"] == resolved_id
     assert row["name"] == "web-server"
     assert row["image"] == "nginx:1.25"
     assert row["status"] == "running"
@@ -100,6 +147,12 @@ async def test_list_containers_returns_container_rows_with_all_fields(
     assert row["cpu_pct"] == CPU_PCT_NGINX
     assert row["mem_mib"] == MEM_MIB_256
     assert row["labels"] == {"app": "web", "env": "prod"}
+    # STAGE-003-005 Q2 fields
+    assert row["compose_project"] is None
+    assert row["compose_service"] is None
+    assert row["compose_file_path"] is None
+    # STAGE-003-005 Q1 field
+    assert row["restart_count_24h"] is None
 
 
 @pytest.mark.asyncio
@@ -172,3 +225,62 @@ async def test_list_containers_omits_cadvisor_fields_when_not_cached(
     row = data["containers"][0]
     assert row["cpu_pct"] is None
     assert row["mem_mib"] is None
+
+
+@pytest.mark.asyncio
+async def test_list_containers_returns_compose_fields(
+    authenticated_client: AsyncClient,
+    repo: SqliteRepository,
+) -> None:
+    """Test that compose fields are returned when populated (Q2)."""
+    # Seed a compose-managed container
+    await _seed_docker_container(
+        repo,
+        target_id="compose-container-1",
+        name="karma",
+        compose_project="homelab-monitor",
+        compose_service="karma",
+        compose_file_path="/storage/programs/homelab-monitor/deploy/compose/docker-compose.yml",
+    )
+
+    response = await authenticated_client.get("/api/integrations/docker/containers")
+    assert response.status_code == HTTP_OK
+    data = response.json()
+    assert len(data["containers"]) == 1
+
+    row = data["containers"][0]
+    assert row["compose_project"] == "homelab-monitor"
+    assert row["compose_service"] == "karma"
+    assert (
+        row["compose_file_path"]
+        == "/storage/programs/homelab-monitor/deploy/compose/docker-compose.yml"
+    )
+
+
+@pytest.mark.asyncio
+async def test_list_containers_restart_count_24h_from_cache(
+    authenticated_client: AsyncClient,
+    repo: SqliteRepository,
+) -> None:
+    """Test that restart_count_24h is returned from cache (Q1)."""
+    # Seed a container
+    resolved_id = await _seed_docker_container(
+        repo,
+        target_id="restart-test-container",
+        name="test-app",
+    )
+
+    # Manually update the restart_count_24h_cached column
+    async with repo.transaction() as conn:
+        await conn.execute(
+            text("UPDATE targets_docker SET restart_count_24h_cached = 3 WHERE target_id = :tid"),
+            {"tid": resolved_id},
+        )
+
+    response = await authenticated_client.get("/api/integrations/docker/containers")
+    assert response.status_code == HTTP_OK
+    data = response.json()
+    assert len(data["containers"]) == 1
+
+    row = data["containers"][0]
+    assert row["restart_count_24h"] == 3  # noqa: PLR2004

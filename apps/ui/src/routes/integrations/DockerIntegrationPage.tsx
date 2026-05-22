@@ -1,3 +1,4 @@
+import { useState, useMemo } from 'react'
 import { ContainerGrid } from './ContainerGrid'
 import { ContainerGridCard } from './ContainerGridCard'
 import { PendingSuggestionsPanel } from './PendingSuggestionsPanel'
@@ -6,7 +7,17 @@ import { useListContainers } from '@/api/docker'
 
 export function DockerIntegrationPage() {
   const result = useListContainers()
-  const containers = result.data?.containers ?? []
+  const allContainers = useMemo(() => result.data?.containers ?? [], [result.data])
+  const [showMissing, setShowMissing] = useState(false)
+
+  const missingCount = useMemo(
+    () => allContainers.filter((c) => c.status === 'missing').length,
+    [allContainers],
+  )
+  const containers = useMemo(
+    () => (showMissing ? allContainers : allContainers.filter((c) => c.status !== 'missing')),
+    [allContainers, showMissing],
+  )
 
   return (
     <div className="space-y-6">
@@ -22,6 +33,19 @@ export function DockerIntegrationPage() {
             Container data temporarily unavailable
           </div>
         )}
+        <label className="flex items-center gap-2 text-sm text-muted-foreground">
+          <input
+            type="checkbox"
+            checked={showMissing}
+            onChange={(e) => setShowMissing(e.target.checked)}
+            aria-label="Show missing containers"
+            data-testid="show-missing-toggle"
+          />
+          <span>
+            Show missing containers
+            {missingCount > 0 ? ` (${missingCount})` : ''}
+          </span>
+        </label>
         {/* TODO: both grids render the full container list at all viewports; CSS hides one. Acceptable for skeleton, revisit if rendering becomes expensive. */}
         <ContainerGrid containers={containers} />
         <ContainerGridCard containers={containers} />

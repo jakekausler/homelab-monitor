@@ -36,8 +36,10 @@ describe('ContainerGrid', () => {
     expect(desktop).toHaveTextContent('No containers discovered yet.')
     expect(desktop.querySelectorAll('tbody tr')).toHaveLength(1)
     const headers = [
+      'Compose',
       'Name',
       'Status',
+      'Restarts (24h)',
       'Image',
       'CPU',
       'RAM',
@@ -56,8 +58,10 @@ describe('ContainerGrid', () => {
     render(<ContainerGrid containers={MOCK_CONTAINERS} />)
     const desktop = screen.getByTestId('containers-desktop')
     const headers = [
+      'Compose',
       'Name',
       'Status',
+      'Restarts (24h)',
       'Image',
       'CPU',
       'RAM',

@@ -42,6 +42,7 @@ EXPECTED_TABLES = {
     "digest_configs",
     "maintenance_windows",
     "suggestions",
+    "suggestions_docker",
     "tool_scorecards",
     "cron_log_cursors",
     "cron_runs",

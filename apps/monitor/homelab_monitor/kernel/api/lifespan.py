@@ -289,6 +289,30 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
         )
         degraded.append("docker_socket")
 
+    try:
+        from homelab_monitor.plugins.discoverers.docker_discoverer import (  # noqa: PLC0415
+            DockerDiscoverer,
+        )
+
+        # TODO: add load test for high-event-rate scenarios where events_loop +
+        # periodic_task contend on the asyncio.Lock during docker compose up bursts.
+        # Current tests serialize the two paths. See code review I4.
+        loader.register(
+            DockerDiscoverer,
+            {
+                "name": "docker_discoverer",
+                "interval_seconds": int(DockerDiscoverer.interval.total_seconds()),
+                "timeout_seconds": int(DockerDiscoverer.timeout.total_seconds()),
+            },
+        )
+    except Exception as exc:  # pragma: no cover -- defensive
+        log.warning(
+            "lifespan.collector_register_failed",
+            name="docker_discoverer",
+            error=str(exc),
+        )
+        degraded.append("docker_discoverer")
+
     plugins_env = os.environ.get("HOMELAB_MONITOR_PLUGINS_DIR")
     if plugins_env is not None:
         plugins_dir: Path | None = Path(plugins_env)
@@ -407,6 +431,33 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
                 "HOMELAB_MONITOR_VM_URL", "http://victoriametrics:8428"
             )
             app.state.docker_socket_client = docker_client
+        # Wire DockerSocketClient + SuggestionsRepository into DockerDiscoverer
+        from homelab_monitor.kernel.db.repositories.suggestions_repository import (  # noqa: PLC0415
+            SuggestionsRepository,
+        )
+        from homelab_monitor.plugins.discoverers.docker_discoverer import (  # noqa: PLC0415
+            DockerDiscoverer,
+        )
+
+        if isinstance(c, DockerDiscoverer):
+            # Reuse the singleton DockerSocketClient already wired into
+            # DockerSocketCollector above, IF present (degraded path may have
+            # skipped it). Otherwise construct a dedicated one.
+            discoverer_socket_client = getattr(app.state, "docker_socket_client", None)
+            if discoverer_socket_client is None:
+                from homelab_monitor.kernel.docker.socket_client import (  # noqa: PLC0415
+                    DockerSocketClient,
+                )
+
+                socket_path = os.environ.get(
+                    "HOMELAB_MONITOR_DOCKER_SOCKET", "/var/run/docker.sock"
+                )
+                discoverer_socket_client = DockerSocketClient(socket_path=socket_path, log=log)
+                app.state.docker_socket_client = discoverer_socket_client
+            c._socket_client = discoverer_socket_client  # pyright: ignore[reportPrivateUsage]
+            c._suggestions_repo = SuggestionsRepository(repo)  # pyright: ignore[reportPrivateUsage]
+            c._db = repo  # pyright: ignore[reportPrivateUsage]
+            app.state.docker_discoverer = c
     scheduler = Scheduler(
         collectors,
         ctx_factory,
@@ -417,6 +468,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
         alert_dispatcher=alert_dispatcher,
     )
     await scheduler.start()
+
+    # 7a. Start DockerDiscoverer events loop (runs concurrently with scheduler).
+    discoverer = getattr(app.state, "docker_discoverer", None)
+    if discoverer is not None and "docker_discoverer" not in degraded:
+        # Build a one-off ctx for the events loop (separate from the scheduler's
+        # per-tick ctx). Reuses the same factory so vm/log/db are identical.
+        events_ctx = ctx_factory(discoverer)
+        discoverer.start_events_loop(events_ctx)
 
     # 7b. One-shot cron-discovery on startup. The scheduler's per-collector
     # tick loop applies an initial offset, so the first SCHEDULED cron tick
@@ -557,6 +616,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
     try:
         yield
     finally:
+        # Stop DockerDiscoverer events loop before scheduler shutdown
+        discoverer = getattr(app.state, "docker_discoverer", None)
+        if discoverer is not None:
+            await discoverer.stop_events_loop()
         await scheduler.stop()
         refresh_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):

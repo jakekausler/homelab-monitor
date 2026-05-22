@@ -11,3 +11,6 @@ export type ContainerRow = components['schemas']['ContainerRow'] & {
   logs_url?: string | undefined // STAGE-003-011 (per-container log viewer)
   actions_available?: boolean | undefined // STAGE-003-010
 }
+
+export type DockerSuggestionRow = components['schemas']['DockerSuggestionRow']
+export type DockerSuggestionListResponse = components['schemas']['DockerSuggestionListResponse']

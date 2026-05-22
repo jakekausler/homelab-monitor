@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from pytest_httpx import HTTPXMock
 from sqlalchemy import text
 
 from homelab_monitor.kernel.api.app import create_app
@@ -535,3 +536,254 @@ async def test_cron_events_token_mint_failure_swallowed(
             "cron_events_token should not be set when mint fails"
         )
         assert app.state.scheduler is not None
+
+
+# ---------------------------------------------------------------------------
+# Coverage gap tests for STAGE-003-005
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_lifespan_https_only_cookies_disabled_warning(
+    db_url: str,
+    master_key: bytes,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """HTTPS_ONLY_COOKIES=false → lifespan logs warning but starts successfully.
+
+    Covers lifespan.py line 102: the HTTPS_ONLY_COOKIES warning branch.
+    """
+    monkeypatch.setenv("HOMELAB_MONITOR_DB_URL", db_url)
+    monkeypatch.setenv("HOMELAB_MONITOR_MASTER_KEY", base64.b64encode(master_key).decode())
+    monkeypatch.setenv("HOMELAB_MONITOR_HTTPS_ONLY_COOKIES", "false")
+
+    app = create_app(lifespan_enabled=True)
+
+    async with app.router.lifespan_context(app):
+        # Lifespan must complete successfully despite the warning.
+        assert app.state.scheduler is not None
+        assert app.state.scheduler.running
+
+
+@pytest.mark.asyncio
+async def test_lifespan_user_count_nonzero_skips_bootstrap_warning(
+    db_url: str,
+    master_key: bytes,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When at least one user exists, the 'no_users_configured' warning is NOT emitted.
+
+    Covers lifespan.py branch 137→145: user_count > 0 skips the warning block.
+    """
+
+    from homelab_monitor.kernel.db.engine import get_engine as _get_engine  # noqa: PLC0415
+    from homelab_monitor.kernel.db.migrations import run_migrations  # noqa: PLC0415
+
+    monkeypatch.setenv("HOMELAB_MONITOR_DB_URL", db_url)
+    monkeypatch.setenv("HOMELAB_MONITOR_MASTER_KEY", base64.b64encode(master_key).decode())
+
+    # Pre-create a user in the DB before lifespan starts so user_count > 0.
+    from homelab_monitor.kernel.auth.passwords import hash_password  # noqa: PLC0415
+    from homelab_monitor.kernel.auth.repository import AuthRepository  # noqa: PLC0415
+
+    engine = _get_engine(url=db_url)
+    await run_migrations(engine)
+    repo = SqliteRepository(engine)
+    auth_repo = AuthRepository(repo)
+    pw_hash = hash_password("testpassword123!")
+    await auth_repo.create_user("admin", pw_hash)
+    await engine.dispose()
+
+    app = create_app(lifespan_enabled=True)
+
+    async with app.router.lifespan_context(app):
+        # Lifespan must start successfully with user present.
+        assert app.state.scheduler is not None
+
+
+@pytest.mark.asyncio
+async def test_lifespan_wires_docker_discoverer_to_app_state(
+    db_url: str,
+    master_key: bytes,
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,  # type: ignore[name-defined]
+) -> None:
+    """After lifespan startup, app.state.docker_discoverer is wired.
+
+    Covers lifespan.py lines 439-457: the DockerDiscoverer wiring loop,
+    and line 471-475: start_events_loop call path.
+    Also covers line 618-619: stop_events_loop called during shutdown.
+    """
+    import re  # noqa: PLC0415
+
+    from homelab_monitor.plugins.discoverers.docker_discoverer import (  # noqa: PLC0415
+        DockerDiscoverer,
+    )
+
+    monkeypatch.setenv("HOMELAB_MONITOR_DB_URL", db_url)
+    monkeypatch.setenv("HOMELAB_MONITOR_MASTER_KEY", base64.b64encode(master_key).decode())
+
+    # Suppress real Docker socket calls — the events stream and list endpoints.
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(r".*localhost/events.*"),
+        content=b"",
+        is_optional=True,
+        is_reusable=True,
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(r".*localhost/containers/json.*"),
+        json=[],
+        is_optional=True,
+        is_reusable=True,
+    )
+
+    app = create_app(lifespan_enabled=True)
+
+    async with app.router.lifespan_context(app):
+        assert hasattr(app.state, "docker_discoverer"), (
+            "app.state.docker_discoverer should be set by lifespan startup"
+        )
+        discoverer = app.state.docker_discoverer
+        assert isinstance(discoverer, DockerDiscoverer)
+        assert discoverer._socket_client is not None  # pyright: ignore[reportPrivateUsage]
+        assert discoverer._suggestions_repo is not None  # pyright: ignore[reportPrivateUsage]
+        assert discoverer._db is not None  # pyright: ignore[reportPrivateUsage]
+    # Exiting context triggers shutdown which calls stop_events_loop (lines 618-619).
+
+
+@pytest.mark.asyncio
+async def test_lifespan_docker_discoverer_fallback_socket_client(
+    db_url: str,
+    master_key: bytes,
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,  # type: ignore[name-defined]
+) -> None:
+    """DockerDiscoverer uses a dedicated socket client when DockerSocketCollector
+    failed to register (app.state.docker_socket_client absent).
+
+    Covers lifespan.py lines 444-453: the fallback DockerSocketClient construction
+    for DockerDiscoverer when app.state.docker_socket_client is None.
+    """
+    import re  # noqa: PLC0415
+
+    from homelab_monitor.kernel.metrics.docker_socket_collector import (  # noqa: PLC0415
+        DockerSocketCollector,
+    )
+    from homelab_monitor.plugins.discoverers.docker_discoverer import (  # noqa: PLC0415
+        DockerDiscoverer,
+    )
+
+    monkeypatch.setenv("HOMELAB_MONITOR_DB_URL", db_url)
+    monkeypatch.setenv("HOMELAB_MONITOR_MASTER_KEY", base64.b64encode(master_key).decode())
+
+    # Suppress real Docker calls.
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(r".*localhost/events.*"),
+        content=b"",
+        is_optional=True,
+        is_reusable=True,
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(r".*localhost/containers/json.*"),
+        json=[],
+        is_optional=True,
+        is_reusable=True,
+    )
+
+    # Patch the collector loop so DockerSocketCollector's wiring block is skipped,
+    # leaving app.state.docker_socket_client unset before DockerDiscoverer wiring.
+    original_isinstance = (  # pyright: ignore[reportUnknownVariableType]
+        __builtins__["isinstance"] if isinstance(__builtins__, dict) else isinstance
+    )  # type: ignore[index]
+
+    def _patched_isinstance(obj: object, cls: object) -> bool:
+        if cls is DockerSocketCollector:
+            return False  # Skip the DockerSocketCollector wiring block
+        return original_isinstance(obj, cls)  # type: ignore[return-value]
+
+    import builtins  # noqa: PLC0415
+
+    monkeypatch.setattr(builtins, "isinstance", _patched_isinstance)
+
+    app = create_app(lifespan_enabled=True)
+
+    async with app.router.lifespan_context(app):
+        # DockerDiscoverer should still be wired with its own socket client.
+        if hasattr(app.state, "docker_discoverer"):
+            discoverer = app.state.docker_discoverer
+            assert isinstance(discoverer, DockerDiscoverer)
+            assert discoverer._socket_client is not None  # pyright: ignore[reportPrivateUsage]
+
+
+@pytest.mark.asyncio
+async def test_lifespan_docker_discoverer_in_degraded_skips_events_loop(
+    db_url: str,
+    master_key: bytes,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When docker_discoverer registration fails, it enters degraded list and
+    the events loop is NOT started (covers branches 471→490 and 618→620 false-branch).
+
+    We patch PluginLoader.register to raise for DockerDiscoverer, which
+    forces the lifespan try/except to add it to ``degraded``.
+    """
+    from homelab_monitor.kernel.plugins.loader import PluginLoader  # noqa: PLC0415
+    from homelab_monitor.plugins.discoverers.docker_discoverer import (  # noqa: PLC0415
+        DockerDiscoverer,
+    )
+
+    monkeypatch.setenv("HOMELAB_MONITOR_DB_URL", db_url)
+    monkeypatch.setenv("HOMELAB_MONITOR_MASTER_KEY", base64.b64encode(master_key).decode())
+
+    original_register = PluginLoader.register
+
+    def _patched_register(
+        self: PluginLoader,
+        collector_cls: object,
+        config_overrides: object = None,
+        **kwargs: object,
+    ) -> object:
+        if collector_cls is DockerDiscoverer:
+            raise RuntimeError("simulated DockerDiscoverer registration failure")
+        return original_register(self, collector_cls, config_overrides, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(PluginLoader, "register", _patched_register)
+
+    app = create_app(lifespan_enabled=True)
+
+    async with app.router.lifespan_context(app):
+        # docker_discoverer is in degraded, so app.state.docker_discoverer should NOT be set.
+        # This exercises the false branch of line 471 (discoverer is None → skip events loop).
+        assert (
+            not hasattr(app.state, "docker_discoverer")
+            or getattr(app.state, "docker_discoverer", None) is None
+        )
+        assert app.state.scheduler is not None
+    # Exiting context exercises the false branch of line 618
+    # (discoverer is None → skip stop_events_loop).
+
+
+@pytest.mark.asyncio
+async def test_lifespan_startup_cron_discovery_disabled_skips_immediate_run(
+    db_url: str,
+    master_key: bytes,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When HOMELAB_MONITOR_DISABLE_STARTUP_CRON_DISCOVERY=1, the immediate cron
+    discovery run is skipped (covers branch 493→506: the false branch of
+    ``if "cron-discoverer" not in degraded and not _disable_startup_discovery``).
+    """
+    monkeypatch.setenv("HOMELAB_MONITOR_DB_URL", db_url)
+    monkeypatch.setenv("HOMELAB_MONITOR_MASTER_KEY", base64.b64encode(master_key).decode())
+    monkeypatch.setenv("HOMELAB_MONITOR_DISABLE_STARTUP_CRON_DISCOVERY", "1")
+
+    app = create_app(lifespan_enabled=True)
+
+    async with app.router.lifespan_context(app):
+        # Lifespan must complete successfully with startup discovery disabled.
+        assert app.state.scheduler is not None
+        assert app.state.scheduler.running

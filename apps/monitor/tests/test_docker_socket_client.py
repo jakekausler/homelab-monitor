@@ -285,6 +285,287 @@ async def test_inspect_container_non_dict_payload_raises() -> None:
     await client.aclose()
 
 
+# ---------------------------------------------------------------------------
+# events() method tests
+# ---------------------------------------------------------------------------
+
+
+async def _aiter_lines(lines: list[str]):  # type: ignore[no-untyped-def]  # noqa: ANN202
+    """Async iterator that yields lines one by one."""
+    for line in lines:
+        yield line
+
+
+@pytest.mark.asyncio
+async def test_events_yields_parsed_json_dicts() -> None:
+    """events() yields parsed dict for each valid JSON line."""
+    log = structlog.get_logger()
+
+    event1 = {"Action": "create", "Type": "container"}
+    event2 = {"Action": "destroy", "Type": "container"}
+
+    mock_resp = AsyncMock()
+    mock_resp.status_code = 200
+    mock_resp.aiter_lines = MagicMock(
+        return_value=_aiter_lines(
+            [
+                json.dumps(event1),
+                json.dumps(event2),
+            ]
+        )
+    )
+
+    mock_stream_cm = AsyncMock()
+    mock_stream_cm.__aenter__ = AsyncMock(return_value=mock_resp)
+    mock_stream_cm.__aexit__ = AsyncMock(return_value=False)
+
+    mock_http = AsyncMock(spec=httpx.AsyncClient)
+    mock_http.stream = MagicMock(return_value=mock_stream_cm)
+
+    client = DockerSocketClient(socket_path="/var/run/docker.sock", log=log, httpx_client=mock_http)
+
+    results: list[dict[str, object]] = []
+    async for ev in client.events():
+        results.append(ev)
+
+    assert len(results) == 2  # noqa: PLR2004
+    assert results[0]["Action"] == "create"
+    assert results[1]["Action"] == "destroy"
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_events_includes_filters_param_when_provided() -> None:
+    """events() passes filters as JSON-encoded query param when provided."""
+    log = structlog.get_logger()
+
+    mock_resp = AsyncMock()
+    mock_resp.status_code = 200
+    mock_resp.aiter_lines = MagicMock(return_value=_aiter_lines([]))
+
+    mock_stream_cm = AsyncMock()
+    mock_stream_cm.__aenter__ = AsyncMock(return_value=mock_resp)
+    mock_stream_cm.__aexit__ = AsyncMock(return_value=False)
+
+    mock_http = AsyncMock(spec=httpx.AsyncClient)
+    mock_http.stream = MagicMock(return_value=mock_stream_cm)
+
+    client = DockerSocketClient(socket_path="/var/run/docker.sock", log=log, httpx_client=mock_http)
+
+    async for _ in client.events(filters={"type": ["container"]}):
+        pass
+
+    call_kwargs = mock_http.stream.call_args
+    params = call_kwargs[1]["params"] if call_kwargs[1] else call_kwargs[0][2]
+    assert "filters" in params
+    assert json.loads(params["filters"]) == {"type": ["container"]}
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_events_no_filters_param_when_filters_none() -> None:
+    """events() passes empty params dict when filters=None (covers branch 206->208)."""
+    log = structlog.get_logger()
+
+    mock_resp = AsyncMock()
+    mock_resp.status_code = 200
+    mock_resp.aiter_lines = MagicMock(return_value=_aiter_lines([]))
+
+    mock_stream_cm = AsyncMock()
+    mock_stream_cm.__aenter__ = AsyncMock(return_value=mock_resp)
+    mock_stream_cm.__aexit__ = AsyncMock(return_value=False)
+
+    mock_http = AsyncMock(spec=httpx.AsyncClient)
+    mock_http.stream = MagicMock(return_value=mock_stream_cm)
+
+    client = DockerSocketClient(socket_path="/var/run/docker.sock", log=log, httpx_client=mock_http)
+
+    async for _ in client.events():  # filters=None default
+        pass
+
+    call_kwargs = mock_http.stream.call_args
+    params = call_kwargs[1]["params"] if call_kwargs[1] else call_kwargs[0][2]
+    assert "filters" not in params
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_events_raises_protocol_error_on_non_200_status() -> None:
+    """Non-200 status from /events raises DockerSocketProtocolError."""
+    log = structlog.get_logger()
+
+    mock_resp = AsyncMock()
+    mock_resp.status_code = 500
+
+    mock_stream_cm = AsyncMock()
+    mock_stream_cm.__aenter__ = AsyncMock(return_value=mock_resp)
+    mock_stream_cm.__aexit__ = AsyncMock(return_value=False)
+
+    mock_http = AsyncMock(spec=httpx.AsyncClient)
+    mock_http.stream = MagicMock(return_value=mock_stream_cm)
+
+    client = DockerSocketClient(socket_path="/var/run/docker.sock", log=log, httpx_client=mock_http)
+
+    with pytest.raises(DockerSocketProtocolError) as exc_info:
+        async for _ in client.events():
+            pass
+
+    assert "500" in str(exc_info.value)
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_events_skips_empty_lines() -> None:
+    """Blank lines in the stream are skipped; valid events are still yielded."""
+    log = structlog.get_logger()
+
+    event = {"Action": "create", "Type": "container"}
+
+    mock_resp = AsyncMock()
+    mock_resp.status_code = 200
+    mock_resp.aiter_lines = MagicMock(
+        return_value=_aiter_lines(
+            [
+                json.dumps(event),
+                "",  # blank line — must be skipped
+                "   ",  # whitespace-only — must be skipped
+                json.dumps({"Action": "destroy", "Type": "container"}),
+            ]
+        )
+    )
+
+    mock_stream_cm = AsyncMock()
+    mock_stream_cm.__aenter__ = AsyncMock(return_value=mock_resp)
+    mock_stream_cm.__aexit__ = AsyncMock(return_value=False)
+
+    mock_http = AsyncMock(spec=httpx.AsyncClient)
+    mock_http.stream = MagicMock(return_value=mock_stream_cm)
+
+    client = DockerSocketClient(socket_path="/var/run/docker.sock", log=log, httpx_client=mock_http)
+
+    results: list[dict[str, object]] = []
+    async for ev in client.events():
+        results.append(ev)
+
+    assert len(results) == 2  # noqa: PLR2004
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_events_skips_bad_json_lines() -> None:
+    """Malformed JSON lines are skipped (warning logged); valid events still yielded."""
+    log = structlog.get_logger()
+
+    good = {"Action": "create", "Type": "container"}
+
+    mock_resp = AsyncMock()
+    mock_resp.status_code = 200
+    mock_resp.aiter_lines = MagicMock(
+        return_value=_aiter_lines(
+            [
+                json.dumps(good),
+                "{not valid json!!!",  # bad JSON — must be skipped
+            ]
+        )
+    )
+
+    mock_stream_cm = AsyncMock()
+    mock_stream_cm.__aenter__ = AsyncMock(return_value=mock_resp)
+    mock_stream_cm.__aexit__ = AsyncMock(return_value=False)
+
+    mock_http = AsyncMock(spec=httpx.AsyncClient)
+    mock_http.stream = MagicMock(return_value=mock_stream_cm)
+
+    client = DockerSocketClient(socket_path="/var/run/docker.sock", log=log, httpx_client=mock_http)
+
+    results: list[dict[str, object]] = []
+    async for ev in client.events():
+        results.append(ev)
+
+    assert len(results) == 1
+    assert results[0]["Action"] == "create"
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_events_skips_non_dict_events() -> None:
+    """JSON that parses to a non-dict (e.g. list) is skipped (covers branch 234->221)."""
+    log = structlog.get_logger()
+
+    mock_resp = AsyncMock()
+    mock_resp.status_code = 200
+    mock_resp.aiter_lines = MagicMock(
+        return_value=_aiter_lines(
+            [
+                json.dumps([1, 2, 3]),  # valid JSON but a list, not dict
+                json.dumps({"Action": "create"}),  # valid dict — should be yielded
+            ]
+        )
+    )
+
+    mock_stream_cm = AsyncMock()
+    mock_stream_cm.__aenter__ = AsyncMock(return_value=mock_resp)
+    mock_stream_cm.__aexit__ = AsyncMock(return_value=False)
+
+    mock_http = AsyncMock(spec=httpx.AsyncClient)
+    mock_http.stream = MagicMock(return_value=mock_stream_cm)
+
+    client = DockerSocketClient(socket_path="/var/run/docker.sock", log=log, httpx_client=mock_http)
+
+    results: list[dict[str, object]] = []
+    async for ev in client.events():
+        results.append(ev)
+
+    assert len(results) == 1
+    assert results[0]["Action"] == "create"
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_events_raises_connection_error_on_httpx_connect_error() -> None:
+    """httpx.ConnectError during events stream raises DockerSocketConnectionError."""
+    log = structlog.get_logger()
+    socket_path = "/var/run/docker.sock"
+
+    mock_stream_cm = AsyncMock()
+    mock_stream_cm.__aenter__ = AsyncMock(side_effect=httpx.ConnectError("refused"))
+    mock_stream_cm.__aexit__ = AsyncMock(return_value=False)
+
+    mock_http = AsyncMock(spec=httpx.AsyncClient)
+    mock_http.stream = MagicMock(return_value=mock_stream_cm)
+
+    client = DockerSocketClient(socket_path=socket_path, log=log, httpx_client=mock_http)
+
+    with pytest.raises(DockerSocketConnectionError) as exc_info:
+        async for _ in client.events():
+            pass
+
+    assert socket_path in str(exc_info.value)
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_events_raises_connection_error_on_httpx_http_error() -> None:
+    """Non-ConnectError httpx.HTTPError during events stream raises DockerSocketConnectionError."""
+    log = structlog.get_logger()
+
+    mock_stream_cm = AsyncMock()
+    mock_stream_cm.__aenter__ = AsyncMock(side_effect=httpx.ReadError("connection reset"))
+    mock_stream_cm.__aexit__ = AsyncMock(return_value=False)
+
+    mock_http = AsyncMock(spec=httpx.AsyncClient)
+    mock_http.stream = MagicMock(return_value=mock_stream_cm)
+
+    client = DockerSocketClient(socket_path="/var/run/docker.sock", log=log, httpx_client=mock_http)
+
+    with pytest.raises(DockerSocketConnectionError) as exc_info:
+        async for _ in client.events():
+            pass
+
+    assert "transport error" in str(exc_info.value)
+    await client.aclose()
+
+
 @pytest.mark.asyncio
 async def test_default_constructor_creates_real_client_smoke() -> None:
     """Default constructor (no httpx_client injected) creates a real client and closes cleanly.

@@ -8,13 +8,17 @@ step (T-MERGE-LOCATION) — sub-10ms read, no live VM query.
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict
 
 from homelab_monitor.kernel.api.dependencies import get_repo, require_session
 from homelab_monitor.kernel.auth.models import User
+from homelab_monitor.kernel.db.repositories.suggestions_repository import (
+    ALLOWED_STATES,
+    SuggestionsRepository,
+)
 from homelab_monitor.kernel.db.repositories.targets_repository import TargetsRepository
 from homelab_monitor.kernel.db.repository import SqliteRepository
 
@@ -38,6 +42,17 @@ class ContainerRow(BaseModel):
     healthcheck: str | None = None  # 'healthy' | 'unhealthy' | 'starting' | None
     network_mode: str | None = None
     labels: dict[str, str] = {}
+    # NEW: STAGE-003-005 Refinement — logical-key rekey + forensics
+    container_id: str | None = None
+    logical_key_kind: str | None = None  # 'compose' | 'name'
+    logical_key: str | None = None
+    previous_container_id: str | None = None  # most-recent prior container_id
+    recreated_at: str | None = None
+    # NEW: STAGE-003-005 Q2 + Q1 — compose columns + 24h restart count
+    compose_project: str | None = None
+    compose_service: str | None = None
+    compose_file_path: str | None = None
+    restart_count_24h: int | None = None
 
 
 class ContainerListResponse(BaseModel):
@@ -79,7 +94,112 @@ async def list_containers(
                 healthcheck=row.healthcheck,
                 network_mode=row.network_mode,
                 labels=row.labels,
+                container_id=row.container_id,
+                logical_key_kind=row.logical_key_kind,
+                logical_key=row.logical_key,
+                previous_container_id=row.previous_container_id,
+                recreated_at=row.recreated_at,
+                compose_project=row.compose_project,
+                compose_service=row.compose_service,
+                compose_file_path=row.compose_file_path,
+                restart_count_24h=row.restart_count_24h_cached,
             )
             for row in rows
         ]
+    )
+
+
+class DockerSuggestionRow(BaseModel):
+    """Joined view of one Docker suggestion."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    id: str
+    kind: str  # 'docker_container_discovered' | 'docker_label_collision'
+    deduplication_key: str
+    state: str  # 'pending' | 'accepted' | 'ignored' | 'container_gone'
+    created_at: str
+    updated_at: str
+    container_id: str
+    container_name: str
+    image_ref: str
+    labels: dict[str, str] = {}
+    compose_project: str | None = None
+    compose_service: str | None = None
+    compose_file_path: str | None = None
+    detection_reason: str  # 'no_homelab_monitor_label' | 'disabled_profile' | 'label_collision'
+
+
+class DockerSuggestionListResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    suggestions: list[DockerSuggestionRow]
+    next_cursor: str | None = None
+
+
+def _get_suggestions_repo(
+    repo: Annotated[SqliteRepository, Depends(get_repo)],
+) -> SuggestionsRepository:
+    return SuggestionsRepository(repo)
+
+
+_SUGGESTION_STATUS_QUERY = Literal["pending", "accepted", "ignored", "container_gone", "all"]
+_DEFAULT_SUGGESTION_PAGE_SIZE: int = 50
+_MAX_SUGGESTION_PAGE_SIZE: int = 200
+
+
+@router.get("/suggestions", response_model=DockerSuggestionListResponse)
+async def list_suggestions(
+    _user: Annotated[User, Depends(require_session())],
+    suggestions_repo: Annotated[SuggestionsRepository, Depends(_get_suggestions_repo)],
+    status_filter: Annotated[
+        _SUGGESTION_STATUS_QUERY,
+        Query(alias="status"),
+    ] = "pending",
+    cursor: Annotated[str | None, Query()] = None,
+    limit: Annotated[
+        int, Query(ge=1, le=_MAX_SUGGESTION_PAGE_SIZE)
+    ] = _DEFAULT_SUGGESTION_PAGE_SIZE,
+) -> DockerSuggestionListResponse:
+    """List Docker suggestions filtered by state, paginated by cursor.
+
+    Cursor opaque to the client. status='all' lists every state.
+    """
+    if status_filter not in ALLOWED_STATES and status_filter != "all":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"invalid status: {status_filter}",
+        )
+    try:
+        rows, next_cursor = await suggestions_repo.list_pending_docker_suggestions(
+            status=status_filter,
+            cursor=cursor,
+            limit=limit,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    return DockerSuggestionListResponse(
+        suggestions=[
+            DockerSuggestionRow(
+                id=r.id,
+                kind=r.kind,
+                deduplication_key=r.deduplication_key,
+                state=r.state,
+                created_at=r.created_at,
+                updated_at=r.updated_at,
+                container_id=r.container_id,
+                container_name=r.container_name,
+                image_ref=r.image_ref,
+                labels=r.labels,
+                compose_project=r.compose_project,
+                compose_service=r.compose_service,
+                compose_file_path=r.compose_file_path,
+                detection_reason=r.detection_reason,
+            )
+            for r in rows
+        ],
+        next_cursor=next_cursor,
     )

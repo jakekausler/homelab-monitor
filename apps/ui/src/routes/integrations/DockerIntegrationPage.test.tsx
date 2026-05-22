@@ -1,9 +1,27 @@
 import { cleanup, render, screen } from '@testing-library/react'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactElement } from 'react'
 
 import { DockerIntegrationPage } from './DockerIntegrationPage'
+
+vi.mock('@/api/docker', () => ({
+  useListContainers: () => ({
+    data: { containers: [] },
+    isLoading: false,
+    isError: false,
+  }),
+  useListDockerSuggestions: () => ({
+    data: { pages: [{ suggestions: [], next_cursor: null }], pageParams: [undefined] },
+    hasNextPage: false,
+    isFetchingNextPage: false,
+    isLoading: false,
+    isError: false,
+    fetchNextPage: vi.fn(),
+  }),
+  dockerQueryKeys: {},
+  DockerSuggestionStatus: {},
+}))
 
 afterEach(() => {
   cleanup()
@@ -38,7 +56,7 @@ describe('DockerIntegrationPage', () => {
 
   it('renders Pending suggestions section', () => {
     renderWithQueryClient(<DockerIntegrationPage />)
-    expect(screen.getByText('Pending suggestions')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: /^Pending suggestions/i })).toBeInTheDocument()
     expect(screen.getByText('No pending suggestions.')).toBeInTheDocument()
   })
 

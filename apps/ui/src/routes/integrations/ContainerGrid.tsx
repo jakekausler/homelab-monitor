@@ -15,10 +15,16 @@ export function ContainerGrid({ containers }: ContainerGridProps) {
         <thead className="bg-muted/40 text-xs uppercase tracking-wide text-muted-foreground">
           <tr>
             <th scope="col" className="px-3 py-2 text-left">
+              Compose
+            </th>
+            <th scope="col" className="px-3 py-2 text-left">
               Name
             </th>
             <th scope="col" className="px-3 py-2 text-left">
               Status
+            </th>
+            <th scope="col" className="px-3 py-2 text-right">
+              Restarts (24h)
             </th>
             <th scope="col" className="px-3 py-2 text-left">
               Image
@@ -49,7 +55,7 @@ export function ContainerGrid({ containers }: ContainerGridProps) {
         <tbody className="divide-y divide-border">
           {containers.length === 0 ? (
             <tr>
-              <td colSpan={10} className="px-3 py-6 text-center text-sm text-muted-foreground">
+              <td colSpan={12} className="px-3 py-6 text-center text-sm text-muted-foreground">
                 No containers discovered yet.
               </td>
             </tr>

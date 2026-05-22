@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import cast
 
 import pytest
 from sqlalchemy import text
@@ -39,9 +40,11 @@ async def test_upsert_docker_container_conn_inserts_new_row(
     target_id = "container-test-1"
 
     async with repo.transaction() as conn:
-        await TargetsRepository.upsert_docker_container_conn(
+        resolved_id = await TargetsRepository.upsert_docker_container_conn(
             conn,
-            target_id=target_id,
+            container_id=target_id,
+            logical_key_kind="name",
+            logical_key="test-container",
             name="test-container",
             status="running",
             image="alpine:latest",
@@ -58,7 +61,7 @@ async def test_upsert_docker_container_conn_inserts_new_row(
     # Verify targets row
     targets_row = await repo.fetch_one(
         text("SELECT id, name, kind, status, source FROM targets WHERE id = :i"),
-        {"i": target_id},
+        {"i": resolved_id},
     )
     assert targets_row is not None
     assert targets_row.name == "test-container"
@@ -73,7 +76,7 @@ async def test_upsert_docker_container_conn_inserts_new_row(
             "  network_mode, cpu_pct_cached, mem_mib_cached "
             "FROM targets_docker WHERE target_id = :i"
         ),
-        {"i": target_id},
+        {"i": resolved_id},
     )
     assert docker_row is not None
     assert docker_row.image == "alpine:latest"
@@ -95,9 +98,11 @@ async def test_upsert_docker_container_conn_updates_existing_row(
 
     # First insert
     async with repo.transaction() as conn:
-        await TargetsRepository.upsert_docker_container_conn(
+        resolved_id = await TargetsRepository.upsert_docker_container_conn(
             conn,
-            target_id=target_id,
+            container_id=target_id,
+            logical_key_kind="name",
+            logical_key="test-container",
             name="test-container",
             status="running",
             image="alpine:latest",
@@ -116,7 +121,9 @@ async def test_upsert_docker_container_conn_updates_existing_row(
     async with repo.transaction() as conn:
         await TargetsRepository.upsert_docker_container_conn(
             conn,
-            target_id=target_id,
+            container_id=target_id,
+            logical_key_kind="name",
+            logical_key="test-container",
             name="test-container-renamed",
             status="exited",
             image="alpine:latest",
@@ -133,7 +140,7 @@ async def test_upsert_docker_container_conn_updates_existing_row(
     # Verify targets row updated
     targets_row = await repo.fetch_one(
         text("SELECT name, status FROM targets WHERE id = :i"),
-        {"i": target_id},
+        {"i": resolved_id},
     )
     assert targets_row is not None
     assert targets_row.name == "test-container-renamed"
@@ -145,7 +152,7 @@ async def test_upsert_docker_container_conn_updates_existing_row(
             "SELECT restart_count, exit_code, healthcheck, cpu_pct_cached, mem_mib_cached "
             "FROM targets_docker WHERE target_id = :i"
         ),
-        {"i": target_id},
+        {"i": resolved_id},
     )
     assert docker_row is not None
     assert docker_row.restart_count == RESTART_COUNT_5
@@ -163,9 +170,11 @@ async def test_upsert_preserves_cache_when_null(repo: SqliteRepository) -> None:
 
     # First insert with cache values
     async with repo.transaction() as conn:
-        await TargetsRepository.upsert_docker_container_conn(
+        resolved_id = await TargetsRepository.upsert_docker_container_conn(
             conn,
-            target_id=target_id,
+            container_id=target_id,
+            logical_key_kind="name",
+            logical_key="cached-container",
             name="cached-container",
             status="running",
             image="alpine:latest",
@@ -184,7 +193,9 @@ async def test_upsert_preserves_cache_when_null(repo: SqliteRepository) -> None:
     async with repo.transaction() as conn:
         await TargetsRepository.upsert_docker_container_conn(
             conn,
-            target_id=target_id,
+            container_id=target_id,
+            logical_key_kind="name",
+            logical_key="cached-container",
             name="cached-container",
             status="running",
             image="alpine:latest",
@@ -201,7 +212,7 @@ async def test_upsert_preserves_cache_when_null(repo: SqliteRepository) -> None:
     # Verify cache was preserved
     docker_row = await repo.fetch_one(
         text("SELECT cpu_pct_cached, mem_mib_cached FROM targets_docker WHERE target_id = :i"),
-        {"i": target_id},
+        {"i": resolved_id},
     )
     assert docker_row is not None
     assert docker_row.cpu_pct_cached == CPU_PCT_D
@@ -219,7 +230,9 @@ async def test_list_docker_containers_returns_joined_rows(repo: SqliteRepository
         async with repo.transaction() as conn:
             await TargetsRepository.upsert_docker_container_conn(
                 conn,
-                target_id=f"ctr-{i}",
+                container_id=f"ctr-{i}",
+                logical_key_kind="name",
+                logical_key=f"container-{i}",
                 name=f"container-{i}",
                 status="running",
                 image=f"image-{i}:latest",
@@ -255,9 +268,11 @@ async def test_list_docker_containers_excludes_hidden_by_default(
 
     # Insert one visible container
     async with repo.transaction() as conn:
-        await TargetsRepository.upsert_docker_container_conn(
+        visible_id = await TargetsRepository.upsert_docker_container_conn(
             conn,
-            target_id="visible",
+            container_id="visible",
+            logical_key_kind="name",
+            logical_key="visible-container",
             name="visible-container",
             status="running",
             image="alpine:latest",
@@ -284,7 +299,7 @@ async def test_list_docker_containers_excludes_hidden_by_default(
 
     rows = await targets_repo.list_docker_containers(include_hidden=False)
     assert len(rows) == 1
-    assert rows[0].id == "visible"
+    assert rows[0].id == visible_id
 
     rows_with_hidden = await targets_repo.list_docker_containers(include_hidden=True)
     assert len(rows_with_hidden) == LIST_COUNT_2
@@ -303,7 +318,9 @@ async def test_list_docker_containers_ordered_by_name(repo: SqliteRepository) ->
         async with repo.transaction() as conn:
             await TargetsRepository.upsert_docker_container_conn(
                 conn,
-                target_id=name,
+                container_id=name,
+                logical_key_kind="name",
+                logical_key=name,
                 name=name,
                 status="running",
                 image="alpine:latest",
@@ -332,7 +349,9 @@ async def test_list_docker_containers_parses_labels_json(repo: SqliteRepository)
     async with repo.transaction() as conn:
         await TargetsRepository.upsert_docker_container_conn(
             conn,
-            target_id="labeled-ctr",
+            container_id="labeled-ctr",
+            logical_key_kind="name",
+            logical_key="labeled-container",
             name="labeled-container",
             status="running",
             image="alpine:latest",
@@ -359,11 +378,14 @@ async def test_mark_missing_except_conn_marks_unseen_containers(
     now = _now_iso()
 
     # Insert three containers
+    resolved_ids: list[str] = []
     for i in range(3):
         async with repo.transaction() as conn:
-            await TargetsRepository.upsert_docker_container_conn(
+            rid = await TargetsRepository.upsert_docker_container_conn(
                 conn,
-                target_id=f"ctr-{i}",
+                container_id=f"ctr-{i}",
+                logical_key_kind="name",
+                logical_key=f"container-{i}",
                 name=f"container-{i}",
                 status="running",
                 image="alpine:latest",
@@ -376,18 +398,22 @@ async def test_mark_missing_except_conn_marks_unseen_containers(
                 cpu_pct=None,
                 mem_mib=None,
             )
+            resolved_ids.append(rid)
 
     # Mark containers 0 and 1 as seen; 2 should be missing
     now2 = _now_iso()
     async with repo.transaction() as conn:
         await TargetsRepository.mark_missing_except_conn(
             conn,
-            seen_ids={"ctr-0", "ctr-1"},
+            seen_ids={resolved_ids[0], resolved_ids[1]},
             now=now2,
         )
 
     # Verify ctr-2 is missing
-    ctr2 = await repo.fetch_one(text("SELECT status, last_seen FROM targets WHERE id = 'ctr-2'"))
+    ctr2 = await repo.fetch_one(
+        text("SELECT status, last_seen FROM targets WHERE id = :i"),
+        {"i": resolved_ids[2]},
+    )
     assert ctr2 is not None
     assert ctr2.status == "missing"
     assert ctr2.last_seen == now2
@@ -396,7 +422,7 @@ async def test_mark_missing_except_conn_marks_unseen_containers(
     for i in range(2):
         ctr = await repo.fetch_one(
             text("SELECT status FROM targets WHERE id = :i"),
-            {"i": f"ctr-{i}"},
+            {"i": resolved_ids[i]},
         )
         assert ctr is not None
         assert ctr.status == "running"
@@ -409,9 +435,11 @@ async def test_mark_missing_except_conn_idempotent(repo: SqliteRepository) -> No
 
     # Insert container
     async with repo.transaction() as conn:
-        await TargetsRepository.upsert_docker_container_conn(
+        resolved_id = await TargetsRepository.upsert_docker_container_conn(
             conn,
-            target_id="ctr-test",
+            container_id="ctr-test",
+            logical_key_kind="name",
+            logical_key="test-container",
             name="test-container",
             status="running",
             image="alpine:latest",
@@ -435,7 +463,10 @@ async def test_mark_missing_except_conn_idempotent(repo: SqliteRepository) -> No
         )
 
     # Verify status is missing
-    row1 = await repo.fetch_one(text("SELECT status, last_seen FROM targets WHERE id = 'ctr-test'"))
+    row1 = await repo.fetch_one(
+        text("SELECT status, last_seen FROM targets WHERE id = :i"),
+        {"i": resolved_id},
+    )
     assert row1 is not None
     assert row1.status == "missing"
     assert row1.last_seen == now2
@@ -450,7 +481,10 @@ async def test_mark_missing_except_conn_idempotent(repo: SqliteRepository) -> No
         )
 
     # Verify status is still missing and last_seen was NOT updated (idempotent)
-    row2 = await repo.fetch_one(text("SELECT status, last_seen FROM targets WHERE id = 'ctr-test'"))
+    row2 = await repo.fetch_one(
+        text("SELECT status, last_seen FROM targets WHERE id = :i"),
+        {"i": resolved_id},
+    )
     assert row2 is not None
     assert row2.status == "missing"
     # The second call should not update the row because status != 'missing' is false
@@ -467,7 +501,9 @@ async def test_mark_missing_except_conn_empty_seen_ids(repo: SqliteRepository) -
         async with repo.transaction() as conn:
             await TargetsRepository.upsert_docker_container_conn(
                 conn,
-                target_id=f"ctr-{i}",
+                container_id=f"ctr-{i}",
+                logical_key_kind="name",
+                logical_key=f"container-{i}",
                 name=f"container-{i}",
                 status="running",
                 image="alpine:latest",
@@ -509,9 +545,11 @@ async def test_cascade_delete_targets_removes_docker_sidecar(
 
     # Insert container
     async with repo.transaction() as conn:
-        await TargetsRepository.upsert_docker_container_conn(
+        resolved_id = await TargetsRepository.upsert_docker_container_conn(
             conn,
-            target_id=target_id,
+            container_id=target_id,
+            logical_key_kind="name",
+            logical_key="cascade-container",
             name="cascade-container",
             status="running",
             image="alpine:latest",
@@ -528,11 +566,11 @@ async def test_cascade_delete_targets_removes_docker_sidecar(
     # Verify both rows exist
     targets_row = await repo.fetch_one(
         text("SELECT id FROM targets WHERE id = :i"),
-        {"i": target_id},
+        {"i": resolved_id},
     )
     docker_row = await repo.fetch_one(
         text("SELECT target_id FROM targets_docker WHERE target_id = :i"),
-        {"i": target_id},
+        {"i": resolved_id},
     )
     assert targets_row is not None
     assert docker_row is not None
@@ -540,17 +578,17 @@ async def test_cascade_delete_targets_removes_docker_sidecar(
     # Delete targets row
     await repo.execute(
         text("DELETE FROM targets WHERE id = :i"),
-        {"i": target_id},
+        {"i": resolved_id},
     )
 
     # Verify targets_docker row also deleted
     targets_row_after = await repo.fetch_one(
         text("SELECT id FROM targets WHERE id = :i"),
-        {"i": target_id},
+        {"i": resolved_id},
     )
     docker_row_after = await repo.fetch_one(
         text("SELECT target_id FROM targets_docker WHERE target_id = :i"),
-        {"i": target_id},
+        {"i": resolved_id},
     )
     assert targets_row_after is None
     assert docker_row_after is None
@@ -568,9 +606,9 @@ async def test_list_docker_containers_with_null_sidecar_fields(
     await repo.execute(
         text(
             "INSERT INTO targets (id, name, kind, status, first_seen, last_seen, "
-            "  labels, source, created_at) "
-            "VALUES (:id, :name, 'docker_container', 'running', :now, :now, '{}', "
-            "  'docker_socket', :now)"
+            "  logical_key_kind, logical_key, labels, source, created_at) "
+            "VALUES (:id, :name, 'docker_container', 'running', :now, :now, "
+            "        'name', :name, '{}', 'docker_socket', :now)"
         ),
         {"id": "orphan-ctr", "name": "orphan-container", "now": now},
     )
@@ -588,3 +626,111 @@ async def test_list_docker_containers_with_null_sidecar_fields(
     assert row.network_mode is None
     assert row.cpu_pct_cached is None
     assert row.mem_mib_cached is None
+
+
+@pytest.mark.asyncio
+async def test_upsert_docker_container_conn_inserts_compose_fields(
+    repo: SqliteRepository,
+) -> None:
+    """Verify upsert handles compose fields (Q2)."""
+    now = _now_iso()
+    target_id = "compose-container"
+
+    async with repo.transaction() as conn:
+        resolved_id = await TargetsRepository.upsert_docker_container_conn(
+            conn,
+            container_id=target_id,
+            logical_key_kind="compose",
+            logical_key="homelab-monitor/karma",
+            name="karma",
+            status="running",
+            image="alin/karma:latest",
+            restart_count=0,
+            exit_code=0,
+            healthcheck=None,
+            network_mode="bridge",
+            labels={
+                "com.docker.compose.project": "homelab-monitor",
+                "com.docker.compose.service": "karma",
+            },
+            now=now,
+            cpu_pct=None,
+            mem_mib=None,
+            compose_project="homelab-monitor",
+            compose_service="karma",
+            compose_file_path="/storage/programs/homelab-monitor/deploy/compose/docker-compose.yml",
+        )
+
+    # Verify compose fields are in DB
+    docker_row = await repo.fetch_one(
+        text(
+            "SELECT compose_project, compose_service, compose_file_path "
+            "FROM targets_docker WHERE target_id = :i"
+        ),
+        {"i": resolved_id},
+    )
+    assert docker_row is not None
+    assert docker_row.compose_project == "homelab-monitor"
+    assert docker_row.compose_service == "karma"
+    assert (
+        docker_row.compose_file_path
+        == "/storage/programs/homelab-monitor/deploy/compose/docker-compose.yml"
+    )
+
+
+@pytest.mark.asyncio
+async def test_list_docker_containers_order_by_compose_file_path(
+    repo: SqliteRepository,
+) -> None:
+    """Verify list_docker_containers orders by compose_file_path NULLS LAST, then name."""
+    targets_repo = TargetsRepository(repo)
+    now = _now_iso()
+
+    # Seed 3 containers: two compose-managed, one raw docker
+    containers = [
+        {
+            "container_id": "ctr-a",
+            "name": "karma",
+            "compose_file_path": "/a/docker-compose.yml",
+        },
+        {
+            "container_id": "ctr-b",
+            "name": "pihole",
+            "compose_file_path": None,  # raw docker run
+        },
+        {
+            "container_id": "ctr-c",
+            "name": "grafana",
+            "compose_file_path": "/b/docker-compose.yml",
+        },
+    ]
+    for ctr in containers:
+        async with repo.transaction() as conn:
+            await TargetsRepository.upsert_docker_container_conn(
+                conn,
+                container_id=cast(str, ctr["container_id"]),
+                logical_key_kind="name",
+                logical_key=cast(str, ctr["name"]),
+                name=cast(str, ctr["name"]),
+                status="running",
+                image="image:latest",
+                restart_count=0,
+                exit_code=0,
+                healthcheck=None,
+                network_mode="bridge",
+                labels={},
+                now=now,
+                cpu_pct=None,
+                mem_mib=None,
+                compose_file_path=ctr["compose_file_path"],
+            )
+
+    rows = await targets_repo.list_docker_containers()
+    assert len(rows) == STAT_CNT_3
+    # Expected order: /a/..., /b/..., None (NULLS LAST), then name within each group
+    assert rows[0].name == "karma"
+    assert rows[0].compose_file_path == "/a/docker-compose.yml"
+    assert rows[1].name == "grafana"
+    assert rows[1].compose_file_path == "/b/docker-compose.yml"
+    assert rows[2].name == "pihole"
+    assert rows[2].compose_file_path is None

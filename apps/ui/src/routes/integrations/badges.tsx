@@ -50,15 +50,3 @@ export function HealthcheckBadge({ status }: { status: string | null | undefined
     </Badge>
   )
 }
-
-export function RestartCountBadge({ count }: { count: number }) {
-  if (count === 0) {
-    return <span className="text-muted-foreground">0</span>
-  }
-  const variant = count >= 3 ? 'critical' : 'warn'
-  return (
-    <Badge variant={variant} aria-label={`Restart count ${count}`}>
-      {count}
-    </Badge>
-  )
-}

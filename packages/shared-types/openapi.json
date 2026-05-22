@@ -551,6 +551,50 @@
       "ContainerRow": {
         "description": "Mirrors apps/ui/src/routes/integrations/types.ts::ContainerRow.",
         "properties": {
+          "compose_file_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Compose File Path"
+          },
+          "compose_project": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Compose Project"
+          },
+          "compose_service": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Compose Service"
+          },
+          "container_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Container Id"
+          },
           "cpu_pct": {
             "anyOf": [
               {
@@ -607,6 +651,28 @@
             "title": "Labels",
             "type": "object"
           },
+          "logical_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Logical Key"
+          },
+          "logical_key_kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Logical Key Kind"
+          },
           "mem_mib": {
             "anyOf": [
               {
@@ -633,6 +699,28 @@
             ],
             "title": "Network Mode"
           },
+          "previous_container_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Previous Container Id"
+          },
+          "recreated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recreated At"
+          },
           "restart_count": {
             "anyOf": [
               {
@@ -643,6 +731,17 @@
               }
             ],
             "title": "Restart Count"
+          },
+          "restart_count_24h": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Restart Count 24H"
           },
           "status": {
             "anyOf": [
@@ -1230,6 +1329,133 @@
           "dismissed_at"
         ],
         "title": "DismissResponse",
+        "type": "object"
+      },
+      "DockerSuggestionListResponse": {
+        "properties": {
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
+          "suggestions": {
+            "items": {
+              "$ref": "#/components/schemas/DockerSuggestionRow"
+            },
+            "title": "Suggestions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "suggestions"
+        ],
+        "title": "DockerSuggestionListResponse",
+        "type": "object"
+      },
+      "DockerSuggestionRow": {
+        "description": "Joined view of one Docker suggestion.",
+        "properties": {
+          "compose_file_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Compose File Path"
+          },
+          "compose_project": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Compose Project"
+          },
+          "compose_service": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Compose Service"
+          },
+          "container_id": {
+            "title": "Container Id",
+            "type": "string"
+          },
+          "container_name": {
+            "title": "Container Name",
+            "type": "string"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "deduplication_key": {
+            "title": "Deduplication Key",
+            "type": "string"
+          },
+          "detection_reason": {
+            "title": "Detection Reason",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "image_ref": {
+            "title": "Image Ref",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "default": {},
+            "title": "Labels",
+            "type": "object"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "deduplication_key",
+          "state",
+          "created_at",
+          "updated_at",
+          "container_id",
+          "container_name",
+          "image_ref",
+          "detection_reason"
+        ],
+        "title": "DockerSuggestionRow",
         "type": "object"
       },
       "HTTPValidationError": {
@@ -3846,6 +4072,85 @@
           }
         },
         "summary": "List Containers",
+        "tags": [
+          "docker"
+        ]
+      }
+    },
+    "/api/integrations/docker/suggestions": {
+      "get": {
+        "description": "List Docker suggestions filtered by state, paginated by cursor.\n\nCursor opaque to the client. status='all' lists every state.",
+        "operationId": "list_suggestions_api_integrations_docker_suggestions_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "default": "pending",
+              "enum": [
+                "pending",
+                "accepted",
+                "ignored",
+                "container_gone",
+                "all"
+              ],
+              "title": "Status",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DockerSuggestionListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Suggestions",
         "tags": [
           "docker"
         ]

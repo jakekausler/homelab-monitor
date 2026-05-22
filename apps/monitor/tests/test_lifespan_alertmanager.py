@@ -3,10 +3,43 @@
 from __future__ import annotations
 
 import base64
+import re
 from pathlib import Path
 
 import pytest
 from pytest_httpx import HTTPXMock
+
+
+@pytest.fixture(autouse=True)
+def _suppress_docker_socket_calls(httpx_mock: HTTPXMock) -> None:  # pyright: ignore[reportUnusedFunction]
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(r"http://victoriametrics:8428/.*"),
+        json={"data": {"resultType": "vector", "result": []}},
+        is_optional=True,
+        is_reusable=True,
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(r".*localhost/events.*"),
+        content=b"",
+        is_optional=True,
+        is_reusable=True,
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(r".*localhost/containers/json.*"),
+        json=[],
+        is_optional=True,
+        is_reusable=True,
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(r"http://victorialogs:9428/.*"),
+        json={},
+        is_optional=True,
+        is_reusable=True,
+    )
 
 
 @pytest.mark.asyncio

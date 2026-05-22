@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 import pytest
 from httpx import AsyncClient
 from pytest_httpx import HTTPXMock
@@ -9,6 +11,47 @@ from pytest_httpx import HTTPXMock
 from homelab_monitor.kernel.api.routers.karma import (
     _karma_timeout_s,  # pyright: ignore[reportPrivateUsage]
 )
+
+
+@pytest.fixture(autouse=True)
+def _suppress_lifespan_tick_requests(httpx_mock: HTTPXMock) -> None:  # pyright: ignore[reportUnusedFunction]
+    """Suppress unmocked outbound HTTP requests from lifespan-started collectors.
+
+    DockerSocketCollector and DockerDiscoverer (STAGE-003-005) tick on app
+    lifespan startup and may issue requests during test setup; pytest_httpx
+    fails teardown on any unexpected request. These optional+reusable mocks
+    absorb those calls without interfering with explicit test mocks (which
+    are matched first).
+    """
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(r"http://victoriametrics:8428/.*"),
+        json={"data": {"resultType": "vector", "result": []}},
+        is_optional=True,
+        is_reusable=True,
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(r".*localhost/events.*"),
+        content=b"",
+        is_optional=True,
+        is_reusable=True,
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(r".*localhost/containers/json.*"),
+        json=[],
+        is_optional=True,
+        is_reusable=True,
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(r"http://victorialogs:9428/.*"),
+        json={},
+        is_optional=True,
+        is_reusable=True,
+    )
+
 
 # ---- _karma_timeout_s helper ----
 
@@ -271,7 +314,7 @@ async def test_request_headers_filtered_to_allowlist(
     # forwarding to upstream.
     resp = await authenticated_client.get("/api/karma/")
     assert resp.status_code == 200  # noqa: PLR2004
-    sent = httpx_mock.get_requests()[0]
+    sent = next(r for r in httpx_mock.get_requests() if "karma" in str(r.url))
     assert "authorization" not in {k.lower() for k in sent.headers}
     assert "cookie" not in {k.lower() for k in sent.headers}
 
@@ -348,7 +391,7 @@ async def test_post_body_forwarded_to_upstream(
         content=body,
         headers={"origin": "http://test", "content-type": "application/json"},
     )
-    sent = httpx_mock.get_requests()[0]
+    sent = next(r for r in httpx_mock.get_requests() if "karma" in str(r.url))
     assert sent.content == body
 
 

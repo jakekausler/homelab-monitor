@@ -12,6 +12,7 @@ NEVER invokes write operations — the socket mount is :ro until STAGE-003-010
 from __future__ import annotations
 
 import json
+from collections.abc import AsyncIterator
 from typing import Final, NotRequired, TypedDict, cast
 
 import httpx
@@ -180,3 +181,63 @@ class DockerSocketClient:
         # Cast: we've validated the top-level shape (list/dict) but Docker may return
         # fields we haven't typed. Trust boundary — failures surface as KeyError at consumers.
         return cast("ContainerInspect", data)
+
+    async def events(
+        self,
+        *,
+        filters: dict[str, list[str]] | None = None,
+    ) -> AsyncIterator[dict[str, object]]:
+        """GET /events?filters=... — long-lived stream of newline-delimited JSON.
+
+        Yields one dict per event. The caller decides which events to act on
+        (the discoverer handles container.create / container.destroy). The
+        stream lives until the consumer breaks out of the iterator or the
+        socket disconnects (httpx raises, surfaces to the caller).
+
+        The stream uses read_timeout=None (override the client default) since
+        Docker may emit nothing for many seconds. Connect timeout stays at
+        the client default for fail-fast on a dead socket.
+
+        Raises:
+            DockerSocketConnectionError: socket unreachable / peer reset mid-stream.
+            DockerSocketProtocolError: non-200 status from /events.
+        """
+        params: dict[str, str] = {}
+        if filters:
+            params["filters"] = json.dumps(filters)
+        try:
+            async with self._client.stream(
+                "GET",
+                "/events",
+                params=params,
+                timeout=httpx.Timeout(
+                    _REQUEST_TIMEOUT_SECONDS, connect=_REQUEST_TIMEOUT_SECONDS, read=None
+                ),
+            ) as resp:
+                if resp.status_code != HTTP_OK:
+                    raise DockerSocketProtocolError(
+                        f"unexpected status {resp.status_code} from /events"
+                    )
+                async for raw_line in resp.aiter_lines():
+                    stripped_line = raw_line.strip()
+                    if not stripped_line:
+                        continue
+                    try:
+                        event = json.loads(stripped_line)
+                    except json.JSONDecodeError as exc:
+                        self._log.warning(
+                            "docker_socket.events_bad_json",
+                            line=stripped_line[:200],
+                            error=str(exc),
+                        )
+                        continue
+                    if isinstance(event, dict):
+                        yield event
+        except httpx.ConnectError as exc:
+            raise DockerSocketConnectionError(
+                f"docker socket unreachable at {self._socket_path}: {exc}"
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise DockerSocketConnectionError(
+                f"docker socket transport error during events stream: {exc}"
+            ) from exc

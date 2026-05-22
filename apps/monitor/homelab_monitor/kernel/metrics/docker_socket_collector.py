@@ -42,6 +42,43 @@ from homelab_monitor.kernel.plugins.base import BaseCollector
 from homelab_monitor.kernel.plugins.context import CollectorContext
 from homelab_monitor.kernel.plugins.types import CollectorResult, RunKind, TrustLevel
 
+# Logical-key derivation for docker container targets (STAGE-003-005 Refinement rekey)
+_COMPOSE_PROJECT_LABEL = "com.docker.compose.project"
+_COMPOSE_SERVICE_LABEL = "com.docker.compose.service"
+_COMPOSE_FILE_PATH_LABEL = "com.docker.compose.project.config_files"
+
+
+def derive_docker_logical_key(
+    *,
+    labels: dict[str, str],
+    name: str,
+) -> tuple[str, str]:
+    """Return (logical_key_kind, logical_key) for a Docker container.
+
+    Compose containers (BOTH project and service labels non-empty):
+      ('compose', f"{project}/{service}")
+    Otherwise:
+      ('name', name)
+
+    This key is used to identify a Docker container in the targets table
+    across docker compose up --force-recreate cycles. See STAGE-003-005
+    Refinement spec for rationale and edge cases.
+    """
+    project = labels.get(_COMPOSE_PROJECT_LABEL, "").strip()
+    service = labels.get(_COMPOSE_SERVICE_LABEL, "").strip()
+    if project and service:
+        return ("compose", f"{project}/{service}")
+    return ("name", name)
+
+
+def encode_logical_key(logical_key_kind: str, logical_key: str) -> str:
+    """Encode (kind, value) into the colon-prefixed string used as
+    suggestions.deduplication_key for docker_* suggestion kinds.
+
+    Example: ('compose', 'homelab-monitor/karma') -> 'compose:homelab-monitor/karma'
+    """
+    return f"{logical_key_kind}:{logical_key}"
+
 
 class _PromVectorEntry(TypedDict):
     """Single vector result entry from Prometheus /api/v1/query."""
@@ -76,6 +113,9 @@ class DockerContainerRecord:
     image: str
     network_mode: str
     labels: dict[str, str]
+    compose_project: str | None  # STAGE-003-005 Q2
+    compose_service: str | None  # STAGE-003-005 Q2
+    compose_file_path: str | None  # STAGE-003-005 Q2
 
 
 class DockerSocketCollector(BaseCollector):
@@ -105,7 +145,7 @@ class DockerSocketCollector(BaseCollector):
         self._client: DockerSocketClient | None = client
         self._vm_url: str | None = vm_url
 
-    async def run(self, ctx: CollectorContext) -> CollectorResult:
+    async def run(self, ctx: CollectorContext) -> CollectorResult:  # noqa: PLR0915
         """Tick: list containers, inspect each, merge cadvisor cpu/mem, upsert DB."""
         start = time.monotonic()
         errors: list[str] = []
@@ -164,6 +204,11 @@ class DockerSocketCollector(BaseCollector):
             image_ref = entry["Image"]
             network_mode = inspect.get("HostConfig", {}).get("NetworkMode", "default")
 
+            # Extract compose fields (Q2)
+            compose_project = labels.get(_COMPOSE_PROJECT_LABEL) or None
+            compose_service = labels.get(_COMPOSE_SERVICE_LABEL) or None
+            compose_file_path = labels.get(_COMPOSE_FILE_PATH_LABEL) or None
+
             records.append(
                 DockerContainerRecord(
                     id=entry["Id"],
@@ -175,6 +220,9 @@ class DockerSocketCollector(BaseCollector):
                     image=image_ref,
                     network_mode=network_mode,
                     labels=labels,
+                    compose_project=compose_project,
+                    compose_service=compose_service,
+                    compose_file_path=compose_file_path,
                 )
             )
             seen_ids.add(entry["Id"])
@@ -186,15 +234,25 @@ class DockerSocketCollector(BaseCollector):
             ctx.log.warning("docker_socket.vm_query_failed", error=str(exc))
             cpu_mem = {}  # Leave cached values stale
 
+        # Step 4b: Query VM for 24h restart count delta (reset-aware)
+        try:
+            restart_24h = await self._query_vm_restart_count_24h(ctx)
+        except (httpx.HTTPError, ValueError) as exc:
+            ctx.log.warning("docker_socket.vm_restart_24h_query_failed", error=str(exc))
+            restart_24h = {}  # Leave cached values stale
+
         # Step 5: Upsert DB rows + mark missing
         metrics_emitted = 0
         now = utc_now_iso()
+        seen_target_ids: set[str] = set()  # UUIDs returned by upsert
         async with ctx.db.transaction() as conn:
             for r in records:
                 cpu, mem = cpu_mem.get(r.name, (None, None))
-                await TargetsRepository.upsert_docker_container_conn(
+                restart_24h_val = restart_24h.get(r.name)  # None if not in VM
+                lkk, lk = derive_docker_logical_key(labels=r.labels, name=r.name)
+                target_id = await TargetsRepository.upsert_docker_container_conn(
                     conn,
-                    target_id=r.id,
+                    container_id=r.id,
                     name=r.name,
                     status=r.state,
                     image=r.image,
@@ -203,13 +261,24 @@ class DockerSocketCollector(BaseCollector):
                     healthcheck=r.healthcheck,
                     network_mode=r.network_mode,
                     labels=r.labels,
+                    logical_key_kind=lkk,
+                    logical_key=lk,
                     now=now,
                     cpu_pct=cpu,
                     mem_mib=mem,
+                    compose_project=r.compose_project,
+                    compose_service=r.compose_service,
+                    compose_file_path=r.compose_file_path,
+                    restart_count_24h=restart_24h_val,
                 )
+                seen_target_ids.add(target_id)
 
-            # Mark containers no longer seen as 'missing'
-            await TargetsRepository.mark_missing_except_conn(conn, seen_ids=seen_ids, now=now)
+            # Mark targets no longer seen as 'missing'. The set is now of UUIDs,
+            # not Docker container ids — which is correct, because mark_missing
+            # operates on targets.id.
+            await TargetsRepository.mark_missing_except_conn(
+                conn, seen_ids=seen_target_ids, now=now
+            )
 
         # Step 6: Emit per-container metrics
         for r in records:
@@ -273,6 +342,35 @@ class DockerSocketCollector(BaseCollector):
         if isinstance(status, str):
             return status
         return "unknown"
+
+    async def _query_vm_restart_count_24h(
+        self,
+        ctx: CollectorContext,
+    ) -> dict[str, int]:
+        """Query VictoriaMetrics for 24h restart count delta (reset-aware).
+
+        Returns dict[name, restart_count_24h]. Uses increase() which is
+        reset-aware — counter resets are handled by PromQL semantics.
+
+        TODO: query sums `by (name)` which conflates restart counts across containers
+        that shared the name within the 24h window (rare at homelab scale).
+        Consider `by (name, id)` + matching id-prefix to current container. See code review I8.
+        """
+        if not self._vm_url:
+            return {}
+
+        query = "sum(increase(homelab_container_restart_count[24h])) by (name)"
+        data = await self._query_prometheus(ctx, query)
+        result: dict[str, int] = {}
+        for entry in data:
+            metric = entry.get("metric", {})
+            value_pair = entry.get("value", [None, None])
+            name = metric.get("name")
+            value_str = value_pair[1]
+            if name and value_str:
+                with contextlib.suppress(ValueError):
+                    result[name] = int(float(value_str))
+        return result
 
     async def _query_vm_cpu_mem(
         self,
