@@ -44,9 +44,9 @@ describe('AppShell', () => {
   it('collapses the sidebar when the Toggle sidebar button is clicked', async () => {
     renderShell()
     // Sidebar starts expanded — brand text visible
-    expect(screen.getByText('homelab-monitor')).toBeInTheDocument()
+    expect(screen.getByText('Homelab Monitor')).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: 'Toggle sidebar' }))
-    expect(screen.queryByText('homelab-monitor')).not.toBeInTheDocument()
+    expect(screen.queryByText('Homelab Monitor')).not.toBeInTheDocument()
   })
 
   it('opens the mobile sidebar when "Open navigation menu" is clicked', async () => {

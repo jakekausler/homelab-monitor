@@ -38,14 +38,14 @@ describe('SidebarNav', () => {
     expect(screen.getByRole('navigation', { name: 'Primary' })).toBeInTheDocument()
   })
 
-  it('shows "homelab-monitor" brand text when expanded', () => {
+  it('shows "Homelab Monitor" brand text when expanded', () => {
     renderNav(false)
-    expect(screen.getByText('homelab-monitor')).toBeInTheDocument()
+    expect(screen.getByText('Homelab Monitor')).toBeInTheDocument()
   })
 
   it('hides the brand text when collapsed', () => {
     renderNav(true)
-    expect(screen.queryByText('homelab-monitor')).not.toBeInTheDocument()
+    expect(screen.queryByText('Homelab Monitor')).not.toBeInTheDocument()
   })
 
   it('renders the Overview link', () => {

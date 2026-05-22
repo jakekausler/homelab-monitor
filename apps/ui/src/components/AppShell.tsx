@@ -105,7 +105,7 @@ export function AppShell() {
             aria-label="Navigation menu"
           >
             <div className="flex items-center justify-between border-b border-border px-3 py-2">
-              <span className="text-sm font-semibold text-foreground">homelab-monitor</span>
+              <span className="text-sm font-semibold text-foreground">Homelab Monitor</span>
               <button
                 type="button"
                 onClick={closeMobile}

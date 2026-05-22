@@ -68,7 +68,7 @@ describe('LoginPage', () => {
     setVersion(false)
     setLogin()
     renderLogin()
-    expect(screen.getByText(/Welcome to homelab-monitor/)).toBeInTheDocument()
+    expect(screen.getByText(/Welcome to Homelab Monitor/)).toBeInTheDocument()
     expect(screen.getByText(/hm user create/)).toBeInTheDocument()
   })
 

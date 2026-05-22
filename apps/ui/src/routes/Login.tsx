@@ -76,7 +76,7 @@ export function LoginPage() {
       <div className="flex min-h-screen items-center justify-center bg-background p-6">
         <Card className="w-full max-w-md">
           <CardHeader>
-            <CardTitle>Welcome to homelab-monitor</CardTitle>
+            <CardTitle>Welcome to Homelab Monitor</CardTitle>
             <CardDescription>
               No users are configured yet. Create the first user with the CLI:
             </CardDescription>
@@ -106,7 +106,7 @@ export function LoginPage() {
       <Card className="w-full max-w-md">
         <CardHeader>
           <CardTitle>Sign in</CardTitle>
-          <CardDescription>Enter your homelab-monitor credentials.</CardDescription>
+          <CardDescription>Enter your Homelab Monitor credentials.</CardDescription>
         </CardHeader>
         <form
           onSubmit={(e) => {

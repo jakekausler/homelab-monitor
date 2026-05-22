@@ -70,7 +70,7 @@ export function SidebarNav({
       )}
     >
       <div className="px-2 py-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-        {collapsed ? null : 'homelab-monitor'}
+        {collapsed ? null : 'Homelab Monitor'}
       </div>
       {NAV_ITEMS.map((item) => {
         const Icon = item.icon
