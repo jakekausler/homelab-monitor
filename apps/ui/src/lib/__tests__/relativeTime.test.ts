@@ -11,18 +11,49 @@ describe('formatRelative', () => {
     expect(formatRelative('', NOW)).toBe('—')
   })
 
-  it('formats minutes ago', () => {
-    expect(formatRelative('2026-05-11T11:55:00Z', NOW)).toBe('5 minutes ago')
+  it('returns "just now" for sub-1s delta', () => {
+    const almostNow = new Date(NOW + 500).toISOString()
+    expect(formatRelative(almostNow, NOW)).toBe('just now')
   })
 
-  it('formats hours from now', () => {
-    expect(formatRelative('2026-05-11T15:00:00Z', NOW)).toBe('in 3 hours')
+  it('formats seconds ago', () => {
+    expect(formatRelative('2026-05-11T11:59:45Z', NOW)).toBe('15s ago')
   })
 
-  it('falls back to absolute over 30 days', () => {
-    const out = formatRelative('2025-01-01T00:00:00Z', NOW)
-    expect(out).not.toBe('—')
-    expect(out).not.toMatch(/ago|in /)
+  it('formats minutes and seconds ago', () => {
+    expect(formatRelative('2026-05-11T11:54:30Z', NOW)).toBe('5m 30s ago')
+  })
+
+  it('formats minutes and seconds in future', () => {
+    expect(formatRelative('2026-05-11T12:05:30Z', NOW)).toBe('in 5m 30s')
+  })
+
+  it('formats hours and minutes ago', () => {
+    expect(formatRelative('2026-05-11T06:48:00Z', NOW)).toBe('5h 12m ago')
+  })
+
+  it('formats hours and minutes in future', () => {
+    expect(formatRelative('2026-05-11T17:12:00Z', NOW)).toBe('in 5h 12m')
+  })
+
+  it('formats days and hours ago (within 3 days)', () => {
+    expect(formatRelative('2026-05-09T08:00:00Z', NOW)).toBe('2d 4h ago')
+  })
+
+  it('formats days and hours in future (within 3 days)', () => {
+    expect(formatRelative('2026-05-13T16:00:00Z', NOW)).toBe('in 2d 4h')
+  })
+
+  it('formats exactly 3 days as days and hours', () => {
+    expect(formatRelative('2026-05-08T12:00:00Z', NOW)).toBe('3d 0h ago')
+  })
+
+  it('formats days only when > 3 days ago', () => {
+    expect(formatRelative('2026-04-11T12:00:00Z', NOW)).toBe('30d ago')
+  })
+
+  it('formats days only when > 3 days in future', () => {
+    expect(formatRelative('2026-06-10T12:00:00Z', NOW)).toBe('in 30d')
   })
 
   it('returns raw input on unparseable', () => {

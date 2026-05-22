@@ -1,36 +1,57 @@
-/**
- * Format a UTC ISO-8601 timestamp as "5 minutes ago" / "in 3 hours".
- *
- * Uses Intl.RelativeTimeFormat with locale 'en'. Returns "—" when
- * iso is null/undefined/empty. Returns the raw absolute when more than
- * 30 days in either direction (relative time becomes meaningless).
- */
-const RTF = new Intl.RelativeTimeFormat('en', { numeric: 'auto' })
-const UNITS: Array<{ unit: Intl.RelativeTimeFormatUnit; ms: number }> = [
-  { unit: 'year', ms: 365 * 24 * 60 * 60 * 1000 },
-  { unit: 'month', ms: 30 * 24 * 60 * 60 * 1000 },
-  { unit: 'day', ms: 24 * 60 * 60 * 1000 },
-  { unit: 'hour', ms: 60 * 60 * 1000 },
-  { unit: 'minute', ms: 60 * 1000 },
-  { unit: 'second', ms: 1000 },
-]
+const MS_PER_SECOND = 1000
+const MS_PER_MINUTE = 60 * MS_PER_SECOND
+const MS_PER_HOUR = 60 * MS_PER_MINUTE
+const MS_PER_DAY = 24 * MS_PER_HOUR
+const THREE_DAYS_MS = 3 * MS_PER_DAY
 
+/**
+ * Format a UTC ISO-8601 timestamp as a dual-unit relative string.
+ *
+ * Stepdown precision:
+ * - ≤ 60s: "Xs ago" / "in Xs"
+ * - < 1h: "Xm Ys ago" / "in Xm Ys"
+ * - < 24h: "Xh Ym ago" / "in Xh Ym"
+ * - 1-3 days: "Xd Yh ago" / "in Xd Yh"
+ * - > 3 days: "Xd ago" / "in Xd"
+ *
+ * Returns "—" when ``iso`` is null/undefined/empty. Returns "just now"
+ * when |delta| < 1s. Returns the raw value when ``iso`` is not a valid
+ * timestamp.
+ */
 export function formatRelative(iso: string | null | undefined, nowMs: number = Date.now()): string {
   if (iso === null || iso === undefined || iso === '') return '—'
   const t = Date.parse(iso)
   if (Number.isNaN(t)) return iso
   const deltaMs = t - nowMs
   const abs = Math.abs(deltaMs)
-  if (abs > 30 * 24 * 60 * 60 * 1000) {
-    return new Date(t).toLocaleString()
+  if (abs < MS_PER_SECOND) return 'just now'
+  const past = deltaMs < 0
+  const text = _formatDelta(abs)
+  return past ? `${text} ago` : `in ${text}`
+}
+
+function _formatDelta(abs: number): string {
+  if (abs <= MS_PER_MINUTE) {
+    const s = Math.round(abs / MS_PER_SECOND)
+    return `${s}s`
   }
-  for (const { unit, ms } of UNITS) {
-    if (abs >= ms || unit === 'second') {
-      const value = Math.round(deltaMs / ms)
-      return RTF.format(value, unit)
-    }
+  if (abs < MS_PER_HOUR) {
+    const m = Math.floor(abs / MS_PER_MINUTE)
+    const s = Math.floor((abs % MS_PER_MINUTE) / MS_PER_SECOND)
+    return `${m}m ${s}s`
   }
-  return RTF.format(0, 'second')
+  if (abs < MS_PER_DAY) {
+    const h = Math.floor(abs / MS_PER_HOUR)
+    const m = Math.floor((abs % MS_PER_HOUR) / MS_PER_MINUTE)
+    return `${h}h ${m}m`
+  }
+  if (abs <= THREE_DAYS_MS) {
+    const d = Math.floor(abs / MS_PER_DAY)
+    const h = Math.floor((abs % MS_PER_DAY) / MS_PER_HOUR)
+    return `${d}d ${h}h`
+  }
+  const d = Math.floor(abs / MS_PER_DAY)
+  return `${d}d`
 }
 
 export function formatAbsolute(iso: string | null | undefined): string {

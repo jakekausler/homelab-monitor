@@ -313,6 +313,27 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
         )
         degraded.append("docker_discoverer")
 
+    try:
+        from homelab_monitor.kernel.metrics.probe_supervisor import (  # noqa: PLC0415
+            ProbeSupervisor,
+        )
+
+        loader.register(
+            ProbeSupervisor,
+            {
+                "name": "docker_probes_supervisor",
+                "interval_seconds": int(ProbeSupervisor.interval.total_seconds()),
+                "timeout_seconds": int(ProbeSupervisor.timeout.total_seconds()),
+            },
+        )
+    except Exception as exc:  # pragma: no cover -- defensive
+        log.warning(
+            "lifespan.collector_register_failed",
+            name="docker_probes_supervisor",
+            error=str(exc),
+        )
+        degraded.append("docker_probes_supervisor")
+
     plugins_env = os.environ.get("HOMELAB_MONITOR_PLUGINS_DIR")
     if plugins_env is not None:
         plugins_dir: Path | None = Path(plugins_env)
@@ -457,7 +478,26 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
             c._socket_client = discoverer_socket_client  # pyright: ignore[reportPrivateUsage]
             c._suggestions_repo = SuggestionsRepository(repo)  # pyright: ignore[reportPrivateUsage]
             c._db = repo  # pyright: ignore[reportPrivateUsage]
+            from homelab_monitor.kernel.db.repositories.probe_targets_repository import (  # noqa: PLC0415
+                ProbeTargetsRepository,
+            )
+
+            c._probe_targets_repo = ProbeTargetsRepository(repo)  # pyright: ignore[reportPrivateUsage]
             app.state.docker_discoverer = c
+        from homelab_monitor.kernel.metrics.probe_supervisor import (  # noqa: PLC0415
+            ProbeSupervisor,
+        )
+
+        if isinstance(c, ProbeSupervisor):
+            c._db = repo  # pyright: ignore[reportPrivateUsage]
+            c._http_client = http_client  # pyright: ignore[reportPrivateUsage]
+            c._socket_client = getattr(app.state, "docker_socket_client", None)  # pyright: ignore[reportPrivateUsage]
+            c._host_ip = os.environ.get("HOMELAB_MONITOR_DOCKER_HOST_IP", "127.0.0.1")  # pyright: ignore[reportPrivateUsage]
+            c._exec_enabled = (  # pyright: ignore[reportPrivateUsage]
+                os.environ.get("HOMELAB_MONITOR_DOCKER_PROBES_EXEC_ENABLED", "false").lower()
+                == "true"
+            )
+            app.state.probe_supervisor = c
     scheduler = Scheduler(
         collectors,
         ctx_factory,
@@ -476,6 +516,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
         # per-tick ctx). Reuses the same factory so vm/log/db are identical.
         events_ctx = ctx_factory(discoverer)
         discoverer.start_events_loop(events_ctx)
+
+    # 7b. Start ProbeSupervisor per-container tasks (runs concurrently with scheduler).
+    supervisor = getattr(app.state, "probe_supervisor", None)
+    if (  # pragma: no branch — defensive degraded-collector guard
+        supervisor is not None and "docker_probes_supervisor" not in degraded
+    ):
+        supervisor_ctx = ctx_factory(supervisor)
+        await supervisor.start_per_container_tasks(supervisor_ctx)
 
     # 7b. One-shot cron-discovery on startup. The scheduler's per-collector
     # tick loop applies an initial offset, so the first SCHEDULED cron tick
@@ -616,6 +664,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
     try:
         yield
     finally:
+        # Stop ProbeSupervisor per-container tasks before scheduler shutdown
+        supervisor = getattr(app.state, "probe_supervisor", None)
+        if supervisor is not None:  # pragma: no branch — defensive degraded-collector guard
+            await supervisor.stop_per_container_tasks()
         # Stop DockerDiscoverer events loop before scheduler shutdown
         discoverer = getattr(app.state, "docker_discoverer", None)
         if discoverer is not None:

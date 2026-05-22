@@ -576,3 +576,378 @@ async def test_default_constructor_creates_real_client_smoke() -> None:
     # Use a path that won't be touched — constructor doesn't open the socket.
     client = DockerSocketClient(socket_path="/tmp/nonexistent-socket-for-test", log=log)
     await client.aclose()
+
+
+# ============================================================================
+# exec_in_container tests
+# ============================================================================
+
+
+@pytest.mark.asyncio
+async def test_exec_in_container_zero_exit_returns_zero() -> None:
+    """exec_in_container returns 0 on success."""
+    log = structlog.get_logger()
+
+    # Mock the 3-step API
+    create_response = AsyncMock()
+    create_response.status_code = 201
+    create_response.json = MagicMock(return_value={"Id": "exec-mock-id"})
+
+    start_response = AsyncMock()
+    start_response.status_code = 200
+
+    inspect_response = AsyncMock()
+    inspect_response.status_code = 200
+    inspect_response.json = MagicMock(return_value={"ExitCode": 0})
+
+    mock_http = AsyncMock(spec=httpx.AsyncClient)
+    mock_http.post.side_effect = [create_response, start_response]
+    mock_http.get.return_value = inspect_response
+
+    client = DockerSocketClient(socket_path="/var/run/docker.sock", log=log, httpx_client=mock_http)
+
+    result = await client.exec_in_container(container_id="abc123", cmd="echo hello")
+
+    assert result == 0
+    assert mock_http.post.call_count == 2  # noqa: PLR2004
+    assert mock_http.get.call_count == 1
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_exec_in_container_nonzero_exit_returns_code() -> None:
+    """exec_in_container returns non-zero exit code."""
+    log = structlog.get_logger()
+
+    create_response = AsyncMock()
+    create_response.status_code = 201
+    create_response.json = MagicMock(return_value={"Id": "exec-mock-id"})
+
+    start_response = AsyncMock()
+    start_response.status_code = 200
+
+    inspect_response = AsyncMock()
+    inspect_response.status_code = 200
+    inspect_response.json = MagicMock(return_value={"ExitCode": 2})
+
+    mock_http = AsyncMock(spec=httpx.AsyncClient)
+    mock_http.post.side_effect = [create_response, start_response]
+    mock_http.get.return_value = inspect_response
+
+    client = DockerSocketClient(socket_path="/var/run/docker.sock", log=log, httpx_client=mock_http)
+
+    result = await client.exec_in_container(container_id="abc123", cmd="false")
+
+    assert result == 2  # noqa: PLR2004
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_exec_in_container_create_connection_error_raises() -> None:
+    """Connection error during create step -> DockerSocketConnectionError."""
+    log = structlog.get_logger()
+
+    mock_http = AsyncMock(spec=httpx.AsyncClient)
+    mock_http.post.side_effect = httpx.ConnectError("connection refused")
+
+    client = DockerSocketClient(socket_path="/var/run/docker.sock", log=log, httpx_client=mock_http)
+
+    with pytest.raises(DockerSocketConnectionError):
+        await client.exec_in_container(container_id="abc123", cmd="echo")
+
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_exec_in_container_create_bad_status_raises_protocol_error() -> None:
+    """Create returns non-200/201 -> DockerSocketProtocolError."""
+    log = structlog.get_logger()
+
+    create_response = AsyncMock()
+    create_response.status_code = 404
+    create_response.text = "Container not found"
+
+    mock_http = AsyncMock(spec=httpx.AsyncClient)
+    mock_http.post.return_value = create_response
+
+    client = DockerSocketClient(socket_path="/var/run/docker.sock", log=log, httpx_client=mock_http)
+
+    with pytest.raises(DockerSocketProtocolError) as exc_info:
+        await client.exec_in_container(container_id="notfound", cmd="echo")
+
+    assert "404" in str(exc_info.value)
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_exec_in_container_create_malformed_response_raises() -> None:
+    """Create response missing 'Id' -> DockerSocketProtocolError."""
+    log = structlog.get_logger()
+
+    create_response = AsyncMock()
+    create_response.status_code = 201
+    create_response.json = MagicMock(return_value={"NoId": "bad"})
+
+    mock_http = AsyncMock(spec=httpx.AsyncClient)
+    mock_http.post.return_value = create_response
+
+    client = DockerSocketClient(socket_path="/var/run/docker.sock", log=log, httpx_client=mock_http)
+
+    with pytest.raises(DockerSocketProtocolError) as exc_info:
+        await client.exec_in_container(container_id="abc123", cmd="echo")
+
+    assert "expected exec_id" in str(exc_info.value)
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_exec_in_container_start_bad_status_raises() -> None:
+    """Start returns non-200/201 -> DockerSocketProtocolError."""
+    log = structlog.get_logger()
+
+    create_response = AsyncMock()
+    create_response.status_code = 201
+    create_response.json = MagicMock(return_value={"Id": "exec-id"})
+
+    start_response = AsyncMock()
+    start_response.status_code = 500
+
+    mock_http = AsyncMock(spec=httpx.AsyncClient)
+    mock_http.post.side_effect = [create_response, start_response]
+
+    client = DockerSocketClient(socket_path="/var/run/docker.sock", log=log, httpx_client=mock_http)
+
+    with pytest.raises(DockerSocketProtocolError) as exc_info:
+        await client.exec_in_container(container_id="abc123", cmd="echo")
+
+    assert "500" in str(exc_info.value)
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_exec_in_container_inspect_bad_status_raises() -> None:
+    """Inspect returns non-200 -> DockerSocketProtocolError."""
+    log = structlog.get_logger()
+
+    create_response = AsyncMock()
+    create_response.status_code = 201
+    create_response.json = MagicMock(return_value={"Id": "exec-id"})
+
+    start_response = AsyncMock()
+    start_response.status_code = 200
+
+    inspect_response = AsyncMock()
+    inspect_response.status_code = 404
+
+    mock_http = AsyncMock(spec=httpx.AsyncClient)
+    mock_http.post.side_effect = [create_response, start_response]
+    mock_http.get.return_value = inspect_response
+
+    client = DockerSocketClient(socket_path="/var/run/docker.sock", log=log, httpx_client=mock_http)
+
+    with pytest.raises(DockerSocketProtocolError) as exc_info:
+        await client.exec_in_container(container_id="abc123", cmd="echo")
+
+    assert "404" in str(exc_info.value)
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_exec_in_container_inspect_malformed_json_raises() -> None:
+    """Inspect returns malformed JSON -> DockerSocketProtocolError."""
+    log = structlog.get_logger()
+
+    create_response = AsyncMock()
+    create_response.status_code = 201
+    create_response.json = MagicMock(return_value={"Id": "exec-id"})
+
+    start_response = AsyncMock()
+    start_response.status_code = 200
+
+    inspect_response = AsyncMock()
+    inspect_response.status_code = 200
+    inspect_response.json = MagicMock(side_effect=json.JSONDecodeError("bad json", "{bad", 0))
+
+    mock_http = AsyncMock(spec=httpx.AsyncClient)
+    mock_http.post.side_effect = [create_response, start_response]
+    mock_http.get.return_value = inspect_response
+
+    client = DockerSocketClient(socket_path="/var/run/docker.sock", log=log, httpx_client=mock_http)
+
+    with pytest.raises(DockerSocketProtocolError) as exc_info:
+        await client.exec_in_container(container_id="abc123", cmd="echo")
+
+    assert "malformed JSON" in str(exc_info.value)
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_exec_in_container_missing_exit_code_defaults_to_1() -> None:
+    """Inspect response missing ExitCode -> default to 1."""
+    log = structlog.get_logger()
+
+    create_response = AsyncMock()
+    create_response.status_code = 201
+    create_response.json = MagicMock(return_value={"Id": "exec-id"})
+
+    start_response = AsyncMock()
+    start_response.status_code = 200
+
+    inspect_response = AsyncMock()
+    inspect_response.status_code = 200
+    inspect_response.json = MagicMock(return_value={"NoExitCode": "field"})
+
+    mock_http = AsyncMock(spec=httpx.AsyncClient)
+    mock_http.post.side_effect = [create_response, start_response]
+    mock_http.get.return_value = inspect_response
+
+    client = DockerSocketClient(socket_path="/var/run/docker.sock", log=log, httpx_client=mock_http)
+
+    result = await client.exec_in_container(container_id="abc123", cmd="echo")
+
+    assert result == 1
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_exec_in_container_create_http_transport_error_raises_connection_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """httpx.HTTPError during POST /containers/{id}/exec.
+
+    → DockerSocketConnectionError (lines 287-288).
+    """
+    import httpx  # noqa: PLC0415
+
+    from homelab_monitor.kernel.docker.socket_client import (  # noqa: PLC0415
+        DockerSocketClient,
+        DockerSocketConnectionError,
+    )
+
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_client.post = AsyncMock(side_effect=httpx.HTTPError("simulated transport error"))
+
+    client = DockerSocketClient(
+        socket_path="/var/run/docker.sock", httpx_client=mock_client, log=structlog.get_logger()
+    )
+
+    with pytest.raises(DockerSocketConnectionError, match="docker socket transport error"):
+        await client.exec_in_container(container_id="c1", cmd="echo")
+
+
+@pytest.mark.asyncio
+async def test_exec_in_container_create_unparseable_body_raises_protocol_error() -> None:
+    """JSON decode failure on POST /exec response → DockerSocketProtocolError (lines 296-297)."""
+    import json as json_lib  # noqa: PLC0415
+
+    import httpx  # noqa: PLC0415
+
+    from homelab_monitor.kernel.docker.socket_client import (  # noqa: PLC0415
+        DockerSocketClient,
+        DockerSocketProtocolError,
+    )
+
+    mock_response = MagicMock(spec=httpx.Response)
+    mock_response.status_code = 201
+    mock_response.text = "not-valid-json{"
+    mock_response.json.side_effect = json_lib.JSONDecodeError("not valid json", "doc", 0)
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_client.post = AsyncMock(return_value=mock_response)
+
+    client = DockerSocketClient(
+        socket_path="/var/run/docker.sock", httpx_client=mock_client, log=structlog.get_logger()
+    )
+
+    with pytest.raises(DockerSocketProtocolError):
+        await client.exec_in_container(container_id="c1", cmd="echo")
+
+
+@pytest.mark.asyncio
+async def test_exec_in_container_start_http_transport_error_raises_connection_error() -> None:
+    """httpx.HTTPError during POST /exec/{id}/start.
+
+    → DockerSocketConnectionError (lines 312-313).
+    """
+    import httpx  # noqa: PLC0415
+
+    from homelab_monitor.kernel.docker.socket_client import (  # noqa: PLC0415
+        DockerSocketClient,
+        DockerSocketConnectionError,
+    )
+
+    create_response = MagicMock(spec=httpx.Response)
+    create_response.status_code = 201
+    create_response.json.return_value = {"Id": "exec1"}
+
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_client.post = AsyncMock(
+        side_effect=[create_response, httpx.HTTPError("start transport error")]
+    )
+
+    client = DockerSocketClient(
+        socket_path="/var/run/docker.sock", httpx_client=mock_client, log=structlog.get_logger()
+    )
+
+    with pytest.raises(DockerSocketConnectionError, match="docker socket transport error"):
+        await client.exec_in_container(container_id="c1", cmd="echo")
+
+
+@pytest.mark.asyncio
+async def test_exec_in_container_inspect_http_transport_error_raises_connection_error() -> None:
+    """httpx.HTTPError during GET /exec/{id}/json → DockerSocketConnectionError (lines 322-323)."""
+    import httpx  # noqa: PLC0415
+
+    from homelab_monitor.kernel.docker.socket_client import (  # noqa: PLC0415
+        DockerSocketClient,
+        DockerSocketConnectionError,
+    )
+
+    create_response = MagicMock(spec=httpx.Response)
+    create_response.status_code = 201
+    create_response.json.return_value = {"Id": "exec1"}
+
+    start_response = MagicMock(spec=httpx.Response)
+    start_response.status_code = 200
+
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_client.post = AsyncMock(side_effect=[create_response, start_response])
+    mock_client.get = AsyncMock(side_effect=httpx.HTTPError("inspect transport error"))
+
+    client = DockerSocketClient(
+        socket_path="/var/run/docker.sock", httpx_client=mock_client, log=structlog.get_logger()
+    )
+
+    with pytest.raises(DockerSocketConnectionError, match="docker socket transport error"):
+        await client.exec_in_container(container_id="c1", cmd="echo")
+
+
+@pytest.mark.asyncio
+async def test_exec_in_container_inspect_non_dict_payload_raises_protocol_error() -> None:
+    """GET /exec/{id}/json returns a non-dict body → DockerSocketProtocolError (line 335)."""
+    import httpx  # noqa: PLC0415
+
+    from homelab_monitor.kernel.docker.socket_client import (  # noqa: PLC0415
+        DockerSocketClient,
+        DockerSocketProtocolError,
+    )
+
+    create_response = MagicMock(spec=httpx.Response)
+    create_response.status_code = 201
+    create_response.json.return_value = {"Id": "exec1"}
+    start_response = MagicMock(spec=httpx.Response)
+    start_response.status_code = 200
+
+    inspect_response = MagicMock(spec=httpx.Response)
+    inspect_response.status_code = 200
+    inspect_response.json.return_value = ["not", "a", "dict"]  # list, not dict
+
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_client.post = AsyncMock(side_effect=[create_response, start_response])
+    mock_client.get = AsyncMock(return_value=inspect_response)
+
+    client = DockerSocketClient(
+        socket_path="/var/run/docker.sock", httpx_client=mock_client, log=structlog.get_logger()
+    )
+
+    with pytest.raises(DockerSocketProtocolError):
+        await client.exec_in_container(container_id="c1", cmd="echo")

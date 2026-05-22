@@ -1,6 +1,7 @@
 import type { ContainerRow } from './types'
 import { StatusBadge, HealthcheckBadge } from './badges'
 import { extractComposeBasename } from './composeBasename'
+import { ProbesBadge } from './ProbesBadge'
 
 interface ContainerGridRowProps {
   container: ContainerRow
@@ -49,8 +50,7 @@ export function ContainerGridRow({ container }: ContainerGridRowProps) {
         {container.healthcheck ? <HealthcheckBadge status={container.healthcheck} /> : '—'}
       </td>
       <td className="px-3 py-2 text-xs text-muted-foreground">
-        {/* SCAFFOLDING: STAGE-003-006/007 populate label-based probe badges */}
-        {'—'}
+        <ProbesBadge containerName={container.name} />
       </td>
       <td className="px-3 py-2 text-xs text-muted-foreground">
         {/* SCAFFOLDING: STAGE-003-011 replaces with "View logs →" link */}

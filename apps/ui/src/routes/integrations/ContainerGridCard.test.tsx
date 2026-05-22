@@ -1,5 +1,7 @@
 import { cleanup, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import type { ReactElement } from 'react'
 
 import { ContainerGridCard } from './ContainerGridCard'
 import type { ContainerRow } from './types'
@@ -8,9 +10,16 @@ afterEach(() => {
   cleanup()
 })
 
+function renderWithQueryClient(ui: ReactElement) {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } },
+  })
+  return render(<QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>)
+}
+
 describe('ContainerGridCard', () => {
   it('shows empty state when containers is empty', () => {
-    render(<ContainerGridCard containers={[]} />)
+    renderWithQueryClient(<ContainerGridCard containers={[]} />)
     const mobile = screen.getByTestId('containers-mobile')
     expect(mobile).toHaveTextContent('No containers discovered yet.')
   })
@@ -24,7 +33,7 @@ describe('ContainerGridCard', () => {
         labels: {},
       },
     ]
-    render(<ContainerGridCard containers={containers} />)
+    renderWithQueryClient(<ContainerGridCard containers={containers} />)
     expect(screen.getByText('Compose:', { exact: false })).toHaveTextContent('compose')
   })
 
@@ -37,7 +46,7 @@ describe('ContainerGridCard', () => {
         labels: {},
       },
     ]
-    render(<ContainerGridCard containers={containers} />)
+    renderWithQueryClient(<ContainerGridCard containers={containers} />)
     const composeDiv = screen.getByText('Compose:', { exact: false })
     expect(composeDiv).toHaveTextContent('—')
   })
@@ -52,7 +61,7 @@ describe('ContainerGridCard', () => {
         labels: {},
       },
     ]
-    render(<ContainerGridCard containers={containers} />)
+    renderWithQueryClient(<ContainerGridCard containers={containers} />)
     const composeDivs = screen.getAllByText('Compose:', { exact: false })
     expect(composeDivs[0]).toBeDefined()
     const composeDiv = composeDivs[0]
@@ -69,7 +78,7 @@ describe('ContainerGridCard', () => {
         labels: {},
       },
     ]
-    render(<ContainerGridCard containers={containers} />)
+    renderWithQueryClient(<ContainerGridCard containers={containers} />)
     expect(screen.getByText('Restarts (24h):', { exact: false })).toBeInTheDocument()
     const restartDiv = screen.getByText('Restarts (24h):', { exact: false })
     expect(restartDiv).toHaveTextContent('3')
@@ -85,7 +94,7 @@ describe('ContainerGridCard', () => {
         labels: {},
       },
     ]
-    render(<ContainerGridCard containers={containers} />)
+    renderWithQueryClient(<ContainerGridCard containers={containers} />)
     const restartDiv = screen.getByText('Restarts (24h):', { exact: false })
     expect(restartDiv).toHaveTextContent('—')
   })
@@ -100,7 +109,7 @@ describe('ContainerGridCard', () => {
         labels: {},
       },
     ]
-    render(<ContainerGridCard containers={containers} />)
+    renderWithQueryClient(<ContainerGridCard containers={containers} />)
     const restartDiv = screen.getByText('Restarts (24h):', { exact: false })
     expect(restartDiv).toHaveTextContent('—')
   })
@@ -115,7 +124,7 @@ describe('ContainerGridCard', () => {
         labels: {},
       },
     ]
-    render(<ContainerGridCard containers={containers} />)
+    renderWithQueryClient(<ContainerGridCard containers={containers} />)
     const restartDiv = screen.getByText('Restarts (24h):', { exact: false })
     expect(restartDiv).toHaveAttribute('title', 'Cumulative: 7')
   })
@@ -129,7 +138,7 @@ describe('ContainerGridCard', () => {
         labels: {},
       },
     ]
-    render(<ContainerGridCard containers={containers} />)
+    renderWithQueryClient(<ContainerGridCard containers={containers} />)
     expect(screen.getByText(/c$/)).toBeInTheDocument()
   })
 
@@ -148,7 +157,7 @@ describe('ContainerGridCard', () => {
         labels: {},
       },
     ]
-    render(<ContainerGridCard containers={containers} />)
+    renderWithQueryClient(<ContainerGridCard containers={containers} />)
     expect(screen.getByText('nginx')).toBeInTheDocument()
     expect(screen.getByText('postgres')).toBeInTheDocument()
   })
@@ -161,7 +170,7 @@ describe('ContainerGridCard', () => {
         labels: {},
       },
     ]
-    render(<ContainerGridCard containers={containers} />)
+    renderWithQueryClient(<ContainerGridCard containers={containers} />)
     expect(screen.getByText('my-service')).toBeInTheDocument()
   })
 })

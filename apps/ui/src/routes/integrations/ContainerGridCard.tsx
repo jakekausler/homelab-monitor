@@ -3,6 +3,7 @@ import { EmptyState } from '@/components/EmptyState'
 import type { ContainerRow } from './types'
 import { StatusBadge, HealthcheckBadge } from './badges'
 import { extractComposeBasename } from './composeBasename'
+import { ProbesBadge } from './ProbesBadge'
 
 interface ContainerGridCardProps {
   containers: ContainerRow[]
@@ -61,8 +62,7 @@ export function ContainerGridCard({ containers }: ContainerGridCardProps) {
                 Image Update: {'—'}
               </div>
               <div>
-                {/* SCAFFOLDING: STAGE-003-006/007 populate label-based probe badges */}
-                Probes: {'—'}
+                Probes: <ProbesBadge containerName={c.name} />
               </div>
               <div>
                 {/* SCAFFOLDING: STAGE-003-010 populates Pull & Restart confirm-gated action */}

@@ -1277,3 +1277,390 @@ async def test_compose_service_missing_logs_warning(repo: SqliteRepository) -> N
     # Warning for missing service must have been emitted.
     warning_keys = [entry.get("event") for entry in cap_logs if entry.get("log_level") == "warning"]
     assert "docker_discoverer.compose_service_missing" in warning_keys
+
+
+# ---------------------------------------------------------------------------
+# Wave 4b: Probe-targets upsert coverage gap tests (lines 366-413)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_discoverer_upserts_probes_when_labeled_clean(repo: SqliteRepository) -> None:
+    """Container with valid labels triggers ProbeTargetsRepository.upsert_probe_target_conn.
+
+    Covers the main probe-upsert path in _upsert_probe_targets_from_labels
+    (lines 388-403): descriptors are upser into probe_targets table.
+    """
+    from homelab_monitor.kernel.db.repositories.probe_targets_repository import (  # noqa: PLC0415
+        ProbeTargetsRepository,
+    )
+
+    writer = MemoryRetainingMetricsWriter()
+    ctx = _ctx(writer, repo)
+    sugg_repo = SuggestionsRepository(repo)
+    probe_repo = ProbeTargetsRepository(repo)
+
+    # Container with valid homelab-monitor labels (http and tcp kinds).
+    fake_client = _FakeSocketClient(
+        list_containers_result=[
+            {
+                "Id": "container-xyz",
+                "Names": ["/webapp"],
+                "Image": "nginx:latest",
+                "Labels": {
+                    "homelab-monitor.http.api": "http://container:8080/health",
+                    "homelab-monitor.tcp.db": "tcp://container:5432",
+                },
+            }
+        ],
+        inspect_results={
+            "container-xyz": {
+                "Id": "container-xyz",
+                "Name": "/webapp",
+                "Config": {
+                    "Image": "nginx:latest",
+                    "Labels": {
+                        "homelab-monitor.http.api": "http://container:8080/health",
+                        "homelab-monitor.tcp.db": "tcp://container:5432",
+                    },
+                },
+            }
+        },
+        events_iterator=_async_iter([]),
+    )
+
+    discoverer = DockerDiscoverer(
+        socket_client=fake_client,  # pyright: ignore[reportArgumentType]
+        suggestions_repo=sugg_repo,
+        db=repo,
+        probe_targets_repo=probe_repo,
+    )
+    await discoverer.run(ctx)
+
+    # Verify NO suggestions created (healthy + labeled → no suggestion).
+    sugg_rows, _ = await sugg_repo.list_pending_docker_suggestions(status="all", limit=50)
+    assert len(sugg_rows) == 0
+
+    # Verify 2 probes upser into probe_targets (http.api and tcp.db).
+    probes = await probe_repo.list_for_container(container_name="webapp", include_hidden=False)
+    assert len(probes) == 2  # noqa: PLR2004
+
+    # Check both probes have the expected kind/name.
+    probe_kinds_names = {(p.kind, p.name) for p in probes}
+    assert probe_kinds_names == {("http", "api"), ("tcp", "db")}
+
+    # Verify config_source is "label" for both.
+    for p in probes:
+        assert p.config_source == "label"
+
+
+@pytest.mark.asyncio
+async def test_discoverer_emits_label_malformed_suggestion(repo: SqliteRepository) -> None:
+    """A malformed homelab-monitor label triggers docker_label_malformed suggestion.
+
+    Covers lines 369-386: malformed labels are emitted as docker_label_malformed
+    suggestions with detection_reason set to the reason code.
+    """
+    from sqlalchemy import text  # noqa: PLC0415
+
+    from homelab_monitor.kernel.db.repositories.probe_targets_repository import (  # noqa: PLC0415
+        ProbeTargetsRepository,
+    )
+
+    writer = MemoryRetainingMetricsWriter()
+    ctx = _ctx(writer, repo)
+    sugg_repo = SuggestionsRepository(repo)
+    probe_repo = ProbeTargetsRepository(repo)
+
+    # Container with a malformed http label (not a valid URL).
+    fake_client = _FakeSocketClient(
+        list_containers_result=[
+            {
+                "Id": "container-xyz",
+                "Names": ["/webapp"],
+                "Image": "nginx:latest",
+                "Labels": {
+                    "homelab-monitor.http.api": "not-a-url",
+                },
+            }
+        ],
+        inspect_results={
+            "container-xyz": {
+                "Id": "container-xyz",
+                "Name": "/webapp",
+                "Config": {
+                    "Image": "nginx:latest",
+                    "Labels": {
+                        "homelab-monitor.http.api": "not-a-url",
+                    },
+                },
+            }
+        },
+        events_iterator=_async_iter([]),
+    )
+
+    discoverer = DockerDiscoverer(
+        socket_client=fake_client,  # pyright: ignore[reportArgumentType]
+        suggestions_repo=sugg_repo,
+        db=repo,
+        probe_targets_repo=probe_repo,
+    )
+    await discoverer.run(ctx)
+
+    # Verify docker_label_malformed suggestion created by querying suggestions table directly.
+    # (list_pending_docker_suggestions filters to only docker_container_discovered and
+    # docker_label_collision, so we query directly for docker_label_malformed)
+    rows = await repo.fetch_all(
+        text(
+            "SELECT s.kind, d.detection_reason, d.container_name "
+            "FROM suggestions s JOIN suggestions_docker d ON s.id = d.suggestion_id "
+            "WHERE s.kind = 'docker_label_malformed'"
+        ),
+    )
+    assert len(rows) == 1
+    assert rows[0].kind == "docker_label_malformed"
+    assert rows[0].detection_reason == "invalid_http_url"
+    assert rows[0].container_name == "webapp"
+
+    # Verify NO probes created (malformed labels don't create probes).
+    probes = await ProbeTargetsRepository(repo).list_for_container(
+        container_name="webapp", include_hidden=False
+    )
+    assert len(probes) == 0
+
+
+@pytest.mark.asyncio
+async def test_discoverer_hides_removed_probes(repo: SqliteRepository) -> None:
+    """Probes removed from labels get hidden_at set.
+
+    Covers lines 405-413: mark_missing_except_conn soft-deletes probes
+    whose (kind, name) are not in the current label set.
+    """
+    from homelab_monitor.kernel.db.repositories.probe_targets_repository import (  # noqa: PLC0415
+        ProbeTargetsRepository,
+    )
+
+    writer = MemoryRetainingMetricsWriter()
+    ctx = _ctx(writer, repo)
+    sugg_repo = SuggestionsRepository(repo)
+    probe_repo = ProbeTargetsRepository(repo)
+
+    # First tick: container has two probes.
+    fake_client_tick1 = _FakeSocketClient(
+        list_containers_result=[
+            {
+                "Id": "container-xyz",
+                "Names": ["/webapp"],
+                "Image": "nginx:latest",
+                "Labels": {
+                    "homelab-monitor.http.api": "http://container:8080/health",
+                    "homelab-monitor.http.metrics": "http://container:8081/metrics",
+                },
+            }
+        ],
+        inspect_results={
+            "container-xyz": {
+                "Id": "container-xyz",
+                "Name": "/webapp",
+                "Config": {
+                    "Image": "nginx:latest",
+                    "Labels": {
+                        "homelab-monitor.http.api": "http://container:8080/health",
+                        "homelab-monitor.http.metrics": "http://container:8081/metrics",
+                    },
+                },
+            }
+        },
+        events_iterator=_async_iter([]),
+    )
+
+    discoverer = DockerDiscoverer(
+        socket_client=fake_client_tick1,  # pyright: ignore[reportArgumentType]
+        suggestions_repo=sugg_repo,
+        db=repo,
+        probe_targets_repo=probe_repo,
+    )
+    await discoverer.run(ctx)
+
+    # Verify 2 probes created, both unhidden.
+    probes = await probe_repo.list_for_container(container_name="webapp", include_hidden=False)
+    assert len(probes) == 2  # noqa: PLR2004
+    probes_all = await probe_repo.list_for_container(container_name="webapp", include_hidden=True)
+    assert len(probes_all) == 2  # noqa: PLR2004
+    for p in probes_all:
+        assert p.hidden_at is None
+
+    # Second tick: container has only api label (metrics removed).
+    fake_client_tick2 = _FakeSocketClient(
+        list_containers_result=[
+            {
+                "Id": "container-xyz",
+                "Names": ["/webapp"],
+                "Image": "nginx:latest",
+                "Labels": {
+                    "homelab-monitor.http.api": "http://container:8080/health",
+                },
+            }
+        ],
+        inspect_results={
+            "container-xyz": {
+                "Id": "container-xyz",
+                "Name": "/webapp",
+                "Config": {
+                    "Image": "nginx:latest",
+                    "Labels": {
+                        "homelab-monitor.http.api": "http://container:8080/health",
+                    },
+                },
+            }
+        },
+        events_iterator=_async_iter([]),
+    )
+
+    discoverer2 = DockerDiscoverer(
+        socket_client=fake_client_tick2,  # pyright: ignore[reportArgumentType]
+        suggestions_repo=sugg_repo,
+        db=repo,
+        probe_targets_repo=probe_repo,
+    )
+    await discoverer2.run(ctx)
+
+    # Verify: api probe is unhidden, metrics probe is hidden.
+    probes_unhidden = await probe_repo.list_for_container(
+        container_name="webapp", include_hidden=False
+    )
+    assert len(probes_unhidden) == 1
+    assert probes_unhidden[0].name == "api"
+    assert probes_unhidden[0].hidden_at is None
+
+    probes_all = await probe_repo.list_for_container(container_name="webapp", include_hidden=True)
+    assert len(probes_all) == 2  # noqa: PLR2004
+    metrics_probe = next(p for p in probes_all if p.name == "metrics")
+    assert metrics_probe.hidden_at is not None
+
+
+@pytest.mark.asyncio
+async def test_discoverer_disabled_profile_container_skips_probes(repo: SqliteRepository) -> None:
+    """Disabled-profile container with labels does NOT upsert probes.
+
+    The disabled_profile gate happens in _upsert_suggestion (line 293),
+    NOT in _upsert_probe_targets_from_labels. This test verifies the gate
+    by checking that when a disabled-profile container is processed,
+    _upsert_probe_targets_from_labels is never reached (no probes created).
+    """
+    from homelab_monitor.kernel.db.repositories.probe_targets_repository import (  # noqa: PLC0415
+        ProbeTargetsRepository,
+    )
+
+    writer = MemoryRetainingMetricsWriter()
+    ctx = _ctx(writer, repo)
+    sugg_repo = SuggestionsRepository(repo)
+    probe_repo = ProbeTargetsRepository(repo)
+
+    # Container with valid labels BUT disabled profile.
+    # The gate in _upsert_suggestion (reason == "disabled_profile")
+    # should prevent probe upsert.
+    fake_client = _FakeSocketClient(
+        list_containers_result=[
+            {
+                "Id": "container-xyz",
+                "Names": ["/webapp"],
+                "Image": "nginx:latest",
+                "Labels": {
+                    "homelab-monitor.http.api": "http://container:8080/health",
+                    "com.docker.compose.config.profiles": "disabled",
+                },
+            }
+        ],
+        inspect_results={
+            "container-xyz": {
+                "Id": "container-xyz",
+                "Name": "/webapp",
+                "Config": {
+                    "Image": "nginx:latest",
+                    "Labels": {
+                        "homelab-monitor.http.api": "http://container:8080/health",
+                        "com.docker.compose.config.profiles": "disabled",
+                    },
+                },
+            }
+        },
+        events_iterator=_async_iter([]),
+    )
+
+    discoverer = DockerDiscoverer(
+        socket_client=fake_client,  # pyright: ignore[reportArgumentType]
+        suggestions_repo=sugg_repo,
+        db=repo,
+        probe_targets_repo=probe_repo,
+    )
+    await discoverer.run(ctx)
+
+    # Verify: a docker_container_discovered suggestion was created.
+    # (detection_reason="disabled_profile")
+    sugg_rows, _ = await sugg_repo.list_pending_docker_suggestions(status="all", limit=50)
+    assert len(sugg_rows) == 1
+    assert sugg_rows[0].detection_reason == "disabled_profile"
+
+    # Verify: NO probes were created (the gate in _upsert_suggestion prevented probe upsert).
+    probes = await probe_repo.list_for_container(container_name="webapp", include_hidden=False)
+    assert len(probes) == 0
+
+
+@pytest.mark.asyncio
+async def test_discoverer_strips_docker_rename_prefix_from_container_name(
+    repo: SqliteRepository,
+) -> None:
+    """Docker renames old container to <hex12>_<name> during compose --force-recreate.
+
+    The discoverer must strip that prefix so probe_targets stays keyed on the
+    canonical name (matches targets.name). See STAGE-003-006 Refinement bug.
+    """
+    from homelab_monitor.kernel.db.repositories.probe_targets_repository import (  # noqa: PLC0415
+        ProbeTargetsRepository,
+    )
+
+    writer = MemoryRetainingMetricsWriter()
+    ctx = _ctx(writer, repo)
+    probe_repo = ProbeTargetsRepository(repo)
+
+    fake_client = _FakeSocketClient(
+        list_containers_result=[
+            {"Id": "abc123", "Names": ["/51d0af1f0f51_homelab-grafana"]},
+        ],
+        inspect_results={
+            "abc123": {
+                "Id": "abc123",
+                "Name": "/51d0af1f0f51_homelab-grafana",
+                "Image": "grafana:latest",
+                "Config": {
+                    "Labels": {
+                        "homelab-monitor.http.health": "http://container:3000/api/health",
+                    },
+                },
+                "State": {"Status": "running", "ExitCode": 0, "Health": {"Status": "healthy"}},
+                "RestartCount": 0,
+                "HostConfig": {"NetworkMode": "bridge"},
+                "NetworkSettings": {"Networks": {}},
+            },
+        },
+        events_iterator=_async_iter([]),
+    )
+    discoverer = DockerDiscoverer(
+        socket_client=fake_client,  # pyright: ignore[reportArgumentType]
+        suggestions_repo=SuggestionsRepository(repo),
+        db=repo,
+        probe_targets_repo=probe_repo,
+    )
+    await discoverer.run(ctx)
+
+    # The probe_target row should be keyed on the canonical name, NOT the prefixed name.
+    probes = await probe_repo.list_for_container(container_name="homelab-grafana")
+    assert len(probes) == 1
+    assert probes[0].container_name == "homelab-grafana"
+
+    # And NO row should exist under the prefixed name.
+    probes_prefixed = await probe_repo.list_for_container(
+        container_name="51d0af1f0f51_homelab-grafana"
+    )
+    assert len(probes_prefixed) == 0

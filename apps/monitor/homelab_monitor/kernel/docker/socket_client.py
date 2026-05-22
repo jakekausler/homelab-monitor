@@ -1,12 +1,15 @@
 """Async Docker Engine API client over Unix Domain Socket (httpx transport).
 
 D-DOCKER-SDK-MANUAL-HTTPX (Design exit 2026-05-21): No external SDK; we own the
-two endpoints we need:
+endpoints we need:
   - GET /containers/json?all=true    -> list (running + exited)
   - GET /containers/{id}/json        -> inspect
+  - POST /containers/{id}/exec       -> create exec instance
+  - POST /exec/{id}/start            -> start exec instance
+  - GET /exec/{id}/json              -> inspect exec result
 
-NEVER invokes write operations — the socket mount is :ro until STAGE-003-010
-(D-SOCKET-READ-ONLY).
+Per D-EXEC-OPT-IN (spec §7.4): write operations (exec) are enabled only when
+the operator opts in via global flag + per-container label.
 """
 
 from __future__ import annotations
@@ -241,3 +244,99 @@ class DockerSocketClient:
             raise DockerSocketConnectionError(
                 f"docker socket transport error during events stream: {exc}"
             ) from exc
+
+    async def exec_in_container(
+        self,
+        *,
+        container_id: str,
+        cmd: str,
+    ) -> int:
+        """Run `cmd` inside container_id; return exit code.
+
+        Performs three HTTP calls:
+          1. POST /containers/{id}/exec — create exec instance, get exec_id.
+          2. POST /exec/{id}/start — start it (detached so we don't stream stdout).
+          3. GET  /exec/{id}/json   — inspect for ExitCode.
+
+        The cmd string is shell-split — we pass it as a one-element ["sh", "-c", cmd]
+        argv to use the container's /bin/sh. This matches `docker exec <c> sh -c '<cmd>'`.
+
+        NEVER raises on a non-zero exit code — caller (probe_executor) interprets
+        that as "probe failed".
+
+        Raises:
+            DockerSocketConnectionError: socket unreachable.
+            DockerSocketProtocolError: non-200 from any of the three calls.
+        """
+        # 1. Create the exec instance.
+        create_body = {
+            "Cmd": ["sh", "-c", cmd],
+            "AttachStdout": False,
+            "AttachStderr": False,
+            "Tty": False,
+        }
+        try:
+            resp = await self._client.post(
+                f"/containers/{container_id}/exec",
+                json=create_body,
+            )
+        except httpx.ConnectError as exc:
+            raise DockerSocketConnectionError(
+                f"docker socket unreachable at {self._socket_path}: {exc}"
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise DockerSocketConnectionError(f"docker socket transport error: {exc}") from exc
+        if resp.status_code not in (200, 201):
+            raise DockerSocketProtocolError(
+                f"unexpected status {resp.status_code} from /containers/{container_id}/exec: "
+                f"{resp.text[:200]}"
+            )
+        try:
+            data = resp.json()
+        except json.JSONDecodeError as exc:
+            raise DockerSocketProtocolError(
+                f"malformed JSON from /containers/{container_id}/exec: {exc}"
+            ) from exc
+        if not isinstance(data, dict) or "Id" not in data:
+            raise DockerSocketProtocolError(
+                f"expected exec_id in /containers/{container_id}/exec response, got: {data}"
+            )
+        exec_id: str = str(cast(dict[str, object], data)["Id"])
+
+        # 2. Start the exec instance (detached).
+        try:
+            start_resp = await self._client.post(
+                f"/exec/{exec_id}/start",
+                json={"Detach": False, "Tty": False},
+            )
+        except httpx.HTTPError as exc:
+            raise DockerSocketConnectionError(f"docker socket transport error: {exc}") from exc
+        if start_resp.status_code not in (200, 201):
+            raise DockerSocketProtocolError(
+                f"unexpected status {start_resp.status_code} from /exec/{exec_id}/start"
+            )
+
+        # 3. Inspect to get the exit code.
+        try:
+            inspect_resp = await self._client.get(f"/exec/{exec_id}/json")
+        except httpx.HTTPError as exc:
+            raise DockerSocketConnectionError(f"docker socket transport error: {exc}") from exc
+        if inspect_resp.status_code != HTTP_OK:
+            raise DockerSocketProtocolError(
+                f"unexpected status {inspect_resp.status_code} from /exec/{exec_id}/json"
+            )
+        try:
+            idata = inspect_resp.json()
+        except json.JSONDecodeError as exc:
+            raise DockerSocketProtocolError(
+                f"malformed JSON from /exec/{exec_id}/json: {exc}"
+            ) from exc
+        if not isinstance(idata, dict):
+            raise DockerSocketProtocolError(
+                f"expected dict from /exec/{exec_id}/json, got {type(idata).__name__}"
+            )
+        typed_idata: dict[str, object] = cast(dict[str, object], idata)
+        exit_code_raw = typed_idata.get("ExitCode")
+        if exit_code_raw is None:
+            return 1
+        return int(cast(int, exit_code_raw))

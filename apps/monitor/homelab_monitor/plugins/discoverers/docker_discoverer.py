@@ -29,9 +29,10 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
+import re
 import time
 from datetime import timedelta
-from typing import Any, ClassVar, Final
+from typing import TYPE_CHECKING, Any, ClassVar, Final
 
 from homelab_monitor.kernel.db.repositories.suggestions_repository import (
     SuggestionsRepository,
@@ -50,6 +51,11 @@ from homelab_monitor.kernel.metrics.docker_socket_collector import (
 from homelab_monitor.kernel.plugins.base import BaseCollector
 from homelab_monitor.kernel.plugins.context import CollectorContext
 from homelab_monitor.kernel.plugins.types import CollectorResult, RunKind, TrustLevel
+
+if TYPE_CHECKING:
+    from homelab_monitor.kernel.db.repositories.probe_targets_repository import (
+        ProbeTargetsRepository,
+    )
 
 _BACKOFF_INITIAL_SECONDS: Final[float] = 1.0
 _BACKOFF_MAX_SECONDS: Final[float] = 60.0
@@ -94,11 +100,13 @@ class DockerDiscoverer(BaseCollector):
         socket_client: DockerSocketClient | None = None,
         suggestions_repo: SuggestionsRepository | None = None,
         db: SqliteRepository | None = None,
+        probe_targets_repo: ProbeTargetsRepository | None = None,
         scan_interval_seconds: int | None = None,
     ) -> None:
         self._socket_client: DockerSocketClient | None = socket_client
         self._suggestions_repo: SuggestionsRepository | None = suggestions_repo
         self._db: SqliteRepository | None = db
+        self._probe_targets_repo: ProbeTargetsRepository | None = probe_targets_repo
         self._scan_interval_seconds: int = scan_interval_seconds or _resolve_scan_interval()
         self._lock: asyncio.Lock = asyncio.Lock()
         self._events_task: asyncio.Task[None] | None = None
@@ -281,28 +289,40 @@ class DockerDiscoverer(BaseCollector):
         # Strip leading "/" Docker prepends to inspect Name.
         raw_name = str(inspect.get("Name") or "")
         container_name = raw_name[1:] if raw_name.startswith("/") else raw_name
+        # Docker compose --force-recreate renames the old container as
+        # "<12-hex>_<original>" briefly; strip the prefix here so both the
+        # suggestion and probe-target paths key on the canonical name. A
+        # container literally named "<12-hex>_<X>" by the operator would be
+        # mis-stripped, but this naming pattern is astronomically unlikely.
+        _rename_match = re.match(r"^[0-9a-f]{12}_(.+)$", container_name)
+        if _rename_match:
+            container_name = _rename_match.group(1)
         image_ref = str(inspect.get("Image") or "")
         cfg_obj: dict[str, Any] = inspect.get("Config") or {}
         labels: dict[str, Any] = cfg_obj.get("Labels") or {}
         # Normalise to dict[str, str] — values from the Docker API are always str.
+        labels_str: dict[str, str] = {str(k): str(v) for k, v in labels.items()}
 
-        reason = _extract_detection_reason(labels)
+        reason = _extract_detection_reason(labels_str)
         if reason is None:
-            return  # container is healthy + labeled → no suggestion
+            # Healthy + labeled container → route to probe-targets path
+            # (STAGE-003-006). No suggestion needed.
+            await self._upsert_probe_targets_from_labels(ctx, container_name, labels_str)
+            return
 
+        # Existing suggestion-emit path
         kind = _KIND_COLLISION if reason == "label_collision" else _KIND_DISCOVERED
         # STAGE-003-005 Refinement: dedup_key is now the encoded logical-key string,
         # not container_id. This ensures one suggestion per logical service per kind,
         # surviving docker compose up --force-recreate (which changes container_id).
-        labels_str: dict[str, str] = {str(k): str(v) for k, v in labels.items()}
         logical_key_kind, logical_key = derive_docker_logical_key(
             labels=labels_str,
             name=container_name,
         )
         dedup_key = encode_logical_key(logical_key_kind, logical_key)
-        compose_project: str | None = labels.get(_COMPOSE_PROJECT_LABEL)
-        compose_service: str | None = labels.get(_COMPOSE_SERVICE_LABEL)
-        compose_file_path: str | None = labels.get(_COMPOSE_CONFIG_FILES_LABEL)
+        compose_project: str | None = labels_str.get(_COMPOSE_PROJECT_LABEL)
+        compose_service: str | None = labels_str.get(_COMPOSE_SERVICE_LABEL)
+        compose_file_path: str | None = labels_str.get(_COMPOSE_CONFIG_FILES_LABEL)
         # Compose containers should set all three labels together. Surface any
         # observed gaps so STAGE-003-010's Pull & Restart action can rely on
         # `service` being present when `project` is.
@@ -329,12 +349,77 @@ class DockerDiscoverer(BaseCollector):
                 container_id=container_id,
                 container_name=container_name,
                 image_ref=image_ref,
-                labels={str(k): str(v) for k, v in labels.items()},
+                labels=labels_str,
                 compose_project=compose_project,
                 compose_service=compose_service,
                 compose_file_path=compose_file_path,
                 detection_reason=reason,
                 now=utc_now_iso(),
+            )
+
+    async def _upsert_probe_targets_from_labels(
+        self,
+        ctx: CollectorContext,
+        container_name: str,
+        labels: dict[str, str],
+    ) -> None:
+        """Parse homelab-monitor labels; upsert probe_targets rows.
+
+        Called from _upsert_suggestion ONLY when detection_reason is None
+        (container is healthy + labeled). Emits docker_label_malformed
+        suggestions for invalid labels; skips probe upsert for collisions.
+        """
+        from homelab_monitor.kernel.db.repositories.probe_targets_repository import (  # noqa: PLC0415
+            ProbeTargetsRepository,
+        )
+        from homelab_monitor.kernel.docker.label_parser import parse_homelab_labels  # noqa: PLC0415
+
+        if self._probe_targets_repo is None or self._db is None:
+            return
+
+        parse_result = parse_homelab_labels(labels)
+        now = utc_now_iso()
+        kept_keys: set[tuple[str, str]] = set()
+        async with self._lock, self._db.transaction() as conn:
+            # 1. Emit malformed-label suggestions
+            if parse_result.malformed and self._suggestions_repo is not None:
+                for mal in parse_result.malformed:
+                    dedup = f"malformed::{container_name}::{mal.label_key}"
+                    await SuggestionsRepository.insert_or_update_docker_suggestion_conn(
+                        conn,
+                        kind="docker_label_malformed",
+                        deduplication_key=dedup,
+                        container_id="",
+                        container_name=container_name,
+                        image_ref="",
+                        labels={mal.label_key: mal.label_value},
+                        compose_project=None,
+                        compose_service=None,
+                        compose_file_path=None,
+                        detection_reason=mal.reason,
+                        now=now,
+                    )
+            # 2. Upsert probe rows for valid descriptors
+            if parse_result.descriptors:
+                for desc in parse_result.descriptors:
+                    assert isinstance(self._probe_targets_repo, ProbeTargetsRepository)
+                    await ProbeTargetsRepository.upsert_probe_target_conn(
+                        conn,
+                        container_name=container_name,
+                        kind=desc.kind,
+                        name=desc.name,
+                        target_value=desc.raw_value,
+                        config_source="label",
+                        now=now,
+                    )
+                    kept_keys.add((desc.kind, desc.name))
+            # 3. Soft-delete any probes for this container whose labels were removed.
+            assert isinstance(self._probe_targets_repo, ProbeTargetsRepository)
+            await ProbeTargetsRepository.mark_missing_except_conn(
+                conn,
+                container_name=container_name,
+                kept_keys=kept_keys,
+                now=now,
             )
 
     # ---- Self-metrics ----

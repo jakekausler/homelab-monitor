@@ -1,0 +1,26 @@
+# vmalert rules for label-based Docker container probes.
+# Probes are auto-created by STAGE-003-006's ProbeSupervisor from
+# `homelab-monitor.<kind>.<name>=<value>` labels.
+#
+# Severity vocabulary locked: info / warning / error / critical (spec §8.2).
+#
+# `for: 2m` intentionally tolerates short blips (restart, brief unreachability)
+# without paging. Like other rules in this directory, this won't fire under the
+# fast `make test-fast` rig — the slow integration pipeline drops `for:` to 0s
+# via a runtime override.
+
+groups:
+  - name: docker_probes
+    interval: 30s
+    rules:
+      - alert: DockerProbeFailing
+        expr: homelab_probe_up == 0
+        for: 2m
+        labels:
+          severity: warning
+          source_tool: vmalert-metrics
+          target_kind: docker_container
+          integration: docker
+        annotations:
+          summary: "Probe {{ $labels.kind }}.{{ $labels.name }} on {{ $labels.container }} has been failing for >2m"
+          description: 'Docker container {{ $labels.container }} probe {{ $labels.kind }}.{{ $labels.name }} reports homelab_probe_up=0 (failing for at least 2 minutes).'

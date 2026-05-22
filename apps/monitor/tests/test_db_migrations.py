@@ -46,6 +46,7 @@ EXPECTED_TABLES = {
     "tool_scorecards",
     "cron_log_cursors",
     "cron_runs",
+    "probe_targets",
 }
 
 

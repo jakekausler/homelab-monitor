@@ -1,5 +1,7 @@
 import { cleanup, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import type { ReactElement } from 'react'
 
 import { ContainerGrid } from './ContainerGrid'
 import type { ContainerRow } from './types'
@@ -7,6 +9,13 @@ import type { ContainerRow } from './types'
 afterEach(() => {
   cleanup()
 })
+
+function renderWithQueryClient(ui: ReactElement) {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } },
+  })
+  return render(<QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>)
+}
 
 const MOCK_CONTAINERS: ContainerRow[] = [
   { id: 'abc123', name: 'nginx', labels: {} },
@@ -31,7 +40,7 @@ const MOCK_CONTAINERS: ContainerRow[] = [
 
 describe('ContainerGrid', () => {
   it('shows empty state when containers is empty', () => {
-    render(<ContainerGrid containers={[]} />)
+    renderWithQueryClient(<ContainerGrid containers={[]} />)
     const desktop = screen.getByTestId('containers-desktop')
     expect(desktop).toHaveTextContent('No containers discovered yet.')
     expect(desktop.querySelectorAll('tbody tr')).toHaveLength(1)
@@ -55,7 +64,7 @@ describe('ContainerGrid', () => {
   })
 
   it('renders column headers when containers present', () => {
-    render(<ContainerGrid containers={MOCK_CONTAINERS} />)
+    renderWithQueryClient(<ContainerGrid containers={MOCK_CONTAINERS} />)
     const desktop = screen.getByTestId('containers-desktop')
     const headers = [
       'Compose',
@@ -77,7 +86,7 @@ describe('ContainerGrid', () => {
   })
 
   it('renders a row per container', () => {
-    render(<ContainerGrid containers={MOCK_CONTAINERS} />)
+    renderWithQueryClient(<ContainerGrid containers={MOCK_CONTAINERS} />)
     const desktop = screen.getByTestId('containers-desktop')
     expect(desktop.querySelectorAll('tbody tr')).toHaveLength(3)
     expect(screen.getByText('nginx')).toBeInTheDocument()

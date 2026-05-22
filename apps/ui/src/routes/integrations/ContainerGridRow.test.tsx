@@ -1,5 +1,7 @@
 import { cleanup, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import type { ReactElement } from 'react'
 
 import { ContainerGridRow } from './ContainerGridRow'
 import type { ContainerRow } from './types'
@@ -7,6 +9,13 @@ import type { ContainerRow } from './types'
 afterEach(() => {
   cleanup()
 })
+
+function renderWithQueryClient(ui: ReactElement) {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } },
+  })
+  return render(<QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>)
+}
 
 describe('ContainerGridRow', () => {
   it('renders compose basename when compose_file_path is set', () => {
@@ -16,7 +25,7 @@ describe('ContainerGridRow', () => {
       compose_file_path: '/storage/programs/homelab-monitor/deploy/compose/docker-compose.yml',
       labels: {},
     }
-    render(
+    renderWithQueryClient(
       <table>
         <tbody>
           <ContainerGridRow container={container} />
@@ -33,7 +42,7 @@ describe('ContainerGridRow', () => {
       compose_file_path: null,
       labels: {},
     }
-    render(
+    renderWithQueryClient(
       <table>
         <tbody>
           <ContainerGridRow container={container} />
@@ -53,7 +62,7 @@ describe('ContainerGridRow', () => {
       compose_file_path: filePath,
       labels: {},
     }
-    render(
+    renderWithQueryClient(
       <table>
         <tbody>
           <ContainerGridRow container={container} />
@@ -72,7 +81,7 @@ describe('ContainerGridRow', () => {
       restart_count_24h: 3,
       labels: {},
     }
-    render(
+    renderWithQueryClient(
       <table>
         <tbody>
           <ContainerGridRow container={container} />
@@ -90,7 +99,7 @@ describe('ContainerGridRow', () => {
       restart_count_24h: 0,
       labels: {},
     }
-    render(
+    renderWithQueryClient(
       <table>
         <tbody>
           <ContainerGridRow container={container} />
@@ -110,7 +119,7 @@ describe('ContainerGridRow', () => {
       restart_count_24h: null,
       labels: {},
     }
-    render(
+    renderWithQueryClient(
       <table>
         <tbody>
           <ContainerGridRow container={container} />
@@ -129,7 +138,7 @@ describe('ContainerGridRow', () => {
       restart_count_24h: 2,
       labels: {},
     }
-    render(
+    renderWithQueryClient(
       <table>
         <tbody>
           <ContainerGridRow container={container} />
@@ -147,7 +156,7 @@ describe('ContainerGridRow', () => {
       compose_file_path: '/a/b/c/docker-compose.yml',
       labels: {},
     }
-    render(
+    renderWithQueryClient(
       <table>
         <tbody>
           <ContainerGridRow container={container} />
@@ -163,7 +172,7 @@ describe('ContainerGridRow', () => {
       name: 'nginx',
       labels: {},
     }
-    render(
+    renderWithQueryClient(
       <table>
         <tbody>
           <ContainerGridRow container={container} />

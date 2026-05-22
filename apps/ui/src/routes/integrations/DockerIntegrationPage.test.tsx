@@ -19,6 +19,10 @@ vi.mock('@/api/docker', () => ({
     isError: false,
     fetchNextPage: vi.fn(),
   }),
+  useProbesSummary: () => ({
+    data: {},
+    isPending: false,
+  }),
   dockerQueryKeys: {},
   DockerSuggestionStatus: {},
 }))

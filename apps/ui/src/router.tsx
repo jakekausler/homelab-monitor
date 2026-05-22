@@ -17,6 +17,7 @@ import { CronRunsListPage } from '@/routes/inventory/CronRunsList'
 import { CronRunLogViewerPage } from '@/routes/inventory/CronRunLogViewer'
 import { DockerIntegrationPage } from '@/routes/integrations/DockerIntegrationPage'
 import { ContainerLogsPlaceholderPage } from '@/routes/integrations/ContainerLogsPlaceholder'
+import { ContainerProbesPage } from '@/routes/integrations/ContainerProbesPage'
 import { AppShell } from '@/components/AppShell'
 import { ErrorDisplay } from '@/components/ErrorDisplay'
 
@@ -195,6 +196,12 @@ const containerLogsRoute = createRoute({
   component: ContainerLogsPlaceholderPage,
 })
 
+const containerProbesRoute = createRoute({
+  getParentRoute: () => protectedLayoutRoute,
+  path: '/integrations/docker/containers/$name/probes',
+  component: ContainerProbesPage,
+})
+
 const routeTree = rootRoute.addChildren([
   loginRoute,
   protectedLayoutRoute.addChildren([
@@ -211,6 +218,7 @@ const routeTree = rootRoute.addChildren([
     ]),
     dockerIntegrationRoute,
     containerLogsRoute,
+    containerProbesRoute,
   ]),
 ])
 

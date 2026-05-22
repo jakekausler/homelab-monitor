@@ -1732,6 +1732,22 @@
         "title": "InstallWrapperResult",
         "type": "object"
       },
+      "ListProbesResponse": {
+        "properties": {
+          "probes": {
+            "items": {
+              "$ref": "#/components/schemas/ProbeRow"
+            },
+            "title": "Probes",
+            "type": "array"
+          }
+        },
+        "required": [
+          "probes"
+        ],
+        "title": "ListProbesResponse",
+        "type": "object"
+      },
       "LoginRequest": {
         "additionalProperties": false,
         "properties": {
@@ -2031,6 +2047,150 @@
           "runs"
         ],
         "title": "PreviewRunsResponse",
+        "type": "object"
+      },
+      "ProbeRow": {
+        "description": "One probe target \u2014 mirrors ProbeTargetRow.",
+        "properties": {
+          "config_source": {
+            "title": "Config Source",
+            "type": "string"
+          },
+          "container_name": {
+            "title": "Container Name",
+            "type": "string"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "hidden_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hidden At"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "interval_seconds": {
+            "title": "Interval Seconds",
+            "type": "integer"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error"
+          },
+          "last_run_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Run At"
+          },
+          "last_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Status"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "target_value": {
+            "title": "Target Value",
+            "type": "string"
+          },
+          "timeout_seconds": {
+            "title": "Timeout Seconds",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "container_name",
+          "kind",
+          "name",
+          "target_value",
+          "config_source",
+          "enabled",
+          "interval_seconds",
+          "timeout_seconds",
+          "created_at"
+        ],
+        "title": "ProbeRow",
+        "type": "object"
+      },
+      "ProbeSummaryEntry": {
+        "description": "Per-container probe counts.",
+        "properties": {
+          "active": {
+            "title": "Active",
+            "type": "integer"
+          },
+          "container_name": {
+            "title": "Container Name",
+            "type": "string"
+          },
+          "failing": {
+            "title": "Failing",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "container_name",
+          "active",
+          "failing"
+        ],
+        "title": "ProbeSummaryEntry",
+        "type": "object"
+      },
+      "ProbeSummaryResponse": {
+        "description": "Aggregate probe summary, one entry per container with at least one probe.",
+        "properties": {
+          "summaries": {
+            "items": {
+              "$ref": "#/components/schemas/ProbeSummaryEntry"
+            },
+            "title": "Summaries",
+            "type": "array"
+          }
+        },
+        "required": [
+          "summaries"
+        ],
+        "title": "ProbeSummaryResponse",
         "type": "object"
       },
       "RegisterCronBody": {
@@ -4072,6 +4232,155 @@
           }
         },
         "summary": "List Containers",
+        "tags": [
+          "docker"
+        ]
+      }
+    },
+    "/api/integrations/docker/containers/{name}/probes": {
+      "get": {
+        "description": "List probes for one container. 404 if the container is unknown.",
+        "operationId": "list_container_probes_api_integrations_docker_containers__name__probes_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListProbesResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Container Probes",
+        "tags": [
+          "docker"
+        ]
+      }
+    },
+    "/api/integrations/docker/probes/summary": {
+      "get": {
+        "description": "Return active + failing probe counts grouped by container.\n\nSingle query; intended for the docker grid's per-row badge to avoid an N+1\nquery pattern. Containers with zero probes are NOT returned (caller\ninterprets absence as 'no probes').",
+        "operationId": "get_probes_summary_api_integrations_docker_probes_summary_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProbeSummaryResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Probes Summary",
+        "tags": [
+          "docker"
+        ]
+      }
+    },
+    "/api/integrations/docker/probes/{probe_id}/disable": {
+      "post": {
+        "operationId": "disable_probe_api_integrations_docker_probes__probe_id__disable_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "probe_id",
+            "required": true,
+            "schema": {
+              "title": "Probe Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProbeRow"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Disable Probe",
+        "tags": [
+          "docker"
+        ]
+      }
+    },
+    "/api/integrations/docker/probes/{probe_id}/enable": {
+      "post": {
+        "operationId": "enable_probe_api_integrations_docker_probes__probe_id__enable_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "probe_id",
+            "required": true,
+            "schema": {
+              "title": "Probe Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProbeRow"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Enable Probe",
         "tags": [
           "docker"
         ]
