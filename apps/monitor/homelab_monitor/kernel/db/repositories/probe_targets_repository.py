@@ -47,6 +47,7 @@ class ProbeTargetRow:
     last_error: str | None
     created_at: str
     hidden_at: str | None
+    exec_authorized: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,6 +55,9 @@ class ProbeSummaryRow:
     container_name: str
     active: int
     failing: int
+    # STAGE-003-007 D-SUMMARY-ENDPOINT-EXTENSION:
+    source_breakdown: dict[str, int]
+    config_errors: list[str] | None
 
 
 class ProbeTargetsRepository:
@@ -74,6 +78,7 @@ class ProbeTargetsRepository:
         enabled: bool = True,
         interval_seconds: int = _DEFAULT_INTERVAL_SECONDS,
         timeout_seconds: int = _DEFAULT_TIMEOUT_SECONDS,
+        exec_authorized: bool = False,
         now: str,
     ) -> str:
         """Insert or update by (container_name, kind, name). Returns id.
@@ -103,6 +108,7 @@ class ProbeTargetsRepository:
                     "  config_source = :cs, "
                     "  interval_seconds = :is_, "
                     "  timeout_seconds = :ts, "
+                    "  exec_authorized = :ea, "
                     "  hidden_at = NULL "
                     "WHERE id = :id"
                 ),
@@ -111,6 +117,7 @@ class ProbeTargetsRepository:
                     "cs": config_source,
                     "is_": interval_seconds,
                     "ts": timeout_seconds,
+                    "ea": 1 if exec_authorized else 0,
                     "id": probe_id,
                 },
             )
@@ -121,8 +128,8 @@ class ProbeTargetsRepository:
             text(
                 "INSERT INTO probe_targets "
                 "  (id, container_name, kind, name, target_value, config_source, "
-                "   enabled, interval_seconds, timeout_seconds, created_at) "
-                "VALUES (:id, :cn, :k, :n, :tv, :cs, :en, :is_, :ts, :now)"
+                "   enabled, interval_seconds, timeout_seconds, exec_authorized, created_at) "
+                "VALUES (:id, :cn, :k, :n, :tv, :cs, :en, :is_, :ts, :ea, :now)"
             ),
             {
                 "id": probe_id,
@@ -134,6 +141,7 @@ class ProbeTargetsRepository:
                 "en": 1 if enabled else 0,
                 "is_": interval_seconds,
                 "ts": timeout_seconds,
+                "ea": 1 if exec_authorized else 0,
                 "now": now,
             },
         )
@@ -223,7 +231,7 @@ class ProbeTargetsRepository:
         sql = (
             "SELECT id, container_name, kind, name, target_value, config_source, "
             "  enabled, interval_seconds, timeout_seconds, last_run_at, "
-            "  last_status, last_error, created_at, hidden_at "
+            "  last_status, last_error, created_at, hidden_at, exec_authorized "
             "FROM probe_targets WHERE container_name = :cn "
         )
         if not include_hidden:
@@ -248,6 +256,7 @@ class ProbeTargetsRepository:
                     last_error=None if r.last_error is None else str(r.last_error),
                     created_at=str(r.created_at),
                     hidden_at=None if r.hidden_at is None else str(r.hidden_at),
+                    exec_authorized=bool(r.exec_authorized),
                 )
             )
         return result
@@ -257,7 +266,7 @@ class ProbeTargetsRepository:
             text(
                 "SELECT id, container_name, kind, name, target_value, config_source, "
                 "  enabled, interval_seconds, timeout_seconds, last_run_at, "
-                "  last_status, last_error, created_at, hidden_at "
+                "  last_status, last_error, created_at, hidden_at, exec_authorized "
                 "FROM probe_targets WHERE id = :id"
             ),
             {"id": probe_id},
@@ -280,6 +289,7 @@ class ProbeTargetsRepository:
             last_error=None if r.last_error is None else str(r.last_error),
             created_at=str(r.created_at),
             hidden_at=None if r.hidden_at is None else str(r.hidden_at),
+            exec_authorized=bool(r.exec_authorized),
         )
 
     async def list_distinct_container_names_with_enabled_probes(self) -> list[str]:
@@ -296,31 +306,57 @@ class ProbeTargetsRepository:
         )
         return [str(r.container_name) for r in rows]
 
-    async def summarize_by_container(self) -> list[ProbeSummaryRow]:
+    async def summarize_by_container(
+        self,
+        *,
+        config_errors_by_container: dict[str, list[str]] | None = None,
+    ) -> list[ProbeSummaryRow]:
         """One row per container_name that has at least one enabled, non-hidden probe.
 
         active = count of enabled probes; failing = count where last_status='fail' or 'error'.
-        Containers with zero probes omitted.
+        source_breakdown = per-config_source counts for the container's enabled probes.
+        config_errors = validation errors for this container's override file, if any
+          (sourced from `config_errors_by_container` passed by the API layer; the loader
+          keeps the live error map separate from the DB).
+        Containers with zero probes AND no config_errors are omitted.
         """
         rows = await self._repo.fetch_all(
             text(
-                "SELECT container_name, "
-                "  COUNT(*) AS active, "
-                "  SUM(CASE WHEN last_status IN ('fail', 'error') THEN 1 ELSE 0 END) AS failing "
+                "SELECT container_name, config_source, "
+                "  COUNT(*) AS cnt, "
+                "  SUM(CASE WHEN last_status IN ('fail', 'error') THEN 1 ELSE 0 END) "
+                "  AS failing_cnt "
                 "FROM probe_targets "
                 "WHERE enabled = 1 AND hidden_at IS NULL "
-                "GROUP BY container_name "
-                "ORDER BY container_name"
+                "GROUP BY container_name, config_source "
+                "ORDER BY container_name, config_source"
             )
         )
-        return [
-            ProbeSummaryRow(
-                container_name=str(r.container_name),
-                active=int(r.active),
-                failing=int(r.failing or 0),
+        by_container: dict[str, dict[str, int]] = {}
+        failing_by_container: dict[str, int] = {}
+        for r in rows:
+            cn = str(r.container_name)
+            cs = str(r.config_source)
+            by_container.setdefault(cn, {})[cs] = int(r.cnt)
+            failing_by_container[cn] = failing_by_container.get(cn, 0) + int(r.failing_cnt or 0)
+
+        errors_map = config_errors_by_container or {}
+        result_names: set[str] = set(by_container.keys()) | set(errors_map.keys())
+        out: list[ProbeSummaryRow] = []
+        for cn in sorted(result_names):
+            breakdown = dict(sorted(by_container.get(cn, {}).items()))
+            active_total = sum(breakdown.values())
+            errors_for = errors_map.get(cn)
+            out.append(
+                ProbeSummaryRow(
+                    container_name=cn,
+                    active=active_total,
+                    failing=failing_by_container.get(cn, 0),
+                    source_breakdown=breakdown,
+                    config_errors=errors_for if errors_for else None,
+                )
             )
-            for r in rows
-        ]
+        return out
 
 
 __all__ = [

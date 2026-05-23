@@ -53,6 +53,9 @@ from homelab_monitor.kernel.plugins.context import CollectorContext
 from homelab_monitor.kernel.plugins.types import CollectorResult, RunKind, TrustLevel
 
 if TYPE_CHECKING:
+    from homelab_monitor.kernel.db.repositories.override_ownership_repository import (
+        OverrideOwnershipRepository,
+    )
     from homelab_monitor.kernel.db.repositories.probe_targets_repository import (
         ProbeTargetsRepository,
     )
@@ -94,19 +97,21 @@ class DockerDiscoverer(BaseCollector):
     run_kind: ClassVar[RunKind] = RunKind.ASYNC
     trust_level: ClassVar[TrustLevel] = TrustLevel.BUILTIN
 
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         *,
         socket_client: DockerSocketClient | None = None,
         suggestions_repo: SuggestionsRepository | None = None,
         db: SqliteRepository | None = None,
         probe_targets_repo: ProbeTargetsRepository | None = None,
+        ownership_repo: OverrideOwnershipRepository | None = None,
         scan_interval_seconds: int | None = None,
     ) -> None:
         self._socket_client: DockerSocketClient | None = socket_client
         self._suggestions_repo: SuggestionsRepository | None = suggestions_repo
         self._db: SqliteRepository | None = db
         self._probe_targets_repo: ProbeTargetsRepository | None = probe_targets_repo
+        self._ownership_repo: OverrideOwnershipRepository | None = ownership_repo
         self._scan_interval_seconds: int = scan_interval_seconds or _resolve_scan_interval()
         self._lock: asyncio.Lock = asyncio.Lock()
         self._events_task: asyncio.Task[None] | None = None
@@ -231,7 +236,7 @@ class DockerDiscoverer(BaseCollector):
                     next_backoff_seconds=backoff,
                 )
                 self._emit_metric(ctx, phase="events", result="error")
-            # TODO(STAGE-003-006+): track consecutive_failures counter; emit error log
+            # TODO(STAGE-003-006): track consecutive_failures counter; emit error log
             # after >= 5 consecutive failures (currently retries silently forever with
             # warning-level logs). See code review I1.
             await asyncio.sleep(backoff)
@@ -369,6 +374,9 @@ class DockerDiscoverer(BaseCollector):
         (container is healthy + labeled). Emits docker_label_malformed
         suggestions for invalid labels; skips probe upsert for collisions.
         """
+        from homelab_monitor.kernel.db.repositories.override_ownership_repository import (  # noqa: PLC0415
+            OverrideOwnershipRepository,
+        )
         from homelab_monitor.kernel.db.repositories.probe_targets_repository import (  # noqa: PLC0415
             ProbeTargetsRepository,
         )
@@ -381,6 +389,13 @@ class DockerDiscoverer(BaseCollector):
         now = utc_now_iso()
         kept_keys: set[tuple[str, str]] = set()
         async with self._lock, self._db.transaction() as conn:
+            # STAGE-003-007 D-OWNERSHIP-TOTAL-PER-CONTAINER:
+            # if the OverrideLoader has claimed this container, skip the label path
+            # entirely (no upsert, no mark_missing). The loader owns the rows.
+            if self._ownership_repo is not None:
+                owned = await OverrideOwnershipRepository.list_owned_conn(conn)
+                if container_name in owned:
+                    return
             # 1. Emit malformed-label suggestions
             if parse_result.malformed and self._suggestions_repo is not None:
                 for mal in parse_result.malformed:
@@ -410,6 +425,7 @@ class DockerDiscoverer(BaseCollector):
                         name=desc.name,
                         target_value=desc.raw_value,
                         config_source="label",
+                        exec_authorized=parse_result.exec_authorized,
                         now=now,
                     )
                     kept_keys.add((desc.kind, desc.name))

@@ -136,6 +136,7 @@ async def authenticated_client(
                 json={"username": TEST_USERNAME, "password": TEST_PASSWORD},
             )
             assert resp.status_code == 200  # noqa: PLR2004
+            client.app = app  # type: ignore[attr-defined]
             yield client
 
 

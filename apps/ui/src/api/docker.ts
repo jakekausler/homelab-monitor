@@ -72,9 +72,19 @@ export type ProbeSummaryEntry = {
   container_name: string
   active: number
   failing: number
+  config_errors?: string[] | null
+  source_breakdown: Record<string, number>
 }
 
-export type ProbeSummary = Record<string, { active: number; failing: number }>
+export type ProbeSummary = Record<
+  string,
+  {
+    active: number
+    failing: number
+    config_errors?: string[] | null
+    source_breakdown: Record<string, number>
+  }
+>
 
 /**
  * Fetch probe counts for ALL containers in one query. Use in the docker grid
@@ -91,6 +101,8 @@ export function useProbesSummary() {
         summary[entry.container_name] = {
           active: entry.active,
           failing: entry.failing,
+          config_errors: entry.config_errors ?? null,
+          source_breakdown: entry.source_breakdown,
         }
       }
       return summary

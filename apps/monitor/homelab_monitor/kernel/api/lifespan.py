@@ -483,6 +483,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
             )
 
             c._probe_targets_repo = ProbeTargetsRepository(repo)  # pyright: ignore[reportPrivateUsage]
+            from homelab_monitor.kernel.db.repositories.override_ownership_repository import (  # noqa: PLC0415
+                OverrideOwnershipRepository,
+            )
+
+            c._ownership_repo = OverrideOwnershipRepository(repo)  # pyright: ignore[reportPrivateUsage]
             app.state.docker_discoverer = c
         from homelab_monitor.kernel.metrics.probe_supervisor import (  # noqa: PLC0415
             ProbeSupervisor,
@@ -525,7 +530,47 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
         supervisor_ctx = ctx_factory(supervisor)
         await supervisor.start_per_container_tasks(supervisor_ctx)
 
-    # 7b. One-shot cron-discovery on startup. The scheduler's per-collector
+    # 7c. Start OverrideLoader periodic task (D-HOTRELOAD-PERIODIC-30S).
+    from homelab_monitor.kernel.db.repositories.override_ownership_repository import (  # noqa: PLC0415
+        OverrideOwnershipRepository,
+    )
+    from homelab_monitor.kernel.db.repositories.probe_targets_repository import (  # noqa: PLC0415
+        ProbeTargetsRepository,
+    )
+    from homelab_monitor.kernel.db.repositories.suggestions_repository import (  # noqa: PLC0415
+        SuggestionsRepository,
+    )
+    from homelab_monitor.kernel.docker.override_loader import OverrideLoader  # noqa: PLC0415
+
+    overrides_dir = Path(
+        os.environ.get(
+            "HOMELAB_MONITOR_DOCKER_OVERRIDES_DIR",
+            "/config/plugins/docker",
+        )
+    )
+    exec_enabled_globally = (
+        os.environ.get("HOMELAB_MONITOR_DOCKER_PROBES_EXEC_ENABLED", "false").lower() == "true"
+    )
+    override_loader = OverrideLoader(
+        db=repo,
+        suggestions_repo=SuggestionsRepository(repo),
+        probe_targets_repo=ProbeTargetsRepository(repo),
+        ownership_repo=OverrideOwnershipRepository(repo),
+        overrides_dir=overrides_dir,
+        exec_enabled_globally=exec_enabled_globally,
+        log=log,
+        socket_client=getattr(app.state, "docker_socket_client", None),
+    )
+    # Run one synchronous tick at startup so the API surface sees current
+    # ownership + errors before the first 30s sleep elapses.
+    try:
+        await override_loader.refresh_once()
+    except Exception as exc:  # pragma: no cover -- defensive; refresh_once tolerates dir-missing
+        log.warning("lifespan.override_loader_initial_refresh_failed", error=str(exc))
+    override_loader.start_task()
+    app.state.override_loader = override_loader
+
+    # 7d. One-shot cron-discovery on startup. The scheduler's per-collector
     # tick loop applies an initial offset, so the first SCHEDULED cron tick
     # can be up to ~one interval (300s) away. Requesting an immediate run
     # here makes the `wrapper_installed` column converge within seconds of a
@@ -664,6 +709,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
     try:
         yield
     finally:
+        # Stop OverrideLoader before discoverer/supervisor so its in-flight
+        # tx cannot race with shutdown ownership reads.
+        override_loader_handle = getattr(app.state, "override_loader", None)
+        if override_loader_handle is not None:  # pragma: no branch
+            await override_loader_handle.stop_task()
         # Stop ProbeSupervisor per-container tasks before scheduler shutdown
         supervisor = getattr(app.state, "probe_supervisor", None)
         if supervisor is not None:  # pragma: no branch — defensive degraded-collector guard

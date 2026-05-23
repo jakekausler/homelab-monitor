@@ -18,7 +18,9 @@ from homelab_monitor.kernel.db.repositories.probe_targets_repository import (
 from homelab_monitor.kernel.db.repositories.targets_repository import TargetsRepository
 from homelab_monitor.kernel.db.repository import SqliteRepository
 from homelab_monitor.kernel.db.time import utc_now_iso
+from homelab_monitor.kernel.docker.label_parser import ProbeDescriptor
 from homelab_monitor.kernel.docker.probe_executor import ProbeOutcome
+from homelab_monitor.kernel.docker.probe_resolver import resolve_probe
 from homelab_monitor.kernel.docker.socket_client import DockerSocketClient
 from homelab_monitor.kernel.metrics.probe_supervisor import ProbeSupervisor
 from homelab_monitor.kernel.plugins.context import CollectorContext
@@ -338,7 +340,24 @@ async def test_lookup_container_meta_found(repo: SqliteRepository) -> None:
     # We can't directly seed targets_docker in this test, so we just test the
     # not-found path for now (SCAFFOLDING for STAGE-003-007)
     targets_repo = TargetsRepository(repo)
-    meta = await supervisor._lookup_container_meta(targets_repo, "nonexistent")  # pyright: ignore[reportPrivateUsage]
+    probe = ProbeTargetRow(
+        id="test-probe",
+        container_name="nonexistent",
+        kind="http",
+        name="test",
+        target_value="http://localhost:8080/",
+        config_source="label",
+        enabled=True,
+        interval_seconds=30,
+        timeout_seconds=5,
+        last_run_at=None,
+        last_status=None,
+        last_error=None,
+        created_at=utc_now_iso(),
+        hidden_at=None,
+        exec_authorized=False,
+    )
+    meta = await supervisor._lookup_container_meta(targets_repo, "nonexistent", probe)  # pyright: ignore[reportPrivateUsage]
 
     assert meta["network_mode"] == "bridge"
     assert meta["container_ip"] is None
@@ -353,7 +372,24 @@ async def test_lookup_container_meta_missing_logs_warning(repo: SqliteRepository
     supervisor._ctx = mock_ctx  # pyright: ignore[reportPrivateUsage]
 
     targets_repo = TargetsRepository(repo)
-    meta = await supervisor._lookup_container_meta(targets_repo, "ghost-container")  # pyright: ignore[reportPrivateUsage]
+    probe = ProbeTargetRow(
+        id="test-probe",
+        container_name="ghost-container",
+        kind="http",
+        name="test",
+        target_value="http://localhost:8080/",
+        config_source="label",
+        enabled=True,
+        interval_seconds=30,
+        timeout_seconds=5,
+        last_run_at=None,
+        last_status=None,
+        last_error=None,
+        created_at=utc_now_iso(),
+        hidden_at=None,
+        exec_authorized=False,
+    )
+    meta = await supervisor._lookup_container_meta(targets_repo, "ghost-container", probe)  # pyright: ignore[reportPrivateUsage]
 
     assert meta["container_id"] is None
     mock_ctx.log.warning.assert_called_once_with(
@@ -441,6 +477,7 @@ async def test_emit_probe_metrics_records_up_and_duration(
         last_error=None,
         created_at=utc_now_iso(),
         hidden_at=None,
+        exec_authorized=False,
     )
     outcome = ProbeOutcome(up=True, duration_seconds=0.456, error=None)
 
@@ -707,7 +744,24 @@ async def test_lookup_container_meta_fetches_container_ip_from_socket(
 
     targets_repo = TargetsRepository(repo)
     # Test non-existent container (returns defaults)
-    meta = await supervisor._lookup_container_meta(targets_repo, "nonexistent")  # pyright: ignore[reportPrivateUsage]
+    probe = ProbeTargetRow(
+        id="test-probe",
+        container_name="nonexistent",
+        kind="http",
+        name="test",
+        target_value="http://localhost:8080/",
+        config_source="label",
+        enabled=True,
+        interval_seconds=30,
+        timeout_seconds=5,
+        last_run_at=None,
+        last_status=None,
+        last_error=None,
+        created_at=utc_now_iso(),
+        hidden_at=None,
+        exec_authorized=False,
+    )
+    meta = await supervisor._lookup_container_meta(targets_repo, "nonexistent", probe)  # pyright: ignore[reportPrivateUsage]
 
     assert meta["container_ip"] is None
     socket_client.inspect_container.assert_not_called()
@@ -861,3 +915,81 @@ async def test_fetch_container_ip_handles_none_container_id(
     ip = await supervisor._fetch_container_ip(None, "bridge")  # pyright: ignore[reportPrivateUsage]
     assert ip is None
     socket_client.inspect_container.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_exec_probe_resolves_when_exec_authorized_true_on_row(
+    repo: SqliteRepository,
+) -> None:
+    """Row with exec_authorized=True + global exec_enabled=True → resolve_probe succeeds."""
+    # Insert a probe row with exec_authorized=True
+    now = utc_now_iso()
+    async with repo.transaction() as conn:
+        await ProbeTargetsRepository.upsert_probe_target_conn(
+            conn,
+            container_name="myapp",
+            kind="exec",
+            name="check",
+            target_value="/bin/check.sh",
+            config_source="file_override",
+            exec_authorized=True,
+            now=now,
+        )
+
+    probe_rows = await ProbeTargetsRepository(repo).list_for_container(
+        container_name="myapp", include_hidden=False
+    )
+    assert len(probe_rows) == 1
+    probe = probe_rows[0]
+    assert probe.exec_authorized is True
+
+    # Confirm the bit is available for resolve_probe; resolver returns non-None
+    # for exec when both gates pass.
+    descriptor = ProbeDescriptor(kind="exec", name="check", raw_value="/bin/check.sh")
+    resolved = resolve_probe(
+        descriptor,
+        network_mode="bridge",
+        container_ip=None,
+        container_id="abc123",
+        host_ip="127.0.0.1",
+        exec_enabled=True,
+        exec_authorized=probe.exec_authorized,
+    )
+    assert resolved is not None
+
+
+@pytest.mark.asyncio
+async def test_exec_probe_not_resolvable_when_exec_authorized_false_on_row(
+    repo: SqliteRepository,
+) -> None:
+    """Row with exec_authorized=False → resolve_probe returns None (not_resolvable)."""
+    now = utc_now_iso()
+    async with repo.transaction() as conn:
+        await ProbeTargetsRepository.upsert_probe_target_conn(
+            conn,
+            container_name="myapp",
+            kind="exec",
+            name="check",
+            target_value="/bin/check.sh",
+            config_source="file_override",
+            exec_authorized=False,
+            now=now,
+        )
+
+    probe_rows = await ProbeTargetsRepository(repo).list_for_container(
+        container_name="myapp", include_hidden=False
+    )
+    probe = probe_rows[0]
+    assert probe.exec_authorized is False
+
+    descriptor = ProbeDescriptor(kind="exec", name="check", raw_value="/bin/check.sh")
+    resolved = resolve_probe(
+        descriptor,
+        network_mode="bridge",
+        container_ip=None,
+        container_id="abc123",
+        host_ip="127.0.0.1",
+        exec_enabled=True,
+        exec_authorized=probe.exec_authorized,
+    )
+    assert resolved is None

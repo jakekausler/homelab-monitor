@@ -2068,6 +2068,10 @@
             "title": "Enabled",
             "type": "boolean"
           },
+          "exec_authorized": {
+            "title": "Exec Authorized",
+            "type": "boolean"
+          },
           "hidden_at": {
             "anyOf": [
               {
@@ -2147,17 +2151,32 @@
           "enabled",
           "interval_seconds",
           "timeout_seconds",
-          "created_at"
+          "created_at",
+          "exec_authorized"
         ],
         "title": "ProbeRow",
         "type": "object"
       },
       "ProbeSummaryEntry": {
-        "description": "Per-container probe counts.",
+        "description": "Per-container probe counts + source breakdown + config errors.",
         "properties": {
           "active": {
             "title": "Active",
             "type": "integer"
+          },
+          "config_errors": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Config Errors"
           },
           "container_name": {
             "title": "Container Name",
@@ -2166,6 +2185,14 @@
           "failing": {
             "title": "Failing",
             "type": "integer"
+          },
+          "source_breakdown": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "default": {},
+            "title": "Source Breakdown",
+            "type": "object"
           }
         },
         "required": [
@@ -4282,7 +4309,7 @@
     },
     "/api/integrations/docker/probes/summary": {
       "get": {
-        "description": "Return active + failing probe counts grouped by container.\n\nSingle query; intended for the docker grid's per-row badge to avoid an N+1\nquery pattern. Containers with zero probes are NOT returned (caller\ninterprets absence as 'no probes').",
+        "description": "Return active + failing probe counts grouped by container, including\nper-source breakdown and any current override-file validation errors.\n\nSingle query for the docker grid's per-row badge (avoids N+1).\n`source_breakdown` keys are config_source values ('label', 'file_override',\netc.); `config_errors` is non-None only when the override loader currently\nhas unresolved validation errors for that container.",
         "operationId": "get_probes_summary_api_integrations_docker_probes_summary_get",
         "responses": {
           "200": {

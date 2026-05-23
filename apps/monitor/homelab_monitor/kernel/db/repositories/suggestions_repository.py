@@ -143,6 +143,44 @@ class SuggestionsRepository:
         return anchor_id
 
     @staticmethod
+    async def mark_resolved_conn(
+        conn: AsyncConnection,
+        *,
+        kind: str,
+        kept_dedup_keys: set[str],
+        now: str,
+    ) -> int:
+        """Transition pending suggestions of `kind` whose dedup_key is NOT in
+        kept_dedup_keys to state 'container_gone'. Returns affected row count.
+
+        Used by file-override loader to clear stale malformed-file suggestions
+        when the operator fixes the YAML and the loader stops re-emitting.
+        """
+        if not kept_dedup_keys:
+            # No keys to keep — mark ALL pending of this kind resolved
+            result = await conn.execute(
+                text(
+                    "UPDATE suggestions SET state='container_gone', updated_at=:now "
+                    "WHERE kind=:kind AND state='pending'"
+                ),
+                {"kind": kind, "now": now},
+            )
+            return int(result.rowcount or 0)
+        placeholders = ", ".join(f":k_{i}" for i in range(len(kept_dedup_keys)))
+        params: dict[str, str] = {"kind": kind, "now": now}
+        for i, key in enumerate(sorted(kept_dedup_keys)):
+            params[f"k_{i}"] = key
+        result = await conn.execute(
+            text(
+                f"UPDATE suggestions SET state='container_gone', updated_at=:now "
+                f"WHERE kind=:kind AND state='pending' "
+                f"AND deduplication_key NOT IN ({placeholders})"
+            ),
+            params,
+        )
+        return int(result.rowcount or 0)
+
+    @staticmethod
     async def mark_container_gone_conn(
         conn: AsyncConnection,
         *,
@@ -184,7 +222,10 @@ class SuggestionsRepository:
 
         `status` accepts 'pending' | 'accepted' | 'ignored' | 'container_gone' | 'all'.
         """
-        clauses: list[str] = ["s.kind IN ('docker_container_discovered', 'docker_label_collision')"]
+        clauses: list[str] = [
+            "s.kind IN ('docker_container_discovered', 'docker_label_collision',"
+            " 'docker_file_override_malformed')"
+        ]
         params: dict[str, object] = {"lim": limit}
         if status != "all":
             if status not in ALLOWED_STATES:

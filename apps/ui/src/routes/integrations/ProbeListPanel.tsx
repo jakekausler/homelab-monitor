@@ -6,6 +6,14 @@ import { useNowTick } from '@/lib/useNowTick'
 
 type ProbeRow = Schema<'ProbeRow'>
 
+const SOURCE_LABEL: Record<string, string> = {
+  label: 'Label',
+  file_override: 'Config file',
+  auto_default: 'Auto-detect',
+  discovered_accepted: 'Accepted',
+}
+const sourceLabel = (s: string) => SOURCE_LABEL[s] ?? s
+
 interface ProbeListPanelProps {
   probes: ProbeRow[]
 }
@@ -38,6 +46,7 @@ export function ProbeListPanel({ probes }: ProbeListPanelProps) {
             <tr className="border-b text-left text-xs text-muted-foreground">
               <th className="px-3 py-2">Kind</th>
               <th className="px-3 py-2">Name</th>
+              <th className="px-3 py-2">Source</th>
               <th className="px-3 py-2">Target</th>
               <th className="px-3 py-2">Status</th>
               <th className="px-3 py-2">Last error</th>
@@ -50,6 +59,11 @@ export function ProbeListPanel({ probes }: ProbeListPanelProps) {
               <tr key={p.id} className="hover:bg-accent/30">
                 <td className="px-3 py-2">{p.kind}</td>
                 <td className="px-3 py-2 font-medium">{p.name}</td>
+                <td className="px-3 py-2 text-xs">
+                  <span className="rounded bg-muted px-2 py-0.5 text-muted-foreground">
+                    {sourceLabel(p.config_source)}
+                  </span>
+                </td>
                 <td
                   className="px-3 py-2 max-w-[24rem] truncate text-xs text-muted-foreground"
                   title={p.target_value}
@@ -96,6 +110,15 @@ export function ProbeListPanel({ probes }: ProbeListPanelProps) {
               {statusBadge(p)}
             </div>
             <div className="mt-1 space-y-1 text-xs text-muted-foreground">
+              <div>
+                Source:{' '}
+                <span
+                  aria-label={`Source: ${sourceLabel(p.config_source)}`}
+                  className="rounded bg-muted px-1.5 py-0.5"
+                >
+                  {sourceLabel(p.config_source)}
+                </span>
+              </div>
               <div title={p.target_value}>
                 {p.kind === 'exec' ? 'Command' : 'Target'}:{' '}
                 <code className="text-xs">{truncate(p.target_value, 60)}</code>

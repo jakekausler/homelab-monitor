@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import pytest
+from fastapi import FastAPI
 from httpx import AsyncClient
 from pytest_httpx import HTTPXMock
 from sqlalchemy import text
@@ -16,6 +17,9 @@ from homelab_monitor.kernel.db.repositories.probe_targets_repository import (
 from homelab_monitor.kernel.db.repositories.targets_repository import TargetsRepository
 from homelab_monitor.kernel.db.repository import SqliteRepository
 from homelab_monitor.kernel.db.time import utc_now_iso
+
+# Constants for test assertions
+_EXPECTED_PROBES_SUMMARY_COUNT = 3
 
 if TYPE_CHECKING:
     pass
@@ -504,3 +508,119 @@ async def test_get_probes_summary_requires_auth(unauthenticated_client: AsyncCli
     """No auth => 401."""
     resp = await unauthenticated_client.get("/api/integrations/docker/probes/summary")
     assert resp.status_code == HTTP_UNAUTHORIZED
+
+
+# ---- PROBES SUMMARY STAGE-003-007 TESTS ----
+
+
+@pytest.mark.asyncio
+async def test_probes_summary_returns_source_breakdown(
+    authenticated_client: AsyncClient, repo: SqliteRepository
+) -> None:
+    """Seed container foo with two label probes + one file_override; verify breakdown."""
+    await _seed_container(repo, name="foo")
+    await _seed_probe(repo, container_name="foo", kind="http", name="api", config_source="label")
+    await _seed_probe(repo, container_name="foo", kind="tcp", name="db", config_source="label")
+    await _seed_probe(
+        repo,
+        container_name="foo",
+        kind="metrics",
+        name="prom",
+        config_source="file_override",
+    )
+
+    resp = await authenticated_client.get("/api/integrations/docker/probes/summary")
+    assert resp.status_code == HTTP_OK
+    data = resp.json()
+    assert len(data["summaries"]) == 1
+    entry = data["summaries"][0]
+    assert entry["container_name"] == "foo"
+    assert entry["active"] == _EXPECTED_PROBES_SUMMARY_COUNT
+    assert entry["failing"] == 0
+    assert entry["source_breakdown"] == {"label": 2, "file_override": 1}
+    assert entry["config_errors"] is None
+
+
+@pytest.mark.asyncio
+async def test_probes_summary_attaches_config_errors_when_loader_has_them(
+    authenticated_client: AsyncClient, repo: SqliteRepository
+) -> None:
+    """Stub override_loader to return errors; verify they attach to the entry."""
+    await _seed_container(repo, name="foo")
+    await _seed_probe(repo, container_name="foo", kind="http", name="api")
+
+    # Mock the override_loader on app.state
+    mock_loader = type("MockLoader", (), {})()
+    mock_loader.current_errors_by_container = lambda: {  # type: ignore[assignment]
+        "foo": ["bad.yaml: kind=ssh invalid"]
+    }
+    _app: FastAPI = cast(FastAPI, authenticated_client.app)  # type: ignore[attr-defined]
+    _orig = getattr(_app.state, "override_loader", None)
+    _app.state.override_loader = mock_loader
+    try:
+        resp = await authenticated_client.get("/api/integrations/docker/probes/summary")
+        assert resp.status_code == HTTP_OK
+        data = resp.json()
+        entry = data["summaries"][0]
+        assert entry["config_errors"] == ["bad.yaml: kind=ssh invalid"]
+    finally:
+        if _orig is None:
+            delattr(_app.state, "override_loader")
+        else:
+            _app.state.override_loader = _orig
+
+
+@pytest.mark.asyncio
+async def test_probes_summary_returns_orphan_error_row_for_unknown_container(
+    authenticated_client: AsyncClient,
+) -> None:
+    """Stub loader with errors for ghost container (no probes); row returned."""
+    mock_loader = type("MockLoader", (), {})()
+    mock_loader.current_errors_by_container = lambda: {"ghost": ["ghost.yaml: not found"]}  # type: ignore[assignment]
+    _app: FastAPI = cast(FastAPI, authenticated_client.app)  # type: ignore[attr-defined]
+    _orig = getattr(_app.state, "override_loader", None)
+    _app.state.override_loader = mock_loader
+    try:
+        resp = await authenticated_client.get("/api/integrations/docker/probes/summary")
+        assert resp.status_code == HTTP_OK
+        data = resp.json()
+        assert len(data["summaries"]) == 1
+        entry = data["summaries"][0]
+        assert entry["container_name"] == "ghost"
+        assert entry["active"] == 0
+        assert entry["source_breakdown"] == {}
+        assert entry["config_errors"] == ["ghost.yaml: not found"]
+    finally:
+        if _orig is None:
+            delattr(_app.state, "override_loader")
+        else:
+            _app.state.override_loader = _orig
+
+
+@pytest.mark.asyncio
+async def test_probes_summary_works_when_override_loader_absent(
+    authenticated_client: AsyncClient, repo: SqliteRepository
+) -> None:
+    """No override_loader on app.state; endpoint still works with all config_errors=None."""
+    await _seed_container(repo, name="web")
+    await _seed_probe(repo, container_name="web", kind="http", name="api")
+
+    # Ensure no loader is present
+    _app: FastAPI = cast(FastAPI, authenticated_client.app)  # type: ignore[attr-defined]
+    _orig = getattr(_app.state, "override_loader", None)
+    if hasattr(_app.state, "override_loader"):
+        delattr(_app.state, "override_loader")
+
+    try:
+        resp = await authenticated_client.get("/api/integrations/docker/probes/summary")
+        assert resp.status_code == HTTP_OK
+        data = resp.json()
+        assert len(data["summaries"]) == 1
+        entry = data["summaries"][0]
+        assert entry["config_errors"] is None
+    finally:
+        if _orig is None:
+            if hasattr(_app.state, "override_loader"):
+                delattr(_app.state, "override_loader")
+        else:
+            _app.state.override_loader = _orig

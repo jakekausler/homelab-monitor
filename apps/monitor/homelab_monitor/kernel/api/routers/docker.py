@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, ConfigDict
 
 from homelab_monitor.kernel.api.dependencies import get_repo, require_session
@@ -119,7 +119,8 @@ class DockerSuggestionRow(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     id: str
-    kind: str  # 'docker_container_discovered' | 'docker_label_collision'
+    # 'docker_container_discovered' | 'docker_label_collision' | 'docker_file_override_malformed'
+    kind: str
     deduplication_key: str
     state: str  # 'pending' | 'accepted' | 'ignored' | 'container_gone'
     created_at: str
@@ -228,6 +229,7 @@ class ProbeRow(BaseModel):
     last_error: str | None = None
     created_at: str
     hidden_at: str | None = None
+    exec_authorized: bool
 
 
 class ListProbesResponse(BaseModel):
@@ -236,13 +238,16 @@ class ListProbesResponse(BaseModel):
 
 
 class ProbeSummaryEntry(BaseModel):
-    """Per-container probe counts."""
+    """Per-container probe counts + source breakdown + config errors."""
 
     model_config = ConfigDict(extra="ignore")
 
     container_name: str
     active: int  # count of enabled probes
     failing: int  # count of enabled probes with last_status='fail' or 'error'
+    # STAGE-003-007 D-SUMMARY-ENDPOINT-EXTENSION:
+    source_breakdown: dict[str, int] = {}
+    config_errors: list[str] | None = None
 
 
 class ProbeSummaryResponse(BaseModel):
@@ -352,22 +357,39 @@ async def _toggle_probe(  # noqa: PLR0913
 
 @router.get("/probes/summary", response_model=ProbeSummaryResponse)
 async def get_probes_summary(
+    request: Request,
     _user: Annotated[User, Depends(require_session())],
     probes_repo: Annotated[ProbeTargetsRepository, Depends(_get_probe_targets_repo)],
 ) -> ProbeSummaryResponse:
-    """Return active + failing probe counts grouped by container.
+    """Return active + failing probe counts grouped by container, including
+    per-source breakdown and any current override-file validation errors.
 
-    Single query; intended for the docker grid's per-row badge to avoid an N+1
-    query pattern. Containers with zero probes are NOT returned (caller
-    interprets absence as 'no probes').
+    Single query for the docker grid's per-row badge (avoids N+1).
+    `source_breakdown` keys are config_source values ('label', 'file_override',
+    etc.); `config_errors` is non-None only when the override loader currently
+    has unresolved validation errors for that container.
     """
-    summaries = await probes_repo.summarize_by_container()
+    # STAGE-003-007: thread the loader's current error map through so the
+    # repo can attach errors to existing-container rows AND surface
+    # orphan-file-error rows for containers without probes.
+    loader = getattr(request.app.state, "override_loader", None)
+    errors_mapping: dict[str, tuple[str, ...]] = (
+        loader.current_errors_by_container() if loader is not None else {}
+    )
+    config_errors_by_container: dict[str, list[str]] = {
+        k: list(v) for k, v in errors_mapping.items()
+    }
+    summaries = await probes_repo.summarize_by_container(
+        config_errors_by_container=config_errors_by_container
+    )
     return ProbeSummaryResponse(
         summaries=[
             ProbeSummaryEntry(
                 container_name=s.container_name,
                 active=s.active,
                 failing=s.failing,
+                source_breakdown=s.source_breakdown,
+                config_errors=s.config_errors,
             )
             for s in summaries
         ]
@@ -390,4 +412,5 @@ def _probe_row_to_dto(row: ProbeTargetRow) -> ProbeRow:
         last_error=row.last_error,
         created_at=row.created_at,
         hidden_at=row.hidden_at,
+        exec_authorized=row.exec_authorized,
     )

@@ -47,6 +47,7 @@ EXPECTED_TABLES = {
     "cron_log_cursors",
     "cron_runs",
     "probe_targets",
+    "docker_override_ownership",
 }
 
 
@@ -941,5 +942,32 @@ async def test_migration_0016_round_trip(db_url: str) -> None:
         async with engine.connect() as conn:
             cols = await conn.run_sync(_cols_at_head)
         assert "wrapper_format_version" in cols
+    finally:
+        await engine.dispose()
+
+
+async def test_migration_0024_round_trip(db_url: str) -> None:
+    """Migration 0024 creates docker_override_ownership; downgrade drops it."""
+    engine = get_engine(url=db_url)
+    try:
+        await run_migrations(engine)
+
+        def _list_tables(sync_conn: object) -> set[str]:
+            inspector = inspect(sync_conn)
+            return set(inspector.get_table_names()) if inspector is not None else set()
+
+        async with engine.connect() as conn:
+            tables_at_head = await conn.run_sync(_list_tables)
+        assert "docker_override_ownership" in tables_at_head
+
+        # Downgrade to 0023 + verify table dropped.
+        cfg = Config()
+        cfg.set_main_option("script_location", str(ALEMBIC_DIR))
+        cfg.set_main_option("sqlalchemy.url", db_url)
+        command.downgrade(cfg, "0023")
+
+        async with engine.connect() as conn:
+            tables_at_0023 = await conn.run_sync(_list_tables)
+        assert "docker_override_ownership" not in tables_at_0023
     finally:
         await engine.dispose()

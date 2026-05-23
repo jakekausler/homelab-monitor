@@ -77,6 +77,14 @@ services:
       # @reboot cron lateness and a correct homelab_host_uptime_seconds.
       - /proc:/host/proc:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
+      # STAGE-003-007 D-MOUNT-PATH-PROD: per-container override YAML files.
+      # Per-service Docker probe overrides (STAGE-003-007).
+      # Operator creates YAML files at $HOMELAB_MONITOR_OVERRIDES_DIR/plugins/docker/<container>.yaml on the host.
+      # Container loader scans /config/plugins/docker/*.yaml (HOMELAB_MONITOR_DOCKER_OVERRIDES_DIR default).
+      # Host default /var/lib/homelab-monitor/overrides matches the existing
+      # state-dir convention. Read-only inside container; empty by default =
+      # OverrideLoader is a no-op.
+      - ${HOMELAB_MONITOR_OVERRIDES_DIR:-/var/lib/homelab-monitor/overrides}:/config:ro
     depends_on:
       victoriametrics:
         condition: service_healthy

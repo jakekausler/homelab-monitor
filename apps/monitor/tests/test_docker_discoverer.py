@@ -14,6 +14,9 @@ from unittest.mock import AsyncMock
 import pytest
 import structlog
 
+from homelab_monitor.kernel.db.repositories.probe_targets_repository import (
+    ProbeTargetsRepository,
+)
 from homelab_monitor.kernel.db.repositories.suggestions_repository import (
     SuggestionsRepository,
 )
@@ -1664,3 +1667,238 @@ async def test_discoverer_strips_docker_rename_prefix_from_container_name(
         container_name="51d0af1f0f51_homelab-grafana"
     )
     assert len(probes_prefixed) == 0
+
+
+@pytest.mark.asyncio
+async def test_label_upsert_skipped_when_container_owned_by_override_loader(
+    repo: SqliteRepository,
+) -> None:
+    """When a container is owned by override loader, label-based upsert is skipped."""
+    from homelab_monitor.kernel.db.repositories.override_ownership_repository import (  # noqa: PLC0415
+        OverrideOwnershipRepository,
+    )
+    from homelab_monitor.kernel.db.repositories.probe_targets_repository import (  # noqa: PLC0415
+        ProbeTargetsRepository,
+    )
+
+    writer = MemoryRetainingMetricsWriter()
+    ctx = _ctx(writer, repo)
+    probe_repo = ProbeTargetsRepository(repo)
+    ownership_repo = OverrideOwnershipRepository(repo)
+    sugg_repo = SuggestionsRepository(repo)
+    now = utc_now_iso()
+
+    # Pre-seed ownership: container "foo" is owned by override loader.
+    async with repo.transaction() as conn:
+        await ownership_repo.set_owned_conn(conn, container_names={"foo"}, now=now)
+
+    fake_client = _FakeSocketClient(
+        list_containers_result=[
+            {
+                "Id": "container-foo",
+                "Names": ["/foo"],
+                "Image": "nginx:latest",
+                "Labels": {
+                    "homelab-monitor.http.health": "http://container:80/health",
+                },
+            }
+        ],
+        inspect_results={
+            "container-foo": {
+                "Id": "container-foo",
+                "Name": "/foo",
+                "Config": {
+                    "Image": "nginx:latest",
+                    "Labels": {
+                        "homelab-monitor.http.health": "http://container:80/health",
+                    },
+                },
+                "State": {"Status": "running", "ExitCode": 0, "Health": {"Status": "healthy"}},
+                "RestartCount": 0,
+                "HostConfig": {"NetworkMode": "bridge"},
+                "NetworkSettings": {"Networks": {}},
+            },
+        },
+        events_iterator=_async_iter([]),
+    )
+
+    discoverer = DockerDiscoverer(
+        socket_client=fake_client,  # pyright: ignore[reportArgumentType]
+        suggestions_repo=sugg_repo,
+        db=repo,
+        probe_targets_repo=probe_repo,
+        ownership_repo=ownership_repo,
+    )
+    await discoverer.run(ctx)
+
+    # NO probe_target rows should be created (ownership skipped label upsert).
+    probes = await probe_repo.list_for_container(container_name="foo")
+    assert len(probes) == 0
+
+    # NO label-malformed suggestions should be emitted.
+    sugg_rows, _ = await sugg_repo.list_pending_docker_suggestions(status="all", limit=50)
+    assert len(sugg_rows) == 0
+
+
+@pytest.mark.asyncio
+async def test_label_upsert_proceeds_when_ownership_repo_is_none(
+    repo: SqliteRepository,
+) -> None:
+    """Back-compat: existing tests without ownership_repo still work."""
+    from homelab_monitor.kernel.db.repositories.probe_targets_repository import (  # noqa: PLC0415
+        ProbeTargetsRepository,
+    )
+
+    writer = MemoryRetainingMetricsWriter()
+    ctx = _ctx(writer, repo)
+    probe_repo = ProbeTargetsRepository(repo)
+
+    fake_client = _FakeSocketClient(
+        list_containers_result=[
+            {
+                "Id": "container-nginx",
+                "Names": ["/nginx"],
+                "Image": "nginx:latest",
+                "Labels": {
+                    "homelab-monitor.http.health": "http://container:80/health",
+                },
+            }
+        ],
+        inspect_results={
+            "container-nginx": {
+                "Id": "container-nginx",
+                "Name": "/nginx",
+                "Config": {
+                    "Image": "nginx:latest",
+                    "Labels": {
+                        "homelab-monitor.http.health": "http://container:80/health",
+                    },
+                },
+                "State": {"Status": "running", "ExitCode": 0, "Health": {"Status": "healthy"}},
+                "RestartCount": 0,
+                "HostConfig": {"NetworkMode": "bridge"},
+                "NetworkSettings": {"Networks": {}},
+            },
+        },
+        events_iterator=_async_iter([]),
+    )
+
+    discoverer = DockerDiscoverer(
+        socket_client=fake_client,  # pyright: ignore[reportArgumentType]
+        suggestions_repo=SuggestionsRepository(repo),
+        db=repo,
+        probe_targets_repo=probe_repo,
+        ownership_repo=None,
+    )
+    await discoverer.run(ctx)
+
+    # Probe_target rows SHOULD be created (no ownership constraint).
+    probes = await probe_repo.list_for_container(container_name="nginx")
+    assert len(probes) == 1
+    assert probes[0].kind == "http"
+
+
+@pytest.mark.asyncio
+async def test_label_upsert_proceeds_when_container_not_owned(
+    repo: SqliteRepository,
+) -> None:
+    """When container is not in ownership set, label upsert proceeds normally."""
+    from homelab_monitor.kernel.db.repositories.override_ownership_repository import (  # noqa: PLC0415
+        OverrideOwnershipRepository,
+    )
+    from homelab_monitor.kernel.db.repositories.probe_targets_repository import (  # noqa: PLC0415
+        ProbeTargetsRepository,
+    )
+
+    writer = MemoryRetainingMetricsWriter()
+    ctx = _ctx(writer, repo)
+    probe_repo = ProbeTargetsRepository(repo)
+    ownership_repo = OverrideOwnershipRepository(repo)
+    sugg_repo = SuggestionsRepository(repo)
+    now = utc_now_iso()
+
+    # Pre-seed ownership: only "bar" is owned (not "foo").
+    async with repo.transaction() as conn:
+        await ownership_repo.set_owned_conn(conn, container_names={"bar"}, now=now)
+
+    async with repo.transaction() as conn:
+        owned = await OverrideOwnershipRepository.list_owned_conn(conn)
+    assert owned == {"bar"}, f"setup precondition: owned set should be {{'bar'}}, got {owned}"
+
+    fake_client = _FakeSocketClient(
+        list_containers_result=[
+            {
+                "Id": "container-foo",
+                "Names": ["/foo"],
+                "Image": "nginx:latest",
+                "Labels": {
+                    "homelab-monitor.http.health": "http://container:80/health",
+                },
+            }
+        ],
+        inspect_results={
+            "container-foo": {
+                "Id": "container-foo",
+                "Name": "/foo",
+                "Config": {
+                    "Image": "nginx:latest",
+                    "Labels": {
+                        "homelab-monitor.http.health": "http://container:80/health",
+                    },
+                },
+                "State": {"Status": "running", "ExitCode": 0, "Health": {"Status": "healthy"}},
+                "RestartCount": 0,
+                "HostConfig": {"NetworkMode": "bridge"},
+                "NetworkSettings": {"Networks": {}},
+            },
+        },
+        events_iterator=_async_iter([]),
+    )
+
+    discoverer = DockerDiscoverer(
+        socket_client=fake_client,  # pyright: ignore[reportArgumentType]
+        suggestions_repo=sugg_repo,
+        db=repo,
+        probe_targets_repo=probe_repo,
+        ownership_repo=ownership_repo,
+    )
+    await discoverer.run(ctx)
+
+    # Probe_target rows SHOULD be created (foo is not owned).
+    probes = await probe_repo.list_for_container(container_name="foo")
+    assert len(probes) == 1
+    assert probes[0].kind == "http"
+
+
+@pytest.mark.asyncio
+async def test_label_exec_authorized_persisted_on_row(
+    repo: SqliteRepository,
+) -> None:
+    """exec_authorized=true label persists the bit on the probe_targets row."""
+    writer = MemoryRetainingMetricsWriter()
+    ctx = _ctx(writer, repo)
+
+    probe_repo = ProbeTargetsRepository(repo)
+    discoverer = DockerDiscoverer(
+        db=repo,
+        suggestions_repo=SuggestionsRepository(repo),
+        probe_targets_repo=probe_repo,
+    )
+    fake_inspect: dict[str, Any] = {
+        "Id": "abc123",
+        "Name": "/myapp",
+        "Image": "myapp:latest",
+        "Config": {
+            "Labels": {
+                "homelab-monitor.http.health": "http://localhost:8080/health",
+                "homelab-monitor.exec_authorized": "true",
+            }
+        },
+    }
+    await discoverer._upsert_suggestion(ctx, fake_inspect)  # pyright: ignore[reportPrivateUsage,reportArgumentType]
+
+    probes = await ProbeTargetsRepository(repo).list_for_container(
+        container_name="myapp", include_hidden=False
+    )
+    assert len(probes) == 1
+    assert probes[0].exec_authorized is True

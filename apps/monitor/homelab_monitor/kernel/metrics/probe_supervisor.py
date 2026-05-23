@@ -199,7 +199,9 @@ class ProbeSupervisor(BaseCollector):
                     await asyncio.sleep(_DEFAULT_BACKOFF_AFTER_ERROR_SECONDS)
                     continue
 
-                container_meta = await self._lookup_container_meta(targets_repo, container_name)
+                container_meta = await self._lookup_container_meta(
+                    targets_repo, container_name, probe=enabled[0]
+                )
                 tick_interval = max(
                     _DEFAULT_TICK_FLOOR_SECONDS,
                     float(min(p.interval_seconds for p in enabled)),
@@ -279,6 +281,7 @@ class ProbeSupervisor(BaseCollector):
         self,
         targets_repo: TargetsRepository,
         container_name: str,
+        probe: ProbeTargetRow,
     ) -> dict[str, Any]:
         """Look up network_mode + container_id + container_ip for container_name.
 
@@ -288,7 +291,7 @@ class ProbeSupervisor(BaseCollector):
         as None — the resolver collapses `container` sentinel to host_ip
         in that case.
 
-        exec_authorized comes from the labels JSON.
+        exec_authorized comes from the probe row.
         """
         rows = await targets_repo.list_docker_containers(include_hidden=False)
         match = next((r for r in rows if r.name == container_name), None)
@@ -304,9 +307,7 @@ class ProbeSupervisor(BaseCollector):
                 "container_ip": None,
                 "exec_authorized": False,
             }
-        exec_authorized = (  # pragma: no cover -- requires populated targets_docker
-            match.labels.get("homelab-monitor.exec_authorized", "").strip().lower() == "true"
-        )
+        exec_authorized = probe.exec_authorized  # pragma: no cover -- needs targets_docker
         network_mode = (
             match.network_mode or "bridge"
         )  # pragma: no cover -- requires populated targets_docker
