@@ -98,6 +98,17 @@
 - [ ] Pending Suggestions panel renders only `homelab-monitor.*` labels as badges (not Compose/OCI vendor labels).
 - [ ] PendingSuggestionsPanel SuggestionCard shows compose_file_path below image_ref when present, with truncate + title tooltip.
 
+## STAGE-003-007 — Per-service config-file override
+
+- **R-007-1: file_override probe upsert** — Place a valid YAML file at `<HOMELAB_MONITOR_DOCKER_OVERRIDES_DIR>/<container>.yaml` defining 2 probes. Within 30s, verify `probe_targets` has 2 rows for that container with `config_source='file_override'`. Verify the per-container drill-down shows both probes with Source = `file_override`.
+- **R-007-2: red "Config error" row badge** — Place a malformed YAML (e.g., `kind: ssh`) at `<dir>/<container>.yaml`. Within 30s, verify `/api/integrations/docker/probes/summary` returns `config_errors` (non-null list) on that container's entry. Verify the Docker grid shows the red "Config error" badge in the probes column on the affected row.
+- **R-007-3: orphan malformed file → suggestion** — Place a malformed YAML where the container does NOT exist. Within 30s, verify a `docker_file_override_malformed` suggestion appears in the `suggestions` table (deduplication_key=`malformed::<container>`).
+- **R-007-4: file deletion releases ownership** — Delete an existing override file. Within 30s, verify `docker_override_ownership` no longer contains that container; verify `probe_targets` rows for that container with `config_source='file_override'` are soft-deleted (`hidden_at IS NOT NULL`); verify label-derived probes (if any) re-appear on the next discoverer tick.
+- **R-007-5: exec probe dual gate** — Place an override with `kind: exec` but WITHOUT container-level `exec_authorized: true`. Verify the exec probe is dropped and a `docker_file_override_malformed` suggestion is emitted with reason mentioning `exec_not_authorized`. Repeat with `exec_authorized: true` and env `HOMELAB_MONITOR_DOCKER_PROBES_EXEC_ENABLED=false`; verify the probe is still dropped (env gate also required).
+- **R-007-6: per-tick log emission** — Tail backend log; verify `override_loader.refresh_complete owned=N errors=M suggestions_emitted=K` appears at least once per 30s window (Lesson 14).
+- **R-007-7: container_name canonicalization** — Place an override file using the literal container name (no `/` prefix, no `<12-hex>_` recreate prefix). Verify it matches the running container even immediately after a `docker compose --force-recreate`.
+- **R-007-8: openapi cascade** — When backend `/probes/summary` response schema changes in the future, the UI types in `apps/ui/src/api/schema.ts` MUST be regenerated via `make openapi-export` + `pnpm --filter ui run generate-types`. UI code that consumes `entry.config_errors` / `entry.source_breakdown` will silently break if types aren't regenerated.
+
 ## STAGE-003-006: Label-based probe auto-config
 
 Re-verify after any change to:
