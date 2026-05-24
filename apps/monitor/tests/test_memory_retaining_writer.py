@@ -124,3 +124,9 @@ def test_stress_100_replace_family_iterations_bounded() -> None:
     # last iteration's values: tick=99, so 990..999
     values = {int(e.value) for e in snap_topn}
     assert values == set(range(990, 1000))
+
+
+def test_last_gauge_returns_none_when_no_match() -> None:
+    """last_gauge returns None when no matching gauge was written."""
+    writer = MemoryRetainingMetricsWriter()
+    assert writer.last_gauge("nonexistent_metric") is None

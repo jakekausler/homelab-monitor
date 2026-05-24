@@ -15,6 +15,10 @@ from pydantic import BaseModel, ConfigDict
 
 from homelab_monitor.kernel.api.dependencies import get_repo, require_session
 from homelab_monitor.kernel.auth.models import User
+from homelab_monitor.kernel.db.repositories.image_update_state_repository import (
+    ImageUpdateStateRepository,
+    ImageUpdateStateRow,
+)
 from homelab_monitor.kernel.db.repositories.probe_targets_repository import (
     ProbeTargetRow,
     ProbeTargetsRepository,
@@ -413,4 +417,103 @@ def _probe_row_to_dto(row: ProbeTargetRow) -> ProbeRow:
         created_at=row.created_at,
         hidden_at=row.hidden_at,
         exec_authorized=row.exec_authorized,
+    )
+
+
+class ImageUpdateSummaryEntry(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    container_name: str
+    available: bool
+    current_digest: str | None = None
+    latest_digest: str | None = None
+    last_checked_at: str | None = None
+    check_failed_at: str | None = None
+    check_error_reason: str | None = None
+
+
+class ImageUpdateSummaryResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    summaries: list[ImageUpdateSummaryEntry]
+    rate_limit_skipped_count: int = 0
+    rate_limit_remaining_by_registry: dict[str, int] = {}
+
+
+class ImageUpdateDetail(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    container_name: str
+    last_local_digest: str | None = None
+    last_registry_digest: str | None = None
+    last_image_ref: str
+    last_checked_at: str | None = None
+    check_failed_at: str | None = None
+    check_error_reason: str | None = None
+    update_available: bool
+
+
+def _get_image_update_state_repo(
+    repo: Annotated[SqliteRepository, Depends(get_repo)],
+) -> ImageUpdateStateRepository:
+    return ImageUpdateStateRepository(repo)
+
+
+@router.get("/image-updates/summary", response_model=ImageUpdateSummaryResponse)
+async def get_image_updates_summary(
+    request: Request,
+    _user: Annotated[User, Depends(require_session())],
+    state_repo: Annotated[ImageUpdateStateRepository, Depends(_get_image_update_state_repo)],
+) -> ImageUpdateSummaryResponse:
+    """Aggregate image-update state for the container grid badge + rate-limit banner.
+
+    Sibling of /probes/summary (D-SUMMARY-SIBLING-ENDPOINT).
+    """
+    rows = await state_repo.list_all()
+    collector = getattr(request.app.state, "image_update_collector", None)
+    skipped_count = collector.current_skipped_count() if collector is not None else 0
+    remaining_view = dict(collector.current_rate_limit_remaining()) if collector is not None else {}
+    return ImageUpdateSummaryResponse(
+        summaries=[
+            ImageUpdateSummaryEntry(
+                container_name=r.container_name,
+                available=r.update_available,
+                current_digest=r.last_local_digest,
+                latest_digest=r.last_registry_digest,
+                last_checked_at=r.last_checked_at,
+                check_failed_at=r.check_failed_at,
+                check_error_reason=r.check_error_reason,
+            )
+            for r in rows
+        ],
+        rate_limit_skipped_count=skipped_count,
+        rate_limit_remaining_by_registry=remaining_view,
+    )
+
+
+@router.get(
+    "/containers/{name}/image-update",
+    response_model=ImageUpdateDetail,
+)
+async def get_container_image_update(
+    name: str,
+    _user: Annotated[User, Depends(require_session())],
+    state_repo: Annotated[ImageUpdateStateRepository, Depends(_get_image_update_state_repo)],
+) -> ImageUpdateDetail:
+    """Per-container image-update detail (drill-down route)."""
+    row: ImageUpdateStateRow | None = await state_repo.get_by_container(name)
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"no image-update state for container: {name}",
+        )
+    return ImageUpdateDetail(
+        container_name=row.container_name,
+        last_local_digest=row.last_local_digest,
+        last_registry_digest=row.last_registry_digest,
+        last_image_ref=row.last_image_ref,
+        last_checked_at=row.last_checked_at,
+        check_failed_at=row.check_failed_at,
+        check_error_reason=row.check_error_reason,
+        update_available=row.update_available,
     )

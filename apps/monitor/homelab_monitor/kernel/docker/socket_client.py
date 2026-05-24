@@ -22,6 +22,7 @@ import httpx
 from structlog.stdlib import BoundLogger
 
 HTTP_OK = 200  # Docker Engine API success status
+HTTP_NOT_FOUND: Final[int] = 404
 
 _DEFAULT_SOCKET_PATH: Final[str] = "/var/run/docker.sock"
 # Docker Engine API base host — any value works, httpx UDS transport ignores it.
@@ -184,6 +185,49 @@ class DockerSocketClient:
         # Cast: we've validated the top-level shape (list/dict) but Docker may return
         # fields we haven't typed. Trust boundary — failures surface as KeyError at consumers.
         return cast("ContainerInspect", data)
+
+    async def image_inspect(self, image_id: str) -> dict[str, object] | None:
+        """GET /images/{image_id}/json — returns inspect blob.
+
+        The response includes 'RepoDigests': list[str], which is the
+        local-side equivalent of the registry's "latest" digest.
+        Required by STAGE-003-008's ImageUpdateCollector because
+        /containers/json + /containers/{id}/json do NOT include
+        RepoDigests.
+
+        Returns:
+            The decoded JSON inspect dict on 200, or None on 404.
+
+        Raises:
+            DockerSocketConnectionError: socket unreachable.
+            DockerSocketProtocolError: non-200/non-404 status, malformed JSON.
+        """
+        try:
+            resp = await self._client.get(f"/images/{image_id}/json")
+        except httpx.ConnectError as exc:
+            raise DockerSocketConnectionError(
+                f"docker socket unreachable at {self._socket_path}: {exc}"
+            ) from exc
+        except httpx.HTTPError as exc:  # pragma: no cover -- defensive
+            raise DockerSocketConnectionError(f"docker socket transport error: {exc}") from exc
+        if resp.status_code == HTTP_NOT_FOUND:
+            return None
+        if resp.status_code != HTTP_OK:
+            raise DockerSocketProtocolError(
+                f"unexpected status {resp.status_code} from /images/{image_id}/json: "
+                f"{resp.text[:200]}"
+            )
+        try:
+            data = resp.json()
+        except json.JSONDecodeError as exc:
+            raise DockerSocketProtocolError(
+                f"malformed JSON from /images/{image_id}/json: {exc}"
+            ) from exc
+        if not isinstance(data, dict):
+            raise DockerSocketProtocolError(
+                f"expected dict from /images/{image_id}/json, got {type(data).__name__}"
+            )
+        return cast("dict[str, object]", data)
 
     async def events(
         self,

@@ -23,6 +23,7 @@ vi.mock('@/api/docker', () => ({
     data: {},
     isPending: false,
   }),
+  useImageUpdatesSummary: () => ({ data: null }),
   dockerQueryKeys: {},
   DockerSuggestionStatus: {},
 }))

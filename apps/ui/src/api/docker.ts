@@ -58,6 +58,8 @@ export function useListDockerSuggestions(
 type ListProbesResponse = Schema<'ListProbesResponse'>
 type ProbeRowSchema = Schema<'ProbeRow'>
 type ProbeSummaryResponse = Schema<'ProbeSummaryResponse'>
+type ImageUpdateSummaryResponse = Schema<'ImageUpdateSummaryResponse'>
+type ImageUpdateDetail = Schema<'ImageUpdateDetail'>
 
 export const dockerProbeQueryKeys = {
   list: (containerName: string) =>
@@ -146,5 +148,74 @@ export function useToggleProbe() {
         queryKey: dockerProbeQueryKeys.summary,
       })
     },
+  })
+}
+
+export const dockerImageUpdateQueryKeys = {
+  summary: ['integrations', 'docker', 'image-updates-summary'] as const,
+  detail: (containerName: string) =>
+    ['integrations', 'docker', 'containers', containerName, 'image-update'] as const,
+}
+
+const IMAGE_UPDATE_SUMMARY_REFETCH_INTERVAL_MS = 30_000
+const IMAGE_UPDATE_DETAIL_REFETCH_INTERVAL_MS = 30_000
+
+export type ImageUpdateSummaryEntry = {
+  container_name: string
+  available: boolean
+  current_digest?: string | null
+  latest_digest?: string | null
+  last_checked_at?: string | null
+  check_failed_at?: string | null
+  check_error_reason?: string | null
+}
+
+export type ImageUpdateSummary = {
+  byContainer: Record<string, ImageUpdateSummaryEntry>
+  rateLimitSkippedCount: number
+  rateLimitRemainingByRegistry: Record<string, number>
+}
+
+export function useImageUpdatesSummary() {
+  return useQuery({
+    queryKey: dockerImageUpdateQueryKeys.summary,
+    queryFn: async () => {
+      const result = await apiClient.GET('/api/integrations/docker/image-updates/summary', {})
+      const payload = unwrap<ImageUpdateSummaryResponse>(result)
+      const byContainer: Record<string, ImageUpdateSummaryEntry> = {}
+      for (const entry of payload.summaries) {
+        byContainer[entry.container_name] = {
+          container_name: entry.container_name,
+          available: entry.available,
+          current_digest: entry.current_digest ?? null,
+          latest_digest: entry.latest_digest ?? null,
+          last_checked_at: entry.last_checked_at ?? null,
+          check_failed_at: entry.check_failed_at ?? null,
+          check_error_reason: entry.check_error_reason ?? null,
+        }
+      }
+      return {
+        byContainer,
+        rateLimitSkippedCount: payload.rate_limit_skipped_count,
+        rateLimitRemainingByRegistry: payload.rate_limit_remaining_by_registry,
+      }
+    },
+    refetchInterval: IMAGE_UPDATE_SUMMARY_REFETCH_INTERVAL_MS,
+    staleTime: 5000,
+  })
+}
+
+export function useImageUpdate(containerName: string): UseQueryResult<ImageUpdateDetail, ApiError> {
+  return useQuery({
+    queryKey: dockerImageUpdateQueryKeys.detail(containerName),
+    queryFn: async () => {
+      const result = await apiClient.GET(
+        '/api/integrations/docker/containers/{name}/image-update',
+        { params: { path: { name: containerName } } },
+      )
+      return unwrap<ImageUpdateDetail>(result)
+    },
+    refetchInterval: IMAGE_UPDATE_DETAIL_REFETCH_INTERVAL_MS,
+    enabled: containerName.length > 0,
   })
 }

@@ -13,7 +13,7 @@ from sqlalchemy import text
 
 from alembic import op
 
-revision: str = "0025_probe_targets_exec_authorized"
+revision: str = "0025"
 down_revision: str | None = "0024"
 branch_labels: str | None = None
 depends_on: str | None = None

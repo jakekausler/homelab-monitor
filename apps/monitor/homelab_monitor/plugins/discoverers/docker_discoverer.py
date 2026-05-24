@@ -29,7 +29,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
-import re
 import time
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any, ClassVar, Final
@@ -39,6 +38,7 @@ from homelab_monitor.kernel.db.repositories.suggestions_repository import (
 )
 from homelab_monitor.kernel.db.repository import SqliteRepository
 from homelab_monitor.kernel.db.time import utc_now_iso
+from homelab_monitor.kernel.docker.names import canonicalize_container_name
 from homelab_monitor.kernel.docker.socket_client import (
     ContainerInspect,
     DockerSocketClient,
@@ -291,17 +291,10 @@ class DockerDiscoverer(BaseCollector):
             return
 
         container_id = inspect["Id"]
-        # Strip leading "/" Docker prepends to inspect Name.
+        # Strip leading "/" Docker prepends to inspect Name, and canonicalize
+        # any <12hex>_ prefix from docker compose --force-recreate.
         raw_name = str(inspect.get("Name") or "")
-        container_name = raw_name[1:] if raw_name.startswith("/") else raw_name
-        # Docker compose --force-recreate renames the old container as
-        # "<12-hex>_<original>" briefly; strip the prefix here so both the
-        # suggestion and probe-target paths key on the canonical name. A
-        # container literally named "<12-hex>_<X>" by the operator would be
-        # mis-stripped, but this naming pattern is astronomically unlikely.
-        _rename_match = re.match(r"^[0-9a-f]{12}_(.+)$", container_name)
-        if _rename_match:
-            container_name = _rename_match.group(1)
+        container_name = canonicalize_container_name(raw_name)
         image_ref = str(inspect.get("Image") or "")
         cfg_obj: dict[str, Any] = inspect.get("Config") or {}
         labels: dict[str, Any] = cfg_obj.get("Labels") or {}

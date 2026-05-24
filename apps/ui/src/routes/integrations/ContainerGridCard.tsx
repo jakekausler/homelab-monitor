@@ -4,6 +4,8 @@ import type { ContainerRow } from './types'
 import { StatusBadge, HealthcheckBadge } from './badges'
 import { extractComposeBasename } from './composeBasename'
 import { ProbesBadge } from './ProbesBadge'
+import { ImageUpdateBadge } from './ImageUpdateBadge'
+import { formatDigest } from '@/lib/digest'
 
 interface ContainerGridCardProps {
   containers: ContainerRow[]
@@ -31,10 +33,7 @@ export function ContainerGridCard({ containers }: ContainerGridCardProps) {
                 <span>Status:</span>
                 {c.status ? <StatusBadge status={c.status} /> : <span>—</span>}
               </div>
-              <div>
-                Image: {/* SCAFFOLDING: STAGE-003-004 populates from docker socket collector */}
-                {c.image ?? '—'}
-              </div>
+              <div title={c.image ?? undefined}>Image: {formatDigest(c.image)}</div>
               <div>
                 CPU: {/* SCAFFOLDING: STAGE-003-004 populates from docker socket collector */}
                 {c.cpu_pct != null ? `${c.cpu_pct.toFixed(1)}%` : '—'}
@@ -58,8 +57,7 @@ export function ContainerGridCard({ containers }: ContainerGridCardProps) {
                 {c.healthcheck ? <HealthcheckBadge status={c.healthcheck} /> : <span>—</span>}
               </div>
               <div>
-                {/* SCAFFOLDING: STAGE-003-008/009 populate image-update badges */}
-                Image Update: {'—'}
+                Image Update: <ImageUpdateBadge containerName={c.name} />
               </div>
               <div>
                 Probes: <ProbesBadge containerName={c.name} />

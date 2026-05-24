@@ -334,6 +334,27 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
         )
         degraded.append("docker_probes_supervisor")
 
+    try:
+        from homelab_monitor.kernel.metrics.image_update_collector import (  # noqa: PLC0415
+            ImageUpdateCollector,
+        )
+
+        loader.register(
+            ImageUpdateCollector,
+            {
+                "name": "image_update_checker",
+                "interval_seconds": int(ImageUpdateCollector.interval.total_seconds()),
+                "timeout_seconds": int(ImageUpdateCollector.timeout.total_seconds()),
+            },
+        )
+    except Exception as exc:  # pragma: no cover -- defensive
+        log.warning(
+            "lifespan.collector_register_failed",
+            name="image_update_checker",
+            error=str(exc),
+        )
+        degraded.append("image_update_checker")
+
     plugins_env = os.environ.get("HOMELAB_MONITOR_PLUGINS_DIR")
     if plugins_env is not None:
         plugins_dir: Path | None = Path(plugins_env)
@@ -503,6 +524,26 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
                 == "true"
             )
             app.state.probe_supervisor = c
+        from homelab_monitor.kernel.metrics.image_update_collector import (  # noqa: PLC0415
+            ImageUpdateCollector,
+        )
+
+        if isinstance(c, ImageUpdateCollector):
+            from homelab_monitor.kernel.db.repositories.image_update_state_repository import (  # noqa: PLC0415
+                ImageUpdateStateRepository,
+            )
+            from homelab_monitor.kernel.docker.registry_digest_client import (  # noqa: PLC0415
+                RegistryDigestClient,
+            )
+
+            c._db = repo  # pyright: ignore[reportPrivateUsage]
+            c._socket_client = getattr(app.state, "docker_socket_client", None)  # pyright: ignore[reportPrivateUsage]
+            c._http_client = http_client  # pyright: ignore[reportPrivateUsage]
+            c._registry_client = RegistryDigestClient(  # pyright: ignore[reportPrivateUsage]
+                http_client=http_client, log=log
+            )
+            c._state_repo = ImageUpdateStateRepository(repo)  # pyright: ignore[reportPrivateUsage]
+            app.state.image_update_collector = c
     scheduler = Scheduler(
         collectors,
         ctx_factory,
@@ -529,6 +570,93 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
     ):
         supervisor_ctx = ctx_factory(supervisor)
         await supervisor.start_per_container_tasks(supervisor_ctx)
+
+    # 7e. Start image-events background task (D-EVENTS-FILTERS-KWARG).
+    # Separate from docker_discoverer's container-events loop; subscribes to
+    # 'image' type events (filters={"type":["image"]}) and triggers an
+    # out-of-band image-update check on pull.
+    image_events_task: asyncio.Task[None] | None = None
+    image_update_collector_handle = getattr(app.state, "image_update_collector", None)
+    docker_socket_client = getattr(app.state, "docker_socket_client", None)
+    if (  # pragma: no branch -- both branches need full lifespan boot
+        image_update_collector_handle is not None
+        and docker_socket_client is not None
+        and "image_update_checker" not in degraded
+    ):
+        events_ctx = ctx_factory(image_update_collector_handle)
+
+        async def _image_events_loop() -> None:
+            """Long-lived task subscribing to docker image events.
+
+            On 'pull' events, debounces multiple rapid pulls into a single
+            scheduler.request_immediate_run call (30s window).
+            Reconnects with exponential backoff on failure.
+            """
+            _DEBOUNCE_SECONDS = 30.0
+            _pending_trigger: asyncio.Task[None] | None = None
+
+            async def _do_trigger() -> None:  # pragma: no cover -- docker events handler
+                await asyncio.sleep(_DEBOUNCE_SECONDS)
+                try:
+                    await scheduler.request_immediate_run(
+                        "image_update_checker",
+                        trigger=TriggerContext(kind="manual", request_id=None),
+                    )
+                except Exception as exc:  # pragma: no cover -- defensive
+                    events_ctx.log.warning(
+                        "image_update_collector.events_trigger_failed",
+                        error=str(exc),
+                    )
+
+            _backoff = 1.0
+            _MAX_BACKOFF = 60.0
+            while True:
+                try:
+                    async for event in docker_socket_client.events(  # pragma: no cover
+                        filters={"type": ["image"]}
+                    ):
+                        action = str(event.get("Action") or event.get("status") or "")
+                        if action != "pull":
+                            continue
+                        _backoff = 1.0  # reset on successful event
+                        # Coalesce: cancel any pending debounce and restart
+                        if _pending_trigger is not None and not _pending_trigger.done():
+                            _pending_trigger.cancel()
+                        _pending_trigger = asyncio.create_task(_do_trigger())
+                    # Stream returned without raising (rare in prod; common in tests
+                    # with mocked empty body). Treat as a soft failure: back off
+                    # before re-subscribing so we don't busy-loop.
+                    events_ctx.log.warning(
+                        "image_update_collector.events_stream_closed",
+                        backoff_seconds=_backoff,
+                    )
+                    try:
+                        await asyncio.sleep(_backoff)
+                    except asyncio.CancelledError:
+                        raise
+                    _backoff = min(_backoff * 2, _MAX_BACKOFF)  # pragma: no cover
+                except asyncio.CancelledError:
+                    if (
+                        _pending_trigger is not None and not _pending_trigger.done()
+                    ):  # pragma: no cover -- shutdown race
+                        _pending_trigger.cancel()
+                    raise
+                except Exception as exc:  # pragma: no cover -- docker event stream reconnect
+                    events_ctx.log.warning(
+                        "image_update_collector.events_loop_error",
+                        error=str(exc),
+                        backoff_seconds=_backoff,
+                    )
+                    try:
+                        await asyncio.sleep(_backoff)
+                    except asyncio.CancelledError:
+                        raise
+                    _backoff = min(_backoff * 2, _MAX_BACKOFF)
+
+        image_events_task = asyncio.create_task(
+            _image_events_loop(), name="image_update_collector.events"
+        )
+        app.state.image_events_task = image_events_task
 
     # 7c. Start OverrideLoader periodic task (D-HOTRELOAD-PERIODIC-30S).
     from homelab_monitor.kernel.db.repositories.override_ownership_repository import (  # noqa: PLC0415
@@ -722,6 +850,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
         discoverer = getattr(app.state, "docker_discoverer", None)
         if discoverer is not None:
             await discoverer.stop_events_loop()
+        # Stop image-events task.
+        image_events_task_handle = getattr(app.state, "image_events_task", None)
+        if image_events_task_handle is not None:  # pragma: no branch -- shutdown of optional task
+            image_events_task_handle.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await image_events_task_handle
         await scheduler.stop()
         refresh_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):

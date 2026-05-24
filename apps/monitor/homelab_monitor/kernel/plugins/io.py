@@ -239,6 +239,18 @@ class MemoryRetainingMetricsWriter(InMemoryMetricsWriter):
         super().write_summary(name, value, labels)
         self._set_latest("summary", name, value, labels)
 
+    @property
+    def gauges(self) -> list[tuple[str, float, dict[str, str]]]:
+        """All gauge writes as (name, value, labels) tuples, in order."""
+        return [(e.name, e.value, e.labels) for e in self._entries if e.kind == "gauge"]
+
+    def last_gauge(self, name: str) -> float | None:
+        """Return the most-recently written value for gauge `name`, or None."""
+        for e in reversed(self._entries):
+            if e.kind == "gauge" and e.name == name:
+                return e.value
+        return None
+
     def replace_family(self, name: str, entries: list[tuple[float, dict[str, str]]]) -> None:
         """Wipe latest-value entries for ``name`` and replace with ``entries``.
 

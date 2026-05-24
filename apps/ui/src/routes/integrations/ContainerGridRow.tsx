@@ -2,6 +2,8 @@ import type { ContainerRow } from './types'
 import { StatusBadge, HealthcheckBadge } from './badges'
 import { extractComposeBasename } from './composeBasename'
 import { ProbesBadge } from './ProbesBadge'
+import { ImageUpdateBadge } from './ImageUpdateBadge'
+import { formatDigest } from '@/lib/digest'
 
 interface ContainerGridRowProps {
   container: ContainerRow
@@ -35,7 +37,9 @@ export function ContainerGridRow({ container }: ContainerGridRowProps) {
           ? container.restart_count_24h
           : '—'}
       </td>
-      <td className="px-3 py-2 text-xs text-muted-foreground">{container.image ?? '—'}</td>
+      <td className="px-3 py-2 text-xs text-muted-foreground" title={container.image ?? undefined}>
+        {formatDigest(container.image)}
+      </td>
       <td className="px-3 py-2 text-xs text-muted-foreground">
         {container.cpu_pct != null ? `${container.cpu_pct.toFixed(1)}%` : '—'}
       </td>
@@ -43,8 +47,7 @@ export function ContainerGridRow({ container }: ContainerGridRowProps) {
         {container.mem_mib != null ? `${container.mem_mib.toFixed(0)} MiB` : '—'}
       </td>
       <td className="px-3 py-2 text-xs text-muted-foreground">
-        {/* SCAFFOLDING: STAGE-003-008/009 populate image-update badges */}
-        {'—'}
+        <ImageUpdateBadge containerName={container.name} />
       </td>
       <td className="px-3 py-2 text-xs text-muted-foreground">
         {container.healthcheck ? <HealthcheckBadge status={container.healthcheck} /> : '—'}

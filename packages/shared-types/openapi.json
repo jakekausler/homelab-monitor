@@ -1651,6 +1651,186 @@
         "title": "HeartbeatStateOut",
         "type": "object"
       },
+      "ImageUpdateDetail": {
+        "properties": {
+          "check_error_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Check Error Reason"
+          },
+          "check_failed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Check Failed At"
+          },
+          "container_name": {
+            "title": "Container Name",
+            "type": "string"
+          },
+          "last_checked_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Checked At"
+          },
+          "last_image_ref": {
+            "title": "Last Image Ref",
+            "type": "string"
+          },
+          "last_local_digest": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Local Digest"
+          },
+          "last_registry_digest": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Registry Digest"
+          },
+          "update_available": {
+            "title": "Update Available",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "container_name",
+          "last_image_ref",
+          "update_available"
+        ],
+        "title": "ImageUpdateDetail",
+        "type": "object"
+      },
+      "ImageUpdateSummaryEntry": {
+        "properties": {
+          "available": {
+            "title": "Available",
+            "type": "boolean"
+          },
+          "check_error_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Check Error Reason"
+          },
+          "check_failed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Check Failed At"
+          },
+          "container_name": {
+            "title": "Container Name",
+            "type": "string"
+          },
+          "current_digest": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Digest"
+          },
+          "last_checked_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Checked At"
+          },
+          "latest_digest": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest Digest"
+          }
+        },
+        "required": [
+          "container_name",
+          "available"
+        ],
+        "title": "ImageUpdateSummaryEntry",
+        "type": "object"
+      },
+      "ImageUpdateSummaryResponse": {
+        "properties": {
+          "rate_limit_remaining_by_registry": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "default": {},
+            "title": "Rate Limit Remaining By Registry",
+            "type": "object"
+          },
+          "rate_limit_skipped_count": {
+            "default": 0,
+            "title": "Rate Limit Skipped Count",
+            "type": "integer"
+          },
+          "summaries": {
+            "items": {
+              "$ref": "#/components/schemas/ImageUpdateSummaryEntry"
+            },
+            "title": "Summaries",
+            "type": "array"
+          }
+        },
+        "required": [
+          "summaries"
+        ],
+        "title": "ImageUpdateSummaryResponse",
+        "type": "object"
+      },
       "IngestResponse": {
         "additionalProperties": false,
         "description": "Response for POST /api/alerts/ingest.",
@@ -4264,6 +4444,49 @@
         ]
       }
     },
+    "/api/integrations/docker/containers/{name}/image-update": {
+      "get": {
+        "description": "Per-container image-update detail (drill-down route).",
+        "operationId": "get_container_image_update_api_integrations_docker_containers__name__image_update_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImageUpdateDetail"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Container Image Update",
+        "tags": [
+          "docker"
+        ]
+      }
+    },
     "/api/integrations/docker/containers/{name}/probes": {
       "get": {
         "description": "List probes for one container. 404 if the container is unknown.",
@@ -4302,6 +4525,28 @@
           }
         },
         "summary": "List Container Probes",
+        "tags": [
+          "docker"
+        ]
+      }
+    },
+    "/api/integrations/docker/image-updates/summary": {
+      "get": {
+        "description": "Aggregate image-update state for the container grid badge + rate-limit banner.\n\nSibling of /probes/summary (D-SUMMARY-SIBLING-ENDPOINT).",
+        "operationId": "get_image_updates_summary_api_integrations_docker_image_updates_summary_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImageUpdateSummaryResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Image Updates Summary",
         "tags": [
           "docker"
         ]

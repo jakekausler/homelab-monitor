@@ -31,6 +31,14 @@ from ._uvicorn_fixture import (  # noqa: F401  -- pytest fixture re-export
     uvicorn_server,  # pyright: ignore[reportUnusedImport]
 )
 
+
+def make_engine() -> AsyncEngine:
+    """Return a fresh temp-file-backed async engine for migration tests."""
+    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)  # noqa: SIM115
+    tmp.close()
+    return get_engine(url=f"sqlite+aiosqlite:///{tmp.name}")
+
+
 TEST_USERNAME = "testuser"
 TEST_PASSWORD = "testpassword123"
 

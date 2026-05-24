@@ -951,3 +951,133 @@ async def test_exec_in_container_inspect_non_dict_payload_raises_protocol_error(
 
     with pytest.raises(DockerSocketProtocolError):
         await client.exec_in_container(container_id="c1", cmd="echo")
+
+
+# ============================================================================
+# image_inspect tests
+# ============================================================================
+
+
+@pytest.mark.asyncio
+async def test_image_inspect_returns_dict_on_200() -> None:
+    """image_inspect returns parsed dict on 200 + JSON dict."""
+    log = structlog.get_logger()
+
+    mock_response = AsyncMock()
+    mock_response.status_code = 200
+    mock_response.json = MagicMock(
+        return_value={
+            "Id": "sha256:abc123",
+            "RepoDigests": ["docker.io/library/postgres@sha256:def456"],
+            "Config": {"Env": []},
+        }
+    )
+
+    mock_http = AsyncMock(spec=httpx.AsyncClient)
+    mock_http.get.return_value = mock_response
+    client = DockerSocketClient(socket_path="/var/run/docker.sock", log=log, httpx_client=mock_http)
+
+    result = await client.image_inspect("sha256:abc123")
+
+    assert result is not None
+    assert result["Id"] == "sha256:abc123"
+    assert result["RepoDigests"] == ["docker.io/library/postgres@sha256:def456"]
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_image_inspect_returns_none_on_404() -> None:
+    """image_inspect returns None on 404 (container recently deleted)."""
+    log = structlog.get_logger()
+
+    mock_response = AsyncMock()
+    mock_response.status_code = 404
+    mock_response.text = "No such image"
+
+    mock_http = AsyncMock(spec=httpx.AsyncClient)
+    mock_http.get.return_value = mock_response
+    client = DockerSocketClient(socket_path="/var/run/docker.sock", log=log, httpx_client=mock_http)
+
+    result = await client.image_inspect("sha256:nonexistent")
+
+    assert result is None
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_image_inspect_raises_on_500() -> None:
+    """image_inspect raises DockerSocketProtocolError on 500."""
+    log = structlog.get_logger()
+
+    mock_response = AsyncMock()
+    mock_response.status_code = 500
+    mock_response.text = "Internal server error"
+
+    mock_http = AsyncMock(spec=httpx.AsyncClient)
+    mock_http.get.return_value = mock_response
+    client = DockerSocketClient(socket_path="/var/run/docker.sock", log=log, httpx_client=mock_http)
+
+    with pytest.raises(DockerSocketProtocolError) as exc_info:
+        await client.image_inspect("sha256:abc123")
+
+    assert "500" in str(exc_info.value)
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_image_inspect_raises_on_malformed_json() -> None:
+    """image_inspect raises DockerSocketProtocolError on malformed JSON."""
+    log = structlog.get_logger()
+
+    mock_response = AsyncMock()
+    mock_response.status_code = 200
+    mock_response.json = MagicMock(
+        side_effect=json.JSONDecodeError("Expecting value", doc="{bad", pos=0)
+    )
+
+    mock_http = AsyncMock(spec=httpx.AsyncClient)
+    mock_http.get.return_value = mock_response
+    client = DockerSocketClient(socket_path="/var/run/docker.sock", log=log, httpx_client=mock_http)
+
+    with pytest.raises(DockerSocketProtocolError) as exc_info:
+        await client.image_inspect("sha256:abc123")
+
+    assert "malformed JSON" in str(exc_info.value)
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_image_inspect_raises_on_non_dict_body() -> None:
+    """image_inspect raises DockerSocketProtocolError when body is not a dict."""
+    log = structlog.get_logger()
+
+    mock_response = AsyncMock()
+    mock_response.status_code = 200
+    mock_response.json = MagicMock(return_value=[{"unexpected": "list"}])
+
+    mock_http = AsyncMock(spec=httpx.AsyncClient)
+    mock_http.get.return_value = mock_response
+    client = DockerSocketClient(socket_path="/var/run/docker.sock", log=log, httpx_client=mock_http)
+
+    with pytest.raises(DockerSocketProtocolError) as exc_info:
+        await client.image_inspect("sha256:abc123")
+
+    assert "expected dict" in str(exc_info.value)
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_image_inspect_raises_on_connect_error() -> None:
+    """image_inspect raises DockerSocketConnectionError on connection error."""
+    log = structlog.get_logger()
+    socket_path = "/var/run/docker.sock"
+
+    mock_http = AsyncMock(spec=httpx.AsyncClient)
+    mock_http.get.side_effect = httpx.ConnectError("connection refused")
+    client = DockerSocketClient(socket_path=socket_path, log=log, httpx_client=mock_http)
+
+    with pytest.raises(DockerSocketConnectionError) as exc_info:
+        await client.image_inspect("sha256:abc123")
+
+    assert socket_path in str(exc_info.value)
+    await client.aclose()
