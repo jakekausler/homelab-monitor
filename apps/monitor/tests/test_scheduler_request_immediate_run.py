@@ -287,3 +287,92 @@ async def test_process_pool_executor_has_forkserver_context() -> None:
         assert pool._mp_context.get_start_method() == "forkserver"  # pyright: ignore[reportPrivateUsage]
     finally:
         await scheduler.stop()
+
+
+@pytest.mark.asyncio
+async def test_await_immediate_run_returns_collector_result() -> None:
+    """await_immediate_run waits for the tick to complete and returns CollectorResult."""
+    metrics = InMemoryMetricsWriter()
+    collector_cls = _make_collector("test", interval_ms=1000)
+    ctx_factory = _make_ctx_factory(metrics)
+    loaded = [LoadedCollector(config=CollectorConfig(name="test"), collector=collector_cls())]
+
+    scheduler = Scheduler(loaded, ctx_factory, metrics, SchedulerConfig())
+    await scheduler.start()
+
+    try:
+        await asyncio.sleep(0.1)  # Let scheduler initialize
+        result = await scheduler.await_immediate_run(
+            "test",
+            trigger=TriggerContext(kind="manual", request_id=None),
+            timeout=5.0,
+        )
+        # Should get the CollectorResult
+        assert result is not None
+        assert isinstance(result, CollectorResult)
+        assert result.ok is True
+    finally:
+        await scheduler.stop()
+
+
+@pytest.mark.asyncio
+async def test_await_immediate_run_timeout_returns_none() -> None:
+    """await_immediate_run returns None on timeout."""
+    metrics = InMemoryMetricsWriter()
+
+    # Create a collector that sleeps longer than the timeout
+    async def _slow_run(self: BaseCollector, ctx: CollectorContext) -> CollectorResult:
+        del self, ctx
+        await asyncio.sleep(2.0)
+        return CollectorResult(ok=True)
+
+    collector_cls = type(
+        "_TestCollectorSlow",
+        (BaseCollector,),
+        {
+            "name": "slow",
+            "interval": timedelta(milliseconds=10000),
+            "timeout": timedelta(milliseconds=10000),
+            "run_kind": RunKind.ASYNC,
+            "run": _slow_run,
+        },
+    )
+    ctx_factory = _make_ctx_factory(metrics)
+    loaded = [LoadedCollector(config=CollectorConfig(name="slow"), collector=collector_cls())]
+
+    scheduler = Scheduler(loaded, ctx_factory, metrics, SchedulerConfig())
+    await scheduler.start()
+
+    try:
+        await asyncio.sleep(0.1)
+        result = await scheduler.await_immediate_run(
+            "slow",
+            trigger=TriggerContext(kind="manual", request_id=None),
+            timeout=0.1,  # Very short timeout
+        )
+        # Should return None on timeout
+        assert result is None
+    finally:
+        await scheduler.stop()
+
+
+@pytest.mark.asyncio
+async def test_await_immediate_run_unknown_collector_raises() -> None:
+    """await_immediate_run raises KeyError for unknown collector."""
+    metrics = InMemoryMetricsWriter()
+    collector_cls = _make_collector("test", interval_ms=100)
+    ctx_factory = _make_ctx_factory(metrics)
+    loaded = [LoadedCollector(config=CollectorConfig(name="test"), collector=collector_cls())]
+
+    scheduler = Scheduler(loaded, ctx_factory, metrics, SchedulerConfig())
+    await scheduler.start()
+
+    try:
+        with pytest.raises(KeyError):
+            await scheduler.await_immediate_run(
+                "unknown",
+                trigger=TriggerContext(kind="manual"),
+                timeout=1.0,
+            )
+    finally:
+        await scheduler.stop()

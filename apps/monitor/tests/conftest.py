@@ -31,6 +31,8 @@ from ._uvicorn_fixture import (  # noqa: F401  -- pytest fixture re-export
     uvicorn_server,  # pyright: ignore[reportUnusedImport]
 )
 
+# Test HTTP isolation is provided by pytest-httpx (see _mock_vm_lifespan_tick); no stub needed.
+
 
 def make_engine() -> AsyncEngine:
     """Return a fresh temp-file-backed async engine for migration tests."""

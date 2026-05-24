@@ -102,6 +102,7 @@ describe('ContainerImageUpdatePage', () => {
       error: null,
       data: {
         container_name: 'postgres',
+        source: 'registry',
         last_local_digest: 'sha256:abc123',
         last_registry_digest: 'sha256:def456',
         last_image_ref: 'postgres:16',
@@ -130,6 +131,7 @@ describe('ContainerImageUpdatePage', () => {
       error: null,
       data: {
         container_name: 'nginx',
+        source: 'registry',
         last_local_digest: 'sha256:abc123',
         last_registry_digest: 'sha256:abc123',
         last_image_ref: 'nginx:latest',
@@ -151,6 +153,7 @@ describe('ContainerImageUpdatePage', () => {
       error: null,
       data: {
         container_name: 'postgres',
+        source: 'registry',
         last_local_digest: null,
         last_registry_digest: null,
         last_image_ref: 'postgres:16',
@@ -174,6 +177,7 @@ describe('ContainerImageUpdatePage', () => {
       error: null,
       data: {
         container_name: 'postgres',
+        source: 'registry',
         last_local_digest: 'sha256:abc123',
         last_registry_digest: 'sha256:abc123',
         last_image_ref: 'postgres:16',
@@ -203,10 +207,214 @@ describe('ContainerImageUpdatePage', () => {
         check_failed_at: null,
         check_error_reason: null,
         update_available: false,
+        source: 'registry',
       },
     } as unknown as ReturnType<typeof useImageUpdate>)
     renderWithRouter('postgres')
     const dashes = await screen.findAllByText('—')
     expect(dashes.length).toBeGreaterThan(0)
+  })
+
+  // ---- local_build source tests (STAGE-003-009) ----
+
+  it('renders local_build detail section when source=local_build', async () => {
+    vi.mocked(useImageUpdate).mockReturnValue({
+      isPending: false,
+      isFetching: false,
+      isLoading: false,
+      error: null,
+      data: {
+        container_name: 'udo-viewer',
+        source: 'local_build',
+        update_available: true,
+        compose_service: 'udo-viewer',
+        build_context_path: '/srv/compose/udo-viewer',
+        last_source_hash: 'abc123def456abc123def456abc123def456abc123def456abc123def456abc1',
+        last_checked_at: '2026-05-23T10:00:00Z',
+        check_failed_at: null,
+        check_error_reason: null,
+      },
+    } as unknown as ReturnType<typeof useImageUpdate>)
+    renderWithRouter('udo-viewer')
+    expect(await screen.findByText('Source')).toBeInTheDocument()
+    expect(await screen.findByText('Local build')).toBeInTheDocument()
+    expect(await screen.findByText('Compose service')).toBeInTheDocument()
+    expect(await screen.findByText('udo-viewer')).toBeInTheDocument()
+    expect(await screen.findByText('Build context path')).toBeInTheDocument()
+    expect(await screen.findByText('/srv/compose/udo-viewer')).toBeInTheDocument()
+    expect(await screen.findByText('Last source hash')).toBeInTheDocument()
+  })
+
+  it('renders source hash truncated via formatSourceHash for local_build', async () => {
+    const fullHash = 'abc123def456abc123def456abc123def456abc123def456abc123def456abc1'
+    vi.mocked(useImageUpdate).mockReturnValue({
+      isPending: false,
+      isFetching: false,
+      isLoading: false,
+      error: null,
+      data: {
+        container_name: 'udo-viewer',
+        source: 'local_build',
+        update_available: false,
+        compose_service: 'udo-viewer',
+        build_context_path: '/srv/compose/udo-viewer',
+        last_source_hash: fullHash,
+        last_checked_at: '2026-05-23T10:00:00Z',
+        check_failed_at: null,
+        check_error_reason: null,
+      },
+    } as unknown as ReturnType<typeof useImageUpdate>)
+    renderWithRouter('udo-viewer')
+    // The formatSourceHash should truncate to 12 chars + ellipsis
+    expect(await screen.findByText('abc123def456…')).toBeInTheDocument()
+  })
+
+  it('renders registry detail section when source=registry (regression)', async () => {
+    vi.mocked(useImageUpdate).mockReturnValue({
+      isPending: false,
+      isFetching: false,
+      isLoading: false,
+      error: null,
+      data: {
+        container_name: 'nginx',
+        source: 'registry',
+        update_available: false,
+        last_image_ref: 'nginx:latest',
+        last_local_digest: 'sha256:abc',
+        last_registry_digest: 'sha256:abc',
+        last_checked_at: '2026-05-23T10:00:00Z',
+        check_failed_at: null,
+        check_error_reason: null,
+      },
+    } as unknown as ReturnType<typeof useImageUpdate>)
+    renderWithRouter('nginx')
+    expect(await screen.findByText('Image ref')).toBeInTheDocument()
+    expect(await screen.findByText('nginx:latest')).toBeInTheDocument()
+    expect(await screen.findByText('Current digest')).toBeInTheDocument()
+    expect(await screen.findByText('Latest digest')).toBeInTheDocument()
+  })
+
+  it('does not render registry section when source=local_build', async () => {
+    vi.mocked(useImageUpdate).mockReturnValue({
+      isPending: false,
+      isFetching: false,
+      isLoading: false,
+      error: null,
+      data: {
+        container_name: 'udo-viewer',
+        source: 'local_build',
+        update_available: false,
+        compose_service: 'udo-viewer',
+        build_context_path: '/srv/compose/udo-viewer',
+        last_source_hash: 'abc123',
+        last_checked_at: '2026-05-23T10:00:00Z',
+        check_failed_at: null,
+        check_error_reason: null,
+      },
+    } as unknown as ReturnType<typeof useImageUpdate>)
+    renderWithRouter('udo-viewer')
+    await screen.findByText('Source')
+    expect(screen.queryByText('Image ref')).not.toBeInTheDocument()
+    expect(screen.queryByText('Current digest')).not.toBeInTheDocument()
+  })
+
+  // ---- baseline_source_hash display tests (STAGE-003-009 refinement fix) ----
+
+  it('renders Baseline hash row when source=local_build, update_available=true, baseline differs from current', async () => {
+    vi.mocked(useImageUpdate).mockReturnValue({
+      isPending: false,
+      isFetching: false,
+      isLoading: false,
+      error: null,
+      data: {
+        container_name: 'udo-viewer',
+        source: 'local_build',
+        update_available: true,
+        compose_service: 'udo-viewer',
+        build_context_path: '/srv/compose/udo-viewer',
+        last_source_hash: 'newhashabcdef123456',
+        baseline_source_hash: 'baselineabc123def456',
+        last_checked_at: '2026-05-23T10:00:00Z',
+        check_failed_at: null,
+        check_error_reason: null,
+      },
+    } as unknown as ReturnType<typeof useImageUpdate>)
+    renderWithRouter('udo-viewer')
+    expect(await screen.findByText('Baseline source hash')).toBeInTheDocument()
+    // formatSourceHash truncates to 12 chars + ellipsis
+    expect(await screen.findByText('baselineabc1…')).toBeInTheDocument()
+  })
+
+  it('does NOT render Baseline hash row when source=local_build and update_available=false', async () => {
+    vi.mocked(useImageUpdate).mockReturnValue({
+      isPending: false,
+      isFetching: false,
+      isLoading: false,
+      error: null,
+      data: {
+        container_name: 'udo-viewer',
+        source: 'local_build',
+        update_available: false,
+        compose_service: 'udo-viewer',
+        build_context_path: '/srv/compose/udo-viewer',
+        last_source_hash: 'abc123def456',
+        baseline_source_hash: 'abc123def456',
+        last_checked_at: '2026-05-23T10:00:00Z',
+        check_failed_at: null,
+        check_error_reason: null,
+      },
+    } as unknown as ReturnType<typeof useImageUpdate>)
+    renderWithRouter('udo-viewer')
+    await screen.findByText('Source')
+    expect(screen.queryByText('Baseline source hash')).not.toBeInTheDocument()
+  })
+
+  it('does NOT render Baseline hash row when update_available=true but baseline equals current (defensive)', async () => {
+    const sameHash = 'abc123def456abc123def456'
+    vi.mocked(useImageUpdate).mockReturnValue({
+      isPending: false,
+      isFetching: false,
+      isLoading: false,
+      error: null,
+      data: {
+        container_name: 'udo-viewer',
+        source: 'local_build',
+        update_available: true,
+        compose_service: 'udo-viewer',
+        build_context_path: '/srv/compose/udo-viewer',
+        last_source_hash: sameHash,
+        baseline_source_hash: sameHash,
+        last_checked_at: '2026-05-23T10:00:00Z',
+        check_failed_at: null,
+        check_error_reason: null,
+      },
+    } as unknown as ReturnType<typeof useImageUpdate>)
+    renderWithRouter('udo-viewer')
+    await screen.findByText('Source')
+    expect(screen.queryByText('Baseline source hash')).not.toBeInTheDocument()
+  })
+
+  it('does NOT render Baseline hash row when update_available=true but baseline_source_hash is null (defensive)', async () => {
+    vi.mocked(useImageUpdate).mockReturnValue({
+      isPending: false,
+      isFetching: false,
+      isLoading: false,
+      error: null,
+      data: {
+        container_name: 'udo-viewer',
+        source: 'local_build',
+        update_available: true,
+        compose_service: 'udo-viewer',
+        build_context_path: '/srv/compose/udo-viewer',
+        last_source_hash: 'newhashabc123',
+        baseline_source_hash: null,
+        last_checked_at: '2026-05-23T10:00:00Z',
+        check_failed_at: null,
+        check_error_reason: null,
+      },
+    } as unknown as ReturnType<typeof useImageUpdate>)
+    renderWithRouter('udo-viewer')
+    await screen.findByText('Source')
+    expect(screen.queryByText('Baseline source hash')).not.toBeInTheDocument()
   })
 })

@@ -163,11 +163,15 @@ const IMAGE_UPDATE_DETAIL_REFETCH_INTERVAL_MS = 30_000
 export type ImageUpdateSummaryEntry = {
   container_name: string
   available: boolean
+  source: 'registry' | 'local_build'
   current_digest?: string | null
   latest_digest?: string | null
   last_checked_at?: string | null
   check_failed_at?: string | null
   check_error_reason?: string | null
+  compose_service?: string | null
+  build_context_path?: string | null
+  last_source_hash?: string | null
 }
 
 export type ImageUpdateSummary = {
@@ -184,15 +188,21 @@ export function useImageUpdatesSummary() {
       const payload = unwrap<ImageUpdateSummaryResponse>(result)
       const byContainer: Record<string, ImageUpdateSummaryEntry> = {}
       for (const entry of payload.summaries) {
-        byContainer[entry.container_name] = {
-          container_name: entry.container_name,
-          available: entry.available,
-          current_digest: entry.current_digest ?? null,
-          latest_digest: entry.latest_digest ?? null,
-          last_checked_at: entry.last_checked_at ?? null,
-          check_failed_at: entry.check_failed_at ?? null,
-          check_error_reason: entry.check_error_reason ?? null,
+        const source = String(entry.source) === 'local_build' ? 'local_build' : 'registry'
+        const mapped: ImageUpdateSummaryEntry = {
+          container_name: String(entry.container_name),
+          available: Boolean(entry.available),
+          source,
+          current_digest: entry.current_digest ? String(entry.current_digest) : null,
+          latest_digest: entry.latest_digest ? String(entry.latest_digest) : null,
+          last_checked_at: entry.last_checked_at ? String(entry.last_checked_at) : null,
+          check_failed_at: entry.check_failed_at ? String(entry.check_failed_at) : null,
+          check_error_reason: entry.check_error_reason ? String(entry.check_error_reason) : null,
+          compose_service: entry.compose_service ? String(entry.compose_service) : null,
+          build_context_path: entry.build_context_path ? String(entry.build_context_path) : null,
+          last_source_hash: entry.last_source_hash ? String(entry.last_source_hash) : null,
         }
+        byContainer[mapped.container_name] = mapped
       }
       return {
         byContainer,

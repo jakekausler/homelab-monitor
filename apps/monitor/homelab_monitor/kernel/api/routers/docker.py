@@ -15,6 +15,10 @@ from pydantic import BaseModel, ConfigDict
 
 from homelab_monitor.kernel.api.dependencies import get_repo, require_session
 from homelab_monitor.kernel.auth.models import User
+from homelab_monitor.kernel.db.repositories.docker_build_hashes_repository import (
+    DockerBuildHashesRepository,
+    DockerBuildHashRow,
+)
 from homelab_monitor.kernel.db.repositories.image_update_state_repository import (
     ImageUpdateStateRepository,
     ImageUpdateStateRow,
@@ -425,11 +429,17 @@ class ImageUpdateSummaryEntry(BaseModel):
 
     container_name: str
     available: bool
+    source: Literal["registry", "local_build"] = "registry"
+    # Registry-source fields (unchanged):
     current_digest: str | None = None
     latest_digest: str | None = None
     last_checked_at: str | None = None
     check_failed_at: str | None = None
     check_error_reason: str | None = None
+    # Local-build-source fields (D-SUMMARY-SIBLING-ENDPOINT extension):
+    compose_service: str | None = None
+    build_context_path: str | None = None
+    last_source_hash: str | None = None
 
 
 class ImageUpdateSummaryResponse(BaseModel):
@@ -444,13 +454,20 @@ class ImageUpdateDetail(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     container_name: str
+    source: Literal["registry", "local_build"] = "registry"
+    update_available: bool
+    # Registry-source fields:
     last_local_digest: str | None = None
     last_registry_digest: str | None = None
-    last_image_ref: str
+    last_image_ref: str | None = None
     last_checked_at: str | None = None
     check_failed_at: str | None = None
     check_error_reason: str | None = None
-    update_available: bool
+    # Local-build fields:
+    compose_service: str | None = None
+    build_context_path: str | None = None
+    last_source_hash: str | None = None
+    baseline_source_hash: str | None = None
 
 
 def _get_image_update_state_repo(
@@ -459,33 +476,67 @@ def _get_image_update_state_repo(
     return ImageUpdateStateRepository(repo)
 
 
+def _get_docker_build_hashes_repo(
+    repo: Annotated[SqliteRepository, Depends(get_repo)],
+) -> DockerBuildHashesRepository:
+    return DockerBuildHashesRepository(repo)
+
+
 @router.get("/image-updates/summary", response_model=ImageUpdateSummaryResponse)
 async def get_image_updates_summary(
     request: Request,
     _user: Annotated[User, Depends(require_session())],
     state_repo: Annotated[ImageUpdateStateRepository, Depends(_get_image_update_state_repo)],
+    build_repo: Annotated[DockerBuildHashesRepository, Depends(_get_docker_build_hashes_repo)],
 ) -> ImageUpdateSummaryResponse:
-    """Aggregate image-update state for the container grid badge + rate-limit banner.
+    """Aggregate image-update state across registry + local-build sources.
 
-    Sibling of /probes/summary (D-SUMMARY-SIBLING-ENDPOINT).
+    D-SUMMARY-SIBLING-ENDPOINT extension: returns BOTH registry and
+    local-build entries in a single list. Each entry carries `source` to
+    discriminate. Rate-limit fields apply ONLY to registry source.
+    Local-build presence supersedes registry for the SAME container_name
+    (a container with both image: and build: in compose is a local build).
     """
-    rows = await state_repo.list_all()
-    collector = getattr(request.app.state, "image_update_collector", None)
-    skipped_count = collector.current_skipped_count() if collector is not None else 0
-    remaining_view = dict(collector.current_rate_limit_remaining()) if collector is not None else {}
-    return ImageUpdateSummaryResponse(
-        summaries=[
+    registry_rows = await state_repo.list_all()
+    build_rows = await build_repo.list_all()
+    build_names = {r.container_name for r in build_rows}
+
+    summaries: list[ImageUpdateSummaryEntry] = []
+    for r in registry_rows:
+        if r.container_name in build_names:
+            continue  # local-build wins
+        summaries.append(
             ImageUpdateSummaryEntry(
                 container_name=r.container_name,
                 available=r.update_available,
+                source="registry",
                 current_digest=r.last_local_digest,
                 latest_digest=r.last_registry_digest,
                 last_checked_at=r.last_checked_at,
                 check_failed_at=r.check_failed_at,
                 check_error_reason=r.check_error_reason,
             )
-            for r in rows
-        ],
+        )
+    for b in build_rows:
+        summaries.append(
+            ImageUpdateSummaryEntry(
+                container_name=b.container_name,
+                available=b.update_available,
+                source="local_build",
+                compose_service=b.compose_service,
+                build_context_path=b.build_context_path,
+                last_source_hash=b.last_source_hash,
+                last_checked_at=b.last_checked_at,
+                check_failed_at=b.check_failed_at,
+                check_error_reason=b.check_error_reason,
+            )
+        )
+
+    collector = getattr(request.app.state, "image_update_collector", None)
+    skipped_count = collector.current_skipped_count() if collector is not None else 0
+    remaining_view = dict(collector.current_rate_limit_remaining()) if collector is not None else {}
+    return ImageUpdateSummaryResponse(
+        summaries=summaries,
         rate_limit_skipped_count=skipped_count,
         rate_limit_remaining_by_registry=remaining_view,
     )
@@ -499,8 +550,24 @@ async def get_container_image_update(
     name: str,
     _user: Annotated[User, Depends(require_session())],
     state_repo: Annotated[ImageUpdateStateRepository, Depends(_get_image_update_state_repo)],
+    build_repo: Annotated[DockerBuildHashesRepository, Depends(_get_docker_build_hashes_repo)],
 ) -> ImageUpdateDetail:
-    """Per-container image-update detail (drill-down route)."""
+    """Per-container image-update detail; local-build supersedes registry."""
+    build_row: DockerBuildHashRow | None = await build_repo.get_by_container(name)
+    if build_row is not None:
+        return ImageUpdateDetail(
+            container_name=build_row.container_name,
+            source="local_build",
+            update_available=build_row.update_available,
+            compose_service=build_row.compose_service,
+            build_context_path=build_row.build_context_path,
+            last_source_hash=build_row.last_source_hash,
+            baseline_source_hash=build_row.baseline_source_hash,
+            last_checked_at=build_row.last_checked_at,
+            check_failed_at=build_row.check_failed_at,
+            check_error_reason=build_row.check_error_reason,
+        )
+
     row: ImageUpdateStateRow | None = await state_repo.get_by_container(name)
     if row is None:
         raise HTTPException(
@@ -509,11 +576,12 @@ async def get_container_image_update(
         )
     return ImageUpdateDetail(
         container_name=row.container_name,
+        source="registry",
+        update_available=row.update_available,
         last_local_digest=row.last_local_digest,
         last_registry_digest=row.last_registry_digest,
         last_image_ref=row.last_image_ref,
         last_checked_at=row.last_checked_at,
         check_failed_at=row.check_failed_at,
         check_error_reason=row.check_error_reason,
-        update_available=row.update_available,
     )

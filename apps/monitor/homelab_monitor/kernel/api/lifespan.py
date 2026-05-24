@@ -355,6 +355,30 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
         )
         degraded.append("image_update_checker")
 
+    # ------------------------------------------------------------------
+    # STAGE-003-009: LocalBuildUpdateCollector
+    # ------------------------------------------------------------------
+    try:
+        from homelab_monitor.kernel.metrics.local_build_update_collector import (  # noqa: PLC0415
+            LocalBuildUpdateCollector,
+        )
+
+        loader.register(
+            LocalBuildUpdateCollector,
+            {
+                "name": "local_build_update_checker",
+                "interval_seconds": int(LocalBuildUpdateCollector.interval.total_seconds()),
+                "timeout_seconds": int(LocalBuildUpdateCollector.timeout.total_seconds()),
+            },
+        )
+    except Exception as exc:  # pragma: no cover -- defensive
+        log.warning(
+            "lifespan.collector_register_failed",
+            name="local_build_update_checker",
+            error=str(exc),
+        )
+        degraded.append("local_build_update_checker")
+
     plugins_env = os.environ.get("HOMELAB_MONITOR_PLUGINS_DIR")
     if plugins_env is not None:
         plugins_dir: Path | None = Path(plugins_env)
@@ -435,6 +459,29 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
             log=bound_log,  # pyright: ignore[reportArgumentType]
             ha=None,
         )
+
+    # 7f. BuildSourcesLoader — STAGE-003-009 generic config (scope expansion).
+    # Constructed before collector iteration so LocalBuildUpdateCollector can wire it.
+    from homelab_monitor.kernel.docker.build_sources_loader import (  # noqa: PLC0415
+        BuildSourcesLoader,
+    )
+
+    build_sources_config_path = Path(
+        os.environ.get(
+            "HOMELAB_MONITOR_BUILD_SOURCES_CONFIG_PATH",
+            "/config/docker/build-sources.yaml",
+        )
+    )
+    build_sources_loader = BuildSourcesLoader(
+        config_path=build_sources_config_path,
+        log=log,
+    )
+    try:
+        await build_sources_loader.refresh()
+    except Exception as exc:  # pragma: no cover -- defensive
+        log.warning("lifespan.build_sources_loader_initial_refresh_failed", error=str(exc))
+    build_sources_loader.start_task()
+    app.state.build_sources_loader = build_sources_loader
 
     collectors = loader.load_all()
     # TODO(refactor): inject log_stream_state via CollectorContext rather
@@ -544,6 +591,33 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
             )
             c._state_repo = ImageUpdateStateRepository(repo)  # pyright: ignore[reportPrivateUsage]
             app.state.image_update_collector = c
+        from homelab_monitor.kernel.metrics.local_build_update_collector import (  # noqa: PLC0415
+            LocalBuildUpdateCollector,
+        )
+
+        if isinstance(c, LocalBuildUpdateCollector):
+            from homelab_monitor.kernel.db.repositories.docker_build_hashes_repository import (  # noqa: PLC0415
+                DockerBuildHashesRepository,
+            )
+            from homelab_monitor.kernel.docker.source_hash import (  # noqa: PLC0415
+                SourceHashLimits,
+            )
+
+            c._db = repo  # pyright: ignore[reportPrivateUsage]
+            c._socket_client = getattr(app.state, "docker_socket_client", None)  # pyright: ignore[reportPrivateUsage]
+            c._build_hashes_repo = DockerBuildHashesRepository(repo)  # pyright: ignore[reportPrivateUsage]
+            compose_dir_env = os.environ.get("HOMELAB_MONITOR_COMPOSE_DIR")
+            if compose_dir_env:  # pragma: no cover -- env-var-set branch validated via dev rig (3a)
+                c._compose_dir = Path(compose_dir_env)  # pyright: ignore[reportPrivateUsage]
+            else:
+                c._compose_dir = None  # pyright: ignore[reportPrivateUsage]
+                log.info(
+                    "lifespan.local_build_compose_dir_unset",
+                    hint="set HOMELAB_MONITOR_COMPOSE_DIR to enable",
+                )
+            c._limits = SourceHashLimits.from_env()  # pyright: ignore[reportPrivateUsage]
+            c._build_sources_loader = build_sources_loader  # pyright: ignore[reportPrivateUsage]
+            app.state.local_build_update_collector = c
     scheduler = Scheduler(
         collectors,
         ctx_factory,
@@ -727,6 +801,34 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
                 error=str(exc),
             )
 
+    if "image_update_checker" not in degraded:  # pragma: no branch -- always registered
+        try:
+            await scheduler.await_immediate_run(
+                "image_update_checker",
+                trigger=TriggerContext(kind="manual", request_id=None),
+                timeout=30.0,
+            )
+            log.info("lifespan.image_update_checker_startup_run_completed")
+        except Exception as exc:  # pragma: no cover -- defensive
+            log.warning(
+                "lifespan.image_update_checker_startup_run_failed",
+                error=str(exc),
+            )
+
+    if "local_build_update_checker" not in degraded:  # pragma: no branch -- always registered
+        try:
+            await scheduler.await_immediate_run(
+                "local_build_update_checker",
+                trigger=TriggerContext(kind="manual", request_id=None),
+                timeout=30.0,
+            )
+            log.info("lifespan.local_build_update_checker_startup_run_completed")
+        except Exception as exc:  # pragma: no cover -- defensive
+            log.warning(
+                "lifespan.local_build_update_checker_startup_run_failed",
+                error=str(exc),
+            )
+
     app.state.master_key = master_key
     app.state.auth_repo = auth_repo
     app.state.secrets_repo = secrets_repo
@@ -842,6 +944,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
         override_loader_handle = getattr(app.state, "override_loader", None)
         if override_loader_handle is not None:  # pragma: no branch
             await override_loader_handle.stop_task()
+        build_sources_loader_handle = getattr(app.state, "build_sources_loader", None)
+        if build_sources_loader_handle is not None:  # pragma: no branch
+            await build_sources_loader_handle.stop_task()
         # Stop ProbeSupervisor per-container tasks before scheduler shutdown
         supervisor = getattr(app.state, "probe_supervisor", None)
         if supervisor is not None:  # pragma: no branch — defensive degraded-collector guard

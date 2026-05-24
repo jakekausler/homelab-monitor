@@ -313,3 +313,191 @@ async def test_per_container_unauthenticated_returns_401(
         "/api/integrations/docker/containers/anyname/image-update"
     )
     assert response.status_code == HTTP_UNAUTHORIZED
+
+
+# ---- LOCAL-BUILD EXTENSION TESTS (STAGE-003-009) ----
+
+
+async def _seed_docker_build_hash(  # noqa: PLR0913 -- test-only helper
+    repo: SqliteRepository,
+    *,
+    container_name: str,
+    compose_service: str = "myapp",
+    build_context_path: str = "/srv/compose/myapp",
+    last_source_hash: str | None = "abc123hash",
+    update_available: bool = False,
+    last_checked_at: str | None = None,
+    check_failed_at: str | None = None,
+    check_error_reason: str | None = None,
+    baseline_source_hash: str | None = None,
+    baseline_image_id: str | None = None,
+) -> None:
+    """Test helper: seed a docker_build_hashes row."""
+    from homelab_monitor.kernel.db.repositories.docker_build_hashes_repository import (  # noqa: PLC0415
+        DockerBuildHashesRepository,
+    )
+
+    now = utc_now_iso()
+    async with repo.transaction() as conn:
+        await DockerBuildHashesRepository.upsert_conn(
+            conn,
+            container_name=container_name,
+            compose_service=compose_service,
+            build_context_path=build_context_path,
+            last_source_hash=last_source_hash,
+            last_checked_at=last_checked_at or now,
+            check_failed_at=check_failed_at,
+            check_error_reason=check_error_reason,
+            update_available=update_available,
+            baseline_source_hash=baseline_source_hash,
+            baseline_image_id=baseline_image_id,
+        )
+
+
+@pytest.mark.asyncio
+async def test_summary_local_build_row_appears_with_source_discriminator(
+    authenticated_client: AsyncClient, repo: SqliteRepository
+) -> None:
+    """Summary returns local_build rows with source='local_build' discriminator."""
+    await _seed_docker_build_hash(repo, container_name="udo-viewer", update_available=True)
+
+    response = await authenticated_client.get("/api/integrations/docker/image-updates/summary")
+    assert response.status_code == HTTP_OK
+    data = response.json()
+    entries = {e["container_name"]: e for e in data["summaries"]}
+
+    assert "udo-viewer" in entries
+    assert entries["udo-viewer"]["source"] == "local_build"
+    assert entries["udo-viewer"]["available"] is True
+
+
+@pytest.mark.asyncio
+async def test_summary_local_build_wins_over_registry_for_same_container(
+    authenticated_client: AsyncClient, repo: SqliteRepository
+) -> None:
+    """When container has both registry and build-hash rows, local_build wins."""
+    # Seed both repos for the same container
+    await _seed_image_update_state(repo, container_name="myapp", update_available=False)
+    await _seed_docker_build_hash(repo, container_name="myapp", update_available=True)
+
+    response = await authenticated_client.get("/api/integrations/docker/image-updates/summary")
+    assert response.status_code == HTTP_OK
+    data = response.json()
+    entries = {e["container_name"]: e for e in data["summaries"]}
+
+    # myapp should appear exactly once, as local_build
+    myapp_entries = [e for e in data["summaries"] if e["container_name"] == "myapp"]
+    assert len(myapp_entries) == 1
+    assert myapp_entries[0]["source"] == "local_build"
+    assert myapp_entries[0]["available"] is True
+    assert "udo-viewer" not in entries  # only myapp seeded in build hashes
+
+
+@pytest.mark.asyncio
+async def test_summary_registry_and_local_build_coexist_for_different_containers(
+    authenticated_client: AsyncClient, repo: SqliteRepository
+) -> None:
+    """Registry-source and local_build-source rows for different containers both appear."""
+    await _seed_image_update_state(repo, container_name="nginx-registry")
+    await _seed_docker_build_hash(repo, container_name="udo-viewer")
+
+    response = await authenticated_client.get("/api/integrations/docker/image-updates/summary")
+    assert response.status_code == HTTP_OK
+    data = response.json()
+    entries = {e["container_name"]: e for e in data["summaries"]}
+
+    assert entries["nginx-registry"]["source"] == "registry"
+    assert entries["udo-viewer"]["source"] == "local_build"
+
+
+@pytest.mark.asyncio
+async def test_per_container_local_build_row_returns_local_build_detail(
+    authenticated_client: AsyncClient, repo: SqliteRepository
+) -> None:
+    """Per-container detail returns source='local_build' with local-build.
+
+    Fields include baseline.
+    """
+    now = utc_now_iso()
+    await _seed_docker_build_hash(
+        repo,
+        container_name="udo-viewer",
+        compose_service="udo-viewer",
+        build_context_path="/srv/compose/udo-viewer",
+        last_source_hash="deadbeef123456",
+        update_available=True,
+        last_checked_at=now,
+        baseline_source_hash="hash-base-abc",
+        baseline_image_id="sha256:img1",
+    )
+
+    response = await authenticated_client.get(
+        "/api/integrations/docker/containers/udo-viewer/image-update"
+    )
+    assert response.status_code == HTTP_OK
+    data = response.json()
+    assert data["container_name"] == "udo-viewer"
+    assert data["source"] == "local_build"
+    assert data["update_available"] is True
+    assert data["compose_service"] == "udo-viewer"
+    assert data["build_context_path"] == "/srv/compose/udo-viewer"
+    assert data["last_source_hash"] == "deadbeef123456"
+    assert data["baseline_source_hash"] == "hash-base-abc"
+
+
+@pytest.mark.asyncio
+async def test_per_container_only_registry_row_returns_registry_source(
+    authenticated_client: AsyncClient, repo: SqliteRepository
+) -> None:
+    """Per-container detail returns source='registry' when only registry row exists."""
+    await _seed_image_update_state(
+        repo,
+        container_name="nginx",
+        last_image_ref="nginx:latest",
+        update_available=False,
+    )
+
+    response = await authenticated_client.get(
+        "/api/integrations/docker/containers/nginx/image-update"
+    )
+    assert response.status_code == HTTP_OK
+    data = response.json()
+    assert data["source"] == "registry"
+    assert data["last_image_ref"] == "nginx:latest"
+
+
+@pytest.mark.asyncio
+async def test_per_container_local_build_supersedes_registry_row(
+    authenticated_client: AsyncClient, repo: SqliteRepository
+) -> None:
+    """Per-container detail returns local_build even when registry row also exists."""
+    await _seed_image_update_state(repo, container_name="myapp", update_available=False)
+    await _seed_docker_build_hash(repo, container_name="myapp", update_available=True)
+
+    response = await authenticated_client.get(
+        "/api/integrations/docker/containers/myapp/image-update"
+    )
+    assert response.status_code == HTTP_OK
+    data = response.json()
+    assert data["source"] == "local_build"
+    assert data["update_available"] is True
+
+
+@pytest.mark.asyncio
+async def test_per_container_neither_row_returns_404(
+    authenticated_client: AsyncClient,
+) -> None:
+    """Per-container returns 404 when neither registry nor build-hash row exists."""
+    response = await authenticated_client.get(
+        "/api/integrations/docker/containers/ghost/image-update"
+    )
+    assert response.status_code == HTTP_NOT_FOUND
+
+
+@pytest.mark.asyncio
+async def test_summary_auth_still_enforced_for_local_build(
+    unauthenticated_client: AsyncClient,
+) -> None:
+    """Summary endpoint still requires auth even with local-build rows."""
+    response = await unauthenticated_client.get("/api/integrations/docker/image-updates/summary")
+    assert response.status_code == HTTP_UNAUTHORIZED

@@ -1,0 +1,25 @@
+# /config/docker/build-sources.yaml example (STAGE-003-009).
+#
+# When this file exists, it supersedes HOMELAB_MONITOR_COMPOSE_DIR.
+# On the host, place it at:
+#   ${HOMELAB_MONITOR_OVERRIDES_DIR:-/var/lib/homelab-monitor/overrides}/docker/build-sources.yaml
+# Container reads it at /config/docker/build-sources.yaml.
+# Hot-reloads every 30s; no restart needed.
+
+# REQUIRED: 1+ compose files. host_path is informational; container_path is
+# what's read (must be reachable via a docker-compose volume mount).
+compose_files:
+  - host_path: /storage/docker/compose/docker-compose.yml
+    container_path: /host-compose/docker-compose.yml
+  # Later files override earlier ones (same as `docker compose -f a -f b`).
+  # - host_path: /storage/docker/compose/docker-compose.override.yml
+  #   container_path: /host-compose/docker-compose.override.yml
+
+# OPTIONAL: remap rules. Any absolute host path starting with host_prefix is
+# rewritten with container_prefix when read from inside the container.
+# First-match-wins. No match → check_error_reason=context_missing.
+# Mounts for these rules are operator-managed via HOMELAB_MONITOR_BUILD_CONTEXTS_DIR
+# (single bind) or a custom docker-compose.override.yml (multiple binds).
+build_context_roots:
+  - host_prefix: /storage/programs
+    container_prefix: /host-build-contexts/programs

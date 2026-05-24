@@ -48,6 +48,7 @@ EXPECTED_TABLES = {
     "cron_runs",
     "probe_targets",
     "docker_override_ownership",
+    "docker_build_hashes",
     "image_update_state",
 }
 

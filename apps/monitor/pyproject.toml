@@ -19,6 +19,7 @@ dependencies = [
     "psutil>=6.1",
     "uuid-utils>=0.10",
     "pyyaml>=6.0.3",
+    "pathspec>=0.12,<1.0",
     "croniter>=2.0.0",
 ]
 

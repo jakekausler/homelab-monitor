@@ -1653,6 +1653,28 @@
       },
       "ImageUpdateDetail": {
         "properties": {
+          "baseline_source_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Baseline Source Hash"
+          },
+          "build_context_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Build Context Path"
+          },
           "check_error_reason": {
             "anyOf": [
               {
@@ -1675,6 +1697,17 @@
             ],
             "title": "Check Failed At"
           },
+          "compose_service": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Compose Service"
+          },
           "container_name": {
             "title": "Container Name",
             "type": "string"
@@ -1691,8 +1724,15 @@
             "title": "Last Checked At"
           },
           "last_image_ref": {
-            "title": "Last Image Ref",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Image Ref"
           },
           "last_local_digest": {
             "anyOf": [
@@ -1716,6 +1756,26 @@
             ],
             "title": "Last Registry Digest"
           },
+          "last_source_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Source Hash"
+          },
+          "source": {
+            "default": "registry",
+            "enum": [
+              "registry",
+              "local_build"
+            ],
+            "title": "Source",
+            "type": "string"
+          },
           "update_available": {
             "title": "Update Available",
             "type": "boolean"
@@ -1723,7 +1783,6 @@
         },
         "required": [
           "container_name",
-          "last_image_ref",
           "update_available"
         ],
         "title": "ImageUpdateDetail",
@@ -1734,6 +1793,17 @@
           "available": {
             "title": "Available",
             "type": "boolean"
+          },
+          "build_context_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Build Context Path"
           },
           "check_error_reason": {
             "anyOf": [
@@ -1756,6 +1826,17 @@
               }
             ],
             "title": "Check Failed At"
+          },
+          "compose_service": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Compose Service"
           },
           "container_name": {
             "title": "Container Name",
@@ -1783,6 +1864,17 @@
             ],
             "title": "Last Checked At"
           },
+          "last_source_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Source Hash"
+          },
           "latest_digest": {
             "anyOf": [
               {
@@ -1793,6 +1885,15 @@
               }
             ],
             "title": "Latest Digest"
+          },
+          "source": {
+            "default": "registry",
+            "enum": [
+              "registry",
+              "local_build"
+            ],
+            "title": "Source",
+            "type": "string"
           }
         },
         "required": [
@@ -4446,7 +4547,7 @@
     },
     "/api/integrations/docker/containers/{name}/image-update": {
       "get": {
-        "description": "Per-container image-update detail (drill-down route).",
+        "description": "Per-container image-update detail; local-build supersedes registry.",
         "operationId": "get_container_image_update_api_integrations_docker_containers__name__image_update_get",
         "parameters": [
           {
@@ -4532,7 +4633,7 @@
     },
     "/api/integrations/docker/image-updates/summary": {
       "get": {
-        "description": "Aggregate image-update state for the container grid badge + rate-limit banner.\n\nSibling of /probes/summary (D-SUMMARY-SIBLING-ENDPOINT).",
+        "description": "Aggregate image-update state across registry + local-build sources.\n\nD-SUMMARY-SIBLING-ENDPOINT extension: returns BOTH registry and\nlocal-build entries in a single list. Each entry carries `source` to\ndiscriminate. Rate-limit fields apply ONLY to registry source.\nLocal-build presence supersedes registry for the SAME container_name\n(a container with both image: and build: in compose is a local build).",
         "operationId": "get_image_updates_summary_api_integrations_docker_image_updates_summary_get",
         "responses": {
           "200": {

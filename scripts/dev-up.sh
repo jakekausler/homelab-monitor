@@ -197,6 +197,46 @@ clean_existing() {
 ensure_data_dirs() {
   mkdir -p "${LOG_DIR}"
   mkdir -p /tmp/hm-dev/backup /tmp/hm-dev/runbook-transcripts
+  # STAGE-003-009: seed a minimal compose dir so LocalBuildUpdateCollector
+  # has a build: service to hash. The fake container won't actually be
+  # running, but the compose-reader path is exercised + the
+  # compose_readable gauge flips to 1.
+  mkdir -p /tmp/hm-dev/compose/udo-viewer
+  if [[ ! -f /tmp/hm-dev/compose/docker-compose.yml ]]; then
+    cat > /tmp/hm-dev/compose/docker-compose.yml <<'EOF'
+# Dev rig seed compose for STAGE-003-009.
+# Not actually deployed — used only to exercise the compose reader +
+# source-hasher collector path.
+services:
+  udo-viewer:
+    container_name: udo-viewer
+    build:
+      context: ./udo-viewer
+      dockerfile: Dockerfile
+    profiles: ["disabled"]
+EOF
+  fi
+  if [[ ! -f /tmp/hm-dev/compose/udo-viewer/Dockerfile ]]; then
+    cat > /tmp/hm-dev/compose/udo-viewer/Dockerfile <<'EOF'
+FROM alpine:3.20
+RUN echo "udo-viewer dev seed" > /etc/udo-viewer-version
+CMD ["sleep", "infinity"]
+EOF
+  fi
+  # STAGE-003-009 (scope expansion): seed build-sources YAML so the dev rig
+  # exercises the loader path alongside the env-var fallback.
+  mkdir -p /tmp/hm-dev/config/docker
+  if [[ ! -f /tmp/hm-dev/config/docker/build-sources.yaml ]]; then
+    cat > /tmp/hm-dev/config/docker/build-sources.yaml <<'EOF'
+# Dev rig seed for STAGE-003-009 generic build-sources config.
+# Identity-mapped: no remap rules. Exercises loader + read_compose_set.
+compose_files:
+  - host_path: /tmp/hm-dev/compose/docker-compose.yml
+    container_path: /tmp/hm-dev/compose/docker-compose.yml
+build_context_roots: []
+EOF
+  fi
+  mkdir -p /tmp/hm-dev/build-contexts
 }
 
 # ----------------------------------------------------------------------------

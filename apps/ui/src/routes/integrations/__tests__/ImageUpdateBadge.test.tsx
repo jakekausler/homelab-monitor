@@ -25,6 +25,10 @@ vi.mock('@/api/docker', () => ({
   },
 }))
 
+vi.mock('@/lib/sourceHash', () => ({
+  formatSourceHash: (v: string | null | undefined) => (v ? `[${v.slice(0, 6)}]` : '—'),
+}))
+
 import { useImageUpdatesSummary } from '@/api/docker'
 
 // ---------------------------------------------------------------------------
@@ -37,10 +41,12 @@ function makeImageUpdateSummary(
     {
       container_name: string
       available: boolean
+      source?: string
       current_digest?: string | null
       latest_digest?: string | null
       last_checked_at?: string | null
       check_error_reason?: string | null
+      last_source_hash?: string | null
     }
   > = {},
 ) {
@@ -209,5 +215,58 @@ describe('ImageUpdateBadge', () => {
       'href',
       expect.stringContaining('/integrations/docker/containers/nginx/image-update'),
     )
+  })
+
+  // ---- local_build source tests (STAGE-003-009) ----
+
+  it('renders "Source changed — rebuild needed" when source=local_build and available=true', async () => {
+    vi.mocked(useImageUpdatesSummary).mockReturnValue({
+      isPending: false,
+      isFetching: false,
+      isLoading: false,
+      error: null,
+      data: makeImageUpdateSummary({
+        'udo-viewer': {
+          container_name: 'udo-viewer',
+          available: true,
+          source: 'local_build',
+          last_source_hash: 'abc123def456abc1',
+        },
+      }),
+    } as unknown as ReturnType<typeof useImageUpdatesSummary>)
+    renderWithRouter('udo-viewer')
+    const link = await screen.findByRole('link')
+    expect(link).toHaveTextContent('Source changed — rebuild needed')
+    expect(link).toHaveClass('bg-blue-50', 'text-blue-800')
+  })
+
+  it('renders "up to date" when source=local_build and available=false (no error)', async () => {
+    vi.mocked(useImageUpdatesSummary).mockReturnValue({
+      isPending: false,
+      isFetching: false,
+      isLoading: false,
+      error: null,
+      data: makeImageUpdateSummary({
+        'udo-viewer': {
+          container_name: 'udo-viewer',
+          available: false,
+          source: 'local_build',
+          current_digest: null,
+          latest_digest: null,
+          last_checked_at: '2026-05-23T10:00:00Z',
+          check_error_reason: null,
+        },
+      }),
+    } as unknown as ReturnType<typeof useImageUpdatesSummary>)
+    renderWithRouter('udo-viewer')
+    const span = await screen.findByText('up to date')
+    expect(span).toBeInTheDocument()
+  })
+
+  it('renders "Update available" (regression) when source=registry and available=true', async () => {
+    renderWithRouter('nginx')
+    const links = await screen.findAllByRole('link')
+    const link = links[0]
+    expect(link).toHaveTextContent('Update available')
   })
 })

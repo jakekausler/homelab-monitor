@@ -217,6 +217,7 @@ class Scheduler:
         self._thread_pool: ThreadPoolExecutor | None = None
         self._process_pool: ProcessPoolExecutor | None = None
         self._immediate_runs: dict[str, asyncio.Queue[tuple[str, TriggerContext]]] = {}
+        self._pending_awaitables: dict[str, asyncio.Future[CollectorResult | None]] = {}
 
     @property
     def running(self) -> bool:
@@ -379,6 +380,62 @@ class Scheduler:
         await q.put((tick_id, trigger))
         return tick_id
 
+    async def await_immediate_run(
+        self, name: str, *, trigger: TriggerContext, timeout: float = 30.0
+    ) -> CollectorResult | None:
+        """Enqueue an out-of-band run for ``name`` and await its completion.
+
+        Semantics:
+        - Same as ``request_immediate_run`` (enqueues a run for collector ``name``).
+        - BUT awaits until the run completes (or timeout).
+        - Returns the CollectorResult (or None on timeout).
+
+        The run goes through the full pipeline (lock → timeout → failure budget →
+        event sink) with the same semantics as a scheduled tick.
+
+        Args:
+            name: Collector name.
+            trigger: TriggerContext describing what initiated the run.
+            timeout: Max seconds to wait for completion. Default 30.0.
+
+        Returns:
+            CollectorResult if the run completes within timeout, None on timeout.
+
+        Raises:
+            KeyError: If ``name`` is not a known collector.
+        """
+        if name not in self._configs:
+            msg = f"unknown collector: {name}"
+            raise KeyError(msg)
+
+        assert self._loop is not None
+        q = self._immediate_runs.setdefault(name, asyncio.Queue())
+        tick_id = uuid4().hex
+        future: asyncio.Future[CollectorResult | None] = self._loop.create_future()
+        self._pending_awaitables[tick_id] = future
+        try:
+            await q.put((tick_id, trigger))
+            try:
+                result = await asyncio.wait_for(future, timeout=timeout)
+                return result
+            except TimeoutError:
+                return None
+        finally:
+            self._pending_awaitables.pop(tick_id, None)
+
+    def _signal_awaitable_done(self, tick_id: str, result: CollectorResult | None) -> None:
+        """Resolve a pending await_immediate_run future if any exists for this tick.
+
+        Called from early-return paths in _tick to wake up any caller waiting in
+        await_immediate_run. Passes the CollectorResult on success or None on
+        early failure (quarantine, group lock timeout, timeout, exception, etc).
+        The future receiver gracefully handles None (lifespan code already has
+        try/except wrappers).
+        """
+        future = self._pending_awaitables.pop(tick_id, None)
+        if future is not None and not future.done():
+            future.set_result(result)
+
     # --- Per-collector tick loop -----------------------------------------------------
 
     async def _run_collector(self, c: Collector) -> None:
@@ -526,6 +583,7 @@ class Scheduler:
                             ts=utc_now_iso(),
                         )
                     )
+                    self._signal_awaitable_done(tick_id, None)
                     return
 
                 # Group lock acquisition with interval/2 deadline. Outside the inner
@@ -555,6 +613,7 @@ class Scheduler:
                             ts=utc_now_iso(),
                         )
                     )
+                    self._signal_awaitable_done(tick_id, None)
                     return
 
                 # Lock held; main tick body wrapped in try/finally for guaranteed release.
@@ -584,6 +643,7 @@ class Scheduler:
                                     ts=utc_now_iso(),
                                 )
                             )
+                            self._signal_awaitable_done(tick_id, None)
                             return
                         raise  # pragma: no cover -- not reachable via Scheduler.stop()
                     except TimeoutError:
@@ -612,6 +672,7 @@ class Scheduler:
                                 ts=utc_now_iso(),
                             )
                         )
+                        self._signal_awaitable_done(tick_id, None)
                         return
                     except Exception:
                         duration = self._loop.time() - start
@@ -639,6 +700,7 @@ class Scheduler:
                                 ts=utc_now_iso(),
                             )
                         )
+                        self._signal_awaitable_done(tick_id, None)
                         return
                     finally:
                         self._self_metrics.write_summary(
@@ -699,6 +761,9 @@ class Scheduler:
                                 ts=utc_now_iso(),
                             )
                         )
+
+                    # Set the result on any awaitable future (await_immediate_run)
+                    self._signal_awaitable_done(tick_id, result)
 
                 finally:
                     lock.release()
