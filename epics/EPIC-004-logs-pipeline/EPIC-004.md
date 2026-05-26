@@ -56,7 +56,7 @@ EPIC-004 MUST specifically address all of the following for docker container log
 | STAGE-004-002 | Drain clustering job: periodic (5min interval) batch over recent VL data; produces signature templates + counts; emits `homelab_log_signature_count{template_hash, service}` metrics |
 | STAGE-004-003 | Drain signature catalog UI: "Signatures" tab inside the Logs screen; user can label signatures, suppress noise, mark as "expected" |
 | STAGE-004-004 | Signature-anomaly vmalert rules: rules generated from baselines (count > N×rolling-baseline OR new signature seen in last X) |
-| STAGE-004-005 | Logs explorer UI: full-text/LogsQL query, time range, live tail, saved queries; integrates with the signature catalog for "show me lines matching this signature" |
+| STAGE-004-005 | Logs explorer UI: full-text/LogsQL query, time range, live tail, saved queries; integrates with the signature catalog for "show me lines matching this signature"; adds pagination + custom-range picker to all log-viewer surfaces (per-container + cron run logs) |
 | STAGE-004-006 | Redaction pipeline: vector transforms strip well-known sensitive patterns (bearer tokens, JWTs, passwords in URLs, AWS keys); audit log records what was redacted (counts only, never the redacted value) |
 | STAGE-004-007 | "Create alert from query" UX: user composes a LogsQL query in the explorer, clicks "Alert when this fires", produces a vmalert rule via a guided form; rule is committed to `deploy/vmalert/logs/` (or stored in DB and rendered to file at runtime — Design phase decides) |
 
@@ -67,6 +67,13 @@ Same as EPIC-001 plus:
 - **No raw log line that contains a known-sensitive pattern leaves the pipeline un-redacted** — assert in tests with planted credentials.
 - **Drain clustering memory + CPU bounded** by configurable batch size; over budget = abort batch, alert.
 - **User-created alert rules from the UI are reviewable** before activation: the UI shows the resulting rule YAML and asks for confirmation before persisting.
+
+### STAGE-004-005 acceptance criteria (Logs explorer UI + pagination + custom-range)
+
+In addition to the core Logs explorer deliverables (LogsQL query interface, time range picker, live tail, saved queries), STAGE-004-005 MUST add the following two deferred features to ALL log-viewer surfaces in the codebase:
+
+- **Pagination across all log-viewer surfaces** — Add cursor-based "Load older lines" pagination to: per-container log viewer (`DockerContainerLogsViewer.tsx` from STAGE-003-011), cron run log viewer (`CronRunLogViewer.tsx` from STAGE-002-015), and the new global logs explorer in this stage. All three must use a consistent cursor scheme (timestamp + line_seq). Deferred from STAGE-003-011 (design decision D-DEFER-PAGINATION, 2026-05-26).
+- **Custom datetime range picker** — Replace the 6-preset since picker (5m/15m/1h/6h/24h/7d) with: same 6 presets PLUS a "Custom range" option that opens two datetime pickers (start, end) with validation (start < end, neither in the future, total range ≤ 30d per VL retention). Applied to: per-container log viewer, cron run log viewer, and the global logs explorer. Deferred from STAGE-003-011 (design decision D-DEFER-CUSTOM-RANGE, 2026-05-26).
 
 ## Dependencies
 

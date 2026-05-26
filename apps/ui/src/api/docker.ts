@@ -318,3 +318,41 @@ export function useListComposeActions(
     refetchInterval: COMPOSE_ACTION_LIST_REFETCH_MS,
   })
 }
+
+// ---------------------------------------------------------------------------
+// STAGE-003-011 — per-container log viewer
+// ---------------------------------------------------------------------------
+
+type ContainerLogsResponse = Schema<'ContainerLogsResponse'>
+
+export const dockerLogsQueryKeys = {
+  logs: (containerName: string, since: string) =>
+    ['integrations', 'docker', 'containers', containerName, 'logs', since] as const,
+}
+
+/**
+ * Fetch recent log lines for one container from VictoriaLogs.
+ * Manual refresh only (no refetchInterval per D-MANUAL-REFRESH-V1).
+ *
+ * @param containerName — container name (route param)
+ * @param since — duration string Xs|Xm|Xh|Xd, default 15m
+ */
+export function useContainerLogs(
+  containerName: string,
+  since: string,
+): UseQueryResult<ContainerLogsResponse, ApiError> {
+  return useQuery({
+    queryKey: dockerLogsQueryKeys.logs(containerName, since),
+    queryFn: async () => {
+      const result = await apiClient.GET('/api/integrations/docker/containers/{name}/logs', {
+        params: {
+          path: { name: containerName },
+          query: { since },
+        },
+      })
+      return unwrap<ContainerLogsResponse>(result)
+    },
+    enabled: containerName.length > 0,
+    retry: false,
+  })
+}

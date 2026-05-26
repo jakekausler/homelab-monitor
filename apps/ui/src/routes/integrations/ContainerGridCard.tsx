@@ -1,5 +1,6 @@
-import { EmptyState } from '@/components/EmptyState'
+import { Link } from '@tanstack/react-router'
 
+import { EmptyState } from '@/components/EmptyState'
 import type { ContainerRow } from './types'
 import { StatusBadge, HealthcheckBadge } from './badges'
 import { extractComposeBasename } from './composeBasename'
@@ -62,6 +63,17 @@ export function ContainerGridCard({ containers }: ContainerGridCardProps) {
               </div>
               <div>
                 Probes: <ProbesBadge containerName={c.name} />
+              </div>
+              <div>
+                Logs:{' '}
+                <Link
+                  to="/integrations/docker/containers/$name/logs"
+                  params={{ name: c.name }}
+                  className="text-primary hover:underline"
+                  data-testid={`logs-link-mobile-${c.name}`}
+                >
+                  View logs →
+                </Link>
               </div>
               <div className="flex items-center gap-1">
                 <span>Actions:</span>

@@ -733,6 +733,89 @@
         "title": "ContainerListResponse",
         "type": "object"
       },
+      "ContainerLogLine": {
+        "additionalProperties": false,
+        "description": "One log line returned by the per-container log viewer.",
+        "properties": {
+          "line": {
+            "title": "Line",
+            "type": "string"
+          },
+          "timestamp": {
+            "title": "Timestamp",
+            "type": "string"
+          }
+        },
+        "required": [
+          "timestamp",
+          "line"
+        ],
+        "title": "ContainerLogLine",
+        "type": "object"
+      },
+      "ContainerLogsResponse": {
+        "additionalProperties": false,
+        "description": "Response body for GET /api/integrations/docker/containers/{name}/logs.\n\nlog_status values:\n  - \"available\": >=1 line returned within the window.\n  - \"no_lines\": container known to inventory but VL returned no lines.\n  - \"container_unknown\": container not in targets table (returned with 404).\n  - \"vl_unavailable\": VictoriaLogs unreachable/timeout/non-200 (returned with 503).\n\nFor container_unknown and vl_unavailable: lines = [], window_start/window_end\nmay be None (no query was actually run for unknown; no result for unavailable).",
+        "properties": {
+          "container_name": {
+            "title": "Container Name",
+            "type": "string"
+          },
+          "lines": {
+            "items": {
+              "$ref": "#/components/schemas/ContainerLogLine"
+            },
+            "title": "Lines",
+            "type": "array"
+          },
+          "log_status": {
+            "enum": [
+              "available",
+              "no_lines",
+              "container_unknown",
+              "vl_unavailable"
+            ],
+            "title": "Log Status",
+            "type": "string"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          },
+          "window_end": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Window End"
+          },
+          "window_start": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Window Start"
+          }
+        },
+        "required": [
+          "container_name",
+          "log_status",
+          "lines",
+          "truncated",
+          "window_start",
+          "window_end"
+        ],
+        "title": "ContainerLogsResponse",
+        "type": "object"
+      },
       "ContainerRow": {
         "description": "Mirrors apps/ui/src/routes/integrations/types.ts::ContainerRow.",
         "properties": {
@@ -4904,6 +4987,69 @@
           }
         },
         "summary": "Get Container Image Update",
+        "tags": [
+          "docker"
+        ]
+      }
+    },
+    "/api/integrations/docker/containers/{name}/logs": {
+      "get": {
+        "description": "Fetch recent log lines for one container from VictoriaLogs.\n\nAuth: session-only (operator dashboard). LogsQL is constructed server-side\nusing `service:\"<name>\"` (vector's add_labels guarantees this label).\n\nHard caps:\n  - limit: silently clamped at 500.\n  - since: silently clamped at 7d.\n  - max-bytes / timeout: inherited from VlQueryLimits (load_vl_query_limits()).",
+        "operationId": "get_container_logs_api_integrations_docker_containers__name__logs_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "default": "15m",
+              "title": "Since",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContainerLogsResponse"
+                }
+              }
+            },
+            "description": "Logs available or window empty"
+          },
+          "404": {
+            "description": "Container not in inventory"
+          },
+          "422": {
+            "description": "Invalid since parameter"
+          },
+          "503": {
+            "description": "VictoriaLogs temporarily unavailable"
+          }
+        },
+        "summary": "Get Container Logs",
         "tags": [
           "docker"
         ]

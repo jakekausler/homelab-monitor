@@ -145,6 +145,7 @@ function RunLogBody({ data }: { data: import('@/api/types').Schema<'RunLogRespon
           Run in progress — output as of now.
         </p>
       )}
+      {/* TODO: EPIC-004 STAGE-004-005 — cursor-based pagination + custom datetime range picker */}
       {data.truncated && (
         <p
           className="rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-xs text-amber-800 dark:text-amber-200"

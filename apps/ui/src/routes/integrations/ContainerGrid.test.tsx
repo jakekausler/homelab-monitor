@@ -1,6 +1,14 @@
 import { cleanup, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import {
+  Outlet,
+  RouterProvider,
+  createMemoryHistory,
+  createRootRoute,
+  createRoute,
+  createRouter,
+} from '@tanstack/react-router'
 import type { ReactElement } from 'react'
 
 import { ContainerGrid } from './ContainerGrid'
@@ -14,7 +22,23 @@ function renderWithQueryClient(ui: ReactElement) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } },
   })
-  return render(<QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>)
+  const rootRoute = createRootRoute({
+    component: () => <Outlet />,
+  })
+  const childRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/',
+    component: () => ui,
+  })
+  const router = createRouter({
+    routeTree: rootRoute.addChildren([childRoute]),
+    history: createMemoryHistory({ initialEntries: ['/'] }),
+  })
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <RouterProvider router={router} />
+    </QueryClientProvider>,
+  )
 }
 
 const MOCK_CONTAINERS: ContainerRow[] = [
@@ -39,9 +63,9 @@ const MOCK_CONTAINERS: ContainerRow[] = [
 ]
 
 describe('ContainerGrid', () => {
-  it('shows empty state when containers is empty', () => {
+  it('shows empty state when containers is empty', async () => {
     renderWithQueryClient(<ContainerGrid containers={[]} />)
-    const desktop = screen.getByTestId('containers-desktop')
+    const desktop = await screen.findByTestId('containers-desktop')
     expect(desktop).toHaveTextContent('No containers discovered yet.')
     expect(desktop.querySelectorAll('tbody tr')).toHaveLength(1)
     const headers = [
@@ -63,9 +87,9 @@ describe('ContainerGrid', () => {
     }
   })
 
-  it('renders column headers when containers present', () => {
+  it('renders column headers when containers present', async () => {
     renderWithQueryClient(<ContainerGrid containers={MOCK_CONTAINERS} />)
-    const desktop = screen.getByTestId('containers-desktop')
+    const desktop = await screen.findByTestId('containers-desktop')
     const headers = [
       'Compose',
       'Name',
@@ -85,9 +109,9 @@ describe('ContainerGrid', () => {
     }
   })
 
-  it('renders a row per container', () => {
+  it('renders a row per container', async () => {
     renderWithQueryClient(<ContainerGrid containers={MOCK_CONTAINERS} />)
-    const desktop = screen.getByTestId('containers-desktop')
+    const desktop = await screen.findByTestId('containers-desktop')
     expect(desktop.querySelectorAll('tbody tr')).toHaveLength(3)
     expect(screen.getByText('nginx')).toBeInTheDocument()
     expect(screen.getByText('postgres')).toBeInTheDocument()

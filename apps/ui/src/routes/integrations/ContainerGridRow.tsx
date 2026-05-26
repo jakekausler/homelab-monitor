@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { Link } from '@tanstack/react-router'
 import { useQueryClient } from '@tanstack/react-query'
 
 import type { ContainerRow } from './types'
@@ -68,8 +69,14 @@ export function ContainerGridRow({ container }: ContainerGridRowProps) {
         <ProbesBadge containerName={container.name} />
       </td>
       <td className="px-3 py-2 text-xs text-muted-foreground">
-        {/* SCAFFOLDING: STAGE-003-011 replaces with "View logs →" link */}
-        {'—'}
+        <Link
+          to="/integrations/docker/containers/$name/logs"
+          params={{ name: container.name }}
+          className="text-primary hover:underline"
+          data-testid={`logs-link-${container.name}`}
+        >
+          View logs →
+        </Link>
       </td>
       <td className="px-3 py-2 text-xs text-muted-foreground">
         <ActionsCell container={container} />

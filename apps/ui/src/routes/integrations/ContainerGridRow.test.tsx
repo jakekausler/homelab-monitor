@@ -1,6 +1,14 @@
 import { cleanup, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import {
+  Outlet,
+  RouterProvider,
+  createMemoryHistory,
+  createRootRoute,
+  createRoute,
+  createRouter,
+} from '@tanstack/react-router'
 import type { ReactElement } from 'react'
 
 import { ContainerGridRow } from './ContainerGridRow'
@@ -39,11 +47,27 @@ function renderWithQueryClient(ui: ReactElement) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } },
   })
-  return render(<QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>)
+  const rootRoute = createRootRoute({
+    component: () => <Outlet />,
+  })
+  const testRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/',
+    component: () => ui,
+  })
+  const router = createRouter({
+    routeTree: rootRoute.addChildren([testRoute]),
+    history: createMemoryHistory({ initialEntries: ['/'] }),
+  })
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <RouterProvider router={router} />
+    </QueryClientProvider>,
+  )
 }
 
 describe('ContainerGridRow', () => {
-  it('renders compose basename when compose_file_path is set', () => {
+  it('renders compose basename when compose_file_path is set', async () => {
     const container: ContainerRow = {
       id: 'test-123',
       name: 'my-container',
@@ -57,10 +81,10 @@ describe('ContainerGridRow', () => {
         </tbody>
       </table>,
     )
-    expect(screen.getByText('compose')).toBeInTheDocument()
+    expect(await screen.findByText('compose')).toBeInTheDocument()
   })
 
-  it('renders dash when compose_file_path is null', () => {
+  it('renders dash when compose_file_path is null', async () => {
     const container: ContainerRow = {
       id: 'test-123',
       name: 'my-container',
@@ -75,11 +99,11 @@ describe('ContainerGridRow', () => {
       </table>,
     )
     // The dash should be in the compose cell (first td after tr)
-    const cells = screen.getAllByRole('cell')
+    const cells = await screen.findAllByRole('cell')
     expect(cells[0]).toHaveTextContent('—')
   })
 
-  it('shows full compose_file_path as tooltip', () => {
+  it('shows full compose_file_path as tooltip', async () => {
     const filePath = '/storage/programs/homelab-monitor/deploy/compose/docker-compose.yml'
     const container: ContainerRow = {
       id: 'test-123',
@@ -94,11 +118,11 @@ describe('ContainerGridRow', () => {
         </tbody>
       </table>,
     )
-    const composeCells = screen.getAllByRole('cell')
+    const composeCells = await screen.findAllByRole('cell')
     expect(composeCells[0]).toHaveAttribute('title', filePath)
   })
 
-  it('renders restart_count_24h when present and > 0', () => {
+  it('renders restart_count_24h when present and > 0', async () => {
     const container: ContainerRow = {
       id: 'test-123',
       name: 'my-container',
@@ -113,10 +137,10 @@ describe('ContainerGridRow', () => {
         </tbody>
       </table>,
     )
-    expect(screen.getByText('3')).toBeInTheDocument()
+    expect(await screen.findByText('3')).toBeInTheDocument()
   })
 
-  it('renders dash for restart_count_24h when 0', () => {
+  it('renders dash for restart_count_24h when 0', async () => {
     const container: ContainerRow = {
       id: 'test-123',
       name: 'my-container',
@@ -131,12 +155,12 @@ describe('ContainerGridRow', () => {
         </tbody>
       </table>,
     )
-    const cells = screen.getAllByRole('cell')
+    const cells = await screen.findAllByRole('cell')
     // Restarts (24h) cell is at index 3 (after compose, name, status)
     expect(cells[3]).toHaveTextContent('—')
   })
 
-  it('renders dash for restart_count_24h when null', () => {
+  it('renders dash for restart_count_24h when null', async () => {
     const container: ContainerRow = {
       id: 'test-123',
       name: 'my-container',
@@ -151,11 +175,11 @@ describe('ContainerGridRow', () => {
         </tbody>
       </table>,
     )
-    const cells = screen.getAllByRole('cell')
+    const cells = await screen.findAllByRole('cell')
     expect(cells[3]).toHaveTextContent('—')
   })
 
-  it('shows cumulative restart_count as tooltip for restart_count_24h', () => {
+  it('shows cumulative restart_count as tooltip for restart_count_24h', async () => {
     const container: ContainerRow = {
       id: 'test-123',
       name: 'my-container',
@@ -170,11 +194,11 @@ describe('ContainerGridRow', () => {
         </tbody>
       </table>,
     )
-    const cells = screen.getAllByRole('cell')
+    const cells = await screen.findAllByRole('cell')
     expect(cells[3]).toHaveAttribute('title', 'Cumulative: 7')
   })
 
-  it('renders compose basename from nested path correctly', () => {
+  it('renders compose basename from nested path correctly', async () => {
     const container: ContainerRow = {
       id: 'test-123',
       name: 'my-container',
@@ -188,10 +212,10 @@ describe('ContainerGridRow', () => {
         </tbody>
       </table>,
     )
-    expect(screen.getByText('c')).toBeInTheDocument()
+    expect(await screen.findByText('c')).toBeInTheDocument()
   })
 
-  it('renders container name', () => {
+  it('renders container name', async () => {
     const container: ContainerRow = {
       id: 'test-123',
       name: 'nginx',
@@ -204,7 +228,28 @@ describe('ContainerGridRow', () => {
         </tbody>
       </table>,
     )
-    expect(screen.getByText('nginx')).toBeInTheDocument()
+    expect(await screen.findByText('nginx')).toBeInTheDocument()
+  })
+
+  it('Logs column renders View logs → link with route href', async () => {
+    const container: ContainerRow = {
+      id: 'test-123',
+      name: 'caddy',
+      labels: {},
+    }
+    renderWithQueryClient(
+      <table>
+        <tbody>
+          <ContainerGridRow container={container} />
+        </tbody>
+      </table>,
+    )
+    const link = await screen.findByTestId('logs-link-caddy')
+    expect(link).toBeInTheDocument()
+    expect(link).toHaveAttribute(
+      'href',
+      expect.stringContaining('/integrations/docker/containers/caddy/logs'),
+    )
   })
 
   describe('ActionsCell toast on terminal state', () => {
@@ -226,7 +271,7 @@ describe('ContainerGridRow', () => {
       expect(toast.warning).toBeDefined()
     })
 
-    it('renders actions cell without crashing when toast is mocked', () => {
+    it('renders actions cell without crashing when toast is mocked', async () => {
       renderWithQueryClient(
         <table>
           <tbody>
@@ -235,7 +280,7 @@ describe('ContainerGridRow', () => {
         </table>,
       )
       // Just verify the component renders without error when toast is mocked
-      expect(screen.getByText('Pull & Restart')).toBeInTheDocument()
+      expect(await screen.findByText('Pull & Restart')).toBeInTheDocument()
     })
   })
 })

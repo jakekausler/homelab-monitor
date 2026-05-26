@@ -1,6 +1,14 @@
 import { cleanup, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import {
+  Outlet,
+  RouterProvider,
+  createMemoryHistory,
+  createRootRoute,
+  createRoute,
+  createRouter,
+} from '@tanstack/react-router'
 import type { ReactElement } from 'react'
 
 import { ContainerGridCard } from './ContainerGridCard'
@@ -14,17 +22,33 @@ function renderWithQueryClient(ui: ReactElement) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } },
   })
-  return render(<QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>)
+  const rootRoute = createRootRoute({
+    component: () => <Outlet />,
+  })
+  const childRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/',
+    component: () => ui,
+  })
+  const router = createRouter({
+    routeTree: rootRoute.addChildren([childRoute]),
+    history: createMemoryHistory({ initialEntries: ['/'] }),
+  })
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <RouterProvider router={router} />
+    </QueryClientProvider>,
+  )
 }
 
 describe('ContainerGridCard', () => {
-  it('shows empty state when containers is empty', () => {
+  it('shows empty state when containers is empty', async () => {
     renderWithQueryClient(<ContainerGridCard containers={[]} />)
-    const mobile = screen.getByTestId('containers-mobile')
+    const mobile = await screen.findByTestId('containers-mobile')
     expect(mobile).toHaveTextContent('No containers discovered yet.')
   })
 
-  it('renders compose basename when compose_file_path is set', () => {
+  it('renders compose basename when compose_file_path is set', async () => {
     const containers: ContainerRow[] = [
       {
         id: 'test-123',
@@ -34,10 +58,10 @@ describe('ContainerGridCard', () => {
       },
     ]
     renderWithQueryClient(<ContainerGridCard containers={containers} />)
-    expect(screen.getByText('Compose:', { exact: false })).toHaveTextContent('compose')
+    expect(await screen.findByText('Compose:', { exact: false })).toHaveTextContent('compose')
   })
 
-  it('renders dash for compose when compose_file_path is null', () => {
+  it('renders dash for compose when compose_file_path is null', async () => {
     const containers: ContainerRow[] = [
       {
         id: 'test-123',
@@ -47,11 +71,11 @@ describe('ContainerGridCard', () => {
       },
     ]
     renderWithQueryClient(<ContainerGridCard containers={containers} />)
-    const composeDiv = screen.getByText('Compose:', { exact: false })
+    const composeDiv = await screen.findByText('Compose:', { exact: false })
     expect(composeDiv).toHaveTextContent('—')
   })
 
-  it('shows full compose_file_path as tooltip', () => {
+  it('shows full compose_file_path as tooltip', async () => {
     const filePath = '/storage/programs/homelab-monitor/deploy/compose/docker-compose.yml'
     const containers: ContainerRow[] = [
       {
@@ -62,13 +86,13 @@ describe('ContainerGridCard', () => {
       },
     ]
     renderWithQueryClient(<ContainerGridCard containers={containers} />)
-    const composeDivs = screen.getAllByText('Compose:', { exact: false })
+    const composeDivs = await screen.findAllByText('Compose:', { exact: false })
     expect(composeDivs[0]).toBeDefined()
     const composeDiv = composeDivs[0]
     expect(composeDiv).toHaveAttribute('title', filePath)
   })
 
-  it('renders restart_count_24h when present and > 0', () => {
+  it('renders restart_count_24h when present and > 0', async () => {
     const containers: ContainerRow[] = [
       {
         id: 'test-123',
@@ -79,12 +103,12 @@ describe('ContainerGridCard', () => {
       },
     ]
     renderWithQueryClient(<ContainerGridCard containers={containers} />)
-    expect(screen.getByText('Restarts (24h):', { exact: false })).toBeInTheDocument()
+    expect(await screen.findByText('Restarts (24h):', { exact: false })).toBeInTheDocument()
     const restartDiv = screen.getByText('Restarts (24h):', { exact: false })
     expect(restartDiv).toHaveTextContent('3')
   })
 
-  it('renders dash for restart_count_24h when 0', () => {
+  it('renders dash for restart_count_24h when 0', async () => {
     const containers: ContainerRow[] = [
       {
         id: 'test-123',
@@ -95,11 +119,11 @@ describe('ContainerGridCard', () => {
       },
     ]
     renderWithQueryClient(<ContainerGridCard containers={containers} />)
-    const restartDiv = screen.getByText('Restarts (24h):', { exact: false })
+    const restartDiv = await screen.findByText('Restarts (24h):', { exact: false })
     expect(restartDiv).toHaveTextContent('—')
   })
 
-  it('renders dash for restart_count_24h when null', () => {
+  it('renders dash for restart_count_24h when null', async () => {
     const containers: ContainerRow[] = [
       {
         id: 'test-123',
@@ -110,11 +134,11 @@ describe('ContainerGridCard', () => {
       },
     ]
     renderWithQueryClient(<ContainerGridCard containers={containers} />)
-    const restartDiv = screen.getByText('Restarts (24h):', { exact: false })
+    const restartDiv = await screen.findByText('Restarts (24h):', { exact: false })
     expect(restartDiv).toHaveTextContent('—')
   })
 
-  it('shows cumulative restart_count as tooltip', () => {
+  it('shows cumulative restart_count as tooltip', async () => {
     const containers: ContainerRow[] = [
       {
         id: 'test-123',
@@ -125,11 +149,11 @@ describe('ContainerGridCard', () => {
       },
     ]
     renderWithQueryClient(<ContainerGridCard containers={containers} />)
-    const restartDiv = screen.getByText('Restarts (24h):', { exact: false })
+    const restartDiv = await screen.findByText('Restarts (24h):', { exact: false })
     expect(restartDiv).toHaveAttribute('title', 'Cumulative: 7')
   })
 
-  it('renders compose basename from nested path correctly', () => {
+  it('renders compose basename from nested path correctly', async () => {
     const containers: ContainerRow[] = [
       {
         id: 'test-123',
@@ -139,10 +163,10 @@ describe('ContainerGridCard', () => {
       },
     ]
     renderWithQueryClient(<ContainerGridCard containers={containers} />)
-    expect(screen.getByText(/c$/)).toBeInTheDocument()
+    expect(await screen.findByText(/c$/)).toBeInTheDocument()
   })
 
-  it('renders multiple containers', () => {
+  it('renders multiple containers', async () => {
     const containers: ContainerRow[] = [
       {
         id: 'test-123',
@@ -158,11 +182,11 @@ describe('ContainerGridCard', () => {
       },
     ]
     renderWithQueryClient(<ContainerGridCard containers={containers} />)
-    expect(screen.getByText('nginx')).toBeInTheDocument()
+    expect(await screen.findByText('nginx')).toBeInTheDocument()
     expect(screen.getByText('postgres')).toBeInTheDocument()
   })
 
-  it('renders container name', () => {
+  it('renders container name', async () => {
     const containers: ContainerRow[] = [
       {
         id: 'test-123',
@@ -171,6 +195,18 @@ describe('ContainerGridCard', () => {
       },
     ]
     renderWithQueryClient(<ContainerGridCard containers={containers} />)
-    expect(screen.getByText('my-service')).toBeInTheDocument()
+    expect(await screen.findByText('my-service')).toBeInTheDocument()
+  })
+
+  it('Mobile card renders Logs → View logs link', async () => {
+    const containers: ContainerRow[] = [
+      {
+        id: 'test-123',
+        name: 'caddy',
+        labels: {},
+      },
+    ]
+    renderWithQueryClient(<ContainerGridCard containers={containers} />)
+    expect(await screen.findByTestId('logs-link-mobile-caddy')).toBeInTheDocument()
   })
 })

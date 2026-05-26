@@ -8,18 +8,24 @@ step (T-MERGE-LOCATION) — sub-10ms read, no live VM query.
 
 from __future__ import annotations
 
+import re
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, ConfigDict
 
 from homelab_monitor.kernel.api.dependencies import (
+    get_http_client,
     get_repo,
+    get_vl_url,
     require_session,
     require_user_or_token,
 )
 from homelab_monitor.kernel.auth.models import ApiToken, User
 from homelab_monitor.kernel.auth.scopes import Scope
+from homelab_monitor.kernel.config import VlQueryLimits, load_vl_query_limits
 from homelab_monitor.kernel.db.repositories.compose_actions_repository import (
     ComposeActionRow,
     ComposeActionsRepository,
@@ -43,6 +49,11 @@ from homelab_monitor.kernel.db.repositories.suggestions_repository import (
 from homelab_monitor.kernel.db.repositories.targets_repository import TargetsRepository
 from homelab_monitor.kernel.db.repository import SqliteRepository
 from homelab_monitor.kernel.docker.compose_action_runner import ComposeActionRunner
+from homelab_monitor.kernel.logs.victorialogs_client import (
+    VictoriaLogsClient,
+    VictoriaLogsClientError,
+    logsql_quote_phrase,
+)
 
 router = APIRouter(prefix="/integrations/docker", tags=["docker"])
 
@@ -82,6 +93,46 @@ class ContainerListResponse(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     containers: list[ContainerRow]
+
+
+class ContainerLogLine(BaseModel):
+    """One log line returned by the per-container log viewer."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    timestamp: str
+    line: str
+
+
+_ContainerLogStatus = Literal[
+    "available",
+    "no_lines",
+    "container_unknown",
+    "vl_unavailable",
+]
+
+
+class ContainerLogsResponse(BaseModel):
+    """Response body for GET /api/integrations/docker/containers/{name}/logs.
+
+    log_status values:
+      - "available": >=1 line returned within the window.
+      - "no_lines": container known to inventory but VL returned no lines.
+      - "container_unknown": container not in targets table (returned with 404).
+      - "vl_unavailable": VictoriaLogs unreachable/timeout/non-200 (returned with 503).
+
+    For container_unknown and vl_unavailable: lines = [], window_start/window_end
+    may be None (no query was actually run for unknown; no result for unavailable).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    container_name: str
+    log_status: _ContainerLogStatus
+    lines: list[ContainerLogLine]
+    truncated: bool
+    window_start: str | None
+    window_end: str | None
 
 
 def _get_targets_repo(
@@ -169,6 +220,22 @@ def _get_suggestions_repo(
 _SUGGESTION_STATUS_QUERY = Literal["pending", "accepted", "ignored", "container_gone", "all"]
 _DEFAULT_SUGGESTION_PAGE_SIZE: int = 50
 _MAX_SUGGESTION_PAGE_SIZE: int = 200
+
+# STAGE-003-011 — container log viewer
+_LOGS_DEFAULT_SINCE: str = "15m"
+# Both intentionally 500 in STAGE-003-011 — the limit param is kept in the contract for
+# future flexibility; EPIC-004 STAGE-004-005 will introduce real pagination (cursor +
+# raised cap). For now, any caller-supplied limit is silently clamped to 500.
+_LOGS_MAX_LINES: int = 500
+_LOGS_DEFAULT_LIMIT: int = 500
+_LOGS_MAX_SINCE_SECONDS: int = 7 * 24 * 60 * 60  # 7 days
+_SINCE_PATTERN = re.compile(r"^(\d+)([smhd])$")
+_SECONDS_PER_UNIT: dict[str, int] = {
+    "s": 1,
+    "m": 60,
+    "h": 60 * 60,
+    "d": 24 * 60 * 60,
+}
 
 
 @router.get("/suggestions", response_model=DockerSuggestionListResponse)
@@ -301,6 +368,130 @@ async def list_container_probes(
     probes = await probes_repo.list_for_container(container_name=name, include_hidden=False)
     return ListProbesResponse(
         probes=[_probe_row_to_dto(p) for p in probes],
+    )
+
+
+def _parse_since(since: str) -> int:
+    """Parse 'Xs|Xm|Xh|Xd' → total seconds. Raises HTTPException 422 on bad format.
+
+    Clamped at _LOGS_MAX_SINCE_SECONDS (7d) — caller does NOT need to clamp.
+    Empty string / whitespace are treated as invalid (use _LOGS_DEFAULT_SINCE
+    at the FastAPI default level instead).
+    """
+    m = _SINCE_PATTERN.match(since.strip())
+    if m is None:
+        raise HTTPException(
+            status_code=422,
+            detail=f"invalid since format (expected Xs|Xm|Xh|Xd): {since!r}",
+        )
+    value, unit = int(m.group(1)), m.group(2)
+    if value <= 0:
+        raise HTTPException(
+            status_code=422,
+            detail=f"since must be > 0: {since!r}",
+        )
+    total = value * _SECONDS_PER_UNIT[unit]
+    return min(total, _LOGS_MAX_SINCE_SECONDS)
+
+
+@router.get(
+    "/containers/{name}/logs",
+    response_model=ContainerLogsResponse,
+    responses={
+        200: {"description": "Logs available or window empty"},
+        404: {"description": "Container not in inventory"},
+        422: {"description": "Invalid since parameter"},
+        503: {"description": "VictoriaLogs temporarily unavailable"},
+    },
+)
+async def get_container_logs(  # noqa: PLR0913 -- FastAPI route with injected dependencies
+    name: str,
+    _user: Annotated[User, Depends(require_session())],
+    targets_repo: Annotated[TargetsRepository, Depends(_get_targets_repo)],
+    http_client: Annotated[httpx.AsyncClient, Depends(get_http_client)],
+    vl_url: Annotated[str, Depends(get_vl_url)],
+    since: Annotated[str, Query()] = _LOGS_DEFAULT_SINCE,
+    limit: Annotated[int, Query(ge=1)] = _LOGS_DEFAULT_LIMIT,
+) -> ContainerLogsResponse:
+    """Fetch recent log lines for one container from VictoriaLogs.
+
+    Auth: session-only (operator dashboard). LogsQL is constructed server-side
+    using `service:"<name>"` (vector's add_labels guarantees this label).
+
+    Hard caps:
+      - limit: silently clamped at 500.
+      - since: silently clamped at 7d.
+      - max-bytes / timeout: inherited from VlQueryLimits (load_vl_query_limits()).
+    """
+    # Clamp limit silently (per D-API-CONTRACT: no 422 for over-cap limit).
+    effective_limit = min(limit, _LOGS_MAX_LINES)
+    # Parse + clamp since (raises 422 on bad format).
+    window_seconds = _parse_since(since)
+
+    # 404 if container not in inventory.
+    rows = await targets_repo.list_docker_containers(include_hidden=False)
+    if not any(r.name == name for r in rows):
+        # 404 with populated body per D-API-CONTRACT.
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=ContainerLogsResponse(
+                container_name=name,
+                log_status="container_unknown",
+                lines=[],
+                truncated=False,
+                window_start=None,
+                window_end=None,
+            ).model_dump(),
+        )
+
+    # Build the [start, end] window.
+    now = datetime.now(UTC)
+    window_end_dt = now
+    window_start_dt = now - timedelta(seconds=window_seconds)
+    window_start = window_start_dt.isoformat()
+    window_end = window_end_dt.isoformat()
+
+    # Build the LogsQL query — D-LOG-LABEL-SERVICE.
+    expr = f"service:{logsql_quote_phrase(name)}"
+
+    # Run the VL query via the bounded client.
+    base_limits = load_vl_query_limits()
+    # Override max_lines for this stage's tighter cap (500 vs default 10000).
+    # The VlQueryLimits dataclass is frozen; rebuild with our cap.
+    capped_limits = VlQueryLimits(
+        max_lines=effective_limit,
+        max_bytes=base_limits.max_bytes,
+        timeout_seconds=base_limits.timeout_seconds,
+    )
+    client = VictoriaLogsClient(vl_url=vl_url, http_client=http_client, limits=capped_limits)
+    try:
+        result = await client.query(expr=expr, start=window_start, end=window_end)
+    except VictoriaLogsClientError as exc:
+        # D-API-CONTRACT: 503 with populated body, lines=[].
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=ContainerLogsResponse(
+                container_name=name,
+                log_status="vl_unavailable",
+                lines=[],
+                truncated=False,
+                window_start=window_start,
+                window_end=window_end,
+            ).model_dump(),
+        ) from exc
+
+    if len(result.lines) == 0:
+        log_status: _ContainerLogStatus = "no_lines"
+    else:
+        log_status = "available"
+
+    return ContainerLogsResponse(
+        container_name=name,
+        log_status=log_status,
+        lines=[ContainerLogLine(timestamp=ln.timestamp, line=ln.message) for ln in result.lines],
+        truncated=result.truncated,
+        window_start=window_start,
+        window_end=window_end,
     )
 
 

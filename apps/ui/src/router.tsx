@@ -16,7 +16,7 @@ import { CronDetailPage } from '@/routes/inventory/CronDetailPage'
 import { CronRunsListPage } from '@/routes/inventory/CronRunsList'
 import { CronRunLogViewerPage } from '@/routes/inventory/CronRunLogViewer'
 import { DockerIntegrationPage } from '@/routes/integrations/DockerIntegrationPage'
-import { ContainerLogsPlaceholderPage } from '@/routes/integrations/ContainerLogsPlaceholder'
+import { DockerContainerLogsViewerPage } from '@/routes/integrations/DockerContainerLogsViewer'
 import { ContainerProbesPage } from '@/routes/integrations/ContainerProbesPage'
 import { ContainerImageUpdatePage } from '@/routes/integrations/ContainerImageUpdatePage'
 import { AppShell } from '@/components/AppShell'
@@ -189,12 +189,12 @@ const dockerIntegrationRoute = createRoute({
 })
 
 // NOTE: Sibling of dockerIntegrationRoute (not child). No DockerLayout shell
-// exists yet; if STAGE-003-011 or later introduces one (sub-tabs, persistent
-// header), re-parent this route under it.
+// exists yet. If future stages introduce one (sub-tabs, persistent header),
+// re-parent this route under it.
 const containerLogsRoute = createRoute({
   getParentRoute: () => protectedLayoutRoute,
   path: '/integrations/docker/containers/$name/logs',
-  component: ContainerLogsPlaceholderPage,
+  component: DockerContainerLogsViewerPage,
 })
 
 const containerProbesRoute = createRoute({
