@@ -8,7 +8,7 @@ from __future__ import annotations
 import contextlib
 import importlib
 import os
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import structlog
@@ -972,3 +972,95 @@ def testcanonicalize_container_name_with_short_name() -> None:
     assert canonicalize_container_name("/short") == "short"
     assert canonicalize_container_name("short") == "short"
     assert canonicalize_container_name("/app") == "app"
+
+
+@pytest.mark.asyncio
+async def test_refresh_container_upserts_state_when_deps_wired(
+    repo: SqliteRepository,
+) -> None:
+    """refresh_container upserts a state row when all dependencies are wired."""
+    socket_client = AsyncMock(spec=DockerSocketClient)
+    socket_client.image_inspect.return_value = {
+        "Id": "sha256:localid",
+        "RepoDigests": ["docker.io/library/nginx@sha256:localdigest"],
+    }
+
+    registry_client = AsyncMock(spec=RegistryDigestClient)
+    registry_client.fetch_latest_digest.return_value = FetchedDigest(
+        digest="sha256:registrydigest",
+        rate_limit_remaining=_EXPECTED_REMAINING_HIGH,
+        registry="docker.io",
+    )
+    # cooldown_until_for must exist on the mock (used in _process_one_container path).
+    registry_client.cooldown_until_for = AsyncMock(return_value=None)
+
+    state_repo = ImageUpdateStateRepository(repo)
+    collector = ImageUpdateCollector(
+        db=repo,
+        socket_client=socket_client,
+        registry_client=registry_client,
+        image_update_state_repo=state_repo,
+    )
+
+    await collector.refresh_container(
+        container_name="nginx",
+        image_ref="nginx:latest",
+        image_id="sha256:localid",
+    )
+
+    rows = await state_repo.list_all()
+    assert len(rows) == 1
+    assert rows[0].container_name == "nginx"
+    assert rows[0].last_image_ref == "nginx:latest"
+
+
+@pytest.mark.asyncio
+async def test_process_one_container_returns_zero_when_fetch_digest_payload_none(
+    repo: SqliteRepository,
+) -> None:
+    """_process_one_container returns (0, None) when _fetch_digest_payload returns None."""
+    in_memory_writer = MemoryRetainingMetricsWriter()
+    ctx = _ctx(in_memory_writer, repo)
+
+    socket_client = AsyncMock(spec=DockerSocketClient)
+    # image_inspect returns data with no RepoDigests and registry fetch returns FetchError
+    # that causes _fetch_digest_payload to return a payload (FetchError payload is non-None).
+    # To get payload=None we need ImageRefParseError from _fetch_digest_payload — use a
+    # container whose image_ref is parseable at the outer level (so it passes the outer
+    # parse check in _process_one_container) but causes _fetch_digest_payload's inner
+    # parse to return None. Since both use parse_image_ref on the same ref, the simpler
+    # approach: mock _fetch_digest_payload directly on the collector instance.
+    registry_client = AsyncMock(spec=RegistryDigestClient)
+    registry_client.cooldown_until_for = MagicMock(return_value=None)
+
+    socket_client.list_containers.return_value = [
+        {
+            "Id": "c1",
+            "Names": ["/myapp"],
+            "Image": "nginx:latest",
+            "ImageID": "sha256:abc",
+            "State": "running",
+            "Status": "Up 1h",
+            "Labels": {},
+        }
+    ]
+
+    state_repo = ImageUpdateStateRepository(repo)
+    collector = ImageUpdateCollector(
+        db=repo,
+        socket_client=socket_client,
+        registry_client=registry_client,
+        image_update_state_repo=state_repo,
+    )
+
+    # Patch _fetch_digest_payload to return None so line 368→369 is hit.
+    async def _null_fetch(*_a: object, **_kw: object) -> None:
+        return None
+
+    with patch.object(collector, "_fetch_digest_payload", new=_null_fetch):
+        result = await collector.run(ctx)
+
+    assert result.ok is True
+    # No state row was upserted.
+    rows = await state_repo.list_all()
+    assert len(rows) == 0

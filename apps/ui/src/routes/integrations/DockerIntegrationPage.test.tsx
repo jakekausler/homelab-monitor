@@ -24,6 +24,7 @@ vi.mock('@/api/docker', () => ({
     isPending: false,
   }),
   useImageUpdatesSummary: () => ({ data: null }),
+  useListComposeActions: () => ({ data: { actions: [] }, isPending: false, isError: false }),
   dockerQueryKeys: {},
   DockerSuggestionStatus: {},
 }))
@@ -63,11 +64,5 @@ describe('DockerIntegrationPage', () => {
     renderWithQueryClient(<DockerIntegrationPage />)
     expect(screen.getByRole('heading', { name: /^Pending suggestions/i })).toBeInTheDocument()
     expect(screen.getByText('No pending suggestions.')).toBeInTheDocument()
-  })
-
-  it('renders Recent actions section', () => {
-    renderWithQueryClient(<DockerIntegrationPage />)
-    expect(screen.getByText('Recent actions')).toBeInTheDocument()
-    expect(screen.getByText('No recent actions.')).toBeInTheDocument()
   })
 })

@@ -60,6 +60,10 @@ type ProbeRowSchema = Schema<'ProbeRow'>
 type ProbeSummaryResponse = Schema<'ProbeSummaryResponse'>
 type ImageUpdateSummaryResponse = Schema<'ImageUpdateSummaryResponse'>
 type ImageUpdateDetail = Schema<'ImageUpdateDetail'>
+type PullAndRestartRequest = Schema<'PullAndRestartRequest'>
+type PullAndRestartAcceptedResponse = Schema<'PullAndRestartAcceptedResponse'>
+type ComposeActionDetailResponse = Schema<'ComposeActionDetailResponse'>
+type ComposeActionListResponse = Schema<'ComposeActionListResponse'>
 
 export const dockerProbeQueryKeys = {
   list: (containerName: string) =>
@@ -160,6 +164,19 @@ export const dockerImageUpdateQueryKeys = {
 const IMAGE_UPDATE_SUMMARY_REFETCH_INTERVAL_MS = 30_000
 const IMAGE_UPDATE_DETAIL_REFETCH_INTERVAL_MS = 30_000
 
+export const dockerComposeActionQueryKeys = {
+  detail: (actionId: number) => ['integrations', 'docker', 'compose-actions', actionId] as const,
+  list: (containerName: string, limit: number) =>
+    ['integrations', 'docker', 'compose-actions', 'list', containerName, limit] as const,
+  // Prefix used to invalidate all `list(...)` queries for a container regardless of limit.
+  listAllForContainer: (containerName: string) =>
+    ['integrations', 'docker', 'compose-actions', 'list', containerName] as const,
+}
+
+const COMPOSE_ACTION_POLL_INTERVAL_MS = 2000
+const COMPOSE_ACTION_LIST_REFETCH_MS = 5000
+export const COMPOSE_ACTIVE_STATES = new Set(['pulling', 'building', 'restarting', 'running'])
+
 export type ImageUpdateSummaryEntry = {
   container_name: string
   available: boolean
@@ -227,5 +244,77 @@ export function useImageUpdate(containerName: string): UseQueryResult<ImageUpdat
     },
     refetchInterval: IMAGE_UPDATE_DETAIL_REFETCH_INTERVAL_MS,
     enabled: containerName.length > 0,
+  })
+}
+
+/**
+ * STAGE-003-010 — Pull & Restart mutation.
+ * POSTs the typed-phrase confirm to /api/.../pull-and-restart.
+ * Returns { action_id, state } on success; throws ApiError on 400/401/403/404.
+ */
+export function useStartPullAndRestart(containerName: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (variables: { confirmPhrase: string }) => {
+      const result = await apiClient.POST(
+        '/api/integrations/docker/containers/{name}/pull-and-restart',
+        {
+          params: { path: { name: containerName } },
+          body: { confirm_phrase: variables.confirmPhrase } satisfies PullAndRestartRequest,
+        },
+      )
+      return unwrap<PullAndRestartAcceptedResponse>(result)
+    },
+    onSuccess: () => {
+      // Use prefix key so all `list(...)` queries for this container invalidate
+      // regardless of which `limit` they were instantiated with.
+      void queryClient.invalidateQueries({
+        queryKey: dockerComposeActionQueryKeys.listAllForContainer(containerName),
+      })
+    },
+  })
+}
+
+/**
+ * STAGE-003-010 — Get a single compose action; poll every 2s while
+ * state === 'running'. Pass enabled=false to suspend.
+ */
+export function useGetComposeAction(
+  actionId: number | null,
+  opts?: { enabled?: boolean },
+): UseQueryResult<ComposeActionDetailResponse, ApiError> {
+  return useQuery({
+    queryKey: dockerComposeActionQueryKeys.detail(actionId ?? -1),
+    queryFn: async () => {
+      const result = await apiClient.GET('/api/integrations/docker/compose-actions/{action_id}', {
+        params: { path: { action_id: actionId as number } },
+      })
+      return unwrap<ComposeActionDetailResponse>(result)
+    },
+    enabled: (opts?.enabled ?? true) && actionId !== null,
+    refetchInterval: (query) => {
+      const data = query.state.data
+      return data && COMPOSE_ACTIVE_STATES.has(data.state) ? COMPOSE_ACTION_POLL_INTERVAL_MS : false
+    },
+  })
+}
+
+/**
+ * STAGE-003-010 — List recent compose actions for one container.
+ */
+export function useListComposeActions(
+  containerName: string,
+  limit = 10,
+): UseQueryResult<ComposeActionListResponse, ApiError> {
+  return useQuery({
+    queryKey: dockerComposeActionQueryKeys.list(containerName, limit),
+    queryFn: async () => {
+      const result = await apiClient.GET('/api/integrations/docker/compose-actions', {
+        params: { query: { container: containerName, limit } },
+      })
+      return unwrap<ComposeActionListResponse>(result)
+    },
+    enabled: containerName.length > 0,
+    refetchInterval: COMPOSE_ACTION_LIST_REFETCH_MS,
   })
 }

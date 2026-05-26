@@ -57,6 +57,14 @@ readonly APPLY_PATH_UNIT="homelab-monitor-cron-apply.path"
 readonly APPLY_SERVICE_UNIT="homelab-monitor-cron-apply.service"
 readonly APPLY_TIMER_UNIT="homelab-monitor-cron-apply.timer"
 
+# STAGE-003-010: homelab-compose group + shared-file ACLs (see section near
+# end of script for the implementing functions and why this group exists).
+readonly COMPOSE_GROUP="homelab-compose"
+# Override via env: COMPOSE_GROUP_DESKTOP_USER=alice sudo bash scripts/host-setup.sh
+# Defaults to invoker's $SUDO_USER if available, otherwise to the host's primary 1000-uid user.
+readonly COMPOSE_GROUP_DESKTOP_USER="${COMPOSE_GROUP_DESKTOP_USER:-${SUDO_USER:-jakekausler}}"
+readonly SHARED_FILES_CONF="$SCRIPT_DIR/host-setup-shared-files.conf"
+
 CHECK_ONLY=0
 WRITE_ENV_FILE=""
 
@@ -123,6 +131,79 @@ update_env_var() {
 
     # Restore permissions
     chmod "$orig_perms" "$file"
+}
+
+# ---------------------------------------------------------------------------
+# STAGE-003-010: homelab-compose group + shared-file ACLs
+# ---------------------------------------------------------------------------
+#
+# The Pull & Restart action runs `docker compose pull <svc> && docker compose
+# up -d <svc>` from inside the monitor container. compose needs to read .env
+# for variable interpolation; .env is normally 0600 owned by the user. We
+# create a dedicated `homelab-compose` group so the container's user
+# (homelab-monitor, uid 995) and the desktop user (jakekausler, uid 1000)
+# can both read .env via group membership. The script reads the path list
+# from scripts/host-setup-shared-files.conf and applies chgrp+chmod
+# idempotently.
+
+ensure_compose_group() {
+    if getent group "$COMPOSE_GROUP" > /dev/null; then
+        log "PRESENT: group $COMPOSE_GROUP already exists"
+    else
+        do_or_check "groupadd --system $COMPOSE_GROUP"
+    fi
+}
+
+ensure_user_in_compose_group() {
+    local user="$1"
+    if ! getent passwd "$user" > /dev/null; then
+        log "WARN: user $user not found on host — skipping group membership"
+        return
+    fi
+    if id -nG "$user" 2>/dev/null | tr ' ' '\n' | grep -qx "$COMPOSE_GROUP"; then
+        log "PRESENT: user $user already in $COMPOSE_GROUP"
+    else
+        do_or_check "usermod -aG $COMPOSE_GROUP $user"
+    fi
+}
+
+apply_compose_group_to_shared_files() {
+    if [[ ! -f $SHARED_FILES_CONF ]]; then
+        log "WARN: $SHARED_FILES_CONF not found — skipping shared-file ACLs"
+        return
+    fi
+    while IFS= read -r line; do
+        # Trim whitespace and skip blank/comment lines.
+        line="${line#"${line%%[![:space:]]*}"}"
+        line="${line%"${line##*[![:space:]]}"}"
+        [[ -z $line || ${line:0:1} == "#" ]] && continue
+        if [[ ! -e $line ]]; then
+            log "WARN: $line listed in shared-files conf but does not exist — skipping"
+            continue
+        fi
+        local target
+        target="$(readlink -f "$line")"
+        local cur_group
+        cur_group="$(stat -c '%G' "$target")"
+        local cur_mode
+        cur_mode="$(stat -c '%a' "$target")"
+        local want_mode
+        if [[ -d $target ]]; then
+            want_mode="0750"
+        else
+            want_mode="0640"
+        fi
+        if [[ $cur_group != "$COMPOSE_GROUP" ]]; then
+            do_or_check "chgrp $COMPOSE_GROUP $target"
+        else
+            log "PRESENT: $target already owned by group $COMPOSE_GROUP"
+        fi
+        if [[ $cur_mode != "$want_mode" ]]; then
+            do_or_check "chmod $want_mode $target"
+        else
+            log "PRESENT: $target already at mode $want_mode"
+        fi
+    done < "$SHARED_FILES_CONF"
 }
 
 # --- 1. Ensure the user exists ---
@@ -399,6 +480,13 @@ else
         do_or_check "'$SNAPSHOT_SCRIPT_DEST'"
     fi
 fi
+
+# --- 4.5. STAGE-003-010: homelab-compose group + shared-file ACLs ---
+log "Setting up homelab-compose group for shared file access (STAGE-003-010)..."
+ensure_compose_group
+ensure_user_in_compose_group "$USERNAME"
+ensure_user_in_compose_group "$COMPOSE_GROUP_DESKTOP_USER"
+apply_compose_group_to_shared_files
 
 # --- 5. Print UID/GID for dev.env / production env ---
 UID_VAL=$(id -u "$USERNAME" 2>/dev/null || echo "<not-created>")

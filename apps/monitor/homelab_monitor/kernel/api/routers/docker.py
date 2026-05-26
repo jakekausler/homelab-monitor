@@ -13,8 +13,17 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, ConfigDict
 
-from homelab_monitor.kernel.api.dependencies import get_repo, require_session
-from homelab_monitor.kernel.auth.models import User
+from homelab_monitor.kernel.api.dependencies import (
+    get_repo,
+    require_session,
+    require_user_or_token,
+)
+from homelab_monitor.kernel.auth.models import ApiToken, User
+from homelab_monitor.kernel.auth.scopes import Scope
+from homelab_monitor.kernel.db.repositories.compose_actions_repository import (
+    ComposeActionRow,
+    ComposeActionsRepository,
+)
 from homelab_monitor.kernel.db.repositories.docker_build_hashes_repository import (
     DockerBuildHashesRepository,
     DockerBuildHashRow,
@@ -33,6 +42,7 @@ from homelab_monitor.kernel.db.repositories.suggestions_repository import (
 )
 from homelab_monitor.kernel.db.repositories.targets_repository import TargetsRepository
 from homelab_monitor.kernel.db.repository import SqliteRepository
+from homelab_monitor.kernel.docker.compose_action_runner import ComposeActionRunner
 
 router = APIRouter(prefix="/integrations/docker", tags=["docker"])
 
@@ -585,3 +595,191 @@ async def get_container_image_update(
         check_failed_at=row.check_failed_at,
         check_error_reason=row.check_error_reason,
     )
+
+
+def _get_compose_actions_repo(
+    repo: Annotated[SqliteRepository, Depends(get_repo)],
+) -> ComposeActionsRepository:
+    return ComposeActionsRepository(repo)
+
+
+def _get_compose_action_runner(request: Request) -> ComposeActionRunner:
+    runner = getattr(request.app.state, "compose_action_runner", None)
+    if runner is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="compose action runner is not initialized",
+        )
+    return runner
+
+
+# ----------------------------------------------------------------------
+# STAGE-003-010 — Pull & Restart confirm-gated action.
+# ----------------------------------------------------------------------
+
+_CONFIRM_PHRASE: Literal["pull"] = "pull"
+
+
+class ActionInProgressDetail(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    error_code: Literal["action_in_progress"] = "action_in_progress"
+    in_flight_action_id: int
+    container_name: str
+    state: str
+
+
+class PullAndRestartRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    confirm_phrase: str
+
+
+class PullAndRestartAcceptedResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    action_id: int
+    state: Literal["pulling", "building", "restarting", "failed"]
+
+
+class ComposeActionDetailResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    action_id: int
+    action: str
+    container_name: str
+    compose_service: str
+    before_image: str | None = None
+    before_digest: str | None = None
+    after_image: str | None = None
+    after_digest: str | None = None
+    command: str
+    stdout: str | None = None
+    stderr: str | None = None
+    exit_code: int | None = None
+    state: str
+    error_reason: str | None = None
+    started_at: str
+    ended_at: str | None = None
+    duration_seconds: float | None = None
+    who: str
+    client_ip: str | None = None
+
+
+class ComposeActionListResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    actions: list[ComposeActionDetailResponse]
+
+
+def _row_to_detail(
+    row: ComposeActionRow,
+) -> ComposeActionDetailResponse:
+    """Convert ComposeActionRow → ComposeActionDetailResponse."""
+    return ComposeActionDetailResponse(
+        action_id=row.id,
+        action=row.action,
+        container_name=row.container_name,
+        compose_service=row.compose_service,
+        before_image=row.before_image,
+        before_digest=row.before_digest,
+        after_image=row.after_image,
+        after_digest=row.after_digest,
+        command=row.command,
+        stdout=row.stdout,
+        stderr=row.stderr,
+        exit_code=row.exit_code,
+        state=row.state,
+        error_reason=row.error_reason,
+        started_at=row.started_at,
+        ended_at=row.ended_at,
+        duration_seconds=row.duration_seconds,
+        who=row.who,
+        client_ip=row.client_ip,
+    )
+
+
+@router.post(
+    "/containers/{name}/pull-and-restart",
+    response_model=PullAndRestartAcceptedResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def pull_and_restart_container(  # noqa: PLR0913 -- FastAPI route with injected dependencies
+    name: str,
+    body: PullAndRestartRequest,
+    request: Request,
+    principal: Annotated[User | ApiToken, Depends(require_user_or_token({Scope.DOCKER_WRITE}))],
+    runner: Annotated[ComposeActionRunner, Depends(_get_compose_action_runner)],
+    actions_repo: Annotated[ComposeActionsRepository, Depends(_get_compose_actions_repo)],
+    targets_repo: Annotated[TargetsRepository, Depends(_get_targets_repo)],
+) -> PullAndRestartAcceptedResponse:
+    """Trigger a Pull & Restart for `name`. Returns 202 with action_id.
+
+    Confirm: body.confirm_phrase must equal 'pull' (case-insensitive).
+    Auth: session OR API token with Scope.DOCKER_WRITE.
+    """
+    if body.confirm_phrase.strip().lower() != _CONFIRM_PHRASE:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"confirm_phrase must equal '{_CONFIRM_PHRASE}'",
+        )
+    # 404 if the container is not even discovered.
+    rows = await targets_repo.list_docker_containers(include_hidden=False)
+    if not any(r.name == name for r in rows):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"container not found: {name}",
+        )
+    # 409 if an action is already in flight for this container.
+    in_flight = await actions_repo.get_active_for_container(name)
+    if in_flight is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=ActionInProgressDetail(
+                in_flight_action_id=in_flight.id,
+                container_name=name,
+                state=in_flight.state,
+            ).model_dump(),
+        )
+    # Determine who + client_ip from auth principal.
+    who = principal.username if isinstance(principal, User) else f"token:{principal.name}"
+    client_ip = request.client.host if request.client is not None else None
+    action_id = await runner.trigger_pull_and_restart(
+        container_name=name, who=who, client_ip=client_ip
+    )
+    # The runner returns the action_id. State at this point is normally
+    # "pulling"; if pre-resolution failed it's already "failed".
+    row = await actions_repo.get_by_id(action_id)
+    state: Literal["pulling", "restarting", "running", "failed"] = "pulling"
+    if row is not None and row.state == "failed":
+        state = "failed"
+    return PullAndRestartAcceptedResponse(action_id=action_id, state=state)
+
+
+@router.get(
+    "/compose-actions/{action_id}",
+    response_model=ComposeActionDetailResponse,
+)
+async def get_compose_action(
+    action_id: int,
+    _user: Annotated[User, Depends(require_session())],
+    actions_repo: Annotated[ComposeActionsRepository, Depends(_get_compose_actions_repo)],
+) -> ComposeActionDetailResponse:
+    """Fetch one compose action's full record (stdout/stderr included)."""
+    row = await actions_repo.get_by_id(action_id)
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"compose action not found: {action_id}",
+        )
+    return _row_to_detail(row)
+
+
+@router.get(
+    "/compose-actions",
+    response_model=ComposeActionListResponse,
+)
+async def list_compose_actions(
+    _user: Annotated[User, Depends(require_session())],
+    actions_repo: Annotated[ComposeActionsRepository, Depends(_get_compose_actions_repo)],
+    container: Annotated[str, Query(min_length=1)],
+    limit: Annotated[int, Query(ge=1, le=100)] = 10,
+) -> ComposeActionListResponse:
+    """List recent actions for one container. `container` query param required."""
+    rows = await actions_repo.list_for_container(container_name=container, limit=limit)
+    return ComposeActionListResponse(actions=[_row_to_detail(r) for r in rows])

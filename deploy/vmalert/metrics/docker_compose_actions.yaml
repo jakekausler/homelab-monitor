@@ -1,0 +1,23 @@
+# vmalert rules for Docker compose actions (Pull & Restart, etc).
+# Emitted by ComposeActionRunner (STAGE-003-010).
+#
+# Severity vocabulary locked: info / warning / error / critical (spec §8.2).
+#
+# `for: 0m` — fail fast: a failed action is immediately actionable; there is
+# no transient retry window for a user-initiated write.
+
+groups:
+  - name: docker_compose_actions
+    interval: 30s
+    rules:
+      - alert: DockerComposeActionFailed
+        expr: increase(homelab_compose_action_failed_total[10m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+          source_tool: vmalert-metrics
+          target_kind: docker_container
+          integration: docker
+        annotations:
+          summary: "Pull & Restart action failed for {{ $labels.container }}"
+          description: 'Compose action "{{ $labels.action }}" for container "{{ $labels.container }}" failed; reason: {{ $labels.reason }}. Check Recent Actions panel in the Docker integration for stdout/stderr.'

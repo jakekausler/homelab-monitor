@@ -50,6 +50,7 @@ EXPECTED_TABLES = {
     "docker_override_ownership",
     "docker_build_hashes",
     "image_update_state",
+    "compose_actions",
 }
 
 

@@ -65,6 +65,9 @@ data/
 # bootstrap bearer token. Generated at boot, never committed.
 deploy/compose/test-fixtures/am-config-seed/alertmanager.yml
 
+# Compose overrides
+deploy/compose/docker-compose.override.yml
+
 # OS
 .DS_Store
 Thumbs.db

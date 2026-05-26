@@ -88,3 +88,14 @@ def test_parse_serialize_round_trip() -> None:
     # Should round-trip (order may vary but content is same)
     parsed_again = parse_scopes(serialized)
     assert parsed == parsed_again
+
+
+def test_scope_docker_write_value() -> None:
+    """DOCKER_WRITE serializes to 'docker:write'."""
+    assert Scope.DOCKER_WRITE.value == "docker:write"
+
+
+def test_parse_docker_write_scope() -> None:
+    """parse_scopes parses 'docker:write' to Scope.DOCKER_WRITE."""
+    result = parse_scopes("docker:write")
+    assert result == {Scope.DOCKER_WRITE}

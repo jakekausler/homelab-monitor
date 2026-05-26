@@ -2,7 +2,6 @@ import { useState, useMemo } from 'react'
 import { ContainerGrid } from './ContainerGrid'
 import { ContainerGridCard } from './ContainerGridCard'
 import { PendingSuggestionsPanel } from './PendingSuggestionsPanel'
-import { RecentActionsPanel } from './RecentActionsPanel'
 import { useListContainers } from '@/api/docker'
 
 export function DockerIntegrationPage() {
@@ -52,7 +51,6 @@ export function DockerIntegrationPage() {
       </div>
 
       <PendingSuggestionsPanel />
-      <RecentActionsPanel />
     </div>
   )
 }

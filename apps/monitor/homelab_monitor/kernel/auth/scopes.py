@@ -13,6 +13,7 @@ class Scope(StrEnum):
     CRON_EVENTS_INGEST_WRITE = "cron:events:ingest:write"
     READ_STATUS = "read:status"
     ADMIN_BACKUP_WRITE = "admin:backup:write"
+    DOCKER_WRITE = "docker:write"
 
 
 def parse_scopes(stored: str) -> set[Scope]:

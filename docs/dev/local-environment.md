@@ -17,6 +17,19 @@ make dev          # hybrid: docker sidecars + host backend + host UI
 
 Login defaults: `admin` / `admin-dev-password` (override via `HM_DEV_ADMIN_*` in `dev.env`).
 
+### Build-context mounts (local-build images only)
+
+If your `build-sources.yaml` defines `build_context_roots`, run once (and re-run whenever
+you edit `build-sources.yaml`):
+
+```bash
+make generate-build-mounts
+```
+
+This writes `deploy/compose/docker-compose.override.yml`, which docker compose auto-loads
+(same directory as `docker-compose.yml`). Without this file, `docker compose build` inside
+the monitor container cannot resolve host build-context paths.
+
 ## When to use each mode
 
 | Command | Mode | What it does | When to use |

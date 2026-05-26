@@ -532,6 +532,191 @@
         "title": "CommentBody",
         "type": "object"
       },
+      "ComposeActionDetailResponse": {
+        "properties": {
+          "action": {
+            "title": "Action",
+            "type": "string"
+          },
+          "action_id": {
+            "title": "Action Id",
+            "type": "integer"
+          },
+          "after_digest": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "After Digest"
+          },
+          "after_image": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "After Image"
+          },
+          "before_digest": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Before Digest"
+          },
+          "before_image": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Before Image"
+          },
+          "client_ip": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Ip"
+          },
+          "command": {
+            "title": "Command",
+            "type": "string"
+          },
+          "compose_service": {
+            "title": "Compose Service",
+            "type": "string"
+          },
+          "container_name": {
+            "title": "Container Name",
+            "type": "string"
+          },
+          "duration_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Seconds"
+          },
+          "ended_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ended At"
+          },
+          "error_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Reason"
+          },
+          "exit_code": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exit Code"
+          },
+          "started_at": {
+            "title": "Started At",
+            "type": "string"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          },
+          "stderr": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stderr"
+          },
+          "stdout": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stdout"
+          },
+          "who": {
+            "title": "Who",
+            "type": "string"
+          }
+        },
+        "required": [
+          "action_id",
+          "action",
+          "container_name",
+          "compose_service",
+          "command",
+          "state",
+          "started_at",
+          "who"
+        ],
+        "title": "ComposeActionDetailResponse",
+        "type": "object"
+      },
+      "ComposeActionListResponse": {
+        "properties": {
+          "actions": {
+            "items": {
+              "$ref": "#/components/schemas/ComposeActionDetailResponse"
+            },
+            "title": "Actions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "actions"
+        ],
+        "title": "ComposeActionListResponse",
+        "type": "object"
+      },
       "ContainerListResponse": {
         "properties": {
           "containers": {
@@ -2499,6 +2684,43 @@
           "summaries"
         ],
         "title": "ProbeSummaryResponse",
+        "type": "object"
+      },
+      "PullAndRestartAcceptedResponse": {
+        "properties": {
+          "action_id": {
+            "title": "Action Id",
+            "type": "integer"
+          },
+          "state": {
+            "enum": [
+              "pulling",
+              "building",
+              "restarting",
+              "failed"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "action_id",
+          "state"
+        ],
+        "title": "PullAndRestartAcceptedResponse",
+        "type": "object"
+      },
+      "PullAndRestartRequest": {
+        "properties": {
+          "confirm_phrase": {
+            "title": "Confirm Phrase",
+            "type": "string"
+          }
+        },
+        "required": [
+          "confirm_phrase"
+        ],
+        "title": "PullAndRestartRequest",
         "type": "object"
       },
       "RegisterCronBody": {
@@ -4523,6 +4745,105 @@
         "summary": "Healthz"
       }
     },
+    "/api/integrations/docker/compose-actions": {
+      "get": {
+        "description": "List recent actions for one container. `container` query param required.",
+        "operationId": "list_compose_actions_api_integrations_docker_compose_actions_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "container",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "title": "Container",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 10,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ComposeActionListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Compose Actions",
+        "tags": [
+          "docker"
+        ]
+      }
+    },
+    "/api/integrations/docker/compose-actions/{action_id}": {
+      "get": {
+        "description": "Fetch one compose action's full record (stdout/stderr included).",
+        "operationId": "get_compose_action_api_integrations_docker_compose_actions__action_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "action_id",
+            "required": true,
+            "schema": {
+              "title": "Action Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ComposeActionDetailResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Compose Action",
+        "tags": [
+          "docker"
+        ]
+      }
+    },
     "/api/integrations/docker/containers": {
       "get": {
         "description": "List all Docker containers from the targets table.\n\nRequires an authenticated session. Returns cached CPU/mem metrics from\nthe last collector tick; does not query VictoriaMetrics live.",
@@ -4626,6 +4947,59 @@
           }
         },
         "summary": "List Container Probes",
+        "tags": [
+          "docker"
+        ]
+      }
+    },
+    "/api/integrations/docker/containers/{name}/pull-and-restart": {
+      "post": {
+        "description": "Trigger a Pull & Restart for `name`. Returns 202 with action_id.\n\nConfirm: body.confirm_phrase must equal 'pull' (case-insensitive).\nAuth: session OR API token with Scope.DOCKER_WRITE.",
+        "operationId": "pull_and_restart_container_api_integrations_docker_containers__name__pull_and_restart_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PullAndRestartRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PullAndRestartAcceptedResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Pull And Restart Container",
         "tags": [
           "docker"
         ]

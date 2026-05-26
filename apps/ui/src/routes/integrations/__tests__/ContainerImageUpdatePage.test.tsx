@@ -21,6 +21,7 @@ afterEach(cleanup)
 vi.mock('@/api/docker', () => ({
   useImageUpdate: vi.fn(),
   useImageUpdatesSummary: () => ({ data: null }),
+  useListComposeActions: () => ({ data: { actions: [] }, isPending: false, isError: false }),
 }))
 
 import { useImageUpdate } from '@/api/docker'

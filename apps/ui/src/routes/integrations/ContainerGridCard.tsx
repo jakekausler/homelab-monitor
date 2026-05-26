@@ -6,6 +6,7 @@ import { extractComposeBasename } from './composeBasename'
 import { ProbesBadge } from './ProbesBadge'
 import { ImageUpdateBadge } from './ImageUpdateBadge'
 import { formatDigest } from '@/lib/digest'
+import { ActionsCell } from './ContainerGridRow'
 
 interface ContainerGridCardProps {
   containers: ContainerRow[]
@@ -62,9 +63,9 @@ export function ContainerGridCard({ containers }: ContainerGridCardProps) {
               <div>
                 Probes: <ProbesBadge containerName={c.name} />
               </div>
-              <div>
-                {/* SCAFFOLDING: STAGE-003-010 populates Pull & Restart confirm-gated action */}
-                Actions: {'—'}
+              <div className="flex items-center gap-1">
+                <span>Actions:</span>
+                <ActionsCell container={c} />
               </div>
             </div>
           </li>

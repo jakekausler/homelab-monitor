@@ -483,6 +483,35 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
     build_sources_loader.start_task()
     app.state.build_sources_loader = build_sources_loader
 
+    # STAGE-003-010: ComposeActionRunner — owns per-container locks + bg tasks.
+    from homelab_monitor.kernel.db.repositories.compose_actions_repository import (  # noqa: PLC0415
+        ComposeActionsRepository,
+    )
+    from homelab_monitor.kernel.docker.compose_action_runner import (  # noqa: PLC0415
+        ComposeActionRunner,
+    )
+
+    # Fetch or create the DockerSocketClient (same as in collector wiring below)
+    socket_client = getattr(app.state, "docker_socket_client", None)
+    if socket_client is None:
+        from homelab_monitor.kernel.docker.socket_client import (  # noqa: PLC0415
+            DockerSocketClient,
+        )
+
+        socket_path = os.environ.get("HOMELAB_MONITOR_DOCKER_SOCKET", "/var/run/docker.sock")
+        socket_client = DockerSocketClient(socket_path=socket_path, log=log)
+        app.state.docker_socket_client = socket_client
+
+    compose_action_runner = ComposeActionRunner(
+        repo=repo,
+        actions_repo=ComposeActionsRepository(repo),
+        build_sources_loader=build_sources_loader,
+        socket_client=socket_client,
+        prom_registry=prom_registry,
+        log=log,
+    )
+    app.state.compose_action_runner = compose_action_runner
+
     collectors = loader.load_all()
     # TODO(refactor): inject log_stream_state via CollectorContext rather
     # than mutating private attrs post-construction. Currently this is the
@@ -533,7 +562,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
             # DockerSocketCollector above, IF present (degraded path may have
             # skipped it). Otherwise construct a dedicated one.
             discoverer_socket_client = getattr(app.state, "docker_socket_client", None)
-            if discoverer_socket_client is None:
+            if discoverer_socket_client is None:  # pragma: no cover
+                # Unreachable in practice: lines 496-503 always construct and
+                # store docker_socket_client on app.state before this wiring
+                # loop runs, so this branch can never be entered. It is kept
+                # as a defensive fallback.
                 from homelab_monitor.kernel.docker.socket_client import (  # noqa: PLC0415
                     DockerSocketClient,
                 )
@@ -591,6 +624,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
             )
             c._state_repo = ImageUpdateStateRepository(repo)  # pyright: ignore[reportPrivateUsage]
             app.state.image_update_collector = c
+            # Wire post-pull refresher into compose_action_runner.
+            compose_runner = getattr(app.state, "compose_action_runner", None)
+            if compose_runner is not None:  # pragma: no branch -- always set before plugin loop
+                compose_runner.set_image_update_refresher(c.refresh_container)
         from homelab_monitor.kernel.metrics.local_build_update_collector import (  # noqa: PLC0415
             LocalBuildUpdateCollector,
         )
@@ -618,6 +655,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
             c._limits = SourceHashLimits.from_env()  # pyright: ignore[reportPrivateUsage]
             c._build_sources_loader = build_sources_loader  # pyright: ignore[reportPrivateUsage]
             app.state.local_build_update_collector = c
+            # Wire post-rebuild refresher into compose_action_runner.
+            compose_runner = getattr(app.state, "compose_action_runner", None)
+            if compose_runner is not None:  # pragma: no branch -- always set before plugin loop
+                compose_runner.set_local_build_refresher(c.refresh_container)
     scheduler = Scheduler(
         collectors,
         ctx_factory,
@@ -947,6 +988,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
         build_sources_loader_handle = getattr(app.state, "build_sources_loader", None)
         if build_sources_loader_handle is not None:  # pragma: no branch
             await build_sources_loader_handle.stop_task()
+        # STAGE-003-010: cancel any in-flight compose actions before scheduler shutdown
+        # so subprocess children get SIGTERM via task.cancel().
+        compose_runner_handle = getattr(app.state, "compose_action_runner", None)
+        if compose_runner_handle is not None:  # pragma: no branch
+            await compose_runner_handle.shutdown()
         # Stop ProbeSupervisor per-container tasks before scheduler shutdown
         supervisor = getattr(app.state, "probe_supervisor", None)
         if supervisor is not None:  # pragma: no branch — defensive degraded-collector guard

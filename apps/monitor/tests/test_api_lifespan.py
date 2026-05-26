@@ -787,3 +787,32 @@ async def test_lifespan_startup_cron_discovery_disabled_skips_immediate_run(
         # Lifespan must complete successfully with startup discovery disabled.
         assert app.state.scheduler is not None
         assert app.state.scheduler.running
+
+
+@pytest.mark.asyncio
+async def test_lifespan_wires_local_build_refresher_to_compose_runner(
+    db_url: str,
+    master_key: bytes,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify that LocalBuildUpdateCollector.refresh_container is wired to
+    ComposeActionRunner.set_local_build_refresher during lifespan startup.
+    """
+    monkeypatch.setenv("HOMELAB_MONITOR_DB_URL", db_url)
+    monkeypatch.setenv("HOMELAB_MONITOR_MASTER_KEY", base64.b64encode(master_key).decode())
+
+    app = create_app(lifespan_enabled=True)
+
+    async with app.router.lifespan_context(app):
+        compose_runner = getattr(app.state, "compose_action_runner", None)
+        local_build_collector = getattr(app.state, "local_build_update_collector", None)
+
+        assert compose_runner is not None
+        assert local_build_collector is not None
+
+        # Verify the refresher is wired (not None)
+        refresher = compose_runner._local_build_refresher  # pyright: ignore[reportPrivateUsage]
+        assert refresher is not None
+        # Verify it's a callable bound to the collector (check __self__ for bound method)
+        assert hasattr(refresher, "__self__")
+        assert refresher.__self__ is local_build_collector

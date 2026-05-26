@@ -50,8 +50,18 @@ services:
       HOMELAB_MONITOR_BUILD_HASH_MAX_TOTAL_BYTES: ${HOMELAB_MONITOR_BUILD_HASH_MAX_TOTAL_BYTES:-1073741824}
       HOMELAB_MONITOR_BUILD_HASH_MAX_FILE_COUNT: ${HOMELAB_MONITOR_BUILD_HASH_MAX_FILE_COUNT:-50000}
       HOMELAB_MONITOR_BUILD_HASH_MAX_DEPTH: ${HOMELAB_MONITOR_BUILD_HASH_MAX_DEPTH:-30}
+      # STAGE-003-010: compose action runner.
+      HOMELAB_MONITOR_COMPOSE_ACTION_TIMEOUT_SECONDS: ${HOMELAB_MONITOR_COMPOSE_ACTION_TIMEOUT_SECONDS:-300}
+      # Docker CLI needs a writable HOME for its config dir (~/.docker). Container's
+      # default HOME is / which is root-owned; redirect to /tmp.
+      HOME: /tmp
+      DOCKER_CONFIG: /tmp/.docker
     group_add:
       - "${HM_HOST_DOCKER_GID:-999}"
+      # STAGE-003-010: homelab-compose group grants read access to /storage/docker/compose/.env
+      # for `docker compose pull/up -d` env interpolation. GID is host-specific
+      # (host-setup.sh creates the group; see scripts/host-setup-shared-files.conf).
+      - "${HM_HOST_COMPOSE_GID:-994}"
     volumes:
       - data_monitor:/data
       - data_vm:/var/vm-data:ro
@@ -90,7 +100,12 @@ services:
       # /proc is mounted ro — /proc/stat btime is world-readable. Used for
       # @reboot cron lateness and a correct homelab_host_uptime_seconds.
       - /proc:/host/proc:ro
-      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # STAGE-003-010: docker socket RW for Pull & Restart compose actions.
+      # Security boundary: socket access is root-equivalent on host (accepted per
+      # EPIC-003 cross-stage criterion #18). Auto-fix runs are confirm-gated +
+      # audit-logged + per-runbook rate-limited; manual Pull & Restart is the
+      # only Stage-010 actor.
+      - /var/run/docker.sock:/var/run/docker.sock
       # STAGE-003-007 D-MOUNT-PATH-PROD: per-container override YAML files.
       # Per-service Docker probe overrides (STAGE-003-007).
       # Operator creates YAML files at $HOMELAB_MONITOR_OVERRIDES_DIR/plugins/docker/<container>.yaml on the host.

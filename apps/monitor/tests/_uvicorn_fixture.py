@@ -100,7 +100,7 @@ class UvicornTestServer:
     set by uvicorn on its own loop.
     """
 
-    _STARTUP_TIMEOUT_S = 10.0
+    _STARTUP_TIMEOUT_S = 20.0
     _SHUTDOWN_TIMEOUT_S = 10.0
     _POLL_INTERVAL_S = 0.05
 

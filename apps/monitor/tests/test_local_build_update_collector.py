@@ -17,7 +17,10 @@ from homelab_monitor.kernel.db.repositories.docker_build_hashes_repository impor
 from homelab_monitor.kernel.db.repository import SqliteRepository
 from homelab_monitor.kernel.docker.build_sources_loader import BuildSourcesLoader
 from homelab_monitor.kernel.docker.socket_client import DockerSocketClient
-from homelab_monitor.kernel.docker.source_hash import SourceHashLimits
+from homelab_monitor.kernel.docker.source_hash import (
+    SourceHashLimits,
+    SourceHashResult,
+)
 from homelab_monitor.kernel.metrics import local_build_update_collector as lbuc_module
 from homelab_monitor.kernel.metrics.local_build_update_collector import (
     _DEFAULT_INTERVAL_SECONDS,  # pyright: ignore[reportPrivateUsage]
@@ -1368,3 +1371,676 @@ async def test_preserve_check_failed_at_when_failure_reason_unchanged(
     assert row is not None
     assert row.check_error_reason == "context_missing"
     assert row.check_failed_at == original_failed_at  # Preserved, not updated
+
+
+@pytest.mark.asyncio
+async def test_refresh_container_resets_baseline_and_clears_update_available(
+    repo: SqliteRepository, tmp_path: Path
+) -> None:
+    """T1: refresh_container resets baseline and clears update_available."""
+    # Pre-seed a row with update_available=True and an old baseline
+    async with repo.transaction() as conn:
+        await DockerBuildHashesRepository.upsert_conn(
+            conn,
+            container_name="myapp",
+            compose_service="myapp",
+            build_context_path="/app/build",
+            last_source_hash="old_hash",
+            last_checked_at="2026-01-01T00:00:00+00:00",
+            check_failed_at=None,
+            check_error_reason=None,
+            update_available=True,
+            baseline_source_hash="old_baseline",
+            baseline_image_id="old_image_id",
+        )
+
+    # Setup compose
+    compose_dir = tmp_path / "compose"
+    build_context = tmp_path / "app" / "build"
+    build_context.mkdir(parents=True, exist_ok=True)
+    _write_compose(
+        compose_dir,
+        textwrap.dedent("""
+            services:
+              myapp:
+                build: ../app/build
+        """),
+    )
+
+    # Mock socket client to return container with known image ID
+    socket_client = AsyncMock(spec=DockerSocketClient)
+    socket_client.list_containers.return_value = [
+        {
+            "Id": "cont-id-1",
+            "Names": ["/myapp"],
+            "Config": {"Labels": {"com.docker.compose.service": "myapp"}},
+            "ImageID": "sha256:new_image_id",
+        }
+    ]
+
+    # Mock compute_source_hash to return a new hash
+    with patch(
+        "homelab_monitor.kernel.metrics.local_build_update_collector.compute_source_hash"
+    ) as mock_compute:
+        mock_compute.return_value = SourceHashResult(
+            hash="new_hash",
+            files_hashed=10,
+            bytes_hashed=50000,
+            files_skipped=0,
+            exceeded=None,
+        )
+
+        loader = BuildSourcesLoader(
+            config_path=compose_dir / "build-sources.yaml",
+            log=structlog.get_logger().bind(component="test"),  # type: ignore[arg-type]
+        )
+
+        collector = LocalBuildUpdateCollector(
+            db=repo,
+            socket_client=socket_client,
+            build_hashes_repo=DockerBuildHashesRepository(repo),
+            compose_dir=compose_dir,
+            build_sources_loader=loader,
+        )
+
+        # Call refresh_container
+        await collector.refresh_container(container_name="myapp")
+
+    # Assert: upserted row has update_available=False, new baseline
+    row = await DockerBuildHashesRepository(repo).get_by_container("myapp")
+    assert row is not None
+    assert row.update_available is False
+    assert row.baseline_source_hash == "new_hash"
+    assert row.baseline_image_id == "sha256:new_image_id"
+    assert row.check_failed_at is None
+    assert row.check_error_reason is None
+
+
+@pytest.mark.asyncio
+async def test_refresh_container_noop_when_dependencies_unwired(
+    tmp_path: Path,
+) -> None:
+    """T2: refresh_container no-ops when dependencies unwired."""
+    collector = LocalBuildUpdateCollector(
+        db=None,  # Unwired
+        socket_client=None,
+        build_hashes_repo=None,
+        compose_dir=tmp_path,
+    )
+
+    # Must not raise, must not call any DB method
+    await collector.refresh_container(container_name="test")
+
+
+@pytest.mark.asyncio
+async def test_refresh_container_noop_when_container_not_in_list(
+    repo: SqliteRepository, tmp_path: Path
+) -> None:
+    """T3: refresh_container no-ops when container not in list."""
+    compose_dir = tmp_path / "compose"
+    _write_compose(
+        compose_dir,
+        textwrap.dedent("""
+            services:
+              myapp:
+                build: ../app/build
+        """),
+    )
+
+    socket_client = AsyncMock(spec=DockerSocketClient)
+    socket_client.list_containers.return_value = []  # Empty list
+
+    loader = BuildSourcesLoader(
+        config_path=compose_dir / "build-sources.yaml",
+        log=structlog.get_logger().bind(component="test"),  # type: ignore[arg-type]
+    )
+
+    collector = LocalBuildUpdateCollector(
+        db=repo,
+        socket_client=socket_client,
+        build_hashes_repo=DockerBuildHashesRepository(repo),
+        compose_dir=compose_dir,
+        build_sources_loader=loader,
+    )
+
+    # Must not raise
+    await collector.refresh_container(container_name="nonexistent")
+
+
+# ---------------------------------------------------------------------------
+# Lines 338-345: context_missing with ctx AND prior_row with same error reason
+# (preserves check_failed_at)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_context_missing_with_ctx_emits_skipped_gauge(
+    repo: SqliteRepository, tmp_path: Path
+) -> None:
+    """context_missing branch emits homelab_build_source_hash_skipped_total when ctx is set."""
+    writer = MemoryRetainingMetricsWriter()
+    ctx = _ctx(writer, repo)
+
+    compose_dir = tmp_path / "compose"
+    _write_compose(compose_dir, "services:\n  myapp:\n    build: /nonexistent-path\n")
+
+    socket_client = AsyncMock(spec=DockerSocketClient)
+    socket_client.list_containers.return_value = [
+        {
+            "Names": ["/myapp"],
+            "Labels": {"com.docker.compose.service": "myapp"},
+            "ImageID": "sha256:imageA",
+        }
+    ]
+
+    collector = _make_collector(repo, socket_client, compose_dir=compose_dir)
+    await collector.run(ctx)
+
+    skipped = [g for g in writer.gauges if g[0] == "homelab_build_source_hash_skipped_total"]
+    assert any(g[2].get("reason") == "context_missing" for g in skipped)
+
+
+@pytest.mark.asyncio
+async def test_context_missing_preserves_check_failed_at_when_same_reason(
+    repo: SqliteRepository, tmp_path: Path
+) -> None:
+    """check_failed_at is preserved when context_missing reason unchanged (line 345-348)."""
+    writer = MemoryRetainingMetricsWriter()
+    ctx = _ctx(writer, repo)
+
+    original_failed_at = "2026-01-01T00:00:00+00:00"
+    async with repo.transaction() as conn:
+        await DockerBuildHashesRepository.upsert_conn(
+            conn,
+            container_name="myapp",
+            compose_service="myapp",
+            build_context_path="/nonexistent-path",
+            last_source_hash=None,
+            last_checked_at="2026-01-02T00:00:00+00:00",
+            check_failed_at=original_failed_at,
+            check_error_reason="context_missing",
+            update_available=False,
+            baseline_source_hash=None,
+            baseline_image_id=None,
+        )
+
+    compose_dir = tmp_path / "compose"
+    _write_compose(compose_dir, "services:\n  myapp:\n    build: /nonexistent-path\n")
+
+    socket_client = AsyncMock(spec=DockerSocketClient)
+    socket_client.list_containers.return_value = [
+        {
+            "Names": ["/myapp"],
+            "Labels": {"com.docker.compose.service": "myapp"},
+            "ImageID": "sha256:imageA",
+        }
+    ]
+
+    collector = _make_collector(repo, socket_client, compose_dir=compose_dir)
+    await collector.run(ctx)
+
+    row = await DockerBuildHashesRepository(repo).get_by_container("myapp")
+    assert row is not None
+    assert row.check_failed_at == original_failed_at  # preserved, not reset to now
+
+
+# ---------------------------------------------------------------------------
+# Lines 366-384: exceeded with ctx AND prior_row with same error reason
+# (preserves check_failed_at for oversized case)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_oversized_with_ctx_emits_two_gauges(repo: SqliteRepository, tmp_path: Path) -> None:
+    """Exceeded branch emits both skipped + image_update_available gauges (lines 366-382)."""
+    writer = MemoryRetainingMetricsWriter()
+    ctx = _ctx(writer, repo)
+
+    ctx_dir = tmp_path / "ctx"
+    ctx_dir.mkdir()
+    (ctx_dir / "big.bin").write_bytes(b"x" * 200)
+
+    compose_dir = tmp_path / "compose"
+    _write_compose(compose_dir, f"services:\n  myapp:\n    build: {ctx_dir}\n")
+
+    socket_client = AsyncMock(spec=DockerSocketClient)
+    socket_client.list_containers.return_value = [
+        {
+            "Names": ["/myapp"],
+            "Labels": {"com.docker.compose.service": "myapp"},
+            "ImageID": "sha256:imageA",
+        }
+    ]
+
+    tiny_limits = SourceHashLimits(max_file_bytes=10)
+    collector = LocalBuildUpdateCollector(
+        db=repo,
+        socket_client=socket_client,
+        build_hashes_repo=DockerBuildHashesRepository(repo),
+        compose_dir=compose_dir,
+        limits=tiny_limits,
+    )
+    await collector.run(ctx)
+
+    skipped = [g for g in writer.gauges if g[0] == "homelab_build_source_hash_skipped_total"]
+    assert any(g[2].get("reason") == "context_too_large" for g in skipped)
+    update_gauges = [g for g in writer.gauges if g[0] == "homelab_image_update_available"]
+    assert any(g[2].get("source") == "local_build" for g in update_gauges)
+
+
+@pytest.mark.asyncio
+async def test_oversized_preserves_check_failed_at_when_same_reason(
+    repo: SqliteRepository, tmp_path: Path
+) -> None:
+    """check_failed_at preserved when exceeded reason unchanged (line 384-387)."""
+    writer = MemoryRetainingMetricsWriter()
+    ctx = _ctx(writer, repo)
+
+    ctx_dir = tmp_path / "ctx"
+    ctx_dir.mkdir()
+    (ctx_dir / "big.bin").write_bytes(b"x" * 200)
+
+    original_failed_at = "2026-01-01T00:00:00+00:00"
+    async with repo.transaction() as conn:
+        await DockerBuildHashesRepository.upsert_conn(
+            conn,
+            container_name="myapp",
+            compose_service="myapp",
+            build_context_path=str(ctx_dir),
+            last_source_hash="OVERSIZED:abc",
+            last_checked_at="2026-01-02T00:00:00+00:00",
+            check_failed_at=original_failed_at,
+            check_error_reason="context_too_large",
+            update_available=True,
+            baseline_source_hash=None,
+            baseline_image_id=None,
+        )
+
+    compose_dir = tmp_path / "compose"
+    _write_compose(compose_dir, f"services:\n  myapp:\n    build: {ctx_dir}\n")
+
+    socket_client = AsyncMock(spec=DockerSocketClient)
+    socket_client.list_containers.return_value = [
+        {
+            "Names": ["/myapp"],
+            "Labels": {"com.docker.compose.service": "myapp"},
+            "ImageID": "sha256:imageA",
+        }
+    ]
+
+    tiny_limits = SourceHashLimits(max_file_bytes=10)
+    collector = LocalBuildUpdateCollector(
+        db=repo,
+        socket_client=socket_client,
+        build_hashes_repo=DockerBuildHashesRepository(repo),
+        compose_dir=compose_dir,
+        limits=tiny_limits,
+    )
+    await collector.run(ctx)
+
+    row = await DockerBuildHashesRepository(repo).get_by_container("myapp")
+    assert row is not None
+    assert row.check_failed_at == original_failed_at  # preserved
+
+
+# ---------------------------------------------------------------------------
+# Line 485: refresh_container no-op when config=None and compose_dir=None
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_refresh_container_noop_when_no_compose_config_and_no_compose_dir(
+    repo: SqliteRepository,
+) -> None:
+    """refresh_container returns early when config=None and compose_dir=None (line 485)."""
+    socket_client = AsyncMock(spec=DockerSocketClient)
+
+    # Loader whose current_config is None (missing file)
+    loader = BuildSourcesLoader(
+        config_path=Path("/nonexistent/build-sources.yaml"),
+        log=structlog.get_logger().bind(component="test"),  # type: ignore[arg-type]
+    )
+
+    collector = LocalBuildUpdateCollector(
+        db=repo,
+        socket_client=socket_client,
+        build_hashes_repo=DockerBuildHashesRepository(repo),
+        compose_dir=None,  # no env-var fallback
+        build_sources_loader=loader,
+    )
+
+    # Must not raise and must not call socket_client
+    await collector.refresh_container(container_name="myapp")
+    socket_client.list_containers.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Lines 488-489: refresh_container uses loader compose_paths + PathResolver
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_refresh_container_uses_loader_config_when_present(
+    repo: SqliteRepository, tmp_path: Path
+) -> None:
+    """refresh_container reads compose_paths from loader config (lines 488-489)."""
+    build_context = tmp_path / "build"
+    build_context.mkdir()
+    (build_context / "Dockerfile").write_text("FROM alpine\n", encoding="utf-8")
+
+    compose_dir = tmp_path / "compose"
+    _write_compose(compose_dir, f"services:\n  myapp:\n    build: {build_context}\n")
+
+    yaml_path = tmp_path / "build-sources.yaml"
+    yaml_path.write_text(_build_sources_yaml(compose_dir / "docker-compose.yml"), encoding="utf-8")
+    loader = await _make_loader(yaml_path)
+    assert loader.current_config is not None
+
+    socket_client = AsyncMock(spec=DockerSocketClient)
+    socket_client.list_containers.return_value = [
+        {
+            "Names": ["/myapp"],
+            "Labels": {"com.docker.compose.service": "myapp"},
+            "ImageID": "sha256:new-img",
+        }
+    ]
+
+    collector = LocalBuildUpdateCollector(
+        db=repo,
+        socket_client=socket_client,
+        build_hashes_repo=DockerBuildHashesRepository(repo),
+        compose_dir=None,  # force loader path
+        build_sources_loader=loader,
+    )
+
+    # Must not raise; should upsert a row
+    await collector.refresh_container(container_name="myapp")
+
+    row = await DockerBuildHashesRepository(repo).get_by_container("myapp")
+    assert row is not None
+    assert row.update_available is False
+    assert row.baseline_image_id == "sha256:new-img"
+
+
+# ---------------------------------------------------------------------------
+# Lines 497-498: refresh_container no-op on ComposeReadError
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_refresh_container_noop_on_compose_read_error(
+    repo: SqliteRepository, tmp_path: Path
+) -> None:
+    """refresh_container returns early on ComposeReadError (lines 497-498)."""
+
+    compose_dir = tmp_path / "compose"
+    _write_compose(compose_dir, "services: {\nbroken: [unclosed\n")
+
+    socket_client = AsyncMock(spec=DockerSocketClient)
+
+    collector = LocalBuildUpdateCollector(
+        db=repo,
+        socket_client=socket_client,
+        build_hashes_repo=DockerBuildHashesRepository(repo),
+        compose_dir=compose_dir,
+    )
+
+    # Must not raise; no upsert
+    await collector.refresh_container(container_name="myapp")
+    socket_client.list_containers.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Lines 503-504: refresh_container no-op on socket error
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_refresh_container_noop_on_socket_error(
+    repo: SqliteRepository, tmp_path: Path
+) -> None:
+    """refresh_container returns early when list_containers raises (lines 503-504)."""
+    build_context = tmp_path / "build"
+    build_context.mkdir()
+    compose_dir = tmp_path / "compose"
+    _write_compose(compose_dir, f"services:\n  myapp:\n    build: {build_context}\n")
+
+    socket_client = AsyncMock(spec=DockerSocketClient)
+    socket_client.list_containers.side_effect = OSError("socket broken")
+
+    collector = LocalBuildUpdateCollector(
+        db=repo,
+        socket_client=socket_client,
+        build_hashes_repo=DockerBuildHashesRepository(repo),
+        compose_dir=compose_dir,
+    )
+
+    # Must not raise
+    await collector.refresh_container(container_name="myapp")
+
+    row = await DockerBuildHashesRepository(repo).get_by_container("myapp")
+    assert row is None  # nothing written
+
+
+# ---------------------------------------------------------------------------
+# Line 517: refresh_container skips entries with empty Names
+# Line 522-523: target_entry is None → no-op
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_refresh_container_skips_entries_with_no_names(
+    repo: SqliteRepository, tmp_path: Path
+) -> None:
+    """refresh_container skips entries with empty Names and returns early (lines 516-523)."""
+    build_context = tmp_path / "build"
+    build_context.mkdir()
+    compose_dir = tmp_path / "compose"
+    _write_compose(compose_dir, f"services:\n  myapp:\n    build: {build_context}\n")
+
+    socket_client = AsyncMock(spec=DockerSocketClient)
+    # One entry with no Names — should be skipped, leaving target_entry=None
+    socket_client.list_containers.return_value = [
+        {"Names": [], "Labels": {}, "ImageID": "sha256:img"},
+    ]
+
+    collector = LocalBuildUpdateCollector(
+        db=repo,
+        socket_client=socket_client,
+        build_hashes_repo=DockerBuildHashesRepository(repo),
+        compose_dir=compose_dir,
+    )
+
+    await collector.refresh_container(container_name="myapp")
+
+    row = await DockerBuildHashesRepository(repo).get_by_container("myapp")
+    assert row is None  # no upsert since target_entry was None
+
+
+@pytest.mark.asyncio
+async def test_refresh_container_noop_when_name_not_matched_in_list(
+    repo: SqliteRepository, tmp_path: Path
+) -> None:
+    """Return early when no entry name matches (branch 518->514 exhausts loop)."""
+    build_context = tmp_path / "build"
+    build_context.mkdir()
+    compose_dir = tmp_path / "compose"
+    _write_compose(compose_dir, f"services:\n  myapp:\n    build: {build_context}\n")
+
+    socket_client = AsyncMock(spec=DockerSocketClient)
+    # Entry has a non-empty name that does NOT match "myapp"
+    socket_client.list_containers.return_value = [
+        {"Names": ["/other-container"], "Labels": {}, "ImageID": "sha256:img"},
+    ]
+
+    collector = LocalBuildUpdateCollector(
+        db=repo,
+        socket_client=socket_client,
+        build_hashes_repo=DockerBuildHashesRepository(repo),
+        compose_dir=compose_dir,
+    )
+
+    await collector.refresh_container(container_name="myapp")
+
+    row = await DockerBuildHashesRepository(repo).get_by_container("myapp")
+    assert row is None  # no upsert — loop exhausted without finding target
+
+
+# ---------------------------------------------------------------------------
+# Lines 529-530: refresh_container no-op when service not in build_services
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_refresh_container_noop_when_service_not_a_build_service(
+    repo: SqliteRepository, tmp_path: Path
+) -> None:
+    """refresh_container returns early when compose service has no build context (lines 529-530)."""
+    compose_dir = tmp_path / "compose"
+    # Service has only image:, no build:
+    _write_compose(compose_dir, "services:\n  myapp:\n    image: nginx:latest\n")
+
+    socket_client = AsyncMock(spec=DockerSocketClient)
+    socket_client.list_containers.return_value = [
+        {
+            "Names": ["/myapp"],
+            "Labels": {"com.docker.compose.service": "myapp"},
+            "ImageID": "sha256:img",
+        }
+    ]
+
+    collector = LocalBuildUpdateCollector(
+        db=repo,
+        socket_client=socket_client,
+        build_hashes_repo=DockerBuildHashesRepository(repo),
+        compose_dir=compose_dir,
+    )
+
+    await collector.refresh_container(container_name="myapp")
+
+    row = await DockerBuildHashesRepository(repo).get_by_container("myapp")
+    assert row is None  # no upsert
+
+
+# ---------------------------------------------------------------------------
+# Branch 338->345 (ctx=None, context_missing) and 366->384 (ctx=None, exceeded)
+# These branches are taken when refresh_container calls _build_upsert_payload
+# with ctx=None — the gauge-write block is skipped, jumping past it.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_refresh_container_context_missing_no_ctx_branch(
+    repo: SqliteRepository, tmp_path: Path
+) -> None:
+    """Missing build context skips gauge emission (ctx=None, line 338->345)."""
+    compose_dir = tmp_path / "compose"
+    # Reference a build context path that will not exist on disk
+    missing_ctx = tmp_path / "nonexistent-build"
+    _write_compose(compose_dir, f"services:\n  myapp:\n    build: {missing_ctx}\n")
+
+    socket_client = AsyncMock(spec=DockerSocketClient)
+    socket_client.list_containers.return_value = [
+        {
+            "Names": ["/myapp"],
+            "Labels": {"com.docker.compose.service": "myapp"},
+            "ImageID": "sha256:img",
+        }
+    ]
+
+    collector = LocalBuildUpdateCollector(
+        db=repo,
+        socket_client=socket_client,
+        build_hashes_repo=DockerBuildHashesRepository(repo),
+        compose_dir=compose_dir,
+    )
+
+    # refresh_container calls _build_upsert_payload(ctx=None, ...) — no gauge, but payload returned
+    await collector.refresh_container(container_name="myapp")
+
+    row = await DockerBuildHashesRepository(repo).get_by_container("myapp")
+    assert row is not None
+    assert row.check_error_reason == "context_missing"
+
+
+@pytest.mark.asyncio
+async def test_refresh_container_oversized_context_no_ctx_branch(
+    repo: SqliteRepository, tmp_path: Path
+) -> None:
+    """refresh_container with oversized context skips gauge emission (ctx=None, line 366->384)."""
+    ctx_dir = tmp_path / "ctx"
+    ctx_dir.mkdir()
+    (ctx_dir / "big.bin").write_bytes(b"x" * 200)
+
+    compose_dir = tmp_path / "compose"
+    _write_compose(compose_dir, f"services:\n  myapp:\n    build: {ctx_dir}\n")
+
+    socket_client = AsyncMock(spec=DockerSocketClient)
+    socket_client.list_containers.return_value = [
+        {
+            "Names": ["/myapp"],
+            "Labels": {"com.docker.compose.service": "myapp"},
+            "ImageID": "sha256:img",
+        }
+    ]
+
+    tiny_limits = SourceHashLimits(max_file_bytes=10)
+    collector = LocalBuildUpdateCollector(
+        db=repo,
+        socket_client=socket_client,
+        build_hashes_repo=DockerBuildHashesRepository(repo),
+        compose_dir=compose_dir,
+        limits=tiny_limits,
+    )
+
+    await collector.refresh_container(container_name="myapp")
+
+    row = await DockerBuildHashesRepository(repo).get_by_container("myapp")
+    assert row is not None
+    assert row.check_error_reason == "context_too_large"
+
+
+# ---------------------------------------------------------------------------
+# Line 551: refresh_container no-op when payload is None (hash exceeded limits)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_refresh_container_noop_when_hash_exceeds_limits(
+    repo: SqliteRepository, tmp_path: Path
+) -> None:
+    """refresh_container returns early when _build_upsert_payload returns None (line 551).
+
+    This cannot happen today because reset_baseline=True never returns None
+    (exceeded returns a payload, not None). The only way payload is None is a
+    future code path, so we patch _build_upsert_payload to force the branch.
+    """
+    build_context = tmp_path / "build"
+    build_context.mkdir()
+    (build_context / "Dockerfile").write_text("FROM alpine\n", encoding="utf-8")
+
+    compose_dir = tmp_path / "compose"
+    _write_compose(compose_dir, f"services:\n  myapp:\n    build: {build_context}\n")
+
+    socket_client = AsyncMock(spec=DockerSocketClient)
+    socket_client.list_containers.return_value = [
+        {
+            "Names": ["/myapp"],
+            "Labels": {"com.docker.compose.service": "myapp"},
+            "ImageID": "sha256:img",
+        }
+    ]
+
+    collector = LocalBuildUpdateCollector(
+        db=repo,
+        socket_client=socket_client,
+        build_hashes_repo=DockerBuildHashesRepository(repo),
+        compose_dir=compose_dir,
+    )
+
+    # Force _build_upsert_payload to return None
+    with patch.object(collector, "_build_upsert_payload", return_value=None):
+        await collector.refresh_container(container_name="myapp")
+
+    row = await DockerBuildHashesRepository(repo).get_by_container("myapp")
+    assert row is None  # no upsert when payload is None

@@ -37,7 +37,7 @@ from homelab_monitor.kernel.docker.compose_reader import (
 )
 from homelab_monitor.kernel.docker.names import canonicalize_container_name
 from homelab_monitor.kernel.docker.path_resolver import PathResolver
-from homelab_monitor.kernel.docker.socket_client import DockerSocketClient
+from homelab_monitor.kernel.docker.socket_client import ContainerListEntry, DockerSocketClient
 from homelab_monitor.kernel.docker.source_hash import (
     SourceHashLimits,
     SourceHashResult,
@@ -314,9 +314,9 @@ class LocalBuildUpdateCollector(BaseCollector):
             duration_seconds=time.monotonic() - start,
         )
 
-    def _process_one_container(  # noqa: PLR0913 -- payload builder; explicit param names for readability
+    def _build_upsert_payload(  # noqa: PLR0913 -- keyword-only collaborator + state inputs
         self,
-        ctx: CollectorContext,
+        ctx: CollectorContext | None,
         *,
         container_name: str,
         compose_service: str,
@@ -324,14 +324,23 @@ class LocalBuildUpdateCollector(BaseCollector):
         now: str,
         prior_row: DockerBuildHashRow | None,
         current_image_id: str,
+        reset_baseline: bool = False,
     ) -> _UpsertPayload | None:
-        """Hash one container's build context. Returns payload (or None on hard skip)."""
+        """Build an upsert payload for one container. Handles both tick and refresh paths.
+
+        When reset_baseline=True (on-demand refresh after rebuild):
+        - Computes fresh hash and resets baseline without the 3-case logic.
+        - Returns None if hash computation exceeds limits.
+
+        When reset_baseline=False (normal tick): applies the 3-case baseline logic.
+        """
         if not build_context.exists():
-            ctx.vm.write_gauge(
-                "homelab_build_source_hash_skipped_total",
-                1.0,
-                {"reason": "context_missing", "name": container_name},
-            )
+            if ctx is not None:
+                ctx.vm.write_gauge(
+                    "homelab_build_source_hash_skipped_total",
+                    1.0,
+                    {"reason": "context_missing", "name": container_name},
+                )
             # Preserve check_failed_at if same error reason (don't reset timestamp)
             check_failed_at = (
                 prior_row.check_failed_at
@@ -354,22 +363,23 @@ class LocalBuildUpdateCollector(BaseCollector):
         result: SourceHashResult = compute_source_hash(build_context, limits=self._limits)
 
         if result.exceeded is not None:
-            ctx.vm.write_gauge(
-                "homelab_build_source_hash_skipped_total",
-                1.0,
-                {"reason": result.exceeded, "name": container_name},
-            )
-            ctx.vm.write_gauge(
-                "homelab_image_update_available",
-                1.0,
-                {
-                    "name": container_name,
-                    "image": f"local-build:{compose_service}",
-                    "source": "local_build",
-                    "current_digest": result.hash,  # sentinel hash
-                    "latest_digest": result.hash,
-                },
-            )
+            if ctx is not None:
+                ctx.vm.write_gauge(
+                    "homelab_build_source_hash_skipped_total",
+                    1.0,
+                    {"reason": result.exceeded, "name": container_name},
+                )
+                ctx.vm.write_gauge(
+                    "homelab_image_update_available",
+                    1.0,
+                    {
+                        "name": container_name,
+                        "image": f"local-build:{compose_service}",
+                        "source": "local_build",
+                        "current_digest": result.hash,  # sentinel hash
+                        "latest_digest": result.hash,
+                    },
+                )
             # Preserve check_failed_at if same error reason (don't reset timestamp)
             check_failed_at = (
                 prior_row.check_failed_at
@@ -389,10 +399,8 @@ class LocalBuildUpdateCollector(BaseCollector):
                 "baseline_image_id": prior_row.baseline_image_id if prior_row else None,
             }
 
-        # Determine baseline and update_available per 3-case design:
-        # Case 0: missing/empty image_id from socket → treat as first check (defensive)
-        # Case 1: first ever check (no row) OR image mismatch
-        if (
+        # When reset_baseline=True, skip the 3-case logic and reset baseline directly.
+        if reset_baseline or (
             prior_row is None
             or not current_image_id
             or (current_image_id and prior_row.baseline_image_id != current_image_id)
@@ -408,17 +416,18 @@ class LocalBuildUpdateCollector(BaseCollector):
                 baseline_source_hash is not None and baseline_source_hash != result.hash
             )
 
-        ctx.vm.write_gauge(
-            "homelab_image_update_available",
-            1.0 if update_available else 0.0,
-            {
-                "name": container_name,
-                "image": f"local-build:{compose_service}",
-                "source": "local_build",
-                "current_digest": baseline_source_hash or "",
-                "latest_digest": result.hash,
-            },
-        )
+        if ctx is not None:
+            ctx.vm.write_gauge(
+                "homelab_image_update_available",
+                1.0 if update_available else 0.0,
+                {
+                    "name": container_name,
+                    "image": f"local-build:{compose_service}",
+                    "source": "local_build",
+                    "current_digest": baseline_source_hash or "",
+                    "latest_digest": result.hash,
+                },
+            )
         return {
             "container_name": container_name,
             "compose_service": compose_service,
@@ -431,6 +440,118 @@ class LocalBuildUpdateCollector(BaseCollector):
             "baseline_source_hash": baseline_source_hash,
             "baseline_image_id": baseline_image_id,
         }
+
+    def _process_one_container(  # noqa: PLR0913 -- payload builder; explicit param names for readability
+        self,
+        ctx: CollectorContext,
+        *,
+        container_name: str,
+        compose_service: str,
+        build_context: Path,
+        now: str,
+        prior_row: DockerBuildHashRow | None,
+        current_image_id: str,
+    ) -> _UpsertPayload | None:
+        """Hash one container's build context. Returns payload (or None on hard skip)."""
+        return self._build_upsert_payload(
+            ctx,
+            container_name=container_name,
+            compose_service=compose_service,
+            build_context=build_context,
+            now=now,
+            prior_row=prior_row,
+            current_image_id=current_image_id,
+            reset_baseline=False,
+        )
+
+    async def refresh_container(  # noqa: PLR0911 -- step-by-step refresher with documented early returns
+        self, *, container_name: str
+    ) -> None:
+        """Reset baseline hash/image_id for one container after a successful rebuild.
+
+        Called by ComposeActionRunner after Rebuild & Restart succeeds. Recomputes
+        the source hash, sets update_available=False, and persists the new baseline
+        so the badge clears immediately without waiting for the next 30-min tick.
+
+        No-ops if dependencies are not wired.
+        """
+        if self._db is None or self._socket_client is None or self._build_hashes_repo is None:
+            return  # pragma: no cover -- dependencies unwired
+
+        # Need build_context for this container. Load from build_sources_loader or
+        # compose_dir fallback — mirrors the tick path's compose resolution.
+        config = self._build_sources_loader.current_config if self._build_sources_loader else None
+        if config is None and self._compose_dir is None:
+            return  # no compose config available; no-op
+
+        if config is not None:
+            compose_paths = [Path(e.container_path) for e in config.compose_files]
+            resolver = PathResolver(config.build_context_roots)
+        else:
+            assert self._compose_dir is not None
+            compose_paths = [self._compose_dir / self._compose_filename]
+            resolver = PathResolver([])
+
+        try:
+            compose = read_compose_set(compose_paths, path_resolver=resolver)
+        except ComposeReadError:
+            return  # compose unreadable; no-op
+
+        # Inspect the container to get current image_id and service label.
+        try:
+            entries = await self._socket_client.list_containers()
+        except Exception:
+            return  # no-op on socket error
+
+        build_services = {
+            svc_name: svc
+            for svc_name, svc in compose.services.items()
+            if svc.build_context is not None
+        }
+
+        # Find the matching entry for container_name.
+        target_entry: ContainerListEntry | None = None
+        for entry in entries:
+            raw_names = entry.get("Names") or []
+            if not raw_names:
+                continue
+            if canonicalize_container_name(str(raw_names[0])) == container_name:
+                target_entry = entry
+                break
+
+        if target_entry is None:
+            return  # container not running; no-op
+
+        labels_raw = target_entry.get("Labels") or {}
+        labels: dict[str, str] = {str(k): str(v) for k, v in labels_raw.items()}
+        compose_service = labels.get("com.docker.compose.service") or container_name
+        svc = build_services.get(compose_service)
+        if svc is None or svc.build_context is None:
+            return  # not a local-build service
+
+        now = utc_now_iso()
+        current_image_id = str(target_entry.get("ImageID") or "")
+
+        async with self._db.transaction() as conn:
+            prior_row = await DockerBuildHashesRepository.list_all_conn(conn)
+            prior_row_dict = {r.container_name: r for r in prior_row}
+            target_prior = prior_row_dict.get(container_name)
+
+        payload = self._build_upsert_payload(
+            None,  # no ctx — no metric emission during on-demand refresh
+            container_name=container_name,
+            compose_service=compose_service,
+            build_context=svc.build_context,
+            now=now,
+            prior_row=target_prior,
+            current_image_id=current_image_id,
+            reset_baseline=True,
+        )
+        if payload is None:
+            return  # hash exceeded limits; no-op
+
+        async with self._db.transaction() as conn:
+            await DockerBuildHashesRepository.upsert_conn(conn, **payload)
 
     @staticmethod
     def _emit_self_metric(ctx: CollectorContext, *, phase: str, result: str) -> None:

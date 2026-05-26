@@ -139,6 +139,45 @@ class ImageUpdateCollector(BaseCollector):
     def current_skipped_count(self) -> int:
         return self._last_skipped_count
 
+    async def refresh_container(
+        self,
+        *,
+        container_name: str,
+        image_ref: str,
+        image_id: str,
+    ) -> None:
+        """Immediately recheck image-update state for one container.
+
+        Called by ComposeActionRunner after a successful pull to ensure the
+        newly-pulled digest is reflected in the DB without waiting for the
+        next 6h scheduled tick.
+
+        No-ops if dependencies are not wired (e.g. in early boot or tests
+        that don't need the collector).
+        """
+        if (
+            self._db is None
+            or self._socket_client is None
+            or self._registry_client is None
+            or self._state_repo is None
+        ):
+            return  # pragma: no cover -- dependencies unwired
+        now = utc_now_iso()
+        try:
+            payload = await self._fetch_digest_payload(
+                container_name=container_name,
+                image_ref=image_ref,
+                image_id=image_id,
+                now=now,
+            )
+        except Exception:  # pragma: no cover -- defensive
+            return
+        if payload is None:  # pragma: no cover -- defensive
+            return
+        assert self._db is not None  # pragma: no cover -- defensive
+        async with self._db.transaction() as conn:
+            await ImageUpdateStateRepository.upsert_state_conn(conn, now=now, **payload)
+
     async def run(self, ctx: CollectorContext) -> CollectorResult:
         start = time.monotonic()
         if (  # pragma: no cover -- defensive init guard
@@ -320,23 +359,55 @@ class ImageUpdateCollector(BaseCollector):
                 )
                 return (1, None)
 
-        # 3. Get local digest from image_inspect.
+        payload = await self._fetch_digest_payload(
+            container_name=container_name,
+            image_ref=image_ref,
+            image_id=image_id,
+            now=now,
+        )
+        if payload is None:
+            return (0, None)
+
+        # Emit gauge from the payload.
+        local_digest = payload.get("last_local_digest")
+        registry_digest = payload.get("last_registry_digest")
+        ctx.vm.write_gauge(
+            "homelab_image_update_available",
+            1.0 if payload["update_available"] else 0.0,
+            {
+                "name": container_name,
+                "image": image_ref,
+                "current_digest": local_digest or "",
+                "latest_digest": registry_digest or "",
+            },
+        )
+        return (1, payload)
+
+    async def _fetch_digest_payload(
+        self,
+        *,
+        container_name: str,
+        image_ref: str,
+        image_id: str,
+        now: str,
+    ) -> _UpsertPayload | None:
+        """Fetch digests for one container and return upsert payload, or None on skip.
+
+        Does not emit metrics or manage rate-limit tracking; used by both
+        _process_one_container (during tick) and refresh_container (on-demand).
+        """
+        # Parse image ref.
+        try:
+            parsed = parse_image_ref(image_ref)
+        except ImageRefParseError:
+            return None
+
+        # Get local digest from image_inspect.
         assert self._socket_client is not None
         local_digest: str | None = None
         try:
             inspect_data = await self._socket_client.image_inspect(image_id)
-        except Exception as exc:
-            ctx.log.warning(
-                "image_update_collector.image_inspect_failed",
-                container_name=container_name,
-                image_id=image_id,
-                error=str(exc),
-            )
-            ctx.vm.write_gauge(
-                "homelab_image_update_image_inspect_failures",
-                1.0,
-                {"container_name": container_name},
-            )
+        except Exception:  # pragma: no cover -- defensive
             inspect_data = None
         if inspect_data is not None:
             raw_digests: object = inspect_data.get("RepoDigests")
@@ -361,32 +432,22 @@ class ImageUpdateCollector(BaseCollector):
                     first = str(matched)
                     local_digest = first.split("@", 1)[1] if "@" in first else first
 
-        # 4. Fetch registry digest.
+        # Fetch registry digest.
         assert self._registry_client is not None
         result = await self._registry_client.fetch_latest_digest(image_ref)
 
-        # 5. Branch on outcome.
+        # Branch on outcome.
         if isinstance(result, FetchedDigest):
             # Update rate-limit tracking with timestamp.
             if (
                 result.rate_limit_remaining is not None
             ):  # pragma: no branch -- None case = no header (non-Docker-Hub registries)
-                self._last_rate_limit_remaining[registry] = (
+                self._last_rate_limit_remaining[parsed.registry] = (
                     result.rate_limit_remaining,
                     time.monotonic(),
                 )
             # If None (no header), preserve existing entry (or leave absent)
             update_available = local_digest is not None and result.digest != local_digest
-            ctx.vm.write_gauge(
-                "homelab_image_update_available",
-                1.0 if update_available else 0.0,
-                {
-                    "name": container_name,
-                    "image": image_ref,
-                    "current_digest": local_digest or "",
-                    "latest_digest": result.digest,
-                },
-            )
             payload: _UpsertPayload = {
                 "container_name": container_name,
                 "last_image_ref": image_ref,
@@ -397,20 +458,9 @@ class ImageUpdateCollector(BaseCollector):
                 "check_error_reason": None,
                 "update_available": update_available,
             }
-            return (1, payload)
+            return payload
 
         # FetchError branch
-        # Emit gauge with 0 (don't claim update on failure).
-        ctx.vm.write_gauge(
-            "homelab_image_update_available",
-            0.0,
-            {
-                "name": container_name,
-                "image": image_ref,
-                "current_digest": local_digest or "",
-                "latest_digest": "",
-            },
-        )
         payload = {
             "container_name": container_name,
             "last_image_ref": image_ref,
@@ -421,14 +471,7 @@ class ImageUpdateCollector(BaseCollector):
             "check_error_reason": result.reason,
             "update_available": False,
         }
-        ctx.log.info(
-            "image_update_collector.fetch_error",
-            container_name=container_name,
-            registry=registry,
-            reason=result.reason,
-            message=result.message,
-        )
-        return (1, payload)
+        return payload
 
     @staticmethod
     def _emit_self_metric(ctx: CollectorContext, *, phase: str, result: str) -> None:

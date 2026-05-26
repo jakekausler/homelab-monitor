@@ -60,6 +60,7 @@ async def insert_audit(  # noqa: PLR0913
     after: Mapping[str, object] | None = None,
     ip: str | None = None,
     when: str | None = None,
+    audit_id: str | None = None,
 ) -> None:
     """Write a row to ``audit_log`` against an EXISTING transaction's connection.
 
@@ -82,7 +83,7 @@ async def insert_audit(  # noqa: PLR0913
     await conn.execute(
         AUDIT_INSERT,
         {
-            "id": uuid7(),
+            "id": audit_id if audit_id is not None else uuid7(),
             "who": who,
             "what": what,
             "when": when if when is not None else utc_now_iso(),

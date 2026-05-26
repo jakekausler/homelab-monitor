@@ -69,6 +69,7 @@ Login defaults: `admin` / `admin-dev-password` (override via `HM_DEV_ADMIN_*` in
 | `make dev-clean` | Tear down everything (incl. volumes), then `make dev`. Use for fresh-DB scenarios. |
 | `make dev-prod` | Full prod compose stack (monitor built from local Dockerfile). Use to validate Dockerfile / alembic / compose changes. |
 | `make dev-down` | Stop everything, preserve volumes. Use when done for the day. |
+| `make generate-build-mounts` | Regenerate compose volume mounts for local-build contexts. Re-run after editing build-sources.yaml. |
 
 Full operator guide: `docs/dev/local-environment.md` (port map, troubleshooting, sidecar visibility, master-key rotation).
 

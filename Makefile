@@ -145,3 +145,14 @@ verify-ci:
 	@command -v code-review-graph >/dev/null 2>&1 || { echo "ERROR: code-review-graph missing — run 'make crg-init'"; exit 1; }
 	uv tool run code-review-graph build
 	docker compose -f deploy/compose/docker-compose.yml config -q
+
+## generate-build-mounts: Regenerate deploy/compose/docker-compose.override.yml from build-sources.yaml
+generate-build-mounts:
+	@bash scripts/generate-compose-override.sh
+
+test-generate-build-mounts:
+	@echo "build_context_roots:" > /tmp/test-bs.yaml
+	@echo "  - host_prefix: /storage/programs" >> /tmp/test-bs.yaml
+	@echo "    container_prefix: /host-build-contexts/programs" >> /tmp/test-bs.yaml
+	@BUILD_SOURCES_PATH=/tmp/test-bs.yaml OUT_OVERRIDE=/tmp/test-override.yml bash scripts/generate-compose-override.sh
+	@grep 'storage/programs:/storage/programs:ro' /tmp/test-override.yml && echo "PASS" || (echo "FAIL" && exit 1)

@@ -5,6 +5,7 @@ import { ErrorDisplay } from '@/components/ErrorDisplay'
 import { formatDigest } from '@/lib/digest'
 import { formatSourceHash } from '@/lib/sourceHash'
 import { formatRelative } from '@/lib/relativeTime'
+import { RecentActionsPanel } from './RecentActionsPanel'
 
 export function ContainerImageUpdatePage() {
   const { name } = useParams({ strict: false })
@@ -155,6 +156,11 @@ export function ContainerImageUpdatePage() {
             </div>
           )}
         </dl>
+      )}
+      {containerName && (
+        <div className="mt-6">
+          <RecentActionsPanel containerName={containerName} />
+        </div>
       )}
     </div>
   )
