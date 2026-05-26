@@ -171,6 +171,23 @@ Re-verify after any change to:
 - **R-009-12: `_signal_awaitable_done` covers all _tick exit paths** — `Scheduler.await_immediate_run` must NOT hang on quarantine/group-lock-timeout/cancelled/timeout/exception early returns in `_tick`. Regression test: `make verify` completes the full pytest suite without hanging (was hanging 5+ min at ~88% before the helper was added).
 - **R-009-13: OpenAPI cascade** — Future changes to `ImageUpdateDetail` or `ImageUpdateSummaryEntry` Pydantic models MUST regenerate `packages/shared-types/openapi.json` + `apps/ui/src/api/schema.ts`. The summary endpoint unions registry + local-build entries; the per-container endpoint prefers local-build over registry when both exist.
 
+## STAGE-003-011 — Per-container log viewer
+
+- [ ] `GET /api/integrations/docker/containers/{name}/logs` returns 200 with `log_status="available"` for a container with active logs (try `homelab-monitor` or `homelab-vector`).
+- [ ] Same endpoint returns 404 with `log_status="container_unknown"` for a non-existent container name (e.g., `/api/integrations/docker/containers/does-not-exist/logs`).
+- [ ] Same endpoint returns 503 with `log_status="vl_unavailable"` when VictoriaLogs is unreachable (simulate by stopping the VL container briefly).
+- [ ] Returns `log_status="no_lines"` (200) when container exists in `targets` table but VL has no lines in the queried window.
+- [ ] Query params clamped: `?limit=10000` → silently clamped to 500; `?since=8d` → silently clamped to 7d.
+- [ ] Query params validated: `?since=abc` or `?since=5x` → 422.
+- [ ] Frontend route `/integrations/docker/containers/$name/logs` renders the viewer (sticky header + log body + since picker + refresh button).
+- [ ] Since picker presets (5m, 15m, 1h, 6h, 24h, 7d) each trigger a fresh query.
+- [ ] Truncation banner ("Showing first 500 lines. Narrow the time window to see all entries.") appears when `truncated=true`.
+- [ ] All four `log_status` UI states render appropriately (available with lines, no_lines empty state, container_unknown 404 page, vl_unavailable amber banner).
+- [ ] "View logs →" link in the desktop container grid (ContainerGridRow) navigates to the correct route.
+- [ ] "View logs →" link in the mobile container card (ContainerGridCard) navigates to the correct route.
+- [ ] Mobile viewport renders the viewer correctly (header stacks, log body scrolls).
+- [ ] Pagination & custom datetime range are explicitly deferred to EPIC-004 STAGE-004-005 — confirm code comments `// TODO: EPIC-004 STAGE-004-005 — cursor-based pagination + custom datetime range picker` exist in both `DockerContainerLogsViewer.tsx` and `CronRunLogViewer.tsx`.
+
 ## STAGE-003-010 — Pull & Restart action (added 2026-05-26)
 
 - [ ] **Remote-image pull**: With a remote-image container showing "Update available", click Pull & Restart → modal shows current/latest digest → type "pull" → submit. Verify: button vanishes immediately → "Pulling…" appears → polling shows transition to "Restarting…" → terminal success → toast "Pull & Restart succeeded for {container}" → badge clears within ~2s → container recreated with new image.
