@@ -42,11 +42,11 @@ The drill-down panel ("Docker" tab under Integrations) lands as a SKELETON early
 | STAGE-003-007 | Per-service config-file override — YAML override under `/config/plugins/docker/` supersedes labels | Complete |
 | STAGE-003-008 | Image-update detection (registry digest) — `homelab_image_update_available` metric + vmalert info-severity rule | Complete |
 | STAGE-003-009 | Image-update detection (locally-built images) — build-context source hash | Complete |
-| STAGE-003-010 | "Pull & Restart" action — confirm-gated compose-aware action + audit + new `compose_actions` table | Not Started |
+| STAGE-003-010 | "Pull & Restart" action — confirm-gated compose-aware action + audit + new `compose_actions` table | Complete |
 | STAGE-003-011 | Per-container log viewer route — `/integrations/docker/containers/$name/logs` (VL-backed, manual refresh) | Not Started |
 | STAGE-003-012 | Drill-down completion + in-epic suggestions stub (cross-ref EPIC-011) | Not Started |
 
-## Current Stage: STAGE-003-010
+## Current Stage: STAGE-003-011
 
 ## Cross-stage acceptance criteria
 
