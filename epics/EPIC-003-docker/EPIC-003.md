@@ -1,6 +1,6 @@
 # EPIC-003: Docker collector + per-container probes + label-based discovery + diun-style updates
 
-## Status: Not Started
+## Status: Complete (2026-05-26)
 
 ## Overview
 
@@ -44,9 +44,9 @@ The drill-down panel ("Docker" tab under Integrations) lands as a SKELETON early
 | STAGE-003-009 | Image-update detection (locally-built images) — build-context source hash | Complete |
 | STAGE-003-010 | "Pull & Restart" action — confirm-gated compose-aware action + audit + new `compose_actions` table | Complete |
 | STAGE-003-011 | Per-container log viewer route — `/integrations/docker/containers/$name/logs` (VL-backed, manual refresh) | Complete |
-| STAGE-003-012 | Drill-down completion + in-epic suggestions stub (cross-ref EPIC-011) | Not Started |
+| STAGE-003-012 | Drill-down completion + in-epic suggestions stub (cross-ref EPIC-011) | Complete |
 
-## Current Stage: STAGE-003-012
+## Current Stage: (Epic Complete — all 12 stages done)
 
 ## Cross-stage acceptance criteria
 
@@ -111,6 +111,7 @@ The in-epic suggestions UI stub (STAGE-003-002 skeleton + STAGE-003-010 completi
 - Render Docker discoverer suggestions alongside all other discoverer types in a single unified inbox.
 - Subsume the per-epic stub — the Docker drill-down's "Pending suggestions" panel can either link to the global inbox OR be removed entirely (to be decided in EPIC-011 Design).
 - Honor the existing `suggestions` table schema written by STAGE-003-004 — no schema rewrite required for EPIC-011 to take over rendering.
+- **Endpoint path migration:** STAGE-003-012 created Docker-namespaced POST endpoints (`/api/integrations/docker/suggestions/{id}/accept|customize|ignore`). EPIC-011 may (a) keep them Docker-namespaced and route global inbox actions through them, (b) introduce generic `/api/suggestions/{id}/...` endpoints that the global inbox uses and deprecate the Docker-namespaced ones over a release boundary, or (c) implement both side-by-side during transition. Decision deferred to EPIC-011 Design phase. The `suggestions` table schema is stable and supports all discoverer types — no schema migration is required, only UI + endpoint paths may change.
 
 This carry-forward MUST be added as an explicit EPIC-011 acceptance criterion when EPIC-011 is opened.
 

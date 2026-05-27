@@ -201,3 +201,39 @@ Re-verify after any change to:
 - [ ] **Host setup idempotent**: `sudo bash scripts/host-setup.sh` is safe to re-run; reports "PRESENT" for existing group/file states.
 - [ ] **Override generation**: `make generate-build-mounts` re-reads build-sources.yaml and rewrites docker-compose.override.yml deterministically. Operator MUST pass `-f deploy/compose/docker-compose.override.yml` to docker compose commands (auto-load is disabled when explicit `-f` is used for the main file).
 - [ ] **Mobile viewport**: Modal + Recent Actions panel render correctly at 375x667; all interactions tappable.
+
+## STAGE-003-012 — Probes section + per-container probe management
+
+### Backend
+- [ ] `POST /api/integrations/docker/probe-targets` creates a new probe_target row (config_source="manual"). 200 OK with the created row. 422 on invalid kind/name/intervals. 404 if container_name doesn't exist in targets table. 401 without session. Requires X-CSRF-Token.
+- [ ] `PATCH /api/integrations/docker/probe-targets/{probe_id}` updates target_value / interval_seconds / timeout_seconds (kind + name + container_name are immutable). 200 with updated row. 404 if probe_id doesn't exist. 422 on invalid intervals. 401 without session.
+- [ ] `DELETE /api/integrations/docker/probe-targets/{probe_id}` physically deletes the row (NOT a soft hide). 204 No Content. 404 if probe_id doesn't exist. 401 without session.
+- [ ] All three endpoints idempotent at REST level where applicable: POST duplicate (container,kind,name) → upserts existing row.
+- [ ] `GET /api/integrations/docker/suggestions/{id}/default-probes` returns the probes Accept would create (probes=[] + reason=docker_unavailable | container_gone | no_ports_no_healthcheck | available). 200 always. 404 only if suggestion_id doesn't exist.
+- [ ] Audit log entries created on POST/PATCH/DELETE (search `docker.probe_target.*` in audit_log table).
+- [ ] Backend kernel coverage 100%.
+
+### Frontend — Probes section
+- [ ] "Probes" section header at `/integrations/docker` (was "Pending Suggestions" before STAGE-003-012 Refinement scope expansion).
+- [ ] One ContainerProbesCard per container in the grid above (1:1). No "show missing" filter.
+- [ ] Each card has header (name + image + status badge), Active probes list, Suggested probes list (if pending suggestion exists), "Add new probe" button.
+- [ ] Active probes list shows kind + name + target + interval/timeout + Edit + Delete buttons.
+- [ ] Click Delete → row disappears IMMEDIATELY (optimistic update), toast confirms.
+- [ ] Click Edit → opens EditProbeModal with kind/name read-only, target/intervals editable.
+- [ ] Submit Edit → row updates IMMEDIATELY, toast confirms.
+- [ ] Suggested probes list (only if pending suggestion) shows kind + name + target + Add + Ignore buttons.
+- [ ] Click Add on suggested → row moves IMMEDIATELY from Suggested to Active, toast confirms.
+- [ ] Click Ignore on suggested → row disappears IMMEDIATELY from Suggested (no network call, client-side only). Refreshing page → ignored items come back (persistent ignore deferred to EPIC-011).
+- [ ] "Add new probe" button opens AddProbeModal (single-row form, kind=http default).
+- [ ] Submit Add → row appears IMMEDIATELY in Active, toast confirms.
+- [ ] Probes shown on the card match probes shown on the per-container drill-down at `/integrations/docker/containers/$name/probes` (both surfaces use the same `useListProbes` hook + cache key).
+- [ ] AddProbeModal + EditProbeModal full-screen sheet on mobile (< sm); centered modal on desktop.
+- [ ] Optimistic updates rollback correctly on server error (test by simulating 500 from POST).
+
+### Cross-epic carry-forward to EPIC-011
+- [ ] PendingSuggestionsPanel removal vs link decision (deferred to EPIC-011 Design): the in-epic Probes panel is now in place. EPIC-011 will decide whether to keep it AND a global inbox, or remove it.
+- [ ] Endpoint path migration (`/api/integrations/docker/suggestions/*` → possibly `/api/suggestions/*`): the existing `/suggestions/{id}/accept|customize|ignore` endpoints remain on the backend but are no longer called by UI. EPIC-011 will decide whether to deprecate or generalize.
+- [ ] Per-default-probe ignore persistence: currently client-side React state only. EPIC-011 will decide whether to add a `dismissed_suggestion_probes` table for cross-session persistence.
+
+### Operational gotcha (CLAUDE.md candidate)
+- [ ] After ANY change to `apps/ui/src/*`, run `pnpm --filter ui run build` BEFORE `docker compose build` to refresh the `apps/ui/dist/` folder. The Dockerfile copies the pre-built dist directly (line 72: `COPY apps/ui/dist /app/ui`). Skipping the UI build ships a stale bundle.
