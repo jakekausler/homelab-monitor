@@ -202,6 +202,20 @@ Re-verify after any change to:
 - [ ] **Override generation**: `make generate-build-mounts` re-reads build-sources.yaml and rewrites docker-compose.override.yml deterministically. Operator MUST pass `-f deploy/compose/docker-compose.override.yml` to docker compose commands (auto-load is disabled when explicit `-f` is used for the main file).
 - [ ] **Mobile viewport**: Modal + Recent Actions panel render correctly at 375x667; all interactions tappable.
 
+## STAGE-003-013 (Container drill-down unification + integration-page slim-down)
+
+- [ ] Visit `/integrations/docker` — containers grouped by compose file (header per group with Boxes icon + count), "Ungrouped" group for standalone containers, rows sorted alphabetically within groups.
+- [ ] Each row shows: name, image subtitle, status/image-update/probes/healthcheck badges (with leading lucide icons), restart chip (only when > 0), CPU%, RAM MiB, chevron. Entire row is a single Link to the container's overview tab.
+- [ ] ImageUpdateBadge renders as a colored Badge (not a Link): green "Up to date", amber "Update available" / "Rebuild needed", red "Update Check Failed". Renders nothing on loading / no-data / error states.
+- [ ] ProbesBadge renders as a colored Badge (not a Link): red "Config errors", red "{N} failing", green "{N} active". Renders nothing on loading / 0 active / no-data.
+- [ ] On mobile (< sm), ContainerListRow stacks vertically: name → image → badges → metrics. On desktop (≥ sm), name+image on left, badges+metrics on right.
+- [ ] Click any row → navigates to `/integrations/docker/containers/<name>/overview` (default tab).
+- [ ] Container drill-down page header is NOT sticky — scrolls naturally with content.
+- [ ] Tab strip: Overview → Probes → Logs → Recent Actions (in that locked order). Horizontally scrollable on mobile.
+- [ ] Overview tab: image update block (with Pull & Restart / Rebuild & Restart button when update_available), container metadata block, restart/exit history block, CPU/RAM with 15-min sparklines (via useMetricsRange).
+- [ ] Probes / Logs / Recent Actions tabs render their respective content.
+- [ ] Pull & Restart flow: button opens PullRestartModal → submits → polls action state.
+
 ## STAGE-003-012 — Probes section + per-container probe management
 
 ### Backend

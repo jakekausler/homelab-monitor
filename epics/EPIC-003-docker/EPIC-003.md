@@ -1,6 +1,6 @@
 # EPIC-003: Docker collector + per-container probes + label-based discovery + diun-style updates
 
-## Status: In Progress
+## Status: Complete (2026-05-27)
 
 ## Overview
 
@@ -45,11 +45,11 @@ The drill-down panel ("Docker" tab under Integrations) lands as a SKELETON early
 | STAGE-003-010 | "Pull & Restart" action — confirm-gated compose-aware action + audit + new `compose_actions` table | Complete |
 | STAGE-003-011 | Per-container log viewer route — `/integrations/docker/containers/$name/logs` (VL-backed, manual refresh) | Complete |
 | STAGE-003-012 | Drill-down completion + in-epic suggestions stub (cross-ref EPIC-011) | Complete |
-| STAGE-003-013 | Container drill-down unification + integration-page simplification | Design Complete |
+| STAGE-003-013 | Container drill-down unification + integration-page simplification | Complete |
 
-## Current Stage: STAGE-003-013
+## Current Stage: (Epic Complete — all 13 stages done)
 
-> **Epic re-opened 2026-05-27**: A 13th stage was added after the original 12 closed, to unify all container info/actions into per-container drill-down pages and slim the Docker integration page into a minimal compose-grouped list with badges. The original 12 stages remain Complete; STAGE-003-013 is independent follow-on work.
+> **Epic re-opened 2026-05-27**: A 13th stage was added after the original 12 closed, to unify all container info/actions into per-container drill-down pages and slim the Docker integration page into a minimal compose-grouped list with badges. The original 12 stages remain Complete; STAGE-003-013 is independent follow-on work. **STAGE-003-013 completed 2026-05-27 — EPIC-003 now fully closed.**
 
 ## Cross-stage acceptance criteria
 
