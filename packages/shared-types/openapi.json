@@ -1030,6 +1030,62 @@
         "title": "ContainerRow",
         "type": "object"
       },
+      "CreateProbeTargetRequest": {
+        "additionalProperties": false,
+        "description": "Request body for POST /integrations/docker/probe-targets.\n\nMirrors ProbeSpec shape, but adds container_name (since this endpoint\nis NOT scoped under a suggestion).",
+        "properties": {
+          "container_name": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Container Name",
+            "type": "string"
+          },
+          "interval_seconds": {
+            "default": 60,
+            "maximum": 3600.0,
+            "minimum": 1.0,
+            "title": "Interval Seconds",
+            "type": "integer"
+          },
+          "kind": {
+            "enum": [
+              "http",
+              "tcp",
+              "exec",
+              "metrics"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[a-zA-Z0-9_-]+$",
+            "title": "Name",
+            "type": "string"
+          },
+          "target_value": {
+            "minLength": 1,
+            "title": "Target Value",
+            "type": "string"
+          },
+          "timeout_seconds": {
+            "default": 10,
+            "maximum": 300.0,
+            "minimum": 1.0,
+            "title": "Timeout Seconds",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "container_name",
+          "kind",
+          "name",
+          "target_value"
+        ],
+        "title": "CreateProbeTargetRequest",
+        "type": "object"
+      },
       "CronEventItem": {
         "additionalProperties": false,
         "description": "One structured cron event in the ingest batch.",
@@ -2706,6 +2762,55 @@
         "title": "ProbeRow",
         "type": "object"
       },
+      "ProbeSpec": {
+        "additionalProperties": false,
+        "description": "One probe descriptor in a Customize request body.",
+        "properties": {
+          "interval_seconds": {
+            "default": 60,
+            "maximum": 3600.0,
+            "minimum": 1.0,
+            "title": "Interval Seconds",
+            "type": "integer"
+          },
+          "kind": {
+            "enum": [
+              "http",
+              "tcp",
+              "exec",
+              "metrics"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[a-zA-Z0-9_-]+$",
+            "title": "Name",
+            "type": "string"
+          },
+          "target_value": {
+            "minLength": 1,
+            "title": "Target Value",
+            "type": "string"
+          },
+          "timeout_seconds": {
+            "default": 10,
+            "maximum": 300.0,
+            "minimum": 1.0,
+            "title": "Timeout Seconds",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "kind",
+          "name",
+          "target_value"
+        ],
+        "title": "ProbeSpec",
+        "type": "object"
+      },
       "ProbeSummaryEntry": {
         "description": "Per-container probe counts + source breakdown + config errors.",
         "properties": {
@@ -3007,6 +3112,115 @@
         "title": "Severity",
         "type": "string"
       },
+      "SuggestionAcceptRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "apply_default_probes": {
+            "default": true,
+            "title": "Apply Default Probes",
+            "type": "boolean"
+          }
+        },
+        "title": "SuggestionAcceptRequest",
+        "type": "object"
+      },
+      "SuggestionAcceptResponse": {
+        "properties": {
+          "probes_created": {
+            "title": "Probes Created",
+            "type": "integer"
+          },
+          "suggestion": {
+            "$ref": "#/components/schemas/DockerSuggestionRow"
+          }
+        },
+        "required": [
+          "suggestion",
+          "probes_created"
+        ],
+        "title": "SuggestionAcceptResponse",
+        "type": "object"
+      },
+      "SuggestionCustomizeRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "probes": {
+            "items": {
+              "$ref": "#/components/schemas/ProbeSpec"
+            },
+            "minItems": 1,
+            "title": "Probes",
+            "type": "array"
+          }
+        },
+        "required": [
+          "probes"
+        ],
+        "title": "SuggestionCustomizeRequest",
+        "type": "object"
+      },
+      "SuggestionCustomizeResponse": {
+        "properties": {
+          "probes_created": {
+            "title": "Probes Created",
+            "type": "integer"
+          },
+          "probes_updated": {
+            "title": "Probes Updated",
+            "type": "integer"
+          },
+          "suggestion": {
+            "$ref": "#/components/schemas/DockerSuggestionRow"
+          }
+        },
+        "required": [
+          "suggestion",
+          "probes_created",
+          "probes_updated"
+        ],
+        "title": "SuggestionCustomizeResponse",
+        "type": "object"
+      },
+      "SuggestionDefaultProbesResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "probes": {
+            "items": {
+              "$ref": "#/components/schemas/ProbeSpec"
+            },
+            "title": "Probes",
+            "type": "array"
+          },
+          "reason": {
+            "enum": [
+              "available",
+              "docker_unavailable",
+              "container_gone",
+              "no_ports_no_healthcheck"
+            ],
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "probes",
+          "reason"
+        ],
+        "title": "SuggestionDefaultProbesResponse",
+        "type": "object"
+      },
+      "SuggestionIgnoreResponse": {
+        "properties": {
+          "suggestion": {
+            "$ref": "#/components/schemas/DockerSuggestionRow"
+          }
+        },
+        "required": [
+          "suggestion"
+        ],
+        "title": "SuggestionIgnoreResponse",
+        "type": "object"
+      },
       "UninstallWrapperPreview": {
         "additionalProperties": false,
         "description": "Dry-run response (confirm=false). Uninstall is a pure crontab-line edit,\nso the preview carries ONLY the crontab diff (no wrapper_content / token).",
@@ -3051,6 +3265,52 @@
           "cron"
         ],
         "title": "UninstallWrapperResult",
+        "type": "object"
+      },
+      "UpdateProbeTargetRequest": {
+        "additionalProperties": false,
+        "description": "Request body for PATCH /integrations/docker/probe-targets/{probe_id}.\n\nAll fields optional \u2014 partial-update semantics. kind, name, container_name\nare NOT mutable (UNIQUE key on probe_targets).",
+        "properties": {
+          "interval_seconds": {
+            "anyOf": [
+              {
+                "maximum": 3600.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Interval Seconds"
+          },
+          "target_value": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Value"
+          },
+          "timeout_seconds": {
+            "anyOf": [
+              {
+                "maximum": 300.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timeout Seconds"
+          }
+        },
+        "title": "UpdateProbeTargetRequest",
         "type": "object"
       },
       "UserResponse": {
@@ -5173,6 +5433,138 @@
         ]
       }
     },
+    "/api/integrations/docker/probe-targets": {
+      "post": {
+        "description": "Create (or upsert by (container_name, kind, name)) a probe target.\n\nconfig_source is always set to \"manual\" for direct-create. The existing\n/suggestions/{id}/accept path uses \"discovered_accepted\" and is unchanged.\n\nAuth: session + X-CSRF-Token.",
+        "operationId": "create_probe_target_api_integrations_docker_probe_targets_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateProbeTargetRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProbeRow"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Probe Target",
+        "tags": [
+          "docker"
+        ]
+      }
+    },
+    "/api/integrations/docker/probe-targets/{probe_id}": {
+      "delete": {
+        "description": "Hard-delete a probe target row.\n\nDistinct from disable (set_enabled_conn) and hide (mark_missing_except_conn).",
+        "operationId": "delete_probe_target_api_integrations_docker_probe_targets__probe_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "probe_id",
+            "required": true,
+            "schema": {
+              "title": "Probe Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Probe deleted"
+          },
+          "404": {
+            "description": "Probe not found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Probe Target",
+        "tags": [
+          "docker"
+        ]
+      },
+      "patch": {
+        "description": "Update mutable probe-target fields. Returns the updated row.\n\nMutable: target_value, interval_seconds, timeout_seconds.\nImmutable: kind, name, container_name (they form the logical UNIQUE key).",
+        "operationId": "update_probe_target_api_integrations_docker_probe_targets__probe_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "probe_id",
+            "required": true,
+            "schema": {
+              "title": "Probe Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateProbeTargetRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProbeRow"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Probe Target",
+        "tags": [
+          "docker"
+        ]
+      }
+    },
     "/api/integrations/docker/probes/summary": {
       "get": {
         "description": "Return active + failing probe counts grouped by container, including\nper-source breakdown and any current override-file validation errors.\n\nSingle query for the docker grid's per-row badge (avoids N+1).\n`source_breakdown` keys are config_source values ('label', 'file_override',\netc.); `config_errors` is non-None only when the override loader currently\nhas unresolved validation errors for that container.",
@@ -5353,6 +5745,197 @@
           }
         },
         "summary": "List Suggestions",
+        "tags": [
+          "docker"
+        ]
+      }
+    },
+    "/api/integrations/docker/suggestions/{suggestion_id}/accept": {
+      "post": {
+        "description": "Accept a pending Docker suggestion.\n\nPer D-IDEMPOTENT-200:\n  - state='pending' \u2192 transition to 'accepted', optionally insert default probes.\n  - state='accepted' \u2192 200 no-op (no duplicate probes).\n  - state='ignored' or 'container_gone' \u2192 409 Conflict.\n  - missing \u2192 404.",
+        "operationId": "accept_suggestion_api_integrations_docker_suggestions__suggestion_id__accept_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "suggestion_id",
+            "required": true,
+            "schema": {
+              "title": "Suggestion Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SuggestionAcceptRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuggestionAcceptResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Accept Suggestion",
+        "tags": [
+          "docker"
+        ]
+      }
+    },
+    "/api/integrations/docker/suggestions/{suggestion_id}/customize": {
+      "post": {
+        "description": "Customize-accept a suggestion with user-supplied probe specs.\n\nPer D-IDEMPOTENT-200:\n  - state in {'pending', 'accepted'} \u2192 upsert probes + ensure state='accepted'.\n  - state in {'ignored', 'container_gone'} \u2192 409 Conflict.\n  - missing \u2192 404.\nServer-side validation of probe uniqueness (kind, name) within the request body.",
+        "operationId": "customize_suggestion_api_integrations_docker_suggestions__suggestion_id__customize_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "suggestion_id",
+            "required": true,
+            "schema": {
+              "title": "Suggestion Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SuggestionCustomizeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuggestionCustomizeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Customize Suggestion",
+        "tags": [
+          "docker"
+        ]
+      }
+    },
+    "/api/integrations/docker/suggestions/{suggestion_id}/default-probes": {
+      "get": {
+        "operationId": "get_suggestion_default_probes_api_integrations_docker_suggestions__suggestion_id__default_probes_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "suggestion_id",
+            "required": true,
+            "schema": {
+              "title": "Suggestion Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuggestionDefaultProbesResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Suggestion Default Probes",
+        "tags": [
+          "docker"
+        ]
+      }
+    },
+    "/api/integrations/docker/suggestions/{suggestion_id}/ignore": {
+      "post": {
+        "description": "Ignore a suggestion from ANY state (D-IGNORE-FROM-ANY-STATE).\n\nPer D-NO-PROBE-MISSING-ON-IGNORE: existing probe_targets rows are NOT\ntouched. The user manages probe cleanup separately via the probe-disable\nUI from STAGE-003-007.",
+        "operationId": "ignore_suggestion_api_integrations_docker_suggestions__suggestion_id__ignore_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "suggestion_id",
+            "required": true,
+            "schema": {
+              "title": "Suggestion Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuggestionIgnoreResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Ignore Suggestion",
         "tags": [
           "docker"
         ]

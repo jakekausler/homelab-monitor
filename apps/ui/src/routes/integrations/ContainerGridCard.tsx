@@ -36,14 +36,8 @@ export function ContainerGridCard({ containers }: ContainerGridCardProps) {
                 {c.status ? <StatusBadge status={c.status} /> : <span>—</span>}
               </div>
               <div title={c.image ?? undefined}>Image: {formatDigest(c.image)}</div>
-              <div>
-                CPU: {/* SCAFFOLDING: STAGE-003-004 populates from docker socket collector */}
-                {c.cpu_pct != null ? `${c.cpu_pct.toFixed(1)}%` : '—'}
-              </div>
-              <div>
-                RAM: {/* SCAFFOLDING: STAGE-003-004 populates from docker socket collector */}
-                {c.mem_mib != null ? `${c.mem_mib} MiB` : '—'}
-              </div>
+              <div>CPU: {c.cpu_pct != null ? `${c.cpu_pct.toFixed(1)}%` : '—'}</div>
+              <div>RAM: {c.mem_mib != null ? `${c.mem_mib} MiB` : '—'}</div>
               <div
                 title={
                   c.restart_count != null && c.restart_count > 0

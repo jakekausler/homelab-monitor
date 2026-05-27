@@ -287,6 +287,65 @@ class SuggestionsRepository:
             next_cursor = f"{last.created_at}|{last.id}"
         return items, next_cursor
 
+    async def get_docker_suggestion_by_id(self, suggestion_id: str) -> DockerSuggestionRow | None:
+        """Fetch one Docker suggestion (joined anchor + sidecar) by id.
+
+        Returns None if no row matches (404 case).
+        """
+        sql = (
+            "SELECT s.id AS id, s.kind AS kind, s.deduplication_key AS dk, "
+            "  s.state AS state, s.created_at AS created_at, s.updated_at AS updated_at, "
+            "  d.container_id AS container_id, d.container_name AS container_name, "
+            "  d.image_ref AS image_ref, d.labels_json AS labels_json, "
+            "  d.compose_project AS compose_project, d.compose_service AS compose_service, "
+            "  d.compose_file_path AS compose_file_path, "
+            "  d.detection_reason AS detection_reason "
+            "FROM suggestions s JOIN suggestions_docker d ON d.suggestion_id = s.id "
+            "WHERE s.id = :id"
+        )
+        rows = await self._repo.fetch_all(text(sql), {"id": suggestion_id})
+        if not rows:
+            return None
+        r = rows[0]
+        labels_raw: str | None = r.labels_json
+        labels: dict[str, str] = json.loads(labels_raw) if labels_raw else {}
+        return DockerSuggestionRow(
+            id=str(r.id),
+            kind=str(r.kind),
+            deduplication_key=str(r.dk),
+            state=str(r.state),
+            created_at=str(r.created_at),
+            updated_at=str(r.updated_at),
+            container_id=str(r.container_id),
+            container_name=str(r.container_name),
+            image_ref=str(r.image_ref),
+            labels=labels,
+            compose_project=None if r.compose_project is None else str(r.compose_project),
+            compose_service=None if r.compose_service is None else str(r.compose_service),
+            compose_file_path=None if r.compose_file_path is None else str(r.compose_file_path),
+            detection_reason=str(r.detection_reason),
+        )
+
+    @staticmethod
+    async def set_state_conn(
+        conn: AsyncConnection,
+        *,
+        suggestion_id: str,
+        new_state: str,
+        now: str,
+    ) -> bool:
+        """Update suggestions.state and updated_at by id. Returns True if a row
+        was updated, False if the id did not match.
+        """
+        if new_state not in ALLOWED_STATES:
+            msg = f"invalid suggestion state: {new_state!r}"
+            raise ValueError(msg)
+        result = await conn.execute(
+            text("UPDATE suggestions SET state = :st, updated_at = :now WHERE id = :id"),
+            {"st": new_state, "now": now, "id": suggestion_id},
+        )
+        return (result.rowcount or 0) > 0
+
 
 __all__ = [
     "ALLOWED_STATES",

@@ -60,9 +60,8 @@ describe('DockerIntegrationPage', () => {
     expect(mobile).toHaveTextContent('No containers discovered yet.')
   })
 
-  it('renders Pending suggestions section', () => {
+  it('renders Probes section', () => {
     renderWithQueryClient(<DockerIntegrationPage />)
-    expect(screen.getByRole('heading', { name: /^Pending suggestions/i })).toBeInTheDocument()
-    expect(screen.getByText('No pending suggestions.')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Probes' })).toBeInTheDocument()
   })
 })

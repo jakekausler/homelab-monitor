@@ -54,10 +54,6 @@ const MOCK_CONTAINERS: ContainerRow[] = [
     restart_count: 0,
     exit_code: null,
     healthcheck: 'healthy',
-    image_update: 'available',
-    probes: ['http'],
-    logs_url: '/integrations/docker/containers/redis/logs',
-    actions_available: true,
     labels: {},
   },
 ]

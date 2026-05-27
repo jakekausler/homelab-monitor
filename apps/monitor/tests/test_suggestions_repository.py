@@ -621,3 +621,81 @@ async def test_insert_stores_compose_file_path(repo: SqliteRepository) -> None:
     items, _ = await sugg_repo.list_pending_docker_suggestions(status="pending", limit=50)
     assert len(items) == 1
     assert items[0].compose_file_path == "/storage/docker/compose/docker-compose.yml"
+
+
+@pytest.mark.asyncio
+async def test_set_state_conn_invalid_state_raises_value_error(
+    repo: SqliteRepository,
+) -> None:
+    """Calling set_state_conn with invalid state raises ValueError."""
+    sugg_repo = SuggestionsRepository(repo)
+    now = utc_now_iso()
+
+    # Create a suggestion first.
+    async with repo.transaction() as conn:
+        suggestion_id = await sugg_repo.insert_or_update_docker_suggestion_conn(
+            conn,
+            kind="docker_container_discovered",
+            deduplication_key="state-test",
+            container_id="container-state",
+            container_name="state-container",
+            image_ref="nginx:latest",
+            labels={},
+            compose_project=None,
+            compose_service=None,
+            compose_file_path=None,
+            detection_reason="no_homelab_monitor_label",
+            now=now,
+        )
+
+    # Try to set to an invalid state.
+    async with repo.transaction() as conn:
+        with pytest.raises(ValueError, match="invalid suggestion state"):
+            await SuggestionsRepository.set_state_conn(
+                conn,
+                suggestion_id=suggestion_id,
+                new_state="invalid_state",
+                now=utc_now_iso(),
+            )
+
+
+@pytest.mark.asyncio
+async def test_set_state_conn_updates_state(repo: SqliteRepository) -> None:
+    """Calling set_state_conn with valid state updates the row and returns True."""
+    sugg_repo = SuggestionsRepository(repo)
+    now = utc_now_iso()
+
+    # Create a suggestion.
+    async with repo.transaction() as conn:
+        suggestion_id = await sugg_repo.insert_or_update_docker_suggestion_conn(
+            conn,
+            kind="docker_container_discovered",
+            deduplication_key="state-update-test",
+            container_id="container-update",
+            container_name="update-container",
+            image_ref="nginx:latest",
+            labels={},
+            compose_project=None,
+            compose_service=None,
+            compose_file_path=None,
+            detection_reason="no_homelab_monitor_label",
+            now=now,
+        )
+
+    # Update state to accepted (a valid state).
+    async with repo.transaction() as conn:
+        result = await SuggestionsRepository.set_state_conn(
+            conn,
+            suggestion_id=suggestion_id,
+            new_state="accepted",
+            now=utc_now_iso(),
+        )
+        assert result is True
+
+    # Verify the state was updated.
+    row = await repo.fetch_one(
+        text("SELECT state FROM suggestions WHERE id = :id"),
+        {"id": suggestion_id},
+    )
+    assert row is not None
+    assert row[0] == "accepted"

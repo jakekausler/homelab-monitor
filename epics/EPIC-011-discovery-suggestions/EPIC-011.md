@@ -12,6 +12,51 @@ After this epic, the user has a single place ("Discovery & suggestions" screen) 
 
 - Spec §2 Q27 (auto-discovery decisions: A+B+C+D+E+F+H), §3.1 (discovery engine + suggestion engine), §6.1 (`suggestions` table), §9.2 (Discovery & suggestions screen).
 
+## Inherited carry-forwards from EPIC-003 (Docker)
+
+EPIC-003 (Docker collector + per-container probes + label-based discovery + diun-style updates) landed an in-epic Pending Suggestions UI under `DockerIntegrationPage` as a TEMPORARY stub (STAGE-003-005 scaffolding + STAGE-003-012 interactive wiring). When EPIC-011 builds the global Discovery & Suggestions inbox, the following decisions become EPIC-011's responsibility:
+
+### Carry-Forward 1: PendingSuggestionsPanel fate (link vs. remove)
+
+The in-epic `apps/ui/src/routes/integrations/PendingSuggestionsPanel.tsx` is explicitly temporary. EPIC-011 must decide:
+
+- **Option A (link):** Keep the panel under `/integrations/docker`; replace its content with a link/summary that navigates to the global inbox filtered by `kind=docker_*`. Useful if users still expect to see Docker-specific suggestions on the Docker integration page.
+- **Option B (remove):** Delete the panel from the Docker integration page entirely. All Docker suggestions appear only in the global inbox. Cleaner separation; the global inbox is the single source of truth.
+- **Option C (parallel):** Both surfaces exist during a transition window. Higher maintenance cost; unlikely the right call for a homelab tool.
+
+**Recommendation pending EPIC-011 Design:** Option B (remove) — simpler mental model, matches the "single inbox" design intent.
+
+### Carry-Forward 2: Endpoint path consolidation
+
+STAGE-003-012 implemented Docker-namespaced POST endpoints:
+- `POST /api/integrations/docker/suggestions/{id}/accept`
+- `POST /api/integrations/docker/suggestions/{id}/customize`
+- `POST /api/integrations/docker/suggestions/{id}/ignore`
+
+EPIC-011 must decide whether the global inbox:
+- **Option A (route via Docker-namespaced endpoints):** Global inbox introspects suggestion `kind` and routes to the right per-integration endpoint. Keeps existing endpoints; future discoverers each contribute their own namespaced endpoints.
+- **Option B (migrate to generic `/api/suggestions/*` endpoints):** Introduce `POST /api/suggestions/{id}/accept|customize|ignore` (kind-agnostic at the API layer; internally dispatches by kind). Deprecate the Docker-namespaced ones over a release. Cleaner long-term API; requires migration shim for any client that uses the old endpoints.
+- **Option C (both during transition):** Same as Option B but keep the Docker-namespaced endpoints alive longer for back-compat.
+
+**Recommendation pending EPIC-011 Design:** Option B (migrate to generic) with a deprecation window — cleaner API as more discoverers come online.
+
+### Carry-Forward 3: Customize modal flow
+
+STAGE-003-012's Customize modal is a Docker-specific scaffold (multi-probe repeatable form rows). EPIC-011 STAGE-011-008 (Customize flow) will likely replace this with a generic discoverer-aware customize editor. The Docker modal can be:
+- Kept as-is and reused by the global inbox when the kind is docker_*
+- Replaced with the generic editor
+- Deleted entirely if the generic editor covers all discoverer kinds
+
+**Recommendation pending EPIC-011 Design:** Replace with generic editor in STAGE-011-008.
+
+### Where to find related artifacts
+- Code comments: `apps/ui/src/routes/integrations/PendingSuggestionsPanel.tsx`, `SuggestionCard.tsx`, `apps/ui/src/api/docker.ts`, `apps/monitor/homelab_monitor/kernel/api/routers/docker.py` (suggestion action endpoints) all carry EPIC-011 cross-reference comments.
+- Regression checklist: `epics/EPIC-003-docker/regression.md` under "STAGE-003-012 — Suggestions panel interactions + EPIC-011 carry-forward".
+- Earlier carry-forward context: `epics/EPIC-003-docker/EPIC-003.md` "Cross-epic carry-forward → EPIC-011" section.
+
+### Acceptance criterion for EPIC-011
+When EPIC-011's Design phase begins, it MUST explicitly resolve these three carry-forward decisions (panel fate, endpoint consolidation, customize modal) in its locked design decisions list and reflect them in STAGE-011-007 (inbox UI polish) + STAGE-011-008 (customize flow) deliverables.
+
 ## Stages (to decompose during epic Design phase)
 
 | Likely stage | Theme |

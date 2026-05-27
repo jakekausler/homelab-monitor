@@ -1,5 +1,5 @@
 import { cleanup, render, screen } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import {
   Outlet,
@@ -14,6 +14,7 @@ import type { ReactElement } from 'react'
 import { ContainerGridRow } from './ContainerGridRow'
 import type { ContainerRow } from './types'
 import { toast } from 'sonner'
+import { useImageUpdate, useListComposeActions } from '@/api/docker'
 
 vi.mock('sonner', () => ({
   toast: {
@@ -25,8 +26,8 @@ vi.mock('sonner', () => ({
 }))
 
 vi.mock('@/api/docker', () => ({
-  useImageUpdate: () => ({ data: undefined, isPending: false, isError: false }),
-  useListComposeActions: () => ({ data: { actions: [] }, isPending: false, isError: false }),
+  useImageUpdate: vi.fn(),
+  useListComposeActions: vi.fn(),
   useStartPullAndRestart: () => ({ mutateAsync: vi.fn(), isPending: false, error: null }),
   useProbesSummary: () => ({ data: {}, isPending: false, isError: false }),
   useImageUpdatesSummary: () => ({ data: null, isPending: false, isError: false }),
@@ -37,7 +38,22 @@ vi.mock('@/api/docker', () => ({
     isError: false,
   }),
   dockerQueryKeys: {},
+  dockerImageUpdateQueryKeys: { summary: ['summary'], detail: (n: string) => ['detail', n] },
+  COMPOSE_ACTIVE_STATES: new Set(['pulling', 'building', 'restarting', 'running']),
 }))
+
+beforeEach(() => {
+  vi.mocked(useImageUpdate).mockReturnValue({
+    data: undefined,
+    isPending: false,
+    isError: false,
+  } as never)
+  vi.mocked(useListComposeActions).mockReturnValue({
+    data: { actions: [] },
+    isPending: false,
+    isError: false,
+  } as never)
+})
 
 afterEach(() => {
   cleanup()
@@ -281,6 +297,105 @@ describe('ContainerGridRow', () => {
       )
       // Just verify the component renders without error when toast is mocked
       expect(await screen.findByText('Pull & Restart')).toBeInTheDocument()
+    })
+  })
+
+  describe('ActionsCell in-flight states', () => {
+    const baseContainer: ContainerRow = {
+      id: 'c1',
+      name: 'caddy',
+      compose_file_path: '/host/docker-compose.yml',
+      labels: {},
+    }
+
+    it('shows Pulling… when an active pulling action exists', async () => {
+      vi.mocked(useListComposeActions).mockReturnValue({
+        data: { actions: [{ action_id: 1, state: 'pulling' }] },
+        isPending: false,
+        isError: false,
+      } as never)
+      renderWithQueryClient(
+        <table>
+          <tbody>
+            <ContainerGridRow container={baseContainer} />
+          </tbody>
+        </table>,
+      )
+      expect(await screen.findByText('Pulling…')).toBeInTheDocument()
+    })
+
+    it('shows Building… when an active building action exists', async () => {
+      vi.mocked(useListComposeActions).mockReturnValue({
+        data: { actions: [{ action_id: 2, state: 'building' }] },
+        isPending: false,
+        isError: false,
+      } as never)
+      renderWithQueryClient(
+        <table>
+          <tbody>
+            <ContainerGridRow container={baseContainer} />
+          </tbody>
+        </table>,
+      )
+      expect(await screen.findByText('Building…')).toBeInTheDocument()
+    })
+
+    it('shows Restarting… when an active restarting action exists', async () => {
+      vi.mocked(useListComposeActions).mockReturnValue({
+        data: { actions: [{ action_id: 3, state: 'restarting' }] },
+        isPending: false,
+        isError: false,
+      } as never)
+      renderWithQueryClient(
+        <table>
+          <tbody>
+            <ContainerGridRow container={baseContainer} />
+          </tbody>
+        </table>,
+      )
+      expect(await screen.findByText('Restarting…')).toBeInTheDocument()
+    })
+  })
+
+  describe('ActionsCell update_available', () => {
+    const baseContainer: ContainerRow = {
+      id: 'c1',
+      name: 'caddy',
+      compose_file_path: '/host/docker-compose.yml',
+      labels: {},
+    }
+
+    it('enables Pull & Restart button when update_available is true', async () => {
+      vi.mocked(useImageUpdate).mockReturnValue({
+        data: { update_available: true, source: 'registry' },
+        isPending: false,
+        isError: false,
+      } as never)
+      renderWithQueryClient(
+        <table>
+          <tbody>
+            <ContainerGridRow container={baseContainer} />
+          </tbody>
+        </table>,
+      )
+      const btn = await screen.findByText('Pull & Restart')
+      expect(btn.closest('button')).not.toBeDisabled()
+    })
+
+    it('shows Rebuild & Restart label when source is local_build', async () => {
+      vi.mocked(useImageUpdate).mockReturnValue({
+        data: { update_available: true, source: 'local_build' },
+        isPending: false,
+        isError: false,
+      } as never)
+      renderWithQueryClient(
+        <table>
+          <tbody>
+            <ContainerGridRow container={baseContainer} />
+          </tbody>
+        </table>,
+      )
+      expect(await screen.findByText('Rebuild & Restart')).toBeInTheDocument()
     })
   })
 })

@@ -10,11 +10,11 @@ from __future__ import annotations
 
 import re
 from datetime import UTC, datetime, timedelta
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal, cast
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from homelab_monitor.kernel.api.dependencies import (
     get_http_client,
@@ -46,9 +46,13 @@ from homelab_monitor.kernel.db.repositories.suggestions_repository import (
     ALLOWED_STATES,
     SuggestionsRepository,
 )
+from homelab_monitor.kernel.db.repositories.suggestions_repository import (
+    DockerSuggestionRow as DockerSuggestionRepoRow,
+)
 from homelab_monitor.kernel.db.repositories.targets_repository import TargetsRepository
 from homelab_monitor.kernel.db.repository import SqliteRepository
 from homelab_monitor.kernel.docker.compose_action_runner import ComposeActionRunner
+from homelab_monitor.kernel.docker.socket_client import DockerSocketClient
 from homelab_monitor.kernel.logs.victorialogs_client import (
     VictoriaLogsClient,
     VictoriaLogsClientError,
@@ -56,6 +60,9 @@ from homelab_monitor.kernel.logs.victorialogs_client import (
 )
 
 router = APIRouter(prefix="/integrations/docker", tags=["docker"])
+
+# Healthcheck Test minimum length: ["CMD"|"CMD-SHELL", "command", ...] requires at least 2 elements
+_HEALTHCHECK_TEST_MIN_LENGTH = 2
 
 
 class ContainerRow(BaseModel):
@@ -209,6 +216,96 @@ class DockerSuggestionListResponse(BaseModel):
 
     suggestions: list[DockerSuggestionRow]
     next_cursor: str | None = None
+
+
+# ----------------------------------------------------------------------
+# STAGE-003-012 — Accept / Customize / Ignore endpoints.
+#
+# EPIC-011 cross-reference:
+# These per-integration suggestion endpoints may be subsumed by generic
+# /api/suggestions/{id}/{accept,customize,ignore} endpoints when EPIC-011
+# builds the global Discovery & Suggestions inbox. See:
+#   - epics/EPIC-011-discovery-suggestions/EPIC-011.md "Inherited carry-forwards from EPIC-003"
+#   - epics/EPIC-003-docker/EPIC-003.md "Cross-epic carry-forward → EPIC-011"
+# The suggestions schema is stable; only URL paths may change.
+# ----------------------------------------------------------------------
+
+
+class ProbeSpec(BaseModel):
+    """One probe descriptor in a Customize request body."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["http", "tcp", "exec", "metrics"]
+    name: str = Field(min_length=1, max_length=64, pattern=r"^[a-zA-Z0-9_-]+$")
+    target_value: str = Field(min_length=1)
+    interval_seconds: int = Field(default=60, ge=1, le=3600)
+    timeout_seconds: int = Field(default=10, ge=1, le=300)
+
+
+class CreateProbeTargetRequest(BaseModel):
+    """Request body for POST /integrations/docker/probe-targets.
+
+    Mirrors ProbeSpec shape, but adds container_name (since this endpoint
+    is NOT scoped under a suggestion).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    container_name: str = Field(min_length=1, max_length=255)
+    kind: Literal["http", "tcp", "exec", "metrics"]
+    name: str = Field(min_length=1, max_length=64, pattern=r"^[a-zA-Z0-9_-]+$")
+    target_value: str = Field(min_length=1)
+    interval_seconds: int = Field(default=60, ge=1, le=3600)
+    timeout_seconds: int = Field(default=10, ge=1, le=300)
+
+
+class UpdateProbeTargetRequest(BaseModel):
+    """Request body for PATCH /integrations/docker/probe-targets/{probe_id}.
+
+    All fields optional — partial-update semantics. kind, name, container_name
+    are NOT mutable (UNIQUE key on probe_targets).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    target_value: str | None = Field(default=None, min_length=1)
+    interval_seconds: int | None = Field(default=None, ge=1, le=3600)
+    timeout_seconds: int | None = Field(default=None, ge=1, le=300)
+
+
+class SuggestionAcceptRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    apply_default_probes: bool = True
+
+
+class SuggestionAcceptResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    suggestion: DockerSuggestionRow
+    probes_created: int
+
+
+class SuggestionCustomizeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    probes: list[ProbeSpec] = Field(min_length=1)
+
+
+class SuggestionCustomizeResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    suggestion: DockerSuggestionRow
+    probes_created: int
+    probes_updated: int
+
+
+class SuggestionIgnoreResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    suggestion: DockerSuggestionRow
+
+
+class SuggestionDefaultProbesResponse(BaseModel):
+    probes: list[ProbeSpec]
+    reason: Literal["available", "docker_unavailable", "container_gone", "no_ports_no_healthcheck"]
+    model_config = ConfigDict(extra="forbid")
 
 
 def _get_suggestions_repo(
@@ -517,6 +614,186 @@ async def enable_probe(
     return await _toggle_probe(
         repo, probes_repo, probe_id, enabled=True, user=user, what="docker.probe.enable"
     )
+
+
+@router.post("/probe-targets", response_model=ProbeRow, status_code=status.HTTP_200_OK)
+async def create_probe_target(
+    body: CreateProbeTargetRequest,
+    user: Annotated[User, Depends(require_session())],
+    repo: Annotated[SqliteRepository, Depends(get_repo)],
+    targets_repo: Annotated[TargetsRepository, Depends(_get_targets_repo)],
+    probes_repo: Annotated[ProbeTargetsRepository, Depends(_get_probe_targets_repo)],
+) -> ProbeRow:
+    """Create (or upsert by (container_name, kind, name)) a probe target.
+
+    config_source is always set to "manual" for direct-create. The existing
+    /suggestions/{id}/accept path uses "discovered_accepted" and is unchanged.
+
+    Auth: session + X-CSRF-Token.
+    """
+    from homelab_monitor.kernel.db.audit import insert_audit  # noqa: PLC0415
+    from homelab_monitor.kernel.db.time import utc_now_iso  # noqa: PLC0415
+
+    # 404 if container not in inventory.
+    rows = await targets_repo.list_docker_containers(include_hidden=False)
+    if not any(r.name == body.container_name for r in rows):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"container not found: {body.container_name}",
+        )
+
+    now = utc_now_iso()
+    async with repo.transaction() as conn:
+        probe_id = await ProbeTargetsRepository.upsert_probe_target_conn(
+            conn,
+            container_name=body.container_name,
+            kind=body.kind,
+            name=body.name,
+            target_value=body.target_value,
+            config_source="manual",
+            enabled=True,
+            interval_seconds=body.interval_seconds,
+            timeout_seconds=body.timeout_seconds,
+            now=now,
+        )
+        await insert_audit(
+            conn,
+            who=user.username,
+            what="docker.probe.create",
+            before=None,
+            after={
+                "probe_id": probe_id,
+                "container_name": body.container_name,
+                "kind": body.kind,
+                "name": body.name,
+                "config_source": "manual",
+            },
+        )
+    after = await probes_repo.get_by_id(probe_id)
+    if after is None:  # pragma: no cover -- defensive
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="probe vanished"
+        )
+    return _probe_row_to_dto(after)
+
+
+@router.patch("/probe-targets/{probe_id}", response_model=ProbeRow)
+async def update_probe_target(
+    probe_id: str,
+    body: UpdateProbeTargetRequest,
+    user: Annotated[User, Depends(require_session())],
+    repo: Annotated[SqliteRepository, Depends(get_repo)],
+    probes_repo: Annotated[ProbeTargetsRepository, Depends(_get_probe_targets_repo)],
+) -> ProbeRow:
+    """Update mutable probe-target fields. Returns the updated row.
+
+    Mutable: target_value, interval_seconds, timeout_seconds.
+    Immutable: kind, name, container_name (they form the logical UNIQUE key).
+    """
+    from homelab_monitor.kernel.db.audit import insert_audit  # noqa: PLC0415
+
+    before = await probes_repo.get_by_id(probe_id)
+    if before is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=f"probe not found: {probe_id}"
+        )
+
+    # Short-circuit empty-body PATCH (don't audit no-op).
+    if body.target_value is None and body.interval_seconds is None and body.timeout_seconds is None:
+        # Empty body: no fields to update. Return current state without auditing a no-op.
+        return _probe_row_to_dto(before)
+
+    async with repo.transaction() as conn:
+        affected = await ProbeTargetsRepository.update_probe_target_conn(
+            conn,
+            probe_id=probe_id,
+            target_value=body.target_value,
+            interval_seconds=body.interval_seconds,
+            timeout_seconds=body.timeout_seconds,
+        )
+        if affected == 0:  # pragma: no cover -- defensive race-condition guard
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="probe vanished during update"
+            )
+        await insert_audit(
+            conn,
+            who=user.username,
+            what="docker.probe.update",
+            before={
+                "probe_id": probe_id,
+                "container_name": before.container_name,
+                "target_value": before.target_value,
+                "interval_seconds": before.interval_seconds,
+                "timeout_seconds": before.timeout_seconds,
+            },
+            after={
+                "probe_id": probe_id,
+                "container_name": before.container_name,
+                "target_value": (
+                    body.target_value if body.target_value is not None else before.target_value
+                ),
+                "interval_seconds": (
+                    body.interval_seconds
+                    if body.interval_seconds is not None
+                    else before.interval_seconds
+                ),
+                "timeout_seconds": (
+                    body.timeout_seconds
+                    if body.timeout_seconds is not None
+                    else before.timeout_seconds
+                ),
+            },
+        )
+
+    after = await probes_repo.get_by_id(probe_id)
+    if after is None:  # pragma: no cover -- defensive
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="probe vanished"
+        )
+    return _probe_row_to_dto(after)
+
+
+@router.delete(
+    "/probe-targets/{probe_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    responses={204: {"description": "Probe deleted"}, 404: {"description": "Probe not found"}},
+)
+async def delete_probe_target(
+    probe_id: str,
+    user: Annotated[User, Depends(require_session())],
+    repo: Annotated[SqliteRepository, Depends(get_repo)],
+    probes_repo: Annotated[ProbeTargetsRepository, Depends(_get_probe_targets_repo)],
+) -> None:
+    """Hard-delete a probe target row.
+
+    Distinct from disable (set_enabled_conn) and hide (mark_missing_except_conn).
+    """
+    from homelab_monitor.kernel.db.audit import insert_audit  # noqa: PLC0415
+
+    before = await probes_repo.get_by_id(probe_id)
+    if before is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=f"probe not found: {probe_id}"
+        )
+    async with repo.transaction() as conn:
+        affected = await ProbeTargetsRepository.delete_probe_target_conn(conn, probe_id=probe_id)
+        if affected == 0:  # pragma: no cover -- defensive
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="probe vanished during delete"
+            )
+        await insert_audit(
+            conn,
+            who=user.username,
+            what="docker.probe.delete",
+            before={
+                "probe_id": probe_id,
+                "container_name": before.container_name,
+                "kind": before.kind,
+                "name": before.name,
+                "config_source": before.config_source,
+            },
+            after=None,
+        )
 
 
 async def _toggle_probe(  # noqa: PLR0913
@@ -974,3 +1251,433 @@ async def list_compose_actions(
     """List recent actions for one container. `container` query param required."""
     rows = await actions_repo.list_for_container(container_name=container, limit=limit)
     return ComposeActionListResponse(actions=[_row_to_detail(r) for r in rows])
+
+
+# ======================================================================
+# STAGE-003-012 — Accept / Customize / Ignore endpoints.
+# ======================================================================
+
+
+def _get_docker_socket_client(request: Request) -> DockerSocketClient | None:
+    """Return the singleton DockerSocketClient if available, else None.
+
+    Lifespan sets `app.state.docker_socket_client` when the socket is
+    reachable. If absent, Accept silently skips inspect-based probe
+    inference (logs a warning, returns probes_created=0).
+    """
+    from homelab_monitor.kernel.docker.socket_client import DockerSocketClient  # noqa: PLC0415
+
+    client = getattr(request.app.state, "docker_socket_client", None)
+    if isinstance(client, DockerSocketClient):
+        return client
+    return None
+
+
+def _default_probes_from_inspect(  # noqa: PLR0912 -- complex inspect-shape handling
+    inspect: dict[str, Any],
+) -> list[ProbeSpec]:
+    """Compute the conservative default probe set for an accepted suggestion.
+
+    Per D-ACCEPT-INVENTORY-ONLY-WITH-CONSERVATIVE-PROBES:
+      Probes are inserted ONLY when BOTH:
+        - container has at least one exposed port, AND
+        - container has a healthcheck defined.
+      One `tcp` probe per exposed port (target_value="tcp://host.docker.internal:<port>")
+      One `exec` probe wrapping the healthcheck command (joined with shell quoting via
+      shlex when the docker Healthcheck.Test is a `["CMD", ...]` or `["CMD-SHELL", ...]` form).
+    """
+    import shlex  # noqa: PLC0415
+
+    config: Any = inspect.get("Config")  # type: ignore[assignment]
+    host_config: Any = inspect.get("HostConfig")  # type: ignore[assignment]
+    if not isinstance(config, dict) or not isinstance(host_config, dict):
+        return []
+
+    # Collect exposed ports from BOTH HostConfig.PortBindings and Config.ExposedPorts.
+    # PortBindings has {"<port>/<proto>": [{"HostIp": "...", "HostPort": "..."}], ...}
+    # ExposedPorts has {"<port>/<proto>": {}}
+    ports: set[int] = set()
+    bindings: Any = host_config.get("PortBindings")  # type: ignore[assignment]
+    if isinstance(bindings, dict):
+        for port_spec in cast(dict[str, Any], bindings):
+            port = _parse_port_spec(str(port_spec))
+            if port is not None:
+                ports.add(port)
+    exposed: Any = config.get("ExposedPorts")  # type: ignore[assignment]
+    if isinstance(exposed, dict):
+        for port_spec in cast(dict[str, Any], exposed):
+            port = _parse_port_spec(str(port_spec))
+            if port is not None:
+                ports.add(port)
+
+    # Extract healthcheck command.
+    healthcheck: Any = config.get("Healthcheck")  # type: ignore[assignment]
+    hc_cmd: str | None = None
+    if isinstance(healthcheck, dict):
+        test: Any = healthcheck.get("Test")  # type: ignore[assignment]
+        if isinstance(test, list) and len(test) > 0:  # type: ignore[arg-type]
+            # Common forms: ["CMD-SHELL", "<shell-cmd>"], ["CMD", "executable", "arg1", ...],
+            # or ["NONE"] (no healthcheck — skip).
+            test_list = cast(list[Any], test)
+            head = str(test_list[0]) if test_list else ""
+            if head == "CMD-SHELL" and len(test_list) >= _HEALTHCHECK_TEST_MIN_LENGTH:
+                hc_cmd = str(test_list[1])
+            elif head == "CMD" and len(test_list) >= _HEALTHCHECK_TEST_MIN_LENGTH:
+                hc_cmd = " ".join(shlex.quote(str(x)) for x in test_list[1:])
+            # Anything else (NONE, empty, unknown shape) → no exec probe.
+
+    # D-ACCEPT-INVENTORY-ONLY-WITH-CONSERVATIVE-PROBES gate.
+    if not ports or hc_cmd is None:
+        return []
+
+    out: list[ProbeSpec] = []
+    for _i, port in enumerate(sorted(ports)):
+        out.append(
+            ProbeSpec(
+                kind="tcp",
+                name=f"tcp-{port}",
+                target_value=f"tcp://host.docker.internal:{port}",
+                interval_seconds=60,
+                timeout_seconds=10,
+            )
+        )
+    out.append(
+        ProbeSpec(
+            kind="exec",
+            name="healthcheck",
+            target_value=hc_cmd,
+            interval_seconds=60,
+            timeout_seconds=10,
+        )
+    )
+    return out
+
+
+def _parse_port_spec(spec: str) -> int | None:
+    """Parse "<port>/<proto>" or "<port>" → int port. Returns None on failure."""
+    port_part = spec.split("/", 1)[0]
+    try:
+        return int(port_part)
+    except ValueError:
+        return None
+
+
+@router.post(
+    "/suggestions/{suggestion_id}/accept",
+    response_model=SuggestionAcceptResponse,
+)
+async def accept_suggestion(  # noqa: PLR0913 -- FastAPI deps
+    suggestion_id: str,
+    body: SuggestionAcceptRequest,
+    request: Request,
+    user: Annotated[User, Depends(require_session())],
+    repo: Annotated[SqliteRepository, Depends(get_repo)],
+    suggestions_repo: Annotated[SuggestionsRepository, Depends(_get_suggestions_repo)],
+) -> SuggestionAcceptResponse:
+    """Accept a pending Docker suggestion.
+
+    Per D-IDEMPOTENT-200:
+      - state='pending' → transition to 'accepted', optionally insert default probes.
+      - state='accepted' → 200 no-op (no duplicate probes).
+      - state='ignored' or 'container_gone' → 409 Conflict.
+      - missing → 404.
+    """
+    from homelab_monitor.kernel.db.audit import insert_audit  # noqa: PLC0415
+    from homelab_monitor.kernel.db.time import utc_now_iso  # noqa: PLC0415
+
+    sugg = await suggestions_repo.get_docker_suggestion_by_id(suggestion_id)
+    if sugg is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"suggestion not found: {suggestion_id}",
+        )
+
+    if sugg.state == "accepted":
+        # Idempotent no-op.
+        return SuggestionAcceptResponse(
+            suggestion=_sugg_row_to_dto(sugg),
+            probes_created=0,
+        )
+
+    if sugg.state in ("ignored", "container_gone"):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"cannot accept suggestion in state {sugg.state!r}",
+        )
+
+    # Compute default probes (only if apply_default_probes=true AND we can reach docker).
+    probes_to_insert: list[ProbeSpec] = []
+    if body.apply_default_probes:
+        client = _get_docker_socket_client(request)
+        if client is not None:
+            try:
+                inspect = await client.inspect_container(sugg.container_id)
+                probes_to_insert = _default_probes_from_inspect(cast("dict[str, object]", inspect))
+            except Exception:
+                probes_to_insert = []
+
+    now = utc_now_iso()
+    probes_created = 0
+    async with repo.transaction() as conn:
+        await SuggestionsRepository.set_state_conn(
+            conn,
+            suggestion_id=suggestion_id,
+            new_state="accepted",
+            now=now,
+        )
+        for spec in probes_to_insert:  # pragma: no cover -- async-for inside async with
+            await ProbeTargetsRepository.upsert_probe_target_conn(
+                conn,
+                container_name=sugg.container_name,
+                kind=spec.kind,
+                name=spec.name,
+                target_value=spec.target_value,
+                config_source="discovered_accepted",
+                enabled=True,
+                interval_seconds=spec.interval_seconds,
+                timeout_seconds=spec.timeout_seconds,
+                now=now,
+            )
+            probes_created += 1  # pragma: no cover -- same instrumentation gap
+        await insert_audit(
+            conn,
+            who=user.username,
+            what="docker.suggestion.accept",
+            before={
+                "suggestion_id": suggestion_id,
+                "state": sugg.state,
+                "container_name": sugg.container_name,
+            },
+            after={
+                "suggestion_id": suggestion_id,
+                "state": "accepted",
+                "container_name": sugg.container_name,
+                "probes_created": probes_created,
+            },
+        )
+
+    refreshed = await suggestions_repo.get_docker_suggestion_by_id(suggestion_id)
+    if refreshed is None:  # pragma: no cover -- defensive
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="suggestion vanished"
+        )
+    return SuggestionAcceptResponse(
+        suggestion=_sugg_row_to_dto(refreshed),
+        probes_created=probes_created,
+    )
+
+
+@router.post(
+    "/suggestions/{suggestion_id}/customize",
+    response_model=SuggestionCustomizeResponse,
+)
+async def customize_suggestion(  # noqa: PLR0913
+    suggestion_id: str,
+    body: SuggestionCustomizeRequest,
+    user: Annotated[User, Depends(require_session())],
+    repo: Annotated[SqliteRepository, Depends(get_repo)],
+    suggestions_repo: Annotated[SuggestionsRepository, Depends(_get_suggestions_repo)],
+    probes_repo: Annotated[ProbeTargetsRepository, Depends(_get_probe_targets_repo)],
+) -> SuggestionCustomizeResponse:
+    """Customize-accept a suggestion with user-supplied probe specs.
+
+    Per D-IDEMPOTENT-200:
+      - state in {'pending', 'accepted'} → upsert probes + ensure state='accepted'.
+      - state in {'ignored', 'container_gone'} → 409 Conflict.
+      - missing → 404.
+    Server-side validation of probe uniqueness (kind, name) within the request body.
+    """
+    from homelab_monitor.kernel.db.audit import insert_audit  # noqa: PLC0415
+    from homelab_monitor.kernel.db.time import utc_now_iso  # noqa: PLC0415
+
+    sugg = await suggestions_repo.get_docker_suggestion_by_id(suggestion_id)
+    if sugg is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"suggestion not found: {suggestion_id}",
+        )
+    if sugg.state in ("ignored", "container_gone"):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"cannot customize suggestion in state {sugg.state!r}",
+        )
+
+    # Server-side defense-in-depth: reject duplicate (kind, name) within request body.
+    keys = [(p.kind, p.name) for p in body.probes]
+    if len(set(keys)) != len(keys):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="duplicate probe (kind, name) in request body",
+        )
+
+    # Pre-read existing probes to compute created-vs-updated counts.
+    existing = await probes_repo.list_for_container(
+        container_name=sugg.container_name, include_hidden=True
+    )
+    existing_keys = {(p.kind, p.name) for p in existing}
+    probes_created = 0
+    probes_updated = 0
+    for spec in body.probes:
+        if (spec.kind, spec.name) in existing_keys:
+            probes_updated += 1
+        else:
+            probes_created += 1
+
+    now = utc_now_iso()
+    async with repo.transaction() as conn:
+        if sugg.state != "accepted":
+            await SuggestionsRepository.set_state_conn(
+                conn,
+                suggestion_id=suggestion_id,
+                new_state="accepted",
+                now=now,
+            )
+        for spec in body.probes:  # pragma: no branch -- body.probes validated non-empty by Pydantic
+            await ProbeTargetsRepository.upsert_probe_target_conn(
+                conn,
+                container_name=sugg.container_name,
+                kind=spec.kind,
+                name=spec.name,
+                target_value=spec.target_value,
+                config_source="discovered_accepted",
+                enabled=True,
+                interval_seconds=spec.interval_seconds,
+                timeout_seconds=spec.timeout_seconds,
+                now=now,
+            )
+        await insert_audit(
+            conn,
+            who=user.username,
+            what="docker.suggestion.customize",
+            before={
+                "suggestion_id": suggestion_id,
+                "state": sugg.state,
+                "container_name": sugg.container_name,
+            },
+            after={
+                "suggestion_id": suggestion_id,
+                "state": "accepted",
+                "container_name": sugg.container_name,
+                "probes_created": probes_created,
+                "probes_updated": probes_updated,
+            },
+        )
+
+    refreshed = await suggestions_repo.get_docker_suggestion_by_id(suggestion_id)
+    if refreshed is None:  # pragma: no cover -- defensive
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="suggestion vanished"
+        )
+    return SuggestionCustomizeResponse(
+        suggestion=_sugg_row_to_dto(refreshed),
+        probes_created=probes_created,
+        probes_updated=probes_updated,
+    )
+
+
+@router.post(
+    "/suggestions/{suggestion_id}/ignore",
+    response_model=SuggestionIgnoreResponse,
+)
+async def ignore_suggestion(
+    suggestion_id: str,
+    user: Annotated[User, Depends(require_session())],
+    repo: Annotated[SqliteRepository, Depends(get_repo)],
+    suggestions_repo: Annotated[SuggestionsRepository, Depends(_get_suggestions_repo)],
+) -> SuggestionIgnoreResponse:
+    """Ignore a suggestion from ANY state (D-IGNORE-FROM-ANY-STATE).
+
+    Per D-NO-PROBE-MISSING-ON-IGNORE: existing probe_targets rows are NOT
+    touched. The user manages probe cleanup separately via the probe-disable
+    UI from STAGE-003-007.
+    """
+    from homelab_monitor.kernel.db.audit import insert_audit  # noqa: PLC0415
+    from homelab_monitor.kernel.db.time import utc_now_iso  # noqa: PLC0415
+
+    sugg = await suggestions_repo.get_docker_suggestion_by_id(suggestion_id)
+    if sugg is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"suggestion not found: {suggestion_id}",
+        )
+    if sugg.state == "ignored":
+        return SuggestionIgnoreResponse(suggestion=_sugg_row_to_dto(sugg))
+
+    now = utc_now_iso()
+    async with repo.transaction() as conn:
+        await SuggestionsRepository.set_state_conn(
+            conn,
+            suggestion_id=suggestion_id,
+            new_state="ignored",
+            now=now,
+        )
+        await insert_audit(
+            conn,
+            who=user.username,
+            what="docker.suggestion.ignore",
+            before={
+                "suggestion_id": suggestion_id,
+                "state": sugg.state,
+                "container_name": sugg.container_name,
+            },
+            after={
+                "suggestion_id": suggestion_id,
+                "state": "ignored",
+                "container_name": sugg.container_name,
+            },
+        )
+    refreshed = await suggestions_repo.get_docker_suggestion_by_id(suggestion_id)
+    if refreshed is None:  # pragma: no cover -- defensive
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="suggestion vanished"
+        )
+    return SuggestionIgnoreResponse(suggestion=_sugg_row_to_dto(refreshed))
+
+
+@router.get(
+    "/suggestions/{suggestion_id}/default-probes",
+    response_model=SuggestionDefaultProbesResponse,
+)
+async def get_suggestion_default_probes(
+    suggestion_id: str,
+    request: Request,
+    user: Annotated[User, Depends(require_session())],
+    suggestions_repo: Annotated[SuggestionsRepository, Depends(_get_suggestions_repo)],
+) -> SuggestionDefaultProbesResponse:
+    sugg = await suggestions_repo.get_docker_suggestion_by_id(suggestion_id)
+    if sugg is None:
+        raise HTTPException(status_code=404, detail="suggestion not found")
+
+    client = _get_docker_socket_client(request)
+    if client is None:
+        return SuggestionDefaultProbesResponse(probes=[], reason="docker_unavailable")
+
+    try:
+        inspect = await client.inspect_container(sugg.container_id)
+    except Exception:
+        return SuggestionDefaultProbesResponse(probes=[], reason="container_gone")
+
+    probes = _default_probes_from_inspect(cast("dict[str, Any]", inspect))
+    if not probes:
+        return SuggestionDefaultProbesResponse(probes=[], reason="no_ports_no_healthcheck")
+    return SuggestionDefaultProbesResponse(probes=probes, reason="available")
+
+
+def _sugg_row_to_dto(row: DockerSuggestionRepoRow) -> DockerSuggestionRow:
+    """Convert a repo DockerSuggestionRow dataclass → API DockerSuggestionRow model."""
+    return DockerSuggestionRow(
+        id=row.id,
+        kind=row.kind,
+        deduplication_key=row.deduplication_key,
+        state=row.state,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+        container_id=row.container_id,
+        container_name=row.container_name,
+        image_ref=row.image_ref,
+        labels=row.labels,
+        compose_project=row.compose_project,
+        compose_service=row.compose_service,
+        compose_file_path=row.compose_file_path,
+        detection_reason=row.detection_reason,
+    )

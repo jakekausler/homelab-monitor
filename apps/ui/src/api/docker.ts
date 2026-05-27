@@ -12,6 +12,11 @@ import type { Schema } from './types'
 
 type ContainerListResponse = Schema<'ContainerListResponse'>
 type DockerSuggestionListResponse = Schema<'DockerSuggestionListResponse'>
+type SuggestionAcceptRequest = Schema<'SuggestionAcceptRequest'>
+type SuggestionAcceptResponse = Schema<'SuggestionAcceptResponse'>
+type SuggestionCustomizeRequest = Schema<'SuggestionCustomizeRequest'>
+type SuggestionCustomizeResponse = Schema<'SuggestionCustomizeResponse'>
+type SuggestionIgnoreResponse = Schema<'SuggestionIgnoreResponse'>
 
 export const dockerQueryKeys = {
   containers: ['integrations', 'docker', 'containers'] as const,
@@ -57,6 +62,8 @@ export function useListDockerSuggestions(
 
 type ListProbesResponse = Schema<'ListProbesResponse'>
 type ProbeRowSchema = Schema<'ProbeRow'>
+type CreateProbeTargetRequest = Schema<'CreateProbeTargetRequest'>
+type UpdateProbeTargetRequest = Schema<'UpdateProbeTargetRequest'>
 type ProbeSummaryResponse = Schema<'ProbeSummaryResponse'>
 type ImageUpdateSummaryResponse = Schema<'ImageUpdateSummaryResponse'>
 type ImageUpdateDetail = Schema<'ImageUpdateDetail'>
@@ -64,6 +71,115 @@ type PullAndRestartRequest = Schema<'PullAndRestartRequest'>
 type PullAndRestartAcceptedResponse = Schema<'PullAndRestartAcceptedResponse'>
 type ComposeActionDetailResponse = Schema<'ComposeActionDetailResponse'>
 type ComposeActionListResponse = Schema<'ComposeActionListResponse'>
+
+/**
+ * ORPHANED by STAGE-003-012 Refinement scope expansion (2026-05-26):
+ * The new "Probes" panel (per-container cards) does not wire Accept/
+ * Customize/Ignore. These hooks remain for backend coverage and will be
+ * subsumed by EPIC-011's global Discovery & Suggestions inbox. Do not
+ * delete; do not call from new UI code without checking with EPIC-011 design.
+ *
+ * See:
+ *   - epics/EPIC-011-discovery-suggestions/EPIC-011.md "Inherited carry-forwards from EPIC-003"
+ *   - epics/EPIC-003-docker/EPIC-003.md "Cross-epic carry-forward → EPIC-011"
+ *
+ * The suggestions schema is stable; only hook locations and API URL paths may change.
+ */
+
+export function useAcceptDockerSuggestion() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (vars: { suggestionId: string; applyDefaultProbes?: boolean }) => {
+      const result = await apiClient.POST(
+        '/api/integrations/docker/suggestions/{suggestion_id}/accept',
+        {
+          params: { path: { suggestion_id: vars.suggestionId } },
+          body: {
+            apply_default_probes: vars.applyDefaultProbes ?? true,
+          } satisfies SuggestionAcceptRequest,
+        },
+      )
+      return unwrap<SuggestionAcceptResponse>(result)
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: dockerQueryKeys.suggestions('pending') })
+      void queryClient.invalidateQueries({ queryKey: dockerQueryKeys.suggestions('accepted') })
+      void queryClient.invalidateQueries({ queryKey: dockerProbeQueryKeys.summary })
+    },
+  })
+}
+
+export function useCustomizeDockerSuggestion() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (vars: {
+      suggestionId: string
+      probes: SuggestionCustomizeRequest['probes']
+    }) => {
+      const result = await apiClient.POST(
+        '/api/integrations/docker/suggestions/{suggestion_id}/customize',
+        {
+          params: { path: { suggestion_id: vars.suggestionId } },
+          body: { probes: vars.probes } satisfies SuggestionCustomizeRequest,
+        },
+      )
+      return unwrap<SuggestionCustomizeResponse>(result)
+    },
+    onSuccess: (data) => {
+      void queryClient.invalidateQueries({ queryKey: dockerQueryKeys.suggestions('pending') })
+      void queryClient.invalidateQueries({ queryKey: dockerQueryKeys.suggestions('accepted') })
+      void queryClient.invalidateQueries({ queryKey: dockerProbeQueryKeys.summary })
+      void queryClient.invalidateQueries({
+        queryKey: dockerProbeQueryKeys.list(data.suggestion.container_name),
+      })
+    },
+  })
+}
+
+export function useIgnoreDockerSuggestion() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (vars: { suggestionId: string }) => {
+      const result = await apiClient.POST(
+        '/api/integrations/docker/suggestions/{suggestion_id}/ignore',
+        {
+          params: { path: { suggestion_id: vars.suggestionId } },
+        },
+      )
+      return unwrap<SuggestionIgnoreResponse>(result)
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: dockerQueryKeys.suggestions('pending') })
+      void queryClient.invalidateQueries({ queryKey: dockerQueryKeys.suggestions('ignored') })
+      void queryClient.invalidateQueries({ queryKey: dockerQueryKeys.suggestions('accepted') })
+    },
+  })
+}
+
+// --- Default-probes preview ---
+type SuggestionDefaultProbesResponse = Schema<'SuggestionDefaultProbesResponse'>
+
+export const dockerSuggestionDefaultProbesQueryKeys = {
+  detail: (suggestionId: string) =>
+    ['integrations', 'docker', 'suggestions', suggestionId, 'default-probes'] as const,
+}
+
+export function useSuggestionDefaultProbes(
+  suggestionId: string,
+): UseQueryResult<SuggestionDefaultProbesResponse, ApiError> {
+  return useQuery({
+    queryKey: dockerSuggestionDefaultProbesQueryKeys.detail(suggestionId),
+    queryFn: async () => {
+      const result = await apiClient.GET(
+        '/api/integrations/docker/suggestions/{suggestion_id}/default-probes',
+        { params: { path: { suggestion_id: suggestionId } } },
+      )
+      return unwrap<SuggestionDefaultProbesResponse>(result)
+    },
+    enabled: suggestionId.length > 0,
+    staleTime: 30_000,
+  })
+}
 
 export const dockerProbeQueryKeys = {
   list: (containerName: string) =>
@@ -316,6 +432,193 @@ export function useListComposeActions(
     },
     enabled: containerName.length > 0,
     refetchInterval: COMPOSE_ACTION_LIST_REFETCH_MS,
+  })
+}
+
+// ---------------------------------------------------------------------------
+// STAGE-003-012 — probe-target CRUD with optimistic updates
+// ---------------------------------------------------------------------------
+
+/**
+ * STAGE-003-012 — Optimistic create of a probe target.
+ *
+ * Cache key:  dockerProbeQueryKeys.list(containerName)
+ * Shape:      { probes: ProbeRow[] }
+ * Strategy:
+ *   onMutate    — snapshot, write cache with optimistic row appended
+ *   onError     — rollback to snapshot
+ *   onSettled   — invalidate to refetch authoritative state
+ *
+ * Required: containerName is passed in body since the POST endpoint
+ * is not scoped under a container path.
+ */
+export function useCreateProbeTarget() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (vars: { body: CreateProbeTargetRequest }) => {
+      const result = await apiClient.POST('/api/integrations/docker/probe-targets', {
+        body: vars.body,
+      })
+      return unwrap<ProbeRowSchema>(result)
+    },
+    onMutate: async (vars) => {
+      const listKey = dockerProbeQueryKeys.list(vars.body.container_name)
+      await queryClient.cancelQueries({ queryKey: listKey })
+      const previous = queryClient.getQueryData<ListProbesResponse>(listKey)
+      // Synthesize an optimistic row. id is a temporary client-side string;
+      // onSettled refetch replaces with real id.
+      const optimistic: ProbeRowSchema = {
+        id: `optimistic-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        container_name: vars.body.container_name,
+        kind: vars.body.kind,
+        name: vars.body.name,
+        target_value: vars.body.target_value,
+        config_source: 'manual',
+        enabled: true,
+        interval_seconds: vars.body.interval_seconds ?? 60,
+        timeout_seconds: vars.body.timeout_seconds ?? 10,
+        last_run_at: null,
+        last_status: null,
+        last_error: null,
+        created_at: new Date().toISOString(),
+        hidden_at: null,
+        exec_authorized: false,
+      }
+      if (previous) {
+        queryClient.setQueryData<ListProbesResponse>(listKey, {
+          ...previous,
+          probes: [...previous.probes, optimistic],
+        })
+      } else {
+        queryClient.setQueryData<ListProbesResponse>(listKey, { probes: [optimistic] })
+      }
+      return { previous, containerName: vars.body.container_name }
+    },
+    onError: (_err, _vars, context) => {
+      if (context?.previous && context.containerName) {
+        queryClient.setQueryData(dockerProbeQueryKeys.list(context.containerName), context.previous)
+      }
+    },
+    onSettled: (_data, _err, vars) => {
+      void queryClient.invalidateQueries({
+        queryKey: dockerProbeQueryKeys.list(vars.body.container_name),
+      })
+      void queryClient.invalidateQueries({ queryKey: dockerProbeQueryKeys.summary })
+    },
+  })
+}
+
+/**
+ * STAGE-003-012 — Optimistic update of a probe target.
+ *
+ * Cache key:  dockerProbeQueryKeys.list(containerName)
+ * Shape:      { probes: ProbeRow[] }
+ * Strategy:
+ *   onMutate    — snapshot, replace row in place with optimistic values
+ *   onError     — rollback to snapshot
+ *   onSettled   — invalidate to refetch authoritative state
+ *
+ * Required: containerName MUST be passed by the caller since the PATCH
+ * endpoint takes only probe_id and we have no way to derive containerName
+ * from the cache without scanning every list query.
+ */
+export function useUpdateProbeTarget() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (vars: {
+      probeId: string
+      containerName: string
+      body: UpdateProbeTargetRequest
+    }) => {
+      const result = await apiClient.PATCH('/api/integrations/docker/probe-targets/{probe_id}', {
+        params: { path: { probe_id: vars.probeId } },
+        body: vars.body,
+      })
+      return unwrap<ProbeRowSchema>(result)
+    },
+    onMutate: async (vars) => {
+      const listKey = dockerProbeQueryKeys.list(vars.containerName)
+      await queryClient.cancelQueries({ queryKey: listKey })
+      const previous = queryClient.getQueryData<ListProbesResponse>(listKey)
+      if (previous) {
+        queryClient.setQueryData<ListProbesResponse>(listKey, {
+          ...previous,
+          probes: previous.probes.map((p) =>
+            p.id === vars.probeId
+              ? {
+                  ...p,
+                  target_value: vars.body.target_value ?? p.target_value,
+                  interval_seconds: vars.body.interval_seconds ?? p.interval_seconds,
+                  timeout_seconds: vars.body.timeout_seconds ?? p.timeout_seconds,
+                }
+              : p,
+          ),
+        })
+      }
+      return { previous }
+    },
+    onError: (_err, vars, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(dockerProbeQueryKeys.list(vars.containerName), context.previous)
+      }
+    },
+    onSettled: (_data, _err, vars) => {
+      void queryClient.invalidateQueries({
+        queryKey: dockerProbeQueryKeys.list(vars.containerName),
+      })
+      void queryClient.invalidateQueries({ queryKey: dockerProbeQueryKeys.summary })
+    },
+  })
+}
+
+/**
+ * STAGE-003-012 — Optimistic delete of a probe target.
+ *
+ * Cache key:  dockerProbeQueryKeys.list(containerName)
+ * Shape:      { probes: ProbeRow[] }
+ * Strategy:
+ *   onMutate    — snapshot, write filtered cache (row removed)
+ *   onError     — rollback to snapshot
+ *   onSettled   — invalidate to refetch authoritative state
+ *
+ * Required: containerName MUST be passed by the caller since the DELETE
+ * endpoint takes only probe_id and we have no way to derive containerName
+ * from the cache without scanning every list query.
+ */
+export function useDeleteProbeTarget() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (vars: { probeId: string; containerName: string }) => {
+      const result = await apiClient.DELETE('/api/integrations/docker/probe-targets/{probe_id}', {
+        params: { path: { probe_id: vars.probeId } },
+      })
+      // 204 returns no body; short-circuit before unwrap (matches useHideCron pattern in crons.ts).
+      if (result.response.status === 204) return
+      return unwrap<undefined>(result)
+    },
+    onMutate: async (vars) => {
+      const listKey = dockerProbeQueryKeys.list(vars.containerName)
+      await queryClient.cancelQueries({ queryKey: listKey })
+      const previous = queryClient.getQueryData<ListProbesResponse>(listKey)
+      if (previous) {
+        queryClient.setQueryData<ListProbesResponse>(listKey, {
+          ...previous,
+          probes: previous.probes.filter((p) => p.id !== vars.probeId),
+        })
+      }
+      return { previous }
+    },
+    onError: (_err, vars, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(dockerProbeQueryKeys.list(vars.containerName), context.previous)
+      }
+    },
+    onSettled: (_data, _err, vars) => {
+      void queryClient.invalidateQueries({
+        queryKey: dockerProbeQueryKeys.list(vars.containerName),
+      })
+      void queryClient.invalidateQueries({ queryKey: dockerProbeQueryKeys.summary })
+    },
   })
 }
 

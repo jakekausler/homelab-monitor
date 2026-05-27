@@ -220,6 +220,62 @@ class ProbeTargetsRepository:
         )
         return result.rowcount or 0
 
+    @staticmethod
+    async def update_probe_target_conn(
+        conn: AsyncConnection,
+        *,
+        probe_id: str,
+        target_value: str | None,
+        interval_seconds: int | None,
+        timeout_seconds: int | None,
+    ) -> int:
+        """Partial update: only patches non-None fields. Returns row count affected.
+
+        kind, name, container_name are NOT updatable here (they form the logical
+        UNIQUE key). Use upsert_probe_target_conn for full upserts.
+        """
+        sets: list[str] = []
+        params: dict[str, object] = {"id": probe_id}
+        if target_value is not None:
+            sets.append("target_value = :tv")
+            params["tv"] = target_value
+        if interval_seconds is not None:
+            sets.append("interval_seconds = :is_")
+            params["is_"] = interval_seconds
+        if timeout_seconds is not None:
+            sets.append("timeout_seconds = :ts")
+            params["ts"] = timeout_seconds
+        if not sets:  # pragma: no cover -- API short-circuits empty-body PATCH before reaching repo
+            # No-op: nothing to update. Still verify the row exists so callers
+            # can rely on rowcount==1 for an existing id even when body is empty.
+            result = await conn.execute(
+                text("SELECT 1 FROM probe_targets WHERE id = :id"),
+                {"id": probe_id},
+            )
+            return 1 if result.first() is not None else 0
+        sql = "UPDATE probe_targets SET " + ", ".join(sets) + " WHERE id = :id"
+        result = await conn.execute(text(sql), params)
+        return result.rowcount or 0  # pragma: no cover -- rowcount defensive None fallback
+
+    @staticmethod
+    async def delete_probe_target_conn(
+        conn: AsyncConnection,
+        *,
+        probe_id: str,
+    ) -> int:
+        """Physically delete a probe_targets row. Returns row count affected.
+
+        NOTE: This is a hard delete — distinct from `mark_missing_except_conn`
+        which soft-hides via hidden_at. The UI exposes Delete (hard) and
+        Disable (soft via set_enabled_conn). See STAGE-003-012 Refinement
+        scope expansion 2026-05-26.
+        """
+        result = await conn.execute(
+            text("DELETE FROM probe_targets WHERE id = :id"),
+            {"id": probe_id},
+        )
+        return result.rowcount or 0  # pragma: no cover -- rowcount defensive None fallback
+
     # ---- Instance reads ----
 
     async def list_for_container(
