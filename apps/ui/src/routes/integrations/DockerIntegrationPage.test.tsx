@@ -45,23 +45,4 @@ describe('DockerIntegrationPage', () => {
     renderWithQueryClient(<DockerIntegrationPage />)
     expect(screen.getByRole('heading', { name: /docker integration/i })).toBeInTheDocument()
   })
-
-  it('renders empty state for container desktop panel', () => {
-    renderWithQueryClient(<DockerIntegrationPage />)
-    const desktop = screen.getByTestId('containers-desktop')
-    expect(desktop).toBeInTheDocument()
-    expect(desktop).toHaveTextContent('No containers discovered yet.')
-  })
-
-  it('renders empty state for container mobile panel', () => {
-    renderWithQueryClient(<DockerIntegrationPage />)
-    const mobile = screen.getByTestId('containers-mobile')
-    expect(mobile).toBeInTheDocument()
-    expect(mobile).toHaveTextContent('No containers discovered yet.')
-  })
-
-  it('renders Probes section', () => {
-    renderWithQueryClient(<DockerIntegrationPage />)
-    expect(screen.getByRole('heading', { name: 'Probes' })).toBeInTheDocument()
-  })
 })

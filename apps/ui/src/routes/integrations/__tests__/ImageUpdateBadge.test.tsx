@@ -1,12 +1,4 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import {
-  Outlet,
-  RouterProvider,
-  createMemoryHistory,
-  createRootRoute,
-  createRoute,
-  createRouter,
-} from '@tanstack/react-router'
 import { cleanup, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -76,53 +68,14 @@ function makeImageUpdateSummary(
 }
 
 // ---------------------------------------------------------------------------
-// Router helper
+// Render helper
 // ---------------------------------------------------------------------------
 
-function renderWithRouter(containerName: string) {
-  const rootRoute = createRootRoute({ component: () => <Outlet /> })
-  const integrationsRoute = createRoute({
-    getParentRoute: () => rootRoute,
-    path: '/integrations',
-    component: () => <Outlet />,
-  })
-  const dockerRoute = createRoute({
-    getParentRoute: () => integrationsRoute,
-    path: '/docker',
-    component: () => <Outlet />,
-  })
-  const containersRoute = createRoute({
-    getParentRoute: () => dockerRoute,
-    path: '/containers',
-    component: () => <Outlet />,
-  })
-  const containerDetailRoute = createRoute({
-    getParentRoute: () => containersRoute,
-    path: '/$name',
-    component: () => <ImageUpdateBadge containerName={containerName} />,
-  })
-  const imageUpdateRoute = createRoute({
-    getParentRoute: () => containerDetailRoute,
-    path: '/image-update',
-    component: () => <div data-testid="image-update-page">{containerName} image-update</div>,
-  })
-
-  const router = createRouter({
-    routeTree: rootRoute.addChildren([
-      integrationsRoute.addChildren([
-        dockerRoute.addChildren([
-          containersRoute.addChildren([containerDetailRoute.addChildren([imageUpdateRoute])]),
-        ]),
-      ]),
-    ]),
-    history: createMemoryHistory({
-      initialEntries: [`/integrations/docker/containers/${containerName}`],
-    }),
-  })
+function renderBadge(containerName: string) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
     <QueryClientProvider client={qc}>
-      <RouterProvider router={router} />
+      <ImageUpdateBadge containerName={containerName} />
     </QueryClientProvider>,
   )
 }
@@ -137,47 +90,59 @@ describe('ImageUpdateBadge', () => {
       isPending: false,
       isFetching: false,
       isLoading: false,
+      isError: false,
       error: null,
       data: makeImageUpdateSummary(),
-    } as unknown as ReturnType<typeof useImageUpdatesSummary>)
+    } as never)
   })
 
-  it('renders dash when isPending is true', async () => {
+  it('renders nothing when isPending is true', () => {
     vi.mocked(useImageUpdatesSummary).mockReturnValue({
       isPending: true,
       isFetching: false,
       isLoading: true,
+      isError: false,
       error: null,
       data: undefined,
-    } as unknown as ReturnType<typeof useImageUpdatesSummary>)
-    renderWithRouter('postgres')
-    expect(await screen.findByText('—')).toBeInTheDocument()
+    } as never)
+    const { container } = renderBadge('postgres')
+    expect(container).toBeEmptyDOMElement()
   })
 
-  it('renders dash when no entry exists', async () => {
+  it('renders nothing when isError is true', () => {
     vi.mocked(useImageUpdatesSummary).mockReturnValue({
       isPending: false,
       isFetching: false,
       isLoading: false,
-      error: null,
-      data: makeImageUpdateSummary(),
-    } as unknown as ReturnType<typeof useImageUpdatesSummary>)
-    renderWithRouter('nonexistent')
-    expect(await screen.findByText('—')).toBeInTheDocument()
+      isError: true,
+      error: new Error('failed'),
+      data: undefined,
+    } as never)
+    const { container } = renderBadge('postgres')
+    expect(container).toBeEmptyDOMElement()
   })
 
-  it('renders blue Update available link when available=true', async () => {
-    renderWithRouter('nginx')
-    const link = await screen.findByRole('link')
-    expect(link).toHaveTextContent('Update available')
-    expect(link).toHaveClass('bg-blue-50', 'text-blue-800')
+  it('renders nothing when no entry exists for container', () => {
+    const { container } = renderBadge('nonexistent')
+    expect(container).toBeEmptyDOMElement()
   })
 
-  it('renders "check failed" when check_error_reason set and available=false', async () => {
+  it('renders "Update available" badge when available=true and source=registry', () => {
+    renderBadge('nginx')
+    expect(screen.getByText('Update available')).toBeInTheDocument()
+  })
+
+  it('correct aria-label on Update available badge', () => {
+    renderBadge('nginx')
+    expect(screen.getByLabelText('Update available for nginx')).toBeInTheDocument()
+  })
+
+  it('renders "Update Check Failed" badge when check_error_reason set and available=false', () => {
     vi.mocked(useImageUpdatesSummary).mockReturnValue({
       isPending: false,
       isFetching: false,
       isLoading: false,
+      isError: false,
       error: null,
       data: makeImageUpdateSummary({
         postgres: {
@@ -189,41 +154,24 @@ describe('ImageUpdateBadge', () => {
           check_error_reason: 'network_error',
         },
       }),
-    } as unknown as ReturnType<typeof useImageUpdatesSummary>)
-    renderWithRouter('postgres')
-    const span = await screen.findByText('check failed')
-    expect(span).toBeInTheDocument()
-    expect(span).toHaveAttribute('title', 'Last check failed: network_error')
+    } as never)
+    renderBadge('postgres')
+    expect(screen.getByText('Update Check Failed')).toBeInTheDocument()
+    expect(screen.getByLabelText('Update Check Failed')).toBeInTheDocument()
   })
 
-  it('renders "up to date" when no error and available=false', async () => {
-    renderWithRouter('postgres')
-    const span = await screen.findByText('up to date')
-    expect(span).toBeInTheDocument()
+  it('renders "Up to date" badge when no error and available=false', () => {
+    renderBadge('postgres')
+    expect(screen.getByText('Up to date')).toBeInTheDocument()
+    expect(screen.getByLabelText('Image up to date')).toBeInTheDocument()
   })
 
-  it('correct aria-label on Update available link', async () => {
-    renderWithRouter('nginx')
-    const link = await screen.findByRole('link')
-    expect(link).toHaveAttribute('aria-label', 'Update available for nginx')
-  })
-
-  it('Update available link has correct href', async () => {
-    renderWithRouter('nginx')
-    const link = await screen.findByRole('link')
-    expect(link).toHaveAttribute(
-      'href',
-      expect.stringContaining('/integrations/docker/containers/nginx/image-update'),
-    )
-  })
-
-  // ---- local_build source tests (STAGE-003-009) ----
-
-  it('renders "Source changed — rebuild needed" when source=local_build and available=true', async () => {
+  it('renders "Rebuild needed" badge when source=local_build and available=true', () => {
     vi.mocked(useImageUpdatesSummary).mockReturnValue({
       isPending: false,
       isFetching: false,
       isLoading: false,
+      isError: false,
       error: null,
       data: makeImageUpdateSummary({
         'udo-viewer': {
@@ -233,18 +181,39 @@ describe('ImageUpdateBadge', () => {
           last_source_hash: 'abc123def456abc1',
         },
       }),
-    } as unknown as ReturnType<typeof useImageUpdatesSummary>)
-    renderWithRouter('udo-viewer')
-    const link = await screen.findByRole('link')
-    expect(link).toHaveTextContent('Source changed — rebuild needed')
-    expect(link).toHaveClass('bg-blue-50', 'text-blue-800')
+    } as never)
+    renderBadge('udo-viewer')
+    expect(screen.getByText('Rebuild needed')).toBeInTheDocument()
   })
 
-  it('renders "up to date" when source=local_build and available=false (no error)', async () => {
+  it('correct aria-label on Rebuild needed badge', () => {
     vi.mocked(useImageUpdatesSummary).mockReturnValue({
       isPending: false,
       isFetching: false,
       isLoading: false,
+      isError: false,
+      error: null,
+      data: makeImageUpdateSummary({
+        'udo-viewer': {
+          container_name: 'udo-viewer',
+          available: true,
+          source: 'local_build',
+          last_source_hash: 'abc123def456abc1',
+        },
+      }),
+    } as never)
+    renderBadge('udo-viewer')
+    expect(
+      screen.getByLabelText('Source changed — rebuild needed for udo-viewer'),
+    ).toBeInTheDocument()
+  })
+
+  it('renders "Up to date" when source=local_build and available=false (no error)', () => {
+    vi.mocked(useImageUpdatesSummary).mockReturnValue({
+      isPending: false,
+      isFetching: false,
+      isLoading: false,
+      isError: false,
       error: null,
       data: makeImageUpdateSummary({
         'udo-viewer': {
@@ -257,16 +226,14 @@ describe('ImageUpdateBadge', () => {
           check_error_reason: null,
         },
       }),
-    } as unknown as ReturnType<typeof useImageUpdatesSummary>)
-    renderWithRouter('udo-viewer')
-    const span = await screen.findByText('up to date')
-    expect(span).toBeInTheDocument()
+    } as never)
+    renderBadge('udo-viewer')
+    expect(screen.getByText('Up to date')).toBeInTheDocument()
   })
 
-  it('renders "Update available" (regression) when source=registry and available=true', async () => {
-    renderWithRouter('nginx')
-    const links = await screen.findAllByRole('link')
-    const link = links[0]
-    expect(link).toHaveTextContent('Update available')
+  it('renders "Update available" (not "Rebuild needed") when source=registry and available=true', () => {
+    renderBadge('nginx')
+    expect(screen.getByText('Update available')).toBeInTheDocument()
+    expect(screen.queryByText('Rebuild needed')).not.toBeInTheDocument()
   })
 })

@@ -16,9 +16,11 @@ import { CronDetailPage } from '@/routes/inventory/CronDetailPage'
 import { CronRunsListPage } from '@/routes/inventory/CronRunsList'
 import { CronRunLogViewerPage } from '@/routes/inventory/CronRunLogViewer'
 import { DockerIntegrationPage } from '@/routes/integrations/DockerIntegrationPage'
-import { DockerContainerLogsViewerPage } from '@/routes/integrations/DockerContainerLogsViewer'
-import { ContainerProbesPage } from '@/routes/integrations/ContainerProbesPage'
-import { ContainerImageUpdatePage } from '@/routes/integrations/ContainerImageUpdatePage'
+import { ContainerPage } from '@/routes/integrations/ContainerPage'
+import { ContainerOverviewTab } from '@/routes/integrations/ContainerOverviewTab'
+import { ContainerProbesTab } from '@/routes/integrations/ContainerProbesTab'
+import { ContainerLogsTab } from '@/routes/integrations/ContainerLogsTab'
+import { ContainerActionsTab } from '@/routes/integrations/ContainerActionsTab'
 import { AppShell } from '@/components/AppShell'
 import { ErrorDisplay } from '@/components/ErrorDisplay'
 
@@ -188,25 +190,47 @@ const dockerIntegrationRoute = createRoute({
   component: DockerIntegrationPage,
 })
 
-// NOTE: Sibling of dockerIntegrationRoute (not child). No DockerLayout shell
-// exists yet. If future stages introduce one (sub-tabs, persistent header),
-// re-parent this route under it.
-const containerLogsRoute = createRoute({
+// NEW: parent route hosts the shared header + tab strip; children render in <Outlet>.
+const containerPageRoute = createRoute({
   getParentRoute: () => protectedLayoutRoute,
-  path: '/integrations/docker/containers/$name/logs',
-  component: DockerContainerLogsViewerPage,
+  path: '/integrations/docker/containers/$name',
+  component: ContainerPage,
+})
+
+const containerIndexRoute = createRoute({
+  getParentRoute: () => containerPageRoute,
+  path: '/',
+  beforeLoad: ({ params }) => {
+    // eslint-disable-next-line @typescript-eslint/only-throw-error -- TanStack Router redirect objects are thrown by design
+    throw redirect({
+      to: '/integrations/docker/containers/$name/overview',
+      params: { name: params.name },
+    })
+  },
+})
+
+const containerOverviewRoute = createRoute({
+  getParentRoute: () => containerPageRoute,
+  path: 'overview',
+  component: ContainerOverviewTab,
 })
 
 const containerProbesRoute = createRoute({
-  getParentRoute: () => protectedLayoutRoute,
-  path: '/integrations/docker/containers/$name/probes',
-  component: ContainerProbesPage,
+  getParentRoute: () => containerPageRoute,
+  path: 'probes',
+  component: ContainerProbesTab,
 })
 
-const containerImageUpdateRoute = createRoute({
-  getParentRoute: () => protectedLayoutRoute,
-  path: '/integrations/docker/containers/$name/image-update',
-  component: ContainerImageUpdatePage,
+const containerLogsRoute = createRoute({
+  getParentRoute: () => containerPageRoute,
+  path: 'logs',
+  component: ContainerLogsTab,
+})
+
+const containerActionsRoute = createRoute({
+  getParentRoute: () => containerPageRoute,
+  path: 'actions',
+  component: ContainerActionsTab,
 })
 
 const routeTree = rootRoute.addChildren([
@@ -224,9 +248,13 @@ const routeTree = rootRoute.addChildren([
       cronRunLogViewerRoute,
     ]),
     dockerIntegrationRoute,
-    containerLogsRoute,
-    containerProbesRoute,
-    containerImageUpdateRoute,
+    containerPageRoute.addChildren([
+      containerIndexRoute,
+      containerOverviewRoute,
+      containerProbesRoute,
+      containerLogsRoute,
+      containerActionsRoute,
+    ]),
   ]),
 ])
 

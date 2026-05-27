@@ -1,17 +1,9 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import {
-  Outlet,
-  RouterProvider,
-  createMemoryHistory,
-  createRootRoute,
-  createRoute,
-  createRouter,
-} from '@tanstack/react-router'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '@/api/client'
-import { DockerContainerLogsViewerPage } from '@/routes/integrations/DockerContainerLogsViewer'
+import { DockerContainerLogsViewerBody } from '@/routes/integrations/DockerContainerLogsViewerBody'
 import { TooltipProvider } from '@/components/ui/tooltip'
 
 afterEach(cleanup)
@@ -46,36 +38,21 @@ function makeData(
   }
 }
 
-function renderWithRouter(initialPath: string = `/integrations/docker/containers/${NAME}/logs`) {
-  const rootRoute = createRootRoute({ component: () => <Outlet /> })
-  const route = createRoute({
-    getParentRoute: () => rootRoute,
-    path: '/integrations/docker/containers/$name/logs',
-    component: DockerContainerLogsViewerPage,
-  })
-  const dockerRoute = createRoute({
-    getParentRoute: () => rootRoute,
-    path: '/integrations/docker',
-    component: () => <div>docker page</div>,
-  })
-  const router = createRouter({
-    routeTree: rootRoute.addChildren([route, dockerRoute]),
-    history: createMemoryHistory({ initialEntries: [initialPath] }),
-  })
+function renderBody() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return {
     qc,
     ...render(
       <QueryClientProvider client={qc}>
         <TooltipProvider>
-          <RouterProvider router={router} />
+          <DockerContainerLogsViewerBody containerName={NAME} />
         </TooltipProvider>
       </QueryClientProvider>,
     ),
   }
 }
 
-describe('DockerContainerLogsViewerPage', () => {
+describe('DockerContainerLogsViewerBody', () => {
   beforeEach(() => {
     vi.mocked(useListContainers).mockReturnValue({
       data: { containers: [{ id: 'x', name: NAME, status: 'running' }] },
@@ -101,7 +78,7 @@ describe('DockerContainerLogsViewerPage', () => {
         ],
       }),
     } as never)
-    renderWithRouter()
+    renderBody()
     const body = await screen.findByTestId('logs-body')
     expect(body.textContent).toContain('INFO line 1')
     expect(body.textContent).toContain('INFO line 2')
@@ -115,12 +92,12 @@ describe('DockerContainerLogsViewerPage', () => {
       error: null,
       data: makeData({ log_status: 'no_lines', lines: [] }),
     } as never)
-    renderWithRouter()
+    renderBody()
     expect(await screen.findByTestId('no-lines')).toBeInTheDocument()
     expect(screen.getByTestId('no-lines')).toHaveTextContent('Try widening')
   })
 
-  it('renders container_unknown 404 page', async () => {
+  it('renders container_unknown 404 state', async () => {
     vi.mocked(useContainerLogs).mockReturnValue({
       isLoading: false,
       isFetching: false,
@@ -133,7 +110,7 @@ describe('DockerContainerLogsViewerPage', () => {
       }),
       data: undefined,
     } as never)
-    renderWithRouter()
+    renderBody()
     expect(await screen.findByTestId('container-unknown')).toBeInTheDocument()
   })
 
@@ -150,7 +127,7 @@ describe('DockerContainerLogsViewerPage', () => {
       }),
       data: undefined,
     } as never)
-    renderWithRouter()
+    renderBody()
     expect(await screen.findByTestId('unavailable-banner')).toBeInTheDocument()
   })
 
@@ -161,19 +138,19 @@ describe('DockerContainerLogsViewerPage', () => {
       error: null,
       data: makeData({ truncated: true }),
     } as never)
-    renderWithRouter()
+    renderBody()
     expect(await screen.findByTestId('truncated-banner')).toBeInTheDocument()
     expect(screen.getByTestId('truncated-banner')).toHaveTextContent('Narrow the time window')
   })
 
   it('omits truncated banner when truncated=false', async () => {
-    renderWithRouter()
+    renderBody()
     await screen.findByTestId('logs-body')
     expect(screen.queryByTestId('truncated-banner')).toBeNull()
   })
 
   it('since picker change triggers new query', async () => {
-    renderWithRouter()
+    renderBody()
     const picker = await screen.findByTestId<HTMLSelectElement>('since-picker')
     fireEvent.change(picker, { target: { value: '1h' } })
     // Assert the hook was called twice: once with default '15m', once with '1h'.
@@ -182,33 +159,27 @@ describe('DockerContainerLogsViewerPage', () => {
   })
 
   it('Refresh button calls invalidateQueries', async () => {
-    const { qc } = renderWithRouter()
+    const { qc } = renderBody()
     const invalidateSpy = vi.spyOn(qc, 'invalidateQueries')
     const btn = await screen.findByTestId('refresh-logs')
     fireEvent.click(btn)
     expect(invalidateSpy).toHaveBeenCalled()
   })
 
-  it('renders status badge from useListContainers cache', async () => {
-    renderWithRouter()
-    await screen.findByTestId('logs-header')
-    // StatusBadge will render the 'running' status string somewhere in the header
-    expect(screen.getByTestId('logs-header').textContent).toContain(NAME)
+  it('renders status badge from useListContainers cache', () => {
+    renderBody()
+    // Container name should be rendered
+    expect(screen.getByText(NAME)).toBeInTheDocument()
+    // StatusBadge will render the 'Running' status text
+    expect(screen.getByText('Running')).toBeInTheDocument()
   })
 
-  it('falls back to name-only header if container not in list cache', async () => {
+  it('falls back to name-only if container not in list cache', () => {
     vi.mocked(useListContainers).mockReturnValue({ data: { containers: [] } } as never)
-    renderWithRouter()
-    const header = await screen.findByTestId('logs-header')
-    expect(header.textContent).toContain(NAME)
-    // No StatusBadge rendered → no 'running' text in header.
-  })
-
-  it('back link targets /integrations/docker', async () => {
-    renderWithRouter()
-    await screen.findByTestId('logs-header')
-    const back = screen.getByRole('link', { name: /Back to Docker integration/ })
-    expect(back).toHaveAttribute('href', '/integrations/docker')
+    renderBody()
+    expect(screen.getByText(NAME)).toBeInTheDocument()
+    // No StatusBadge rendered → no 'Running' status text
+    expect(screen.queryByText('Running')).not.toBeInTheDocument()
   })
 
   it('Refresh button is disabled while isFetching=true', async () => {
@@ -218,7 +189,7 @@ describe('DockerContainerLogsViewerPage', () => {
       error: null,
       data: makeData(),
     } as never)
-    renderWithRouter()
+    renderBody()
     const btn = await screen.findByTestId('refresh-logs')
     expect(btn).toBeDisabled()
   })

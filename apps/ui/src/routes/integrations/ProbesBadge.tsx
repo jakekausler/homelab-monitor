@@ -1,4 +1,5 @@
-import { Link } from '@tanstack/react-router'
+import { AlertCircle, Activity } from 'lucide-react'
+import { Badge } from '@/components/ui/badge'
 import { useProbesSummary } from '@/api/docker'
 
 interface ProbesBadgeProps {
@@ -7,39 +8,36 @@ interface ProbesBadgeProps {
 
 export function ProbesBadge({ containerName }: ProbesBadgeProps) {
   const { data, isPending } = useProbesSummary()
-  if (isPending) return <span className="text-muted-foreground">—</span>
+  if (isPending) return null
   const entry = data?.[containerName]
-  if (!entry) return <span className="text-muted-foreground">—</span>
+  if (!entry) return null
 
   // STAGE-003-007: surface override-file validation errors as a red badge.
   if (entry.config_errors && entry.config_errors.length > 0) {
     return (
-      <Link
-        to="/integrations/docker/containers/$name/probes"
-        params={{ name: containerName }}
-        className="rounded bg-red-50 px-2 py-0.5 text-xs text-red-800 hover:underline"
+      <Badge
+        variant="critical"
         aria-label={`Config error for ${containerName}: ${entry.config_errors.join('; ')}`}
-        title={`${entry.config_errors.length} validation error${entry.config_errors.length === 1 ? '' : 's'} — click to view`}
+        title={`${entry.config_errors.length} validation error${entry.config_errors.length === 1 ? '' : 's'}`}
+        className="inline-flex gap-1"
       >
-        Config error
-      </Link>
+        <AlertCircle className="size-3.5" />
+        Config errors
+      </Badge>
     )
   }
 
-  if (entry.active === 0) return <span className="text-muted-foreground">—</span>
+  if (entry.active === 0) return null
 
-  const text =
-    entry.failing > 0
-      ? `${entry.active} active, ${entry.failing} failing`
-      : `${entry.active} active`
+  const isFailing = entry.failing > 0
+  const variant = isFailing ? 'critical' : 'ok'
+  const text = isFailing ? `${entry.failing} failing` : `${entry.active} active`
+  const ariaLabel = `Probes for ${containerName}: ${entry.active} active${isFailing ? `, ${entry.failing} failing` : ''}`
+
   return (
-    <Link
-      to="/integrations/docker/containers/$name/probes"
-      params={{ name: containerName }}
-      className="text-xs hover:underline"
-      aria-label={`View probes for ${containerName}: ${entry.active} active${entry.failing > 0 ? `, ${entry.failing} failing` : ''}`}
-    >
+    <Badge variant={variant} aria-label={ariaLabel} className="inline-flex gap-1">
+      <Activity className="size-3.5" />
       {text}
-    </Link>
+    </Badge>
   )
 }

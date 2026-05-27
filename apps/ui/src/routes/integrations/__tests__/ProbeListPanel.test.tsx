@@ -211,4 +211,37 @@ describe('ProbeListPanel', () => {
     // Should not have "Error:" label when last_error is null
     expect(screen.queryByText(/^Error:/)).not.toBeInTheDocument()
   })
+
+  it('renders — status badge when last_status is null/unknown', () => {
+    const probes: ProbeRow[] = [makeProbe({ last_status: null as unknown as string })]
+    render(<ProbeListPanel probes={probes} />)
+
+    // The fallback branch of statusBadge renders "—"
+    expect(screen.getAllByText('—').length).toBeGreaterThan(0)
+  })
+
+  it('calls toggle.mutate with correct args when Enable/Disable button is clicked', async () => {
+    const { useToggleProbe } = await import('@/api/docker')
+    const mutate = vi.fn()
+    vi.mocked(useToggleProbe).mockReturnValue({ mutate, isPending: false } as never)
+
+    const probes: ProbeRow[] = [makeProbe({ id: 'probe-toggle', enabled: true })]
+    render(<ProbeListPanel probes={probes} />)
+
+    const disableButtons = screen.getAllByText('Disable')
+    disableButtons[0]?.click()
+
+    expect(mutate).toHaveBeenCalledWith({ probeId: 'probe-toggle', enabled: false })
+  })
+
+  it('truncates long target_value in mobile card view', () => {
+    // truncate(s, 60) kicks in when s.length > 60
+    const longTarget = 'a'.repeat(65)
+    const probes: ProbeRow[] = [makeProbe({ kind: 'exec', target_value: longTarget })]
+    render(<ProbeListPanel probes={probes} />)
+
+    // The mobile card shows truncated value via truncate(p.target_value, 60)
+    const code = screen.getByText(/^a+…$/)
+    expect(code.textContent).toHaveLength(60)
+  })
 })

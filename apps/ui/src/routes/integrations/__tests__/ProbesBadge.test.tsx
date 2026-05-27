@@ -1,12 +1,4 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import {
-  Outlet,
-  RouterProvider,
-  createMemoryHistory,
-  createRootRoute,
-  createRoute,
-  createRouter,
-} from '@tanstack/react-router'
 import { cleanup, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -60,53 +52,14 @@ function makeProbeSummary(
 }
 
 // ---------------------------------------------------------------------------
-// Router helper
+// Render helper
 // ---------------------------------------------------------------------------
 
-function renderWithRouter(containerName: string) {
-  const rootRoute = createRootRoute({ component: () => <Outlet /> })
-  const integrationsRoute = createRoute({
-    getParentRoute: () => rootRoute,
-    path: '/integrations',
-    component: () => <Outlet />,
-  })
-  const dockerRoute = createRoute({
-    getParentRoute: () => integrationsRoute,
-    path: '/docker',
-    component: () => <Outlet />,
-  })
-  const containersRoute = createRoute({
-    getParentRoute: () => dockerRoute,
-    path: '/containers',
-    component: () => <Outlet />,
-  })
-  const containerDetailRoute = createRoute({
-    getParentRoute: () => containersRoute,
-    path: '/$name',
-    component: () => <ProbesBadge containerName={containerName} />,
-  })
-  const probesRoute = createRoute({
-    getParentRoute: () => containerDetailRoute,
-    path: '/probes',
-    component: () => <div data-testid="probes-page">{containerName} probes</div>,
-  })
-
-  const router = createRouter({
-    routeTree: rootRoute.addChildren([
-      integrationsRoute.addChildren([
-        dockerRoute.addChildren([
-          containersRoute.addChildren([containerDetailRoute.addChildren([probesRoute])]),
-        ]),
-      ]),
-    ]),
-    history: createMemoryHistory({
-      initialEntries: [`/integrations/docker/containers/${containerName}`],
-    }),
-  })
+function renderBadge(containerName: string) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
     <QueryClientProvider client={qc}>
-      <RouterProvider router={router} />
+      <ProbesBadge containerName={containerName} />
     </QueryClientProvider>,
   )
 }
@@ -123,47 +76,27 @@ describe('ProbesBadge', () => {
       isLoading: false,
       error: null,
       data: makeProbeSummary(),
-    } as unknown as ReturnType<typeof useProbesSummary>)
+    } as never)
   })
 
-  it('renders dash when isPending is true', async () => {
+  it('renders nothing when isPending is true', () => {
     vi.mocked(useProbesSummary).mockReturnValue({
       isPending: true,
       isFetching: false,
       isLoading: true,
       error: null,
       data: undefined,
-    } as unknown as ReturnType<typeof useProbesSummary>)
-    renderWithRouter('homeassistant')
-    expect(await screen.findByText('—')).toBeInTheDocument()
+    } as never)
+    const { container } = renderBadge('homeassistant')
+    expect(container).toBeEmptyDOMElement()
   })
 
-  it('renders dash when no entry exists', async () => {
-    vi.mocked(useProbesSummary).mockReturnValue({
-      isPending: false,
-      isFetching: false,
-      isLoading: false,
-      error: null,
-      data: makeProbeSummary(),
-    } as unknown as ReturnType<typeof useProbesSummary>)
-    renderWithRouter('nonexistent')
-    expect(await screen.findByText('—')).toBeInTheDocument()
+  it('renders nothing when no entry exists', () => {
+    const { container } = renderBadge('nonexistent')
+    expect(container).toBeEmptyDOMElement()
   })
 
-  it('renders count link when active > 0 and no config errors', async () => {
-    renderWithRouter('homeassistant')
-    const link = await screen.findByRole('link')
-    expect(link).toHaveTextContent('2 active')
-    expect(link).toHaveAttribute('aria-label', 'View probes for homeassistant: 2 active')
-  })
-
-  it('renders count link with failing probes when failing > 0', async () => {
-    renderWithRouter('pihole')
-    const link = await screen.findByRole('link')
-    expect(link).toHaveTextContent('1 active, 1 failing')
-  })
-
-  it('renders dash when active === 0', async () => {
+  it('renders nothing when active === 0 and no config errors', () => {
     vi.mocked(useProbesSummary).mockReturnValue({
       isPending: false,
       isFetching: false,
@@ -177,12 +110,27 @@ describe('ProbesBadge', () => {
           source_breakdown: {},
         },
       }),
-    } as unknown as ReturnType<typeof useProbesSummary>)
-    renderWithRouter('inactive')
-    expect(await screen.findByText('—')).toBeInTheDocument()
+    } as never)
+    const { container } = renderBadge('inactive')
+    expect(container).toBeEmptyDOMElement()
   })
 
-  it('renders red Config error badge when config_errors is non-empty', async () => {
+  it('renders "X active" badge when active > 0 and failing === 0', () => {
+    renderBadge('homeassistant')
+    expect(screen.getByText('2 active')).toBeInTheDocument()
+  })
+
+  it('renders "X failing" badge when failing > 0', () => {
+    renderBadge('pihole')
+    expect(screen.getByText('1 failing')).toBeInTheDocument()
+  })
+
+  it('does not render active count when failing > 0', () => {
+    renderBadge('pihole')
+    expect(screen.queryByText('1 active')).not.toBeInTheDocument()
+  })
+
+  it('renders "Config errors" badge when config_errors is non-empty', () => {
     vi.mocked(useProbesSummary).mockReturnValue({
       isPending: false,
       isFetching: false,
@@ -196,15 +144,12 @@ describe('ProbesBadge', () => {
           source_breakdown: { label: 1, file_override: 1 },
         },
       }),
-    } as unknown as ReturnType<typeof useProbesSummary>)
-    renderWithRouter('homeassistant')
-    const link = await screen.findByRole('link')
-    expect(link).toHaveTextContent('Config error')
-    expect(link).toHaveClass('bg-red-50', 'text-red-800')
-    expect(link).toHaveAttribute('title', '2 validation errors — click to view')
+    } as never)
+    renderBadge('homeassistant')
+    expect(screen.getByText('Config errors')).toBeInTheDocument()
   })
 
-  it('Config error badge takes priority over active count', async () => {
+  it('Config errors badge takes priority over active count', () => {
     vi.mocked(useProbesSummary).mockReturnValue({
       isPending: false,
       isFetching: false,
@@ -218,22 +163,14 @@ describe('ProbesBadge', () => {
           source_breakdown: { label: 5 },
         },
       }),
-    } as unknown as ReturnType<typeof useProbesSummary>)
-    renderWithRouter('homeassistant')
-    expect(await screen.findByText('Config error')).toBeInTheDocument()
+    } as never)
+    renderBadge('homeassistant')
+    expect(screen.getByText('Config errors')).toBeInTheDocument()
     expect(screen.queryByText(/active/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/failing/)).not.toBeInTheDocument()
   })
 
-  it('mounts the link with correct route params', async () => {
-    renderWithRouter('pihole')
-    const link = await screen.findByRole('link')
-    expect(link).toHaveAttribute(
-      'href',
-      expect.stringContaining('/integrations/docker/containers/pihole/probes'),
-    )
-  })
-
-  it('renders config error aria-label with all errors', async () => {
+  it('renders config error aria-label with all errors joined by semicolon', () => {
     vi.mocked(useProbesSummary).mockReturnValue({
       isPending: false,
       isFetching: false,
@@ -247,9 +184,10 @@ describe('ProbesBadge', () => {
           source_breakdown: { label: 2 },
         },
       }),
-    } as unknown as ReturnType<typeof useProbesSummary>)
-    renderWithRouter('homeassistant')
-    const link = await screen.findByRole('link')
-    expect(link).toHaveAttribute('aria-label', 'Config error for homeassistant: Error A; Error B')
+    } as never)
+    renderBadge('homeassistant')
+    expect(
+      screen.getByLabelText('Config error for homeassistant: Error A; Error B'),
+    ).toBeInTheDocument()
   })
 })
