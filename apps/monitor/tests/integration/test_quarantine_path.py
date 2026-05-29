@@ -21,15 +21,13 @@ import httpx
 import pytest
 
 from .helpers.rig import Rig
+from .helpers.rig_health import require_rig_components
 
 
 @pytest.mark.integration
 def test_synthetic_quarantine_alert_lands_in_alerts_list() -> None:
     """POST /api/alerts/ingest with a quarantine-shaped payload; expect it in GET /api/alerts."""
-    try:
-        Rig.boot().__enter__()
-    except (httpx.HTTPError, RuntimeError, TimeoutError) as exc:
-        pytest.skip(f"rig not reachable: {exc}")
+    require_rig_components("monitor")
 
     with Rig.boot() as rig:
         now = datetime.now(UTC).isoformat()

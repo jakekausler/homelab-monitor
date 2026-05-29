@@ -14,16 +14,17 @@ import os
 import httpx
 import pytest
 
+from .helpers.rig_health import require_rig_components
+
 
 @pytest.mark.integration
 @pytest.mark.slow
 def test_alertmanager_accepts_rendered_config() -> None:
     """AM /-/healthy returns 200 — i.e., the static test fixture parses cleanly."""
+    require_rig_components("alertmanager")
+
     am_url = os.environ.get("AM_URL", "http://alertmanager:9093").rstrip("/")
-    try:
-        resp = httpx.get(f"{am_url}/-/healthy", timeout=5.0)
-    except httpx.HTTPError:
-        pytest.skip(f"AM not reachable at {am_url} — start docker-compose.test.yml")
+    resp = httpx.get(f"{am_url}/-/healthy", timeout=5.0)
     assert resp.status_code == 200  # noqa: PLR2004
 
 
@@ -31,11 +32,10 @@ def test_alertmanager_accepts_rendered_config() -> None:
 @pytest.mark.slow
 def test_vmalert_loads_host_rules() -> None:
     """vmalert /api/v1/rules lists our host rules — i.e., host.yaml parses cleanly."""
+    require_rig_components("vmalert-metrics")
+
     vmalert_url = os.environ.get("VMALERT_URL", "http://vmalert-metrics:8880").rstrip("/")
-    try:
-        resp = httpx.get(f"{vmalert_url}/api/v1/rules", timeout=5.0)
-    except httpx.HTTPError:
-        pytest.skip(f"vmalert not reachable at {vmalert_url} — start docker-compose.test.yml")
+    resp = httpx.get(f"{vmalert_url}/api/v1/rules", timeout=5.0)
     assert resp.status_code == 200  # noqa: PLR2004
     data = resp.json()
     rule_names = {

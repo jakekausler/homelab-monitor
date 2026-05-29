@@ -22,6 +22,7 @@ import pytest
 from homelab_monitor.kernel.cron.log_match import canonical_log_key
 
 from .helpers.rig import Rig
+from .helpers.rig_health import require_rig_components
 
 VECTOR_LATENCY_BUDGET_S = 60.0
 CRON_TEST_COMMAND = "/storage/scripts/cron/backup.sh"
@@ -37,10 +38,7 @@ def test_vanilla_cron_line_increments_observed_runs() -> None:
     - last_observed_run_at should be set
     - current_state should REMAIN "unknown" (NOT change to "ok")
     """
-    try:
-        Rig.boot().__enter__()  # ensure rig responds
-    except (httpx.HTTPError, RuntimeError, TimeoutError) as exc:
-        pytest.skip(f"rig not reachable: {exc}")
+    require_rig_components("monitor", "victorialogs")
 
     with Rig.boot() as rig:
         # Step 1: Seed a cron row with a known command so (host, log_match_key)
@@ -165,10 +163,7 @@ def test_wrapper_tagged_line_sets_ok() -> None:
 
     Optional test: exercises the exit-code parsing and state transition path.
     """
-    try:
-        Rig.boot().__enter__()  # ensure rig responds
-    except (httpx.HTTPError, RuntimeError, TimeoutError) as exc:
-        pytest.skip(f"rig not reachable: {exc}")
+    require_rig_components("monitor", "victorialogs")
 
     with Rig.boot() as rig:
         # Similar to the vanilla test, but with exit=0 tag

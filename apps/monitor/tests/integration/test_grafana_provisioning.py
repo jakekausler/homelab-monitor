@@ -16,6 +16,8 @@ from typing import Any
 import httpx
 import pytest
 
+from .helpers.rig_health import require_rig_components
+
 GRAFANA_URL = os.environ.get("GRAFANA_URL", "http://grafana:3000").rstrip("/")
 PLUGIN_INSTALL_TIMEOUT_S = 90.0
 
@@ -37,10 +39,10 @@ def _wait_for_health(deadline: float) -> bool:
 @pytest.mark.slow
 def test_grafana_health_endpoint_returns_200() -> None:
     """Grafana's /api/health responds 200 after first-boot plugin install."""
-    deadline = time.time() + PLUGIN_INSTALL_TIMEOUT_S
-    if not _wait_for_health(deadline):
-        pytest.skip(f"Grafana not reachable at {GRAFANA_URL} — start docker-compose.test.yml")
+    require_rig_components("grafana", "monitor")
 
+    deadline = time.time() + PLUGIN_INSTALL_TIMEOUT_S
+    _wait_for_health(deadline)
     resp = httpx.get(f"{GRAFANA_URL}/api/health", timeout=5.0)
     assert resp.status_code == 200  # noqa: PLR2004
 
@@ -52,10 +54,10 @@ def test_grafana_datasources_provisioned() -> None:
 
     Uses anonymous Viewer access (compose env GF_AUTH_ANONYMOUS_ENABLED=true).
     """
-    deadline = time.time() + PLUGIN_INSTALL_TIMEOUT_S
-    if not _wait_for_health(deadline):
-        pytest.skip(f"Grafana not reachable at {GRAFANA_URL}")
+    require_rig_components("grafana", "monitor")
 
+    deadline = time.time() + PLUGIN_INSTALL_TIMEOUT_S
+    _wait_for_health(deadline)
     resp = httpx.get(f"{GRAFANA_URL}/api/datasources", timeout=5.0)
     assert resp.status_code == 200  # noqa: PLR2004
     datasources: list[dict[str, Any]] = resp.json()
@@ -74,10 +76,10 @@ def test_grafana_datasources_provisioned() -> None:
 @pytest.mark.slow
 def test_grafana_host_overview_dashboard_provisioned() -> None:
     """The host-overview dashboard JSON is loaded with the expected UID and panels."""
-    deadline = time.time() + PLUGIN_INSTALL_TIMEOUT_S
-    if not _wait_for_health(deadline):
-        pytest.skip(f"Grafana not reachable at {GRAFANA_URL}")
+    require_rig_components("grafana", "monitor")
 
+    deadline = time.time() + PLUGIN_INSTALL_TIMEOUT_S
+    _wait_for_health(deadline)
     resp = httpx.get(f"{GRAFANA_URL}/api/dashboards/uid/host-overview", timeout=5.0)
     assert resp.status_code == 200, resp.text  # noqa: PLR2004
     body = resp.json()

@@ -11,10 +11,10 @@ import time
 import uuid
 from datetime import UTC, datetime, timedelta
 
-import httpx
 import pytest
 
 from .helpers.rig import Rig
+from .helpers.rig_health import require_rig_components
 
 VECTOR_LATENCY_BUDGET_S = 30.0
 
@@ -23,10 +23,7 @@ VECTOR_LATENCY_BUDGET_S = 30.0
 @pytest.mark.slow
 def test_log_line_via_noisy_logger_reaches_logs_query() -> None:
     """Plant a unique line; poll /api/logs/query until it surfaces or 30s elapses."""
-    try:
-        Rig.boot().__enter__()  # ensure rig responds
-    except (httpx.HTTPError, RuntimeError, TimeoutError) as exc:
-        pytest.skip(f"rig not reachable: {exc}")
+    require_rig_components("monitor", "victorialogs", "noisy-logger")
 
     marker = f"rig-test-{uuid.uuid4().hex}"
     with Rig.boot() as rig:

@@ -39,6 +39,10 @@ DEFAULT_FIXTURE_HOST_URL = "http://fixture-host:8000"
 DEFAULT_NOISY_LOGGER_URL = "http://noisy-logger:8001"
 DEFAULT_AM_URL = "http://alertmanager:9093"
 DEFAULT_VL_URL = "http://victorialogs:9428"
+DEFAULT_VM_URL = "http://victoriametrics:8428"
+DEFAULT_VMALERT_METRICS_URL = "http://vmalert-metrics:8880"
+DEFAULT_VMALERT_LOGS_URL = "http://vmalert-logs-test:8880"
+DEFAULT_GRAFANA_URL = "http://grafana:3000"
 DEFAULT_RIG_TOKEN_FILE = "/shared/rig-token"
 
 _HTTP_OK = 200
@@ -46,13 +50,17 @@ _HTTP_OK = 200
 
 @dataclass(frozen=True, slots=True)
 class RigUrls:
-    """Resolved URLs for the rig fixtures + monitor."""
+    """Resolved URLs for the rig fixtures + monitor + sidecars."""
 
     monitor: str
     fixture_host: str
     noisy_logger: str
     alertmanager: str
     victorialogs: str
+    victoriametrics: str
+    vmalert_metrics: str
+    vmalert_logs: str
+    grafana: str
 
     @classmethod
     def from_env(cls) -> RigUrls:
@@ -62,6 +70,10 @@ class RigUrls:
             noisy_logger=os.environ.get("NOISY_LOGGER_URL", DEFAULT_NOISY_LOGGER_URL).rstrip("/"),
             alertmanager=os.environ.get("AM_URL", DEFAULT_AM_URL).rstrip("/"),
             victorialogs=os.environ.get("VL_URL", DEFAULT_VL_URL).rstrip("/"),
+            victoriametrics=os.environ.get("VM_URL", DEFAULT_VM_URL).rstrip("/"),
+            vmalert_metrics=os.environ.get("VMALERT_URL", DEFAULT_VMALERT_METRICS_URL).rstrip("/"),
+            vmalert_logs=os.environ.get("VMALERT_LOGS_URL", DEFAULT_VMALERT_LOGS_URL).rstrip("/"),
+            grafana=os.environ.get("GRAFANA_URL", DEFAULT_GRAFANA_URL).rstrip("/"),
         )
 
 

@@ -17,10 +17,14 @@ import os
 import httpx
 import pytest
 
+from .helpers.rig_health import require_rig_components
+
 
 @pytest.mark.integration
 def test_vm_reachable() -> None:
     """`VM_URL/health` returns 200 OK."""
+    require_rig_components("victoriametrics")
+
     vm_url = os.environ.get("VM_URL", "http://victoriametrics:8428").rstrip("/")
     resp = httpx.get(f"{vm_url}/health", timeout=5.0)
     assert resp.status_code == 200  # noqa: PLR2004

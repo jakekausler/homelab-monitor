@@ -17,10 +17,10 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-import httpx
 import pytest
 
 from .helpers.rig import Rig
+from .helpers.rig_health import require_rig_components
 
 VECTOR_LATENCY_BUDGET_S = 30.0
 
@@ -43,10 +43,7 @@ def _query_logs(rig: Rig, marker: str) -> list[dict[str, Any]]:
 @pytest.mark.slow
 def test_python_traceback_stitched_into_single_record() -> None:
     """Plant a 4-line Python traceback; assert ONE VL record containing all 4 fragments."""
-    try:
-        Rig.boot().__enter__()
-    except (httpx.HTTPError, RuntimeError, TimeoutError) as exc:
-        pytest.skip(f"rig not reachable: {exc}")
+    require_rig_components("monitor", "victorialogs", "noisy-logger")
 
     marker = f"rig-ml-py-{uuid.uuid4().hex[:8]}"
     lines = [
@@ -83,10 +80,7 @@ def test_python_traceback_stitched_into_single_record() -> None:
 @pytest.mark.slow
 def test_java_stack_trace_stitched_into_single_record() -> None:
     """Plant a 3-line Java stack trace; assert ONE VL record."""
-    try:
-        Rig.boot().__enter__()
-    except (httpx.HTTPError, RuntimeError, TimeoutError) as exc:
-        pytest.skip(f"rig not reachable: {exc}")
+    require_rig_components("monitor", "victorialogs", "noisy-logger")
 
     marker = f"rig-ml-java-{uuid.uuid4().hex[:8]}"
     lines = [
@@ -127,10 +121,7 @@ def test_negative_control_event_ends_on_non_continuation_line() -> None:
     traceback — it is a separate VL record. Proves continue_through terminates
     the event correctly (not just that unrelated lines never merge).
     """
-    try:
-        Rig.boot().__enter__()
-    except (httpx.HTTPError, RuntimeError, TimeoutError) as exc:
-        pytest.skip(f"rig not reachable: {exc}")
+    require_rig_components("monitor", "victorialogs", "noisy-logger")
 
     marker_tb = f"rig-ml-end-tb-{uuid.uuid4().hex[:8]}"
     marker_plain = f"rig-ml-end-plain-{uuid.uuid4().hex[:8]}"
@@ -174,10 +165,7 @@ def test_negative_control_event_ends_on_non_continuation_line() -> None:
 @pytest.mark.slow
 def test_go_panic_stitched_into_single_record() -> None:
     """Plant a 4-line Go panic; assert ONE VL record."""
-    try:
-        Rig.boot().__enter__()
-    except (httpx.HTTPError, RuntimeError, TimeoutError) as exc:
-        pytest.skip(f"rig not reachable: {exc}")
+    require_rig_components("monitor", "victorialogs", "noisy-logger")
 
     marker = f"rig-ml-go-{uuid.uuid4().hex[:8]}"
     lines = [
@@ -210,10 +198,7 @@ def test_go_panic_stitched_into_single_record() -> None:
 @pytest.mark.slow
 def test_ruby_traceback_stitched_into_single_record() -> None:
     """Plant a 3-line Ruby traceback; assert ONE VL record."""
-    try:
-        Rig.boot().__enter__()
-    except (httpx.HTTPError, RuntimeError, TimeoutError) as exc:
-        pytest.skip(f"rig not reachable: {exc}")
+    require_rig_components("monitor", "victorialogs", "noisy-logger")
 
     marker = f"rig-ml-rb-{uuid.uuid4().hex[:8]}"
     lines = [
@@ -245,10 +230,7 @@ def test_ruby_traceback_stitched_into_single_record() -> None:
 @pytest.mark.slow
 def test_node_stack_trace_stitched_into_single_record() -> None:
     """Plant a 3-line Node.js error; assert ONE VL record."""
-    try:
-        Rig.boot().__enter__()
-    except (httpx.HTTPError, RuntimeError, TimeoutError) as exc:
-        pytest.skip(f"rig not reachable: {exc}")
+    require_rig_components("monitor", "victorialogs", "noisy-logger")
 
     marker = f"rig-ml-node-{uuid.uuid4().hex[:8]}"
     lines = [
@@ -280,10 +262,7 @@ def test_node_stack_trace_stitched_into_single_record() -> None:
 @pytest.mark.slow
 def test_dotnet_stack_trace_stitched_into_single_record() -> None:
     """Plant a 3-line .NET exception; assert ONE VL record."""
-    try:
-        Rig.boot().__enter__()
-    except (httpx.HTTPError, RuntimeError, TimeoutError) as exc:
-        pytest.skip(f"rig not reachable: {exc}")
+    require_rig_components("monitor", "victorialogs", "noisy-logger")
 
     marker = f"rig-ml-dotnet-{uuid.uuid4().hex[:8]}"
     lines = [
@@ -315,10 +294,7 @@ def test_dotnet_stack_trace_stitched_into_single_record() -> None:
 @pytest.mark.slow
 def test_cpp_segfault_stitched_into_single_record() -> None:
     """Plant a 4-line C++ segfault dump; assert ONE VL record."""
-    try:
-        Rig.boot().__enter__()
-    except (httpx.HTTPError, RuntimeError, TimeoutError) as exc:
-        pytest.skip(f"rig not reachable: {exc}")
+    require_rig_components("monitor", "victorialogs", "noisy-logger")
 
     marker = f"rig-ml-cpp-{uuid.uuid4().hex[:8]}"
     lines = [
@@ -351,10 +327,7 @@ def test_cpp_segfault_stitched_into_single_record() -> None:
 @pytest.mark.slow
 def test_rust_panic_stitched_into_single_record() -> None:
     """Plant a 5-line Rust panic with backtrace; assert ONE VL record."""
-    try:
-        Rig.boot().__enter__()
-    except (httpx.HTTPError, RuntimeError, TimeoutError) as exc:
-        pytest.skip(f"rig not reachable: {exc}")
+    require_rig_components("monitor", "victorialogs", "noisy-logger")
 
     marker = f"rig-ml-rust-{uuid.uuid4().hex[:8]}"
     lines = [
@@ -393,10 +366,7 @@ def test_php_fatal_stitched_into_single_record() -> None:
     NOT match start_pattern (no recognized prefix), so they remain continuations.
     The indented 'thrown in...' line also remains a continuation via ^\s.
     """
-    try:
-        Rig.boot().__enter__()
-    except (httpx.HTTPError, RuntimeError, TimeoutError) as exc:
-        pytest.skip(f"rig not reachable: {exc}")
+    require_rig_components("monitor", "victorialogs", "noisy-logger")
 
     marker = f"rig-ml-php-{uuid.uuid4().hex[:8]}"
     lines = [
@@ -430,10 +400,7 @@ def test_php_fatal_stitched_into_single_record() -> None:
 @pytest.mark.slow
 def test_negative_control_two_iso_timestamp_lines_stay_separate() -> None:
     """Two ISO-timestamp lines each match start_pattern → TWO separate VL records."""
-    try:
-        Rig.boot().__enter__()
-    except (httpx.HTTPError, RuntimeError, TimeoutError) as exc:
-        pytest.skip(f"rig not reachable: {exc}")
+    require_rig_components("monitor", "victorialogs", "noisy-logger")
 
     marker_a = f"rig-ml-iso-a-{uuid.uuid4().hex[:8]}"
     marker_b = f"rig-ml-iso-b-{uuid.uuid4().hex[:8]}"

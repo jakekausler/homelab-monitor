@@ -29,6 +29,7 @@ from typing import Any
 import httpx
 import pytest
 
+from .helpers.rig_health import require_rig_components
 from .helpers.vl_planter import plant_log_lines
 
 VL_URL = os.environ.get("VL_URL", "http://victorialogs:9428").rstrip("/")
@@ -87,15 +88,7 @@ def _wait_for_alert_with_label(
 def test_webhook() -> Iterator[None]:
     """Module-scoped: start the test webhook receiver once for all tests in this file."""
     # Skip if VL/vmalert/AM aren't reachable.
-    for url, name in [
-        (VL_URL + "/health", "victorialogs"),
-        (VMALERT_LOGS_URL + "/-/health", "vmalert-logs"),
-        (AM_URL + "/-/healthy", "alertmanager"),
-    ]:
-        try:
-            httpx.get(url, timeout=3.0)
-        except httpx.HTTPError:
-            pytest.skip(f"{name} not reachable — start docker-compose.test.yml")
+    require_rig_components("victorialogs", "vmalert-logs", "alertmanager")
 
     proc = _start_test_webhook()
     try:
@@ -125,10 +118,9 @@ def test_webhook() -> Iterator[None]:
 @pytest.mark.slow
 def test_vmalert_logs_loads_system_rules() -> None:
     """vmalert-logs /api/v1/rules lists KernelOOM + SshFailedLoginBurst (i.e., rules parsed)."""
-    try:
-        resp = httpx.get(f"{VMALERT_LOGS_URL}/api/v1/rules", timeout=5.0)
-    except httpx.HTTPError:
-        pytest.skip("vmalert-logs-test not reachable")
+    require_rig_components("vmalert-logs")
+
+    resp = httpx.get(f"{VMALERT_LOGS_URL}/api/v1/rules", timeout=5.0)
     assert resp.status_code == 200  # noqa: PLR2004
     rule_names = {
         rule["name"]

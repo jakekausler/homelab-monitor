@@ -19,6 +19,7 @@ import httpx
 import pytest
 
 from .helpers.rig import Rig
+from .helpers.rig_health import require_rig_components
 
 ALERTNAME = "RigSilenceTestAlert"
 HOST_LABEL = "rig-silence-host"
@@ -91,11 +92,7 @@ def _alert_is_silenced(am_url: str) -> bool:
 @pytest.mark.slow
 def test_silence_suppresses_alert_in_am() -> None:
     """Fire alert into AM; create silence; assert AM transitions to suppressed."""
-    try:
-        with Rig.boot() as rig:
-            httpx.get(f"{rig.urls.alertmanager}/-/healthy", timeout=3.0)
-    except (httpx.HTTPError, RuntimeError, TimeoutError) as exc:
-        pytest.skip(f"AM not reachable: {exc}")
+    require_rig_components("monitor", "alertmanager")
 
     with Rig.boot() as rig:
         am_url = rig.urls.alertmanager

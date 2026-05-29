@@ -18,23 +18,16 @@ import time
 import httpx
 import pytest
 
-
-def _assert_vm_healthy_or_skip(vm_url: str) -> None:
-    """GET /health and skip the test if VM is unreachable or unhealthy."""
-    try:
-        resp = httpx.get(f"{vm_url}/health", timeout=5.0)
-    except httpx.HTTPError:
-        pytest.skip(f"VM not reachable at {vm_url} — bring up docker-compose.test.yml")
-    if resp.status_code != 200:  # noqa: PLR2004
-        pytest.skip(f"VM unhealthy at {vm_url} (status={resp.status_code})")
+from .helpers.rig_health import require_rig_components
 
 
 @pytest.mark.integration
 @pytest.mark.slow
 def test_cadvisor_exports_container_cpu_metric() -> None:
     """VM has at least one container_cpu_usage_seconds_total series within 30s."""
+    require_rig_components("victoriametrics")
+
     vm_url = os.environ.get("VM_URL", "http://victoriametrics:8428").rstrip("/")
-    _assert_vm_healthy_or_skip(vm_url)
 
     # Poll up to 30s for the cadvisor series to land (vmagent scrape_interval=5s
     # in the test rig; allow some slack for first-scrape lag and storage flush).
@@ -59,8 +52,9 @@ def test_cadvisor_exports_container_cpu_metric() -> None:
 @pytest.mark.slow
 def test_cadvisor_relabel_drops_filesystem_noise() -> None:
     """No container_fs_*-series for tmpfs/overlay/shm/loop devices in VM."""
+    require_rig_components("victoriametrics")
+
     vm_url = os.environ.get("VM_URL", "http://victoriametrics:8428").rstrip("/")
-    _assert_vm_healthy_or_skip(vm_url)
 
     # Allow ~15s for at least one scrape to land before asserting the drop rule.
     time.sleep(15)
@@ -79,8 +73,9 @@ def test_cadvisor_relabel_drops_filesystem_noise() -> None:
 @pytest.mark.slow
 def test_cadvisor_keep_rule_keeps_curated_families() -> None:
     """At least one series exists for each of three curated families."""
+    require_rig_components("victoriametrics")
+
     vm_url = os.environ.get("VM_URL", "http://victoriametrics:8428").rstrip("/")
-    _assert_vm_healthy_or_skip(vm_url)
 
     time.sleep(15)
 

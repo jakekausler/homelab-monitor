@@ -22,22 +22,17 @@ the monitor or fixture-host endpoints are unreachable.
 
 from __future__ import annotations
 
-import httpx
 import pytest
 
 from .helpers.rig import Rig
+from .helpers.rig_health import require_rig_components
 
 
 @pytest.mark.integration
 @pytest.mark.slow
 def test_fixture_host_high_cpu_canonical_e2e() -> None:
     """Set CPU=95 -> firing alert in /api/alerts -> set CPU=5 -> resolved + SSE event."""
-    # Skip-guard: confirm rig is reachable before doing anything.
-    try:
-        with Rig.boot() as rig:
-            httpx.get(f"{rig.urls.monitor}/api/healthz", timeout=5.0)
-    except (httpx.HTTPError, RuntimeError, TimeoutError) as exc:
-        pytest.skip(f"rig not reachable: {exc} -- run `make integration` to bring up")
+    require_rig_components("monitor", "victoriametrics", "alertmanager")
 
     with Rig.boot() as rig:
         # Reset to baseline so the test doesn't accidentally see a left-over

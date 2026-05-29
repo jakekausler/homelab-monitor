@@ -29,6 +29,8 @@ from typing import Any
 import httpx
 import pytest
 
+from .helpers.rig_health import require_rig_components
+
 AM_URL = os.environ.get("AM_URL", "http://alertmanager:9093").rstrip("/")
 TEST_ALERTNAME = "KthxbyeTestAlert"
 TEST_HOST = "kthxbye-host"
@@ -98,10 +100,7 @@ def _get_silence(silence_id: str) -> dict[str, Any] | None:
 @pytest.mark.slow
 def test_kthxbye_extends_acked_silence() -> None:
     """End-to-end: firing alert + ACK! silence + steady refire → kthxbye extends endsAt."""
-    try:
-        httpx.get(f"{AM_URL}/-/healthy", timeout=3.0)
-    except httpx.HTTPError:
-        pytest.skip(f"AM not reachable at {AM_URL} — start docker-compose.test.yml")
+    require_rig_components("alertmanager")
 
     _post_firing_alert()
     silence_id = _post_silence("ACK! testing")
@@ -136,10 +135,7 @@ def test_kthxbye_extends_acked_silence() -> None:
 @pytest.mark.slow
 def test_kthxbye_does_not_extend_non_ack_silence() -> None:
     """Negative: a silence WITHOUT ACK! prefix is NOT extended."""
-    try:
-        httpx.get(f"{AM_URL}/-/healthy", timeout=3.0)
-    except httpx.HTTPError:
-        pytest.skip(f"AM not reachable at {AM_URL} — start docker-compose.test.yml")
+    require_rig_components("alertmanager")
 
     _post_firing_alert()
     silence_id = _post_silence("plain comment, no prefix")
