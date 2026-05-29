@@ -17,3 +17,12 @@
 - Severity is normalized at the mapper to canonical lowercase: debug/info/notice/warn/error/critical/alert/emergency. Raw value preserved in `fields.severity_raw`.
 - `make integration` — `test_vector_to_vl_path` + `test_vector_multiline` (×11) must read `.lines[].message` from real VL data without shape errors. A field rename here breaks both the frontend component mocks AND these integration assertions — update all when changing the shape.
 - After ANY change to the LogLine shape or the 3 response models: regenerate `make openapi-export` + `bash scripts/generate-ui-types.sh`, and grep `apps/ui/src/**/__tests__` for stale `entries:`/`line:` mock fields.
+
+## STAGE-004-003 — `<LogViewer>` extraction + cron/docker viewer refactor
+
+- Docker container logs view + cron run log view both render through shared `<LogViewer>`/`LogLineList` primitives — verify they still render lines (timestamp column + divider, monospace).
+- ANSI: a docker log line containing `\x1b[31m...\x1b[0m` renders colored text, not raw escape codes; malformed/unterminated ANSI does not crash the viewer.
+- Friendly UTC timestamps: row + header `Last:` show `YYYY-MM-DD HH:MM:SS UTC` (no nanoseconds, no T/Z); non-ISO timestamps pass through unchanged. (NOTE: STAGE-004-009 will add UTC→local conversion to BOTH row and header.)
+- Wrap toggle (labeled "Wrap"): toggling switches long lines between wrap and horizontal-scroll; default is nowrap. Present in both docker + cron viewers.
+- Severity tint: warn → yellow, error/critical/alert/emergency → red, else none; null severity → no tint (docker logs currently default to info until STAGE-004-004A lands).
+- Backend test harness: the suite boots a session-scoped shared app (not per-test). Regression risk = test-isolation leaks; if a test starts failing only in-suite (passes in isolation), suspect a missing per-test reset in conftest `_per_test_db`. Real-lifespan tests (test_lifespan_e2e.py / test_api_lifespan.py) must set their own env (don't inherit shared-app env). Run the full suite (xdist) to confirm 3264 passed / 0 fail.
