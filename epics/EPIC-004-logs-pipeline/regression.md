@@ -34,3 +34,12 @@
 - journald/systemd lines are NOT docker-enriched (exists(.label)/exists(.image) guards): bare systemd lines have empty compose_*/image_*.
 - docker_enrich VRL must pass authoritative `vector validate` (NOT --no-environment, which masks VRL compile errors). VRL array index requires an integer literal, not a computed expression (use for_each, not segs[length-1]).
 - Deployment: vector config is render-on-boot; after a template change, restart the monitor container (re-render) THEN the vector container (reload). Vector does not hot-reload.
+
+## STAGE-004-004A — Docker log severity-level extraction
+
+- Vector docker_severity_extract: docker container logs with leading severity tokens (ERROR, WARN, CRITICAL, FATAL, etc.) have `.severity` extracted in VL and queryable in LogsQL. Verify `severity:error AND compose_service:homeassistant` returns HA error lines.
+- Anchored patterns: optional ANSI escape + optional ISO timestamp prefix allowed before the level token. ANSI-wrapped `\x1b[31m...ERROR` lines AND plain `ERROR ...` lines both promote.
+- Guards: `exists(.label)` excludes journald/systemd lines from docker_severity_extract (their severity reflects journald PRIORITY, not message-text parsing). `severity == "info" || is_null(.severity)` ensures lines with an already-set severity (from .level/.PRIORITY in add_labels) are not overwritten.
+- Canonical values: every emitted severity is in the 8-set (debug/info/notice/warn/error/critical/alert/emergency). FATAL→critical (NOT error); PANIC→emergency; ERR→error; CRIT→critical; WARNING→warn.
+- Authoritative gate: the slow @pytest.mark.slow `test_rendered_template_passes_vector_validate` runs plain `vector validate` (NOT --no-environment) against the rendered template. Skips locally when vector binary absent; runs in CI. Closes the STAGE-004-004 false-green gap.
+- VRL `match()` is infallible — `match!` is rejected by Vector with E620. Use plain `match()` for regex match calls in VRL.

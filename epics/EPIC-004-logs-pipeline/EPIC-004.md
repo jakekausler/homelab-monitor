@@ -1,12 +1,12 @@
 # EPIC-004: Logs pipeline (Drain clustering + Logs Explorer + signature anomaly alerts + per-store thresholds)
 
-## Status: Not Started
+## Status: In Progress
 
-## Stages Counter: 4 / 45 Complete
+## Stages Counter: 5 / 45 Complete
 
-## Current Stage: STAGE-004-004A
+## Current Stage: STAGE-004-005
 
-## Current Phase: STAGE-004-004A Design (Not Started)
+## Current Phase: STAGE-004-005 Design (Not Started)
 
 ## Overview
 
@@ -74,7 +74,7 @@ Stages MUST be implemented in order. No parallelization. Each stage lands a sing
 | STAGE-004-002 | Backend `LogLine` shape convergence | All 3 endpoints (docker / cron / generic) return one converged `LogLine` shape. Existing UI continues to work. ✅ Complete |
 | STAGE-004-003 | `<LogViewer>` extraction + cron/docker viewer refactor | Shared component; embedding contract documented for future detail pages. ✅ Complete |
 | STAGE-004-004 | Container label enrichment | `compose_project`, `compose_service`, image labels as top-level VL fields. ✅ Complete |
-| STAGE-004-004A | Docker log severity-level extraction | Parse error/warn tokens from docker log messages; enable severity tinting in `<LogViewer>`. |
+| STAGE-004-004A | Docker log severity-level extraction | Parse error/warn tokens from docker log messages; enable severity tinting in `<LogViewer>`. ✅ Complete |
 | STAGE-004-005 | Cron fingerprint enrichment | hmrun transform adds `cron_fingerprint`; Drain consumer's model-key override hook uses it. |
 | STAGE-004-006 | Redaction pipeline | Vector VRL + audit metric + yaml-driven patterns. |
 | STAGE-004-007 | Cursor pagination | All 3 endpoints + `<LogViewer>`. Fixes STAGE-003-011's D-DEFER-PAGINATION. |
