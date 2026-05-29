@@ -1,87 +1,204 @@
-# EPIC-004: Logs pipeline (vector + VL + Drain + log signature alerts)
+# EPIC-004: Logs pipeline (Drain clustering + Logs Explorer + signature anomaly alerts + per-store thresholds)
 
 ## Status: Not Started
 
+## Stages Counter: 0 / 44 Complete
+
+## Current Stage: STAGE-004-001
+
+## Current Phase: Finalize (Refinement complete 2026-05-28)
+
 ## Overview
 
-Mature the logs pipeline beyond the bootstrap from STAGE-001-016. Add Drain log clustering as a periodic in-process job that converts raw lines into "log signatures" (templates + counts), expose those signatures as metrics, and let the user (and future epics) write vmalert rules against the signature metrics for behavioral log anomaly detection. Add per-stream byte/line caps with disk-budget integration. Define a redaction policy for known-sensitive patterns. Build the dashboard's Logs explorer (LogsQL query, live tail, saved queries, "create alert from this query").
+Mature the logs pipeline beyond the bootstrap delivered in EPIC-001. This epic delivers the production-quality logs surface: a unified `<LogViewer>` shared across all log-display surfaces, a top-level Logs Explorer at `/logs` with paginated LogsQL queries + custom range + advanced LogsQL editor + stream picker + saved queries + query history + field inspector + nested JSONL extraction + histogram + export + live tail, Drain log clustering (drain3) with a Signature Catalog, four kinds of signature anomaly rules, three kinds of log-windowed alert enrichment (container crash, healthcheck failure, cron failure), a vector-layer redaction pipeline, container label enrichment, multi-line stitching, severity escalation, budget warnings, VL backend health alerts, a global retention settings UI, and a user-curated rule-authoring flow with persistence.
 
-After this epic, the logs pipeline is production-quality: capped, observable, queryable, and drives anomaly alerts.
+After this epic, the logs pipeline is production-quality: redacted, capped, observable, queryable, anomaly-aware, and drives user-authored alerts. The deferred-from-STAGE-003-011 cursor pagination + custom datetime range picker land naturally as part of the foundation wave.
 
-## Docker log requirements (added 2026-05-21)
-
-EPIC-004 MUST specifically address all of the following for docker container logs, IN ADDITION TO the generic Drain-clustering signature work:
-
-1. **Container log ingestion gap fix.** STAGE-001-016 declared per-container stdout/stderr ingestion as a deliverable but shipped with the vector `docker_logs` source's `include_containers` hardcoded to `[]` (empty), and no env-var substitution wired through render-on-boot. Result: container logs are NOT actually flowing into VictoriaLogs. The first stage of EPIC-004 (or a dedicated prerequisite stage) MUST fix this: either (a) default include = all containers on the docker socket, (b) default include = homelab-monitor compose project + opt-in for others via `VECTOR_DOCKER_INCLUDE`, or (c) some other configurable default. The bug is in `deploy/vector/vector.toml.template` + the render-on-boot substitution. Verify post-fix by querying VL for streams keyed on container names (e.g., `service="homelab-grafana"`).
-
-2. **Docker daemon log ingestion verified.** dockerd logs are ALREADY in VL via journald (`service="docker.service"`). Keep this working; add vmalert rules for daemon-specific anomalies (e.g., excessive container-restart events, image-pull failures, OOM kill messages from kernel logged through dockerd).
-
-3. **Per-container exit-code log analysis.** When a container crashes, vector ingests the final stderr + the exit-code metadata. EPIC-004 MUST add a stage that:
-   - Correlates container exit-code metadata (from cadvisor's `container_start_time_seconds` reset + the socket collector's `last_exit_code`) with the captured final-N-lines from VL.
-   - Produces a metric like `homelab_container_crash{name, exit_code}` that fires when a non-zero exit happens.
-   - Emits an alert with the crash context (last 20 lines of stderr) as enrichment.
-
-4. **Per-container error-rate anomalies.** Beyond generic Drain signature counts (already planned in STAGE-004-002), EPIC-004 MUST add per-container rules:
-   - Detect error-rate spikes RELATIVE TO each container's own baseline (not a global baseline).
-   - Match common error patterns: `ERROR`, `FATAL`, `panic`, `traceback`, `Exception`, HTTP 5xx in log lines, etc.
-   - Produce `homelab_container_error_rate{name}` metric + corresponding vmalert rule.
-   - Configurable per-container threshold (default: 5x baseline OR 10 errors/min, whichever is more restrictive).
-
-5. **Healthcheck-failure log correlation.** When a container's healthcheck transitions to unhealthy, EPIC-004 MUST fetch the surrounding container log window (60s before + 60s after the unhealthy transition) and attach it to the alert as enrichment. Healthcheck state comes from the socket collector (STAGE-003-003); log fetch is via the existing `VictoriaLogsClient` (introduced in STAGE-002-013).
-
-6. **Pattern analysis for abnormalities.** Beyond Drain signature clustering, EPIC-004 MUST include pattern-based abnormality detection that surfaces things like:
-   - **New error patterns** (a signature template never seen before, or seen <N times in last week, suddenly emitted at high rate).
-   - **Rare-line spikes** (a specific line — not just a template — appearing N times in a short window when it was previously rare).
-   - **Sequence anomalies** (specific log lines appearing in unusual ordering — e.g., `connection reset` immediately followed by `recovering` ratio shifts).
-   - **Time-of-day anomalies** (a line that normally appears at 04:00 backup time suddenly appears at 14:00).
-   - Whether each of these is in scope for v1 vs deferred to v2 is a Design-phase question per stage; but the EPIC's acceptance criteria explicitly require pattern abnormality detection as a category.
-
-**Cross-references:**
-- Container inventory + status + healthcheck source data: STAGE-003-003 (Docker socket collector).
-- `VictoriaLogsClient` for VL queries: STAGE-002-013.
-- Existing vmalert rules pattern: see `deploy/vmalert/metrics/` and `deploy/vmalert/logs/`.
-
-**Why these are explicit requirements:** generic Drain signature counts (STAGE-004-002 as currently scoped) cover #6's first sub-bullet but not the rest. The user explicitly called out wanting all 6 gaps addressed when EPIC-004 begins.
+**Brainstorming reference:** 2026-05-28 brainstorming session locked the 44-stage decomposition. Each stage file in this directory carries the locked D-* decisions inherited from that session.
 
 ## Source documents (read before starting any stage)
 
-- Spec §3.1 (alert ingestor uses log signatures), §3.2 (vector + VL sidecars), §6.3 (VictoriaLogs streams + Drain clustering), §6.4 (disk budget and per-stream caps), §9.2 (Logs explorer screen).
-- Q9 (logs pipeline decisions: pragmatic mix L1 D1, VictoriaLogs L2 B2, pattern matching + alerting L3).
+- Master design spec §3.1 (alert ingestor + log signature consumption), §3.2 (vector + VL + vmalert-logs sidecars), §6.3 (VictoriaLogs streams + Drain clustering), §6.4 (disk budget + per-stream caps), §9.2 (Logs explorer screen + signature catalog + inventory detail "related logs").
+- Q9 (logs pipeline decisions): pragmatic mix of journald/docker/syslog ingestion; VictoriaLogs as the store; pattern-matching + Drain-derived metrics + LogsQL-rule alerting.
 
-## Stages (to decompose during epic Design phase)
+## Brainstormed architecture (2026-05-28)
 
-| Likely stage | Theme |
-|---|---|
-| STAGE-004-001 | Per-stream byte/line caps with disk-budget integration (extends STAGE-001-016's basic throttle); `log_stream_budget` collector + vmalert rule from STAGE-001-018 fully integrated |
-| STAGE-004-002 | Drain clustering job: periodic (5min interval) batch over recent VL data; produces signature templates + counts; emits `homelab_log_signature_count{template_hash, service}` metrics |
-| STAGE-004-003 | Drain signature catalog UI: "Signatures" tab inside the Logs screen; user can label signatures, suppress noise, mark as "expected" |
-| STAGE-004-004 | Signature-anomaly vmalert rules: rules generated from baselines (count > N×rolling-baseline OR new signature seen in last X) |
-| STAGE-004-005 | Logs explorer UI: full-text/LogsQL query, time range, live tail, saved queries; integrates with the signature catalog for "show me lines matching this signature"; adds pagination + custom-range picker to all log-viewer surfaces (per-container + cron run logs) |
-| STAGE-004-006 | Redaction pipeline: vector transforms strip well-known sensitive patterns (bearer tokens, JWTs, passwords in URLs, AWS keys); audit log records what was redacted (counts only, never the redacted value) |
-| STAGE-004-007 | "Create alert from query" UX: user composes a LogsQL query in the explorer, clicks "Alert when this fires", produces a vmalert rule via a guided form; rule is committed to `deploy/vmalert/logs/` (or stored in DB and rendered to file at runtime — Design phase decides) |
+### Unification approach
+
+- **Single `<LogViewer>` component** consumed by docker per-container viewer, cron per-run viewer, and the new Explorer at `/logs`. Caller provides a `useLogs` hook; component handles all rendering states (loading / error / empty / unavailable / truncated / live). Explicit embedding contract documented for future detail pages (HA / Pi-hole / Unifi / Synology / probe-detail / alert-detail).
+- **Three coexisting endpoints**: `/api/integrations/docker/containers/{name}/logs` (docker context), `/api/crons/{fp}/runs/{run_id}/log` (cron context), `/api/logs/query` (generic LogsQL). All three return the same converged `LogLine` shape.
+- **Top-level `/logs` route** for the Explorer; "Open in Explorer" deep-links from per-context viewers pre-fill filters.
+
+### Drain runtime model
+
+- **`drain3` library** (IBM, MIT-licensed) with custom `SqlitePersistence` backend.
+- **Periodic batch consumer** every 5 minutes (configurable via `HOMELAB_MONITOR_DRAIN_INTERVAL_S`), with manual refresh trigger via API + UI.
+- **Per-`service` model granularity** (one drain3 tree per service); cron specialcased to `cron:<fingerprint>` via override hook. New sources (Synology / UDM / HA file-tail) automatically get their own model.
+- **SQLite-persisted** model state (`drain_models` table); cycle cursor stored per-model.
+
+### Anomaly categorization
+
+Every signature-anomaly alert carries `category: log-anomaly` + `anomaly_kind: {new_signature | signature_spike | error_rate_spike | signature_silent}` so downstream consumers (Karma, notification routes, the homelab-monitor UI, the future Claude integration epic) can route/render appropriately.
+
+### Spike-detection algorithm
+
+- **7-day rolling baseline** (e.g., `avg_over_time(...)[7d:5m]`)
+- **1-hour static fallback** during cold-start (when signature has < 7 days of history)
+- **Multiplier configurable per rule** (default 5×); window configurable (default 5 min); both editable via the create-alert-from-signature UI
+
+### Alert authoring
+
+- **User-curated v1** — Drain catalog + Saved Queries each have "Create alert" entry points that pre-fill the alert-authoring modal with sensible defaults. No auto-generation in v1.
+- **Auto-generation deferred to Claude integration epic.**
+- **Rule persistence**: SQLite `log_user_rules` table + render-on-boot into `deploy/vmalert/logs/user-rules/` (and `deploy/vmalert/metrics/user-rules/` for metricsql rules).
+
+### Redaction pipeline
+
+- **Vector VRL transforms** strip the bearer-token / JWT / password-in-URL / AWS-key / generic-api-key default patterns BEFORE log lines hit VictoriaLogs. Patterns come from `homelab-monitor.yaml` under `logs.redact:`, rendered into vector.toml at boot.
+- **Audit metric** (`vector_redactions_total{pattern_type}`) — counts only, never values, per spec §3.1.
+- **Synology / Unifi-specific patterns** forward-referenced in EPIC-007 and EPIC-008 (added when those syslog sources land).
+
+### Per-store thresholds (no cross-store coordinator)
+
+VL has independent thresholds (`HOMELAB_MONITOR_VL_DISK_WARN_PCT=70` / `CRIT_PCT=85`) surfaced in the Settings/Logs page and driving vmalert rules. **Cross-store auto-shrink coordinator is intentionally NOT being built** (locked decision); each of VM and SQLite should have mirroring per-store thresholds, added in their own epics or in EPIC-014 (self-monitor).
+
+## Stage decomposition (44 stages, sequential)
+
+Stages MUST be implemented in order. No parallelization. Each stage lands a single small slice and ships independently usable.
+
+### Foundation wave (S01-S09)
+
+| # | Stage | Theme |
+|---|---|---|
+| STAGE-004-001 | Multi-line log handling | Vector multiline codec stitches tracebacks / stack traces into single events. Lands first so all downstream stages get clean events. |
+| STAGE-004-002 | Backend `LogLine` shape convergence | All 3 endpoints (docker / cron / generic) return one converged `LogLine` shape. Existing UI continues to work. |
+| STAGE-004-003 | `<LogViewer>` extraction + cron/docker viewer refactor | Shared component; embedding contract documented for future detail pages. |
+| STAGE-004-004 | Container label enrichment | `compose_project`, `compose_service`, image labels as top-level VL fields. |
+| STAGE-004-005 | Cron fingerprint enrichment | hmrun transform adds `cron_fingerprint`; Drain consumer's model-key override hook uses it. |
+| STAGE-004-006 | Redaction pipeline | Vector VRL + audit metric + yaml-driven patterns. |
+| STAGE-004-007 | Cursor pagination | All 3 endpoints + `<LogViewer>`. Fixes STAGE-003-011's D-DEFER-PAGINATION. |
+| STAGE-004-008 | Custom datetime range picker | All 3 viewer surfaces. Fixes STAGE-003-011's D-DEFER-CUSTOM-RANGE. |
+| STAGE-004-009 | Local-time rendering with UTC toggle | Applies via `<LogViewer>`. |
+
+### Explorer wave (S10-S22)
+
+| # | Stage | Theme |
+|---|---|---|
+| STAGE-004-010 | Logs Explorer skeleton at `/logs` | Plain-text search + range + paginated results via `<LogViewer>`. |
+| STAGE-004-011 | LogsQL advanced mode + syntax highlighting | "Advanced (LogsQL)" toggle; CodeMirror-based editor with basic token highlighting. |
+| STAGE-004-012 | Stream picker sidebar | Distinct services with line counts; click injects filter via separate state (composes with LogsQL). |
+| STAGE-004-013 | Saved queries | SQLite-backed; named queries restore full Explorer state. |
+| STAGE-004-014 | Query history | Last 20 executed queries (localStorage v1; SQLite later if cross-device needed). |
+| STAGE-004-015 | State persistence | Last query / range / scroll position across navigation. |
+| STAGE-004-016 | Field inspector | Click a line → side panel with parsed fields + copy + add-to-filter. |
+| STAGE-004-017 | Generic nested-field extraction at ingest | Vector flattens JSONL nested objects into dotted-path top-level fields (with `json.` prefix); depth + count caps. |
+| STAGE-004-018 | Filter-scope-aware field discovery | "Available fields" panel shows only fields present in current scope (sample-based, cached). |
+| STAGE-004-019 | Histogram of line counts | Stacked-by-severity bar chart above results; click bucket to narrow range. |
+| STAGE-004-020 | Log-line export | Download matching lines as .txt or .json with streamed backend + cap. |
+| STAGE-004-021 | "Open in Explorer" deep-link | Buttons on docker + cron viewers; helper documented for future detail pages. |
+| STAGE-004-022 | Global retention settings UI | `/settings/logs` page showing VL retention + thresholds; per-store, no coordinator. |
+
+### Live tail wave (S23-S24)
+
+| # | Stage | Theme |
+|---|---|---|
+| STAGE-004-023 | Backend SSE endpoint | Server-side streaming from VL; connection caps + backpressure + per-conn metrics. |
+| STAGE-004-024 | Frontend tail mode | Explorer consumes SSE; auto-scroll sticky behavior; pause/stop controls. |
+
+### Drain wave (S25-S29)
+
+| # | Stage | Theme |
+|---|---|---|
+| STAGE-004-025 | drain3 wrapper + SQLite persistence | `DrainEngine` + `SqlitePersistence`; model-key override hook with cron special case. |
+| STAGE-004-026 | Periodic batch consumer service | Runs every 5 min (configurable); cursor per model; partial-cycle handling. |
+| STAGE-004-027 | Metrics emission + manual refresh API | `homelab_log_signature_count`, `_first_seen_ts`, `_total`; `POST /api/logs/signatures/refresh`. |
+| STAGE-004-028 | Signature catalog backend + list/drill-in UI | Tab on `/logs`; label / suppress / mark-expected / search / sample-lines / Open-in-Explorer. |
+| STAGE-004-029 | Signature annotations | Timestamped notes per signature; chronological list in drill-in panel. |
+
+### Diagnostics (S30)
+
+| # | Stage | Theme |
+|---|---|---|
+| STAGE-004-030 | Drain models dump endpoint + UI viewer | Read-only diagnostics surface; last-cycle stats panel on Signatures tab. |
+
+### Anomaly wave — shared infrastructure (S31)
+
+| # | Stage | Theme |
+|---|---|---|
+| STAGE-004-031 | `LogWindowFetcher` shared service module | Used by crash / healthcheck / cron correlation; cached, capped, degrades gracefully on VL error. |
+
+### Anomaly wave — rules (S32-S39)
+
+| # | Stage | Theme |
+|---|---|---|
+| STAGE-004-032 | Container crash log correlation | `homelab_container_crash` metric + alert annotation + UI render. |
+| STAGE-004-033 | Healthcheck-failure log enrichment | 60s window attached to unhealthy alerts. |
+| STAGE-004-034 | Cron run failure log correlation | Last N lines of hmrun output enriched into cron-failed alerts. |
+| STAGE-004-035 | Anomaly Type A: New signature detected | Rules + first_seen metric + suppression integration. |
+| STAGE-004-036 | Anomaly Type B: Signature count spike vs baseline | 7d rolling baseline + 1h cold-start fallback; template rendered per signature via STAGE-004-044. |
+| STAGE-004-037 | Anomaly Type C: Service-wide error rate spike | `homelab_container_error_rate` metric + rule; satisfies docker req #4. |
+| STAGE-004-038 | Anomaly Type D: Signature went silent | Expected-silence allowlist (always / cron / window kinds). |
+| STAGE-004-039 | Severity escalation rules (L1) | Any critical-severity line triggers alert; per-service exclude overrides. |
+
+### Operational alerts (S40-S41)
+
+| # | Stage | Theme |
+|---|---|---|
+| STAGE-004-040 | Throttle/budget alerts (L2) | Approaching budget / vector throttling / unusual rate. |
+| STAGE-004-041 | VL backend health alerts (L3) | VL down / latency / disk-warn / disk-crit; mirrors per-store threshold pattern. |
+
+### Alert authoring (S42-S44)
+
+| # | Stage | Theme |
+|---|---|---|
+| STAGE-004-042 | Rule persistence model | SQLite `log_user_rules` + render-on-boot into vmalert directories. |
+| STAGE-004-043 | Create-alert-from-query UX | Guided form with YAML preview launching from Explorer. |
+| STAGE-004-044 | Create-alert-from-signature + saved-query shortcuts | L8 merged in; both pre-fill the shared modal. |
 
 ## Cross-stage acceptance criteria
 
 Same as EPIC-001 plus:
 
-- **No raw log line that contains a known-sensitive pattern leaves the pipeline un-redacted** — assert in tests with planted credentials.
-- **Drain clustering memory + CPU bounded** by configurable batch size; over budget = abort batch, alert.
-- **User-created alert rules from the UI are reviewable** before activation: the UI shows the resulting rule YAML and asks for confirmation before persisting.
+- **No raw log line that contains a known-sensitive pattern leaves the pipeline un-redacted** — STAGE-004-006 asserts with planted credentials. Subsequent UI stages MUST NOT add a path that exposes pre-redaction content.
+- **Drain clustering memory + CPU bounded** by `batch_max_lines` (default 50,000); over-budget cycles are marked `'partial'`, not failed, and resume next cycle.
+- **All anomaly alerts carry `category: log-anomaly` and `anomaly_kind: ...`** so downstream consumers can route/render uniformly.
+- **User-created alert rules from the UI are reviewable before activation** — YAML preview in the modal; explicit Save click required.
+- **`<LogViewer>` is the only component rendering log line lists in the app** — embedding contract documented; future detail pages (HA / Pi-hole / Unifi / Synology) consume it without rebuilding.
 
-### STAGE-004-005 acceptance criteria (Logs explorer UI + pagination + custom-range)
+## Out of Scope (explicitly considered and declined; routing for deferred items below)
 
-In addition to the core Logs explorer deliverables (LogsQL query interface, time range picker, live tail, saved queries), STAGE-004-005 MUST add the following two deferred features to ALL log-viewer surfaces in the codebase:
-
-- **Pagination across all log-viewer surfaces** — Add cursor-based "Load older lines" pagination to: per-container log viewer (`DockerContainerLogsViewer.tsx` from STAGE-003-011), cron run log viewer (`CronRunLogViewer.tsx` from STAGE-002-015), and the new global logs explorer in this stage. All three must use a consistent cursor scheme (timestamp + line_seq). Deferred from STAGE-003-011 (design decision D-DEFER-PAGINATION, 2026-05-26).
-- **Custom datetime range picker** — Replace the 6-preset since picker (5m/15m/1h/6h/24h/7d) with: same 6 presets PLUS a "Custom range" option that opens two datetime pickers (start, end) with validation (start < end, neither in the future, total range ≤ 30d per VL retention). Applied to: per-container log viewer, cron run log viewer, and the global logs explorer. Deferred from STAGE-003-011 (design decision D-DEFER-CUSTOM-RANGE, 2026-05-26).
+1. **Cross-store disk-budget orchestration coordinator** — intentionally NOT being built; each of VM / VL / SQLite has independent thresholds (locked in brainstorming 2026-05-28 Q13c).
+2. **Per-stream retention overrides** — global retention only.
+3. **Per-signature retention** — global retention only.
+4. **Log forwarding to external sinks (Loki, S3 archive)** — not in master spec.
+5. **Log compression / cold storage tiers** — not in master spec.
+6. **Log query rate limiting** — single-user system.
+7. **Backfill of old logs from external sources** — not in master spec.
+8. **Audit trail of WHO ran what log query** — single-user system.
+9. **Log sampling beyond vector throttle** — existing 50 lines/sec/service throttle is sufficient.
+10. **Side-by-side time-range comparison** — deferred to the **Forensic Timeline epic** (new epic, created post-EPIC-019).
+11. **Per-line bookmarking** — deferred to the **Forensic Timeline epic**.
+12. **Forensic timeline (cross-source incident view)** — own dedicated epic (new; placeholder to be created).
+13. **Per-service "personality" baseline (volume + severity over time-of-day)** — deferred to the **Forensic Timeline epic**.
+14. **Multi-user log access controls / RBAC** — single-user system.
+15. **Bulk operations on signatures (multi-select suppress)** — deferred until user demand surfaces.
+16. **Auto-generated alert rules from signatures** — deferred to **EPIC-009 (Auto-fix)** / future Claude integration epic. EPIC-009 currently scoped to runbook-driven remediation; the Claude integration that adds Drain-pattern→alert-rule auto-generation will be its own epic.
+17. **Live tail in docker / cron per-context viewers** — Explorer-only in v1; can be retrofitted later via `<LogViewer>` opt-in prop.
+18. **Tree view of nested fields in Field Inspector** — flat dotted paths only.
 
 ## Dependencies
 
-- EPIC-001 (vector, VL, vmalert-logs in place).
-- EPIC-002 not strictly required, but the cron-status log parser from STAGE-002-004 will use the same signature pipeline.
+- EPIC-001 (vector, VL, vmalert-logs in place); cron-status log parser from STAGE-002-004 will hook the Drain pipeline once available.
+- EPIC-002 (cron run logs + cron run viewer; cron fingerprint enrichment depends on STAGE-002-* fingerprint definitions).
+- EPIC-003 (docker container drill-down; STAGE-004-021 "Open in Explorer" button + STAGE-004-032/033 enrichments hook into ContainerOverviewTab + AlertDetailPage).
 
 ## Notes
 
-- Drain reference implementation: paper "Drain: An Online Log Parsing Approach with Fixed Depth Tree" (He et al.). Multiple Python implementations exist; pick one with active maintenance during STAGE-004-002 Design phase.
-- Redaction policy lives in `homelab-monitor.yaml` under `logs.redact:`. Default rules ship with the public release; the host-overrides repo can add private patterns (e.g., regex for the user's specific API tokens that aren't yet in the secrets store).
-- The "create alert from query" feature is the first time end-users (rather than developers) will be authoring alert rules. UX must enforce sane defaults (severity, group_by, group_interval) and warn on patterns that historically produce false positives.
+- **drain3 reference**: paper "Drain: An Online Log Parsing Approach with Fixed Depth Tree" (He et al.). IBM's `drain3` library is locked.
+- **Redaction policy** lives in `homelab-monitor.yaml` under `logs.redact:`. Default v1 patterns ship with the public release; host-specific patterns (Synology API tokens, UDM bearer tokens) added via EPIC-007 and EPIC-008 in their own stages.
+- **Anomaly category labels** are designed for future Claude-integration auto-suggestion: when that epic ships, every log-anomaly alert is already tagged with `anomaly_kind` and a deep-link to the catalog/Explorer for Claude to reason about.
+- **44 stages is intentionally fine-grained.** Each stage is sized to land in one session. The brainstorming session 2026-05-28 explicitly decided "small slices, ship one feature per stage" over fewer larger stages.
+
+## Brainstorming session record
+
+The full set of locked decisions was captured in stage files' `Locked Design Decisions` sections. Authoritative reference: the brainstorm conversation of 2026-05-28 (preserved in conversation logs). Stage Design phases inherit these decisions; do not re-litigate.

@@ -20,7 +20,7 @@ Land Pi-hole as a plugin bundle: a collector for query stats / blocked-domain st
 | STAGE-006-003 | Upstream resolver health: ping each upstream resolver Pi-hole forwards to (configured in Pi-hole); detect upstream slow / failing |
 | STAGE-006-004 | Unbound health (since the user's image bundles Unbound): cache hits, root server reachability, DNSSEC validation rate |
 | STAGE-006-005 | DNS-resolution health collector (cross-cuts EPIC-016): resolves a known domain via Pi-hole AND directly via 1.1.1.1 to distinguish Pi-hole-broken vs WAN-broken |
-| STAGE-006-006 | Pi-hole integration UI panel; default Grafana dashboard `pihole.json`; default vmalert rules (`PiholeQueriesStalled`, `UpstreamFailing`, `BlockedRateAnomaly`) |
+| STAGE-006-006 | Pi-hole integration UI panel; default Grafana dashboard `pihole.json`; default vmalert rules (`PiholeQueriesStalled`, `UpstreamFailing`, `BlockedRateAnomaly`). **MUST consume `<LogViewer>` from EPIC-004 STAGE-004-003 with a caller-provided `useLogs` hook scoped to Pi-hole logs** (e.g., `service:"pi-hole"` for the docker container OR `service:"pi-hole-file"` if/when log files at `/storage/docker/pihole-unbound/logs` are tailed via vector). Use the embedding contract documented in `apps/ui/src/components/logs/README.md`. Per the brainstorming session 2026-05-28, EPIC-004 explicitly designs the embedding contract for this use case. |
 
 ## Cross-stage acceptance criteria
 

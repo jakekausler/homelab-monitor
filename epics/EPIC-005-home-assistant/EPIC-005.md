@@ -31,7 +31,7 @@ This is the "exemplar" integration epic — its shape becomes the template for E
 | STAGE-005-007 | HAPushChannel: dispatcher channel implementation calling `/api/services/notify/mobile_app_jake_s_android`; routing rules updated so critical alerts route here by default |
 | STAGE-005-008 | HA webhook ingester: `POST /api/integrations/ha/event` with API token scope `ha:event:write`; HA automations post here when something interesting happens; payload schema validated; flows into the alert ingestor or dedicated event log |
 | STAGE-005-009 | "Push back to HA" event firer: when an alert fires, optionally fire a corresponding HA event (configured per alert via routing rules); HA can listen and run automations |
-| STAGE-005-010 | HA integration UI panel ("Home Assistant" in Integrations sidebar): entity health grid, battery summary, recent automation failures, integration status |
+| STAGE-005-010 | HA integration UI panel ("Home Assistant" in Integrations sidebar): entity health grid, battery summary, recent automation failures, integration status. **MUST consume `<LogViewer>` from EPIC-004 STAGE-004-003 with a caller-provided `useLogs` hook scoped to HA logs** (e.g., `service:"home-assistant"`). Use the embedding contract documented in `apps/ui/src/components/logs/README.md`. Per the brainstorming session 2026-05-28, EPIC-004 explicitly designs the embedding contract for this use case. If/when HA log files are mounted for vector tailing (future stage in this epic or a follow-up), they get their own `service` label (e.g., `service="home-assistant-file"`) and the LogViewer filter widens accordingly. |
 | STAGE-005-011 | Default Grafana dashboard `home-assistant.json` + default vmalert rules `home-assistant.yaml` |
 
 ## Cross-stage acceptance criteria
