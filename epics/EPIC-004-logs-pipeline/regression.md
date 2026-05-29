@@ -26,3 +26,11 @@
 - Wrap toggle (labeled "Wrap"): toggling switches long lines between wrap and horizontal-scroll; default is nowrap. Present in both docker + cron viewers.
 - Severity tint: warn → yellow, error/critical/alert/emergency → red, else none; null severity → no tint (docker logs currently default to info until STAGE-004-004A lands).
 - Backend test harness: the suite boots a session-scoped shared app (not per-test). Regression risk = test-isolation leaks; if a test starts failing only in-suite (passes in isolation), suspect a missing per-test reset in conftest `_per_test_db`. Real-lifespan tests (test_lifespan_e2e.py / test_api_lifespan.py) must set their own env (don't inherit shared-app env). Run the full suite (xdist) to confirm 3264 passed / 0 fail.
+
+## STAGE-004-004 — Container label enrichment
+
+- Vector docker_enrich: docker container logs in VictoriaLogs have top-level queryable fields compose_project, compose_service, image_name, image_tag (image_digest/image_revision when present). Verify `compose_project:homelab-monitor` LogsQL returns real lines.
+- Raw `.label.*` bag is KEPT alongside promoted fields (no del(.label)).
+- journald/systemd lines are NOT docker-enriched (exists(.label)/exists(.image) guards): bare systemd lines have empty compose_*/image_*.
+- docker_enrich VRL must pass authoritative `vector validate` (NOT --no-environment, which masks VRL compile errors). VRL array index requires an integer literal, not a computed expression (use for_each, not segs[length-1]).
+- Deployment: vector config is render-on-boot; after a template change, restart the monitor container (re-render) THEN the vector container (reload). Vector does not hot-reload.
