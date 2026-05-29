@@ -44,8 +44,8 @@ def test_log_line_via_noisy_logger_reaches_logs_query() -> None:
             )
             if resp.status_code == 200:  # noqa: PLR2004
                 last_resp_text = resp.text
-                entries = resp.json().get("entries", [])
-                if any(marker in entry.get("line", "") for entry in entries):
+                lines = resp.json().get("lines", [])
+                if any(marker in line.get("message", "") for line in lines):
                     found = True
                     break
             time.sleep(2.0)

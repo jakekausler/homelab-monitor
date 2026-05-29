@@ -107,9 +107,9 @@ function RunLogHeader({
         <span className="text-xs text-muted-foreground">
           {formatDuration(data.duration_seconds)}
         </span>
-        {data.entries.length > 0 && (
+        {data.lines.length > 0 && (
           <span className="text-xs text-muted-foreground">
-            {String(data.line_count ?? data.entries.length)} lines
+            {String(data.line_count ?? data.lines.length)} lines
           </span>
         )}
         {flags.map((f) => (
@@ -151,17 +151,17 @@ function RunLogBody({ data }: { data: import('@/api/types').Schema<'RunLogRespon
           className="rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-xs text-amber-800 dark:text-amber-200"
           data-testid="truncated-banner"
         >
-          Output truncated at {String(data.entries.length)} lines.
+          Output truncated at {String(data.lines.length)} lines.
         </p>
       )}
       <pre
         className="overflow-x-auto rounded-md border border-border bg-muted/30 p-3 text-xs font-mono"
         data-testid="log-body"
       >
-        {data.entries.length === 0 ? (
+        {data.lines.length === 0 ? (
           <span className="text-muted-foreground">No log lines captured for this run.</span>
         ) : (
-          data.entries.map((line, i) => (
+          data.lines.map((line, i) => (
             <div key={`${line.timestamp}-${String(i)}`}>
               <span className="text-muted-foreground">{line.timestamp}</span> {line.message}
             </div>

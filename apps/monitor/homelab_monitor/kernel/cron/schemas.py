@@ -21,6 +21,7 @@ from homelab_monitor.kernel.cron.schedule import (
     InvalidCronExpression,
     canonicalize_schedule,
 )
+from homelab_monitor.kernel.logs.models import LogLine
 
 if TYPE_CHECKING:
     from homelab_monitor.kernel.cron.repository import CronRecord
@@ -329,17 +330,6 @@ class CronRunListResponse(BaseModel):
 # ---------- Run log (STAGE-002-014) ----------
 
 
-class RunLogLine(BaseModel):
-    """One log line returned by the narrow run-log endpoint."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    timestamp: str
-    message: str
-    stream: str
-    fields: dict[str, str]
-
-
 class RunLogResponse(BaseModel):
     """Response body for ``GET /api/crons/{fp}/runs/{run_id}/log``.
 
@@ -349,11 +339,11 @@ class RunLogResponse(BaseModel):
     this body).
 
     log_status values:
-      - "available": run is closed AND VL returned data. entries populated.
+      - "available": run is closed AND VL returned data. lines populated.
       - "running": run is still in flight; VL queried over [vl_window_start, now].
-        entries reflect output so far.
+        lines reflect output so far.
       - "expired": closed run whose vl_window_end is older than VL retention;
-        OR defensively for a malformed closed-row state. entries=[].
+        OR defensively for a malformed closed-row state. lines=[].
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -364,7 +354,7 @@ class RunLogResponse(BaseModel):
     line_count: int | None
     byte_count: int | None
     anomaly_flags: str
-    entries: list[RunLogLine]
+    lines: list[LogLine]
     truncated: bool
 
 

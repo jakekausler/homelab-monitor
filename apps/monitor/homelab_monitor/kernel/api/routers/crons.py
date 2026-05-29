@@ -80,7 +80,6 @@ from homelab_monitor.kernel.cron.schemas import (
     InstallWrapperResult,
     PreviewRunsQuery,
     PreviewRunsResponse,
-    RunLogLine,
     RunLogResponse,
     RunLogStatus,
     UninstallWrapperPreview,
@@ -92,6 +91,7 @@ from homelab_monitor.kernel.cron.schemas import (
 )
 from homelab_monitor.kernel.db.time import utc_now_iso
 from homelab_monitor.kernel.heartbeat.schemas import query_model
+from homelab_monitor.kernel.logs.models import from_victorialogs_line
 from homelab_monitor.kernel.logs.victorialogs_client import (
     VictoriaLogsClient,
     VictoriaLogsClientError,
@@ -446,7 +446,7 @@ async def get_cron_run_log(  # noqa: PLR0913 -- explicit dependency injection pe
 
 
 def _expired_response(run: CronRunRecord) -> RunLogResponse:
-    """Build an expired-log response with empty entries."""
+    """Build an expired-log response with empty lines."""
     return RunLogResponse(
         log_status="expired",
         state=run.state,  # type: ignore[arg-type]
@@ -454,7 +454,7 @@ def _expired_response(run: CronRunRecord) -> RunLogResponse:
         line_count=run.line_count,
         byte_count=run.byte_count,
         anomaly_flags=run.anomaly_flags,
-        entries=[],
+        lines=[],
         truncated=False,
     )
 
@@ -494,15 +494,7 @@ async def _query_run_log(  # noqa: PLR0913
         line_count=run.line_count,
         byte_count=run.byte_count,
         anomaly_flags=run.anomaly_flags,
-        entries=[
-            RunLogLine(
-                timestamp=line.timestamp,
-                message=line.message,
-                stream=line.stream,
-                fields=line.fields,
-            )
-            for line in result.lines
-        ],
+        lines=[from_victorialogs_line(line) for line in result.lines],
         truncated=result.truncated,
     )
 

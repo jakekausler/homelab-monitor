@@ -367,7 +367,7 @@ async def test_get_run_log_available(
     assert resp.status_code == 200  # noqa: PLR2004
     body = resp.json()
     assert body["log_status"] == "available"
-    assert len(body["entries"]) == 2  # noqa: PLR2004
+    assert len(body["lines"]) == 2  # noqa: PLR2004
     assert body["truncated"] is False
     assert body["state"] == "ok"
     assert body["line_count"] == 2  # noqa: PLR2004
@@ -409,7 +409,7 @@ async def test_get_run_log_running_shape(
     assert resp.status_code == 200  # noqa: PLR2004
     body = resp.json()
     assert body["log_status"] == "running"
-    assert len(body["entries"]) == 1
+    assert len(body["lines"]) == 1
 
     # The VL request's 'end' param should be close to now()
     requests = httpx_mock.get_requests()
@@ -454,7 +454,7 @@ async def test_get_run_log_expired_old_window(
     assert resp.status_code == 200  # noqa: PLR2004
     body = resp.json()
     assert body["log_status"] == "expired"
-    assert body["entries"] == []
+    assert body["lines"] == []
 
     # VL must not have been contacted
     assert len(httpx_mock.get_requests()) == 0
@@ -662,7 +662,7 @@ async def test_get_run_log_expired_null_vl_window_end(
     assert resp.status_code == 200  # noqa: PLR2004
     body = resp.json()
     assert body["log_status"] == "expired"
-    assert body["entries"] == []
+    assert body["lines"] == []
     assert len(httpx_mock.get_requests()) == 0
 
 

@@ -127,7 +127,7 @@ export function DockerContainerLogsViewerBody({
           >
             {logs.data.lines.map((entry, i) => (
               <div key={`${entry.timestamp}-${String(i)}`}>
-                <span className="text-muted-foreground">{entry.timestamp}</span> {entry.line}
+                <span className="text-muted-foreground">{entry.timestamp}</span> {entry.message}
               </div>
             ))}
           </pre>

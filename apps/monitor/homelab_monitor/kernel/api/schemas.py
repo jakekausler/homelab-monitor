@@ -11,6 +11,7 @@ from homelab_monitor.kernel.alerts.types import AlertOutcome, AlertStatus, Sever
 # Re-export the canonical error envelope from errors.py so external callers
 # can import either `from kernel.api.schemas` or `from kernel.api.errors`.
 from homelab_monitor.kernel.api.errors import ErrorEnvelope, ErrorPayload
+from homelab_monitor.kernel.logs.models import LogLine
 
 __all__ = [
     "AckResponse",
@@ -24,7 +25,6 @@ __all__ = [
     "ErrorPayload",
     "HealthzResponse",
     "IngestResponse",
-    "LogsQueryEntry",
     "LogsQueryResponse",
     "LogsStreamSummary",
     "LogsStreamsResponse",
@@ -227,21 +227,11 @@ class BackupResponse(BaseModel):
     errors: list[str]
 
 
-class LogsQueryEntry(BaseModel):
-    """A single log line from a VictoriaLogs ``/select/logsql/query`` response."""
-
-    model_config = ConfigDict(extra="forbid")
-    stream: str
-    line: str
-    ts: str
-    fields: dict[str, str]
-
-
 class LogsQueryResponse(BaseModel):
     """Response for GET /api/logs/query."""
 
     model_config = ConfigDict(extra="forbid")
-    entries: list[LogsQueryEntry]
+    lines: list[LogLine]
     next_cursor: str | None = None
 
 

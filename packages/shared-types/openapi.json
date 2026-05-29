@@ -733,26 +733,6 @@
         "title": "ContainerListResponse",
         "type": "object"
       },
-      "ContainerLogLine": {
-        "additionalProperties": false,
-        "description": "One log line returned by the per-container log viewer.",
-        "properties": {
-          "line": {
-            "title": "Line",
-            "type": "string"
-          },
-          "timestamp": {
-            "title": "Timestamp",
-            "type": "string"
-          }
-        },
-        "required": [
-          "timestamp",
-          "line"
-        ],
-        "title": "ContainerLogLine",
-        "type": "object"
-      },
       "ContainerLogsResponse": {
         "additionalProperties": false,
         "description": "Response body for GET /api/integrations/docker/containers/{name}/logs.\n\nlog_status values:\n  - \"available\": >=1 line returned within the window.\n  - \"no_lines\": container known to inventory but VL returned no lines.\n  - \"container_unknown\": container not in targets table (returned with 404).\n  - \"vl_unavailable\": VictoriaLogs unreachable/timeout/non-200 (returned with 503).\n\nFor container_unknown and vl_unavailable: lines = [], window_start/window_end\nmay be None (no query was actually run for unknown; no result for unavailable).",
@@ -763,7 +743,7 @@
           },
           "lines": {
             "items": {
-              "$ref": "#/components/schemas/ContainerLogLine"
+              "$ref": "#/components/schemas/LogLine"
             },
             "title": "Lines",
             "type": "array"
@@ -2353,6 +2333,73 @@
         "title": "ListProbesResponse",
         "type": "object"
       },
+      "LogLine": {
+        "additionalProperties": false,
+        "description": "One converged log line returned by every log-viewing endpoint.\n\n`severity`/`host`/`service` are promoted out of the raw VictoriaLogs\n`fields` bag into typed top-level columns by `from_victorialogs_line`.\n`fields` retains the full original bag (plus `severity_raw` when a raw\nseverity was present), so nothing is lost.",
+        "properties": {
+          "fields": {
+            "additionalProperties": true,
+            "title": "Fields",
+            "type": "object"
+          },
+          "host": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Host"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "service": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Service"
+          },
+          "severity": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Severity"
+          },
+          "stream": {
+            "title": "Stream",
+            "type": "string"
+          },
+          "timestamp": {
+            "title": "Timestamp",
+            "type": "string"
+          }
+        },
+        "required": [
+          "timestamp",
+          "message",
+          "stream",
+          "severity",
+          "host",
+          "service",
+          "fields"
+        ],
+        "title": "LogLine",
+        "type": "object"
+      },
       "LoginRequest": {
         "additionalProperties": false,
         "properties": {
@@ -2389,48 +2436,15 @@
         "title": "LoginResponse",
         "type": "object"
       },
-      "LogsQueryEntry": {
-        "additionalProperties": false,
-        "description": "A single log line from a VictoriaLogs ``/select/logsql/query`` response.",
-        "properties": {
-          "fields": {
-            "additionalProperties": {
-              "type": "string"
-            },
-            "title": "Fields",
-            "type": "object"
-          },
-          "line": {
-            "title": "Line",
-            "type": "string"
-          },
-          "stream": {
-            "title": "Stream",
-            "type": "string"
-          },
-          "ts": {
-            "title": "Ts",
-            "type": "string"
-          }
-        },
-        "required": [
-          "stream",
-          "line",
-          "ts",
-          "fields"
-        ],
-        "title": "LogsQueryEntry",
-        "type": "object"
-      },
       "LogsQueryResponse": {
         "additionalProperties": false,
         "description": "Response for GET /api/logs/query.",
         "properties": {
-          "entries": {
+          "lines": {
             "items": {
-              "$ref": "#/components/schemas/LogsQueryEntry"
+              "$ref": "#/components/schemas/LogLine"
             },
-            "title": "Entries",
+            "title": "Lines",
             "type": "array"
           },
           "next_cursor": {
@@ -2446,7 +2460,7 @@
           }
         },
         "required": [
-          "entries"
+          "lines"
         ],
         "title": "LogsQueryResponse",
         "type": "object"
@@ -2984,42 +2998,9 @@
         "title": "RetryResponse",
         "type": "object"
       },
-      "RunLogLine": {
-        "additionalProperties": false,
-        "description": "One log line returned by the narrow run-log endpoint.",
-        "properties": {
-          "fields": {
-            "additionalProperties": {
-              "type": "string"
-            },
-            "title": "Fields",
-            "type": "object"
-          },
-          "message": {
-            "title": "Message",
-            "type": "string"
-          },
-          "stream": {
-            "title": "Stream",
-            "type": "string"
-          },
-          "timestamp": {
-            "title": "Timestamp",
-            "type": "string"
-          }
-        },
-        "required": [
-          "timestamp",
-          "message",
-          "stream",
-          "fields"
-        ],
-        "title": "RunLogLine",
-        "type": "object"
-      },
       "RunLogResponse": {
         "additionalProperties": false,
-        "description": "Response body for ``GET /api/crons/{fp}/runs/{run_id}/log``.\n\nSingle model with a ``log_status`` discriminator field. The 503\n``vl_unavailable`` error case is NOT this shape \u2014 it uses the standard\nHttpProblem error envelope (the endpoint raises before constructing\nthis body).\n\nlog_status values:\n  - \"available\": run is closed AND VL returned data. entries populated.\n  - \"running\": run is still in flight; VL queried over [vl_window_start, now].\n    entries reflect output so far.\n  - \"expired\": closed run whose vl_window_end is older than VL retention;\n    OR defensively for a malformed closed-row state. entries=[].",
+        "description": "Response body for ``GET /api/crons/{fp}/runs/{run_id}/log``.\n\nSingle model with a ``log_status`` discriminator field. The 503\n``vl_unavailable`` error case is NOT this shape \u2014 it uses the standard\nHttpProblem error envelope (the endpoint raises before constructing\nthis body).\n\nlog_status values:\n  - \"available\": run is closed AND VL returned data. lines populated.\n  - \"running\": run is still in flight; VL queried over [vl_window_start, now].\n    lines reflect output so far.\n  - \"expired\": closed run whose vl_window_end is older than VL retention;\n    OR defensively for a malformed closed-row state. lines=[].",
         "properties": {
           "anomaly_flags": {
             "title": "Anomaly Flags",
@@ -3047,13 +3028,6 @@
             ],
             "title": "Duration Seconds"
           },
-          "entries": {
-            "items": {
-              "$ref": "#/components/schemas/RunLogLine"
-            },
-            "title": "Entries",
-            "type": "array"
-          },
           "line_count": {
             "anyOf": [
               {
@@ -3064,6 +3038,13 @@
               }
             ],
             "title": "Line Count"
+          },
+          "lines": {
+            "items": {
+              "$ref": "#/components/schemas/LogLine"
+            },
+            "title": "Lines",
+            "type": "array"
           },
           "log_status": {
             "enum": [
@@ -3096,7 +3077,7 @@
           "line_count",
           "byte_count",
           "anomaly_flags",
-          "entries",
+          "lines",
           "truncated"
         ],
         "title": "RunLogResponse",

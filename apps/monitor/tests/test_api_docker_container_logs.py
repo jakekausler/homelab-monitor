@@ -140,8 +140,8 @@ async def test_get_container_logs_available(
     assert body["container_name"] == "homeassistant"
     assert body["log_status"] == "available"
     assert len(body["lines"]) == 2  # noqa: PLR2004
-    assert body["lines"][0]["line"] == "line one"
-    assert body["lines"][1]["line"] == "line two"
+    assert body["lines"][0]["message"] == "line one"
+    assert body["lines"][1]["message"] == "line two"
     assert body["truncated"] is False
     assert body["window_start"] is not None
     assert body["window_end"] is not None

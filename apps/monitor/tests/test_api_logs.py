@@ -65,10 +65,10 @@ async def test_query_proxies_vl_success(
     )
     assert resp.status_code == 200  # noqa: PLR2004
     body = resp.json()
-    assert len(body["entries"]) == 2  # noqa: PLR2004
-    assert body["entries"][0]["stream"] == "svc.host"
-    assert body["entries"][0]["line"] == "hello"
-    assert body["entries"][1]["fields"]["level"] == "info"
+    assert len(body["lines"]) == 2  # noqa: PLR2004
+    assert body["lines"][0]["stream"] == "svc.host"
+    assert body["lines"][0]["message"] == "hello"
+    assert body["lines"][1]["fields"]["level"] == "info"
 
 
 @pytest.mark.asyncio
@@ -157,7 +157,7 @@ async def test_query_tolerates_blank_lines(
         },
     )
     assert resp.status_code == 200  # noqa: PLR2004
-    assert len(resp.json()["entries"]) == 1
+    assert len(resp.json()["lines"]) == 1
 
 
 @pytest.mark.asyncio
@@ -184,7 +184,7 @@ async def test_query_skips_malformed_json_line(
         },
     )
     assert resp.status_code == 200  # noqa: PLR2004
-    assert len(resp.json()["entries"]) == 1
+    assert len(resp.json()["lines"]) == 1
 
 
 @pytest.mark.asyncio
@@ -333,5 +333,5 @@ async def test_query_skips_non_dict_json_line(
     )
     assert resp.status_code == 200  # noqa: PLR2004
     body = resp.json()
-    assert len(body["entries"]) == 1
-    assert body["entries"][0]["line"] == "kept"
+    assert len(body["lines"]) == 1
+    assert body["lines"][0]["message"] == "kept"

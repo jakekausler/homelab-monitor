@@ -23,14 +23,14 @@ const NAME = 'homeassistant'
 function makeData(
   overrides: Partial<{
     log_status: 'available' | 'no_lines' | 'container_unknown' | 'vl_unavailable'
-    lines: Array<{ timestamp: string; line: string }>
+    lines: Array<{ timestamp: string; message: string }>
     truncated: boolean
   }> = {},
 ) {
   return {
     container_name: NAME,
     log_status: 'available' as const,
-    lines: [{ timestamp: '2026-05-21T14:30:00Z', line: 'INFO hello' }],
+    lines: [{ timestamp: '2026-05-21T14:30:00Z', message: 'INFO hello' }],
     truncated: false,
     window_start: '2026-05-21T14:15:00Z',
     window_end: '2026-05-21T14:30:00Z',
@@ -73,8 +73,8 @@ describe('DockerContainerLogsViewerBody', () => {
       data: makeData({
         log_status: 'available',
         lines: [
-          { timestamp: '2026-05-21T14:30:00Z', line: 'INFO line 1' },
-          { timestamp: '2026-05-21T14:30:05Z', line: 'INFO line 2' },
+          { timestamp: '2026-05-21T14:30:00Z', message: 'INFO line 1' },
+          { timestamp: '2026-05-21T14:30:05Z', message: 'INFO line 2' },
         ],
       }),
     } as never)

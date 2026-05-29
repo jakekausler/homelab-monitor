@@ -36,7 +36,7 @@ def _query_logs(rig: Rig, marker: str) -> list[dict[str, Any]]:
     )
     if resp.status_code != 200:  # noqa: PLR2004
         return []
-    return resp.json().get("entries", [])
+    return resp.json().get("lines", [])
 
 
 @pytest.mark.integration
@@ -60,7 +60,7 @@ def test_python_traceback_stitched_into_single_record() -> None:
         matching: list[dict[str, Any]] = []
         while time.time() < deadline:
             entries = _query_logs(rig, marker)
-            matching = [e for e in entries if marker in e.get("line", "")]
+            matching = [e for e in entries if marker in e.get("message", "")]
             if matching:
                 break
             time.sleep(2.0)
@@ -69,7 +69,7 @@ def test_python_traceback_stitched_into_single_record() -> None:
         f"Expected exactly 1 stitched VL record for marker {marker!r}, "
         f"got {len(matching)}: {[e.get('line', '')[:120] for e in matching]}"
     )
-    stitched = matching[0].get("line", "")
+    stitched = matching[0].get("message", "")
     for fragment in lines:
         assert fragment in stitched or marker in stitched, (
             f"Fragment {fragment!r} not found in stitched record:\n{stitched[:300]}"
@@ -96,7 +96,7 @@ def test_java_stack_trace_stitched_into_single_record() -> None:
         matching: list[dict[str, Any]] = []
         while time.time() < deadline:
             entries = _query_logs(rig, marker)
-            matching = [e for e in entries if marker in e.get("line", "")]
+            matching = [e for e in entries if marker in e.get("message", "")]
             if matching:
                 break
             time.sleep(2.0)
@@ -104,7 +104,7 @@ def test_java_stack_trace_stitched_into_single_record() -> None:
     assert len(matching) == 1, (
         f"Expected exactly 1 stitched VL record for marker {marker!r}, got {len(matching)}"
     )
-    stitched = matching[0].get("line", "")
+    stitched = matching[0].get("message", "")
     assert "Main.java:12" in stitched, (
         f"Stitched record missing tail fragment 'Main.java:12' — multiline codec "
         f"did not absorb the final body line:\n{stitched[:400]}"
@@ -142,8 +142,8 @@ def test_negative_control_event_ends_on_non_continuation_line() -> None:
         while time.time() < deadline:
             entries_tb = _query_logs(rig, marker_tb)
             entries_plain = _query_logs(rig, marker_plain)
-            matching_tb = [e for e in entries_tb if marker_tb in e.get("line", "")]
-            matching_plain = [e for e in entries_plain if marker_plain in e.get("line", "")]
+            matching_tb = [e for e in entries_tb if marker_tb in e.get("message", "")]
+            matching_plain = [e for e in entries_plain if marker_plain in e.get("message", "")]
             if matching_tb and matching_plain:
                 break
             time.sleep(2.0)
@@ -156,7 +156,7 @@ def test_negative_control_event_ends_on_non_continuation_line() -> None:
         f"Expected the plain line as a separate record for {marker_plain!r}, "
         f"got {len(matching_plain)}"
     )
-    assert marker_plain not in matching_tb[0].get("line", ""), (
+    assert marker_plain not in matching_tb[0].get("message", ""), (
         "plain non-continuation line was wrongly stitched into the traceback event"
     )
 
@@ -181,13 +181,13 @@ def test_go_panic_stitched_into_single_record() -> None:
         matching: list[dict[str, Any]] = []
         while time.time() < deadline:
             entries = _query_logs(rig, marker)
-            matching = [e for e in entries if marker in e.get("line", "")]
+            matching = [e for e in entries if marker in e.get("message", "")]
             if matching:
                 break
             time.sleep(2.0)
 
     assert len(matching) == 1, f"Expected 1 stitched record for {marker!r}, got {len(matching)}"
-    stitched = matching[0].get("line", "")
+    stitched = matching[0].get("message", "")
     assert "file.go:42" in stitched, (
         f"Stitched record missing tail fragment 'file.go:42' — codec did not "
         f"absorb the final body line:\n{stitched[:400]}"
@@ -213,13 +213,13 @@ def test_ruby_traceback_stitched_into_single_record() -> None:
         matching: list[dict[str, Any]] = []
         while time.time() < deadline:
             entries = _query_logs(rig, marker)
-            matching = [e for e in entries if marker in e.get("line", "")]
+            matching = [e for e in entries if marker in e.get("message", "")]
             if matching:
                 break
             time.sleep(2.0)
 
     assert len(matching) == 1, f"Expected 1 stitched record for {marker!r}, got {len(matching)}"
-    stitched = matching[0].get("line", "")
+    stitched = matching[0].get("message", "")
     assert "main.rb:10" in stitched, (
         f"Stitched record missing tail fragment 'main.rb:10' — codec did not "
         f"absorb the final body line:\n{stitched[:400]}"
@@ -245,13 +245,13 @@ def test_node_stack_trace_stitched_into_single_record() -> None:
         matching: list[dict[str, Any]] = []
         while time.time() < deadline:
             entries = _query_logs(rig, marker)
-            matching = [e for e in entries if marker in e.get("line", "")]
+            matching = [e for e in entries if marker in e.get("message", "")]
             if matching:
                 break
             time.sleep(2.0)
 
     assert len(matching) == 1, f"Expected 1 stitched record for {marker!r}, got {len(matching)}"
-    stitched = matching[0].get("line", "")
+    stitched = matching[0].get("message", "")
     assert "task_queues:96" in stitched, (
         f"Stitched record missing tail fragment 'task_queues:96' — codec did not "
         f"absorb the final body line:\n{stitched[:400]}"
@@ -277,13 +277,13 @@ def test_dotnet_stack_trace_stitched_into_single_record() -> None:
         matching: list[dict[str, Any]] = []
         while time.time() < deadline:
             entries = _query_logs(rig, marker)
-            matching = [e for e in entries if marker in e.get("line", "")]
+            matching = [e for e in entries if marker in e.get("message", "")]
             if matching:
                 break
             time.sleep(2.0)
 
     assert len(matching) == 1, f"Expected 1 stitched record for {marker!r}, got {len(matching)}"
-    stitched = matching[0].get("line", "")
+    stitched = matching[0].get("message", "")
     assert "loader.cs:42" in stitched, (
         f"Stitched record missing tail fragment 'loader.cs:42' — codec did not "
         f"absorb the final body line:\n{stitched[:400]}"
@@ -310,13 +310,13 @@ def test_cpp_segfault_stitched_into_single_record() -> None:
         matching: list[dict[str, Any]] = []
         while time.time() < deadline:
             entries = _query_logs(rig, marker)
-            matching = [e for e in entries if marker in e.get("line", "")]
+            matching = [e for e in entries if marker in e.get("message", "")]
             if matching:
                 break
             time.sleep(2.0)
 
     assert len(matching) == 1, f"Expected 1 stitched record for {marker!r}, got {len(matching)}"
-    stitched = matching[0].get("line", "")
+    stitched = matching[0].get("message", "")
     assert "0x00007f1234567abc" in stitched, (
         f"Stitched record missing tail fragment '0x00007f1234567abc' — codec did not "
         f"absorb the final body line:\n{stitched[:400]}"
@@ -344,13 +344,13 @@ def test_rust_panic_stitched_into_single_record() -> None:
         matching: list[dict[str, Any]] = []
         while time.time() < deadline:
             entries = _query_logs(rig, marker)
-            matching = [e for e in entries if marker in e.get("line", "")]
+            matching = [e for e in entries if marker in e.get("message", "")]
             if matching:
                 break
             time.sleep(2.0)
 
     assert len(matching) == 1, f"Expected 1 stitched record for {marker!r}, got {len(matching)}"
-    stitched = matching[0].get("line", "")
+    stitched = matching[0].get("message", "")
     assert "RUST_BACKTRACE=1" in stitched, (
         f"Stitched record missing tail fragment 'RUST_BACKTRACE=1' — codec did not "
         f"absorb the final body line:\n{stitched[:400]}"
@@ -383,13 +383,13 @@ def test_php_fatal_stitched_into_single_record() -> None:
         matching: list[dict[str, Any]] = []
         while time.time() < deadline:
             entries = _query_logs(rig, marker)
-            matching = [e for e in entries if marker in e.get("line", "")]
+            matching = [e for e in entries if marker in e.get("message", "")]
             if matching:
                 break
             time.sleep(2.0)
 
     assert len(matching) == 1, f"Expected 1 stitched record for {marker!r}, got {len(matching)}"
-    stitched = matching[0].get("line", "")
+    stitched = matching[0].get("message", "")
     assert "thrown in /app/file.php" in stitched, (
         f"Stitched record missing tail fragment 'thrown in /app/file.php' — codec did not "
         f"absorb the final body line:\n{stitched[:400]}"
@@ -417,8 +417,8 @@ def test_negative_control_two_iso_timestamp_lines_stay_separate() -> None:
         while time.time() < deadline:
             entries_a = _query_logs(rig, marker_a)
             entries_b = _query_logs(rig, marker_b)
-            matching_a = [e for e in entries_a if marker_a in e.get("line", "")]
-            matching_b = [e for e in entries_b if marker_b in e.get("line", "")]
+            matching_a = [e for e in entries_a if marker_a in e.get("message", "")]
+            matching_b = [e for e in entries_b if marker_b in e.get("message", "")]
             if matching_a and matching_b:
                 break
             time.sleep(2.0)

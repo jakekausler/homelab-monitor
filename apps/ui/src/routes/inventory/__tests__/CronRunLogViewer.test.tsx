@@ -45,7 +45,7 @@ function makeLogData(
     state: string
     log_status: string
     truncated: boolean
-    entries: Array<{ timestamp: string; message: string }>
+    lines: Array<{ timestamp: string; message: string }>
     anomaly_flags: string
     duration_seconds: number | null
     line_count: number | null
@@ -58,7 +58,7 @@ function makeLogData(
     state: 'ok',
     log_status: 'available',
     truncated: false,
-    entries: [],
+    lines: [],
     anomaly_flags: '',
     duration_seconds: 30,
     line_count: null,
@@ -172,7 +172,7 @@ describe('CronRunLogViewerPage', () => {
       error: null,
       data: makeLogData({
         log_status: 'available',
-        entries: [
+        lines: [
           { timestamp: '2026-05-01T12:00:01Z', message: 'Starting backup' },
           { timestamp: '2026-05-01T12:00:05Z', message: 'Files copied' },
           { timestamp: '2026-05-01T12:00:29Z', message: 'Done' },
@@ -193,7 +193,7 @@ describe('CronRunLogViewerPage', () => {
       error: null,
       data: makeLogData({
         log_status: 'available',
-        entries: [{ timestamp: '2026-05-01T12:00:01Z', message: 'hello' }],
+        lines: [{ timestamp: '2026-05-01T12:00:01Z', message: 'hello' }],
       }),
     } as unknown as ReturnType<typeof useCronRunLog>)
     renderWithRouter()
@@ -206,7 +206,7 @@ describe('CronRunLogViewerPage', () => {
       isLoading: false,
       isFetching: false,
       error: null,
-      data: makeLogData({ log_status: 'available', entries: [] }),
+      data: makeLogData({ log_status: 'available', lines: [] }),
     } as unknown as ReturnType<typeof useCronRunLog>)
     renderWithRouter()
     const body = await screen.findByTestId('log-body')
@@ -221,7 +221,7 @@ describe('CronRunLogViewerPage', () => {
       data: makeLogData({
         log_status: 'available',
         truncated: true,
-        entries: [{ timestamp: 't1', message: 'line' }],
+        lines: [{ timestamp: 't1', message: 'line' }],
       }),
     } as unknown as ReturnType<typeof useCronRunLog>)
     renderWithRouter()
@@ -245,7 +245,7 @@ describe('CronRunLogViewerPage', () => {
         log_status: 'running',
         exit_code: null,
         duration_seconds: null,
-        entries: [],
+        lines: [],
       }),
     } as unknown as ReturnType<typeof useCronRunLog>)
     renderWithRouter()
@@ -274,7 +274,7 @@ describe('CronRunLogViewerPage', () => {
         log_status: 'running',
         exit_code: null,
         duration_seconds: null,
-        entries: [],
+        lines: [],
       }),
     } as unknown as ReturnType<typeof useCronRunLog>)
     renderWithRouter()
@@ -286,7 +286,7 @@ describe('CronRunLogViewerPage', () => {
       isLoading: false,
       isFetching: false,
       error: null,
-      data: makeLogData({ log_status: 'expired', entries: [] }),
+      data: makeLogData({ log_status: 'expired', lines: [] }),
     } as unknown as ReturnType<typeof useCronRunLog>)
     renderWithRouter()
     expect(await screen.findByTestId('expired-notice')).toBeInTheDocument()
@@ -298,7 +298,7 @@ describe('CronRunLogViewerPage', () => {
       isLoading: false,
       isFetching: false,
       error: null,
-      data: makeLogData({ log_status: 'expired', entries: [] }),
+      data: makeLogData({ log_status: 'expired', lines: [] }),
     } as unknown as ReturnType<typeof useCronRunLog>)
     renderWithRouter()
     await screen.findByTestId('expired-notice')
@@ -348,7 +348,7 @@ describe('CronRunLogViewerPage', () => {
       isLoading: false,
       isFetching: false,
       error: null,
-      data: makeLogData({ anomaly_flags: 'duration_outlier,exit_code_changed', entries: [] }),
+      data: makeLogData({ anomaly_flags: 'duration_outlier,exit_code_changed', lines: [] }),
     } as unknown as ReturnType<typeof useCronRunLog>)
     renderWithRouter()
     await screen.findByTestId('run-log-header')
@@ -369,7 +369,7 @@ describe('CronRunLogViewerPage', () => {
       isLoading: false,
       isFetching: false,
       error: null,
-      data: makeLogData({ entries: [] }),
+      data: makeLogData({ lines: [] }),
     } as unknown as ReturnType<typeof useCronRunLog>)
     renderWithRouter(`/inventory/crons/${FP}/runs/${longRunId}`)
     const header = await screen.findByTestId('run-log-header')
@@ -390,7 +390,7 @@ describe('CronRunLogViewerPage', () => {
       isLoading: false,
       isFetching: false,
       error: null,
-      data: makeLogData({ state: 'ok', entries: [] }),
+      data: makeLogData({ state: 'ok', lines: [] }),
     } as unknown as ReturnType<typeof useCronRunLog>)
     renderWithRouter()
     await screen.findByTestId('run-log-header')

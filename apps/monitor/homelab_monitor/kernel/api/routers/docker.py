@@ -53,6 +53,7 @@ from homelab_monitor.kernel.db.repositories.targets_repository import TargetsRep
 from homelab_monitor.kernel.db.repository import SqliteRepository
 from homelab_monitor.kernel.docker.compose_action_runner import ComposeActionRunner
 from homelab_monitor.kernel.docker.socket_client import DockerSocketClient
+from homelab_monitor.kernel.logs.models import LogLine, from_victorialogs_line
 from homelab_monitor.kernel.logs.victorialogs_client import (
     VictoriaLogsClient,
     VictoriaLogsClientError,
@@ -102,15 +103,6 @@ class ContainerListResponse(BaseModel):
     containers: list[ContainerRow]
 
 
-class ContainerLogLine(BaseModel):
-    """One log line returned by the per-container log viewer."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    timestamp: str
-    line: str
-
-
 _ContainerLogStatus = Literal[
     "available",
     "no_lines",
@@ -136,7 +128,7 @@ class ContainerLogsResponse(BaseModel):
 
     container_name: str
     log_status: _ContainerLogStatus
-    lines: list[ContainerLogLine]
+    lines: list[LogLine]
     truncated: bool
     window_start: str | None
     window_end: str | None
@@ -585,7 +577,7 @@ async def get_container_logs(  # noqa: PLR0913 -- FastAPI route with injected de
     return ContainerLogsResponse(
         container_name=name,
         log_status=log_status,
-        lines=[ContainerLogLine(timestamp=ln.timestamp, line=ln.message) for ln in result.lines],
+        lines=[from_victorialogs_line(ln) for ln in result.lines],
         truncated=result.truncated,
         window_start=window_start,
         window_end=window_end,

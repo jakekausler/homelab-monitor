@@ -18,12 +18,12 @@ from homelab_monitor.kernel.api.dependencies import (
 )
 from homelab_monitor.kernel.api.errors import HttpProblem
 from homelab_monitor.kernel.api.schemas import (
-    LogsQueryEntry,
     LogsQueryResponse,
     LogsStreamsResponse,
 )
 from homelab_monitor.kernel.auth.models import User
 from homelab_monitor.kernel.config import load_vl_query_limits
+from homelab_monitor.kernel.logs.models import from_victorialogs_line
 from homelab_monitor.kernel.logs.victorialogs_client import (
     VictoriaLogsClient,
     VictoriaLogsClientError,
@@ -111,11 +111,8 @@ async def logs_query(  # noqa: PLR0913
             message="victorialogs query failed",
         ) from exc
 
-    entries = [
-        LogsQueryEntry(stream=line.stream, line=line.message, ts=line.timestamp, fields=line.fields)
-        for line in result.lines[:limit]
-    ]
-    return LogsQueryResponse(entries=entries, next_cursor=None)
+    lines = [from_victorialogs_line(line) for line in result.lines[:limit]]
+    return LogsQueryResponse(lines=lines, next_cursor=None)
 
 
 @router.get("/logs/streams", response_model=LogsStreamsResponse)
