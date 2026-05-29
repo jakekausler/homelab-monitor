@@ -98,9 +98,52 @@ if err == null && is_object(parsed) {
 }
 '''
 
+[transforms.docker_enrich]
+type = "remap"
+inputs = ["parse_json"]
+source = '''
+# Promote select docker compose labels to top-level queryable fields (docker-only;
+# journald entries have no .label / .image and are skipped via existence guards).
+if exists(.label) {
+  .compose_project = .label."com.docker.compose.project"
+  .compose_service = .label."com.docker.compose.service"
+  .image_revision = .label."org.opencontainers.image.revision"
+}
+# Parse the image ref string into name / tag / digest (docker emits only .image).
+if exists(.image) {
+  img = to_string(.image) ?? ""
+  if img != "" {
+    at_parts = split(img, "@", limit: 2)
+    ref = to_string(at_parts[0])
+    if length(at_parts) > 1 {
+      .image_digest = at_parts[1]
+    }
+    segs = split(ref, "/")
+    prefix_segs = []
+    last = ref
+    for_each(segs) -> |index, value| {
+      if index == length(segs) - 1 {
+        last = to_string(value)
+      } else {
+        prefix_segs = push(prefix_segs, value)
+      }
+    }
+    name_tag = split(last, ":", limit: 2)
+    last_name = to_string(name_tag[0])
+    if length(name_tag) > 1 {
+      .image_tag = name_tag[1]
+    } else {
+      .image_tag = "latest"
+    }
+    rebuilt = push(prefix_segs, last_name)
+    .image_name = join!(rebuilt, "/")
+  }
+}
+'''
+
 [transforms.drop_noise]
 type = "filter"
-inputs = ["parse_json"]
+inputs = ["docker_enrich"]
 condition = '''
 .message != null && .message != "" && .SYSLOG_IDENTIFIER != "hmrun"
 '''

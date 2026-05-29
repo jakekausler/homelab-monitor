@@ -408,3 +408,107 @@ def test_test_fixture_multiline_matches_template(parsed_config: dict[str, Any]) 
     )
     assert fixture_ml["mode"] == template_ml["mode"]
     assert fixture_ml["timeout_ms"] == template_ml["timeout_ms"]
+
+
+# ---------------------------------------------------------------------------
+# STAGE-004-004: docker_enrich container label enrichment
+# ---------------------------------------------------------------------------
+
+
+def test_docker_enrich_transform_present(parsed_config: dict[str, Any]) -> None:
+    """[transforms.docker_enrich] table must exist."""
+    transforms = parsed_config.get("transforms", {})
+    assert "docker_enrich" in transforms, (
+        f"docker_enrich missing from transforms; keys: {list(transforms.keys())}"
+    )
+
+
+def test_docker_enrich_inputs_is_parse_json(parsed_config: dict[str, Any]) -> None:
+    """docker_enrich must read from parse_json (inserted after parse_json)."""
+    transforms = parsed_config.get("transforms", {})
+    docker_enrich = transforms.get("docker_enrich", {})
+    inputs = docker_enrich.get("inputs", [])
+    assert inputs == ["parse_json"], f"docker_enrich.inputs must be ['parse_json'], got {inputs}"
+
+
+def test_drop_noise_inputs_is_docker_enrich(parsed_config: dict[str, Any]) -> None:
+    """drop_noise must now read from docker_enrich (rewired from parse_json)."""
+    transforms = parsed_config.get("transforms", {})
+    drop_noise = transforms.get("drop_noise", {})
+    inputs = drop_noise.get("inputs", [])
+    assert inputs == ["docker_enrich"], (
+        f"drop_noise.inputs must be ['docker_enrich'] after rewire, got {inputs}"
+    )
+
+
+def test_docker_enrich_source_contains_compose_fields(parsed_config: dict[str, Any]) -> None:
+    """docker_enrich source VRL must contain compose_project and compose_service assignments."""
+    transforms = parsed_config.get("transforms", {})
+    source = transforms.get("docker_enrich", {}).get("source", "")
+    assert ".compose_project" in source, ".compose_project not found in docker_enrich source"
+    assert ".compose_service" in source, ".compose_service not found in docker_enrich source"
+
+
+def test_docker_enrich_source_contains_image_fields(parsed_config: dict[str, Any]) -> None:
+    """docker_enrich source VRL must contain image_name, image_tag, image_digest, image_revision."""
+    transforms = parsed_config.get("transforms", {})
+    source = transforms.get("docker_enrich", {}).get("source", "")
+    assert ".image_name" in source, ".image_name not found in docker_enrich source"
+    assert ".image_tag" in source, ".image_tag not found in docker_enrich source"
+    assert ".image_digest" in source, ".image_digest not found in docker_enrich source"
+    assert ".image_revision" in source, ".image_revision not found in docker_enrich source"
+
+
+def test_docker_enrich_source_assignment_targets_are_snake_case(
+    parsed_config: dict[str, Any],
+) -> None:
+    """Every assignment target in docker_enrich source (LHS of `.foo =`) must be snake_case."""
+    transforms = parsed_config.get("transforms", {})
+    source = transforms.get("docker_enrich", {}).get("source", "")
+    # Match patterns like `.compose_project =` or `.image_tag =`
+    targets = _re.findall(r"(\.[a-zA-Z][a-zA-Z0-9_]*)\s*=(?!=)", source)
+    bad = [t for t in targets if not _re.match(r"^\.[a-z][a-z0-9_]*$", t)]
+    assert not bad, f"docker_enrich source has non-snake_case assignment targets: {bad}"
+
+
+def test_docker_enrich_source_has_journald_guards(parsed_config: dict[str, Any]) -> None:
+    """docker_enrich must gate label extraction on exists(.label) and exists(.image)
+    so journald entries never carry null compose_*/image_* fields."""
+    transforms = parsed_config.get("transforms", {})
+    source = transforms.get("docker_enrich", {}).get("source", "")
+    assert "exists(.label)" in source, (
+        "exists(.label) journald guard missing from docker_enrich source"
+    )
+    assert "exists(.image)" in source, (
+        "exists(.image) journald guard missing from docker_enrich source"
+    )
+
+
+def test_docker_enrich_source_does_not_delete_label_bag(parsed_config: dict[str, Any]) -> None:
+    """docker_enrich must NOT contain del(.label) — raw label bag is kept (D-KEEP-RAW-LABEL-BAG)."""
+    transforms = parsed_config.get("transforms", {})
+    source = transforms.get("docker_enrich", {}).get("source", "")
+    assert "del(.label)" not in source, (
+        "docker_enrich source contains del(.label) but "
+        "D-KEEP-RAW-LABEL-BAG requires raw bag to be kept"
+    )
+
+
+def test_docker_enrich_source_has_no_lookarounds(parsed_config: dict[str, Any]) -> None:
+    """docker_enrich VRL source must not use regex lookarounds (Vector uses Rust regex crate)."""
+    transforms = parsed_config.get("transforms", {})
+    source = transforms.get("docker_enrich", {}).get("source", "")
+    _assert_no_lookarounds(source)
+
+
+def test_sinks_vl_inputs_unchanged(parsed_config: dict[str, Any]) -> None:
+    """[sinks.vl].inputs must remain ['throttle', 'hmrun_shaped'].
+
+    docker_enrich does not touch the sink wiring.
+    """
+    sinks = parsed_config.get("sinks", {})
+    vl = sinks.get("vl", {})
+    inputs = vl.get("inputs", [])
+    assert inputs == ["throttle", "hmrun_shaped"], (
+        f"sinks.vl.inputs must be ['throttle', 'hmrun_shaped'], got {inputs}"
+    )

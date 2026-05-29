@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import re
 from pathlib import Path
 
 import pytest
@@ -15,6 +16,46 @@ from homelab_monitor.kernel.db.engine import get_engine
 from homelab_monitor.kernel.db.migrations import run_migrations
 from homelab_monitor.kernel.db.repository import SqliteRepository
 from homelab_monitor.kernel.secrets.repository import AsyncSecretsRepository
+
+
+@pytest.fixture(autouse=True)
+def _mock_vm_lifespan_tick(httpx_mock: HTTPXMock) -> None:  # pyright: ignore[reportUnusedFunction]
+    """Mock VictoriaMetrics / VictoriaLogs / Docker-socket calls fired by the real
+    lifespan's background collectors (DockerSocketCollector, image_update_checker)
+    so a scheduler-timed tick cannot trip pytest-httpx's teardown assertion.
+
+    Pre-existing isolation gap: this module enters the real lifespan AND uses
+    httpx_mock but never registered a VictoriaMetrics catch-all. Mirrors the guard
+    in test_api_docker_probes.py / test_api_cron_runs.py.
+    """
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(r"http://victoriametrics:8428/.*"),
+        json={"data": {"resultType": "vector", "result": []}},
+        is_optional=True,
+        is_reusable=True,
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(r"http://localhost/events.*"),
+        content=b"",
+        is_optional=True,
+        is_reusable=True,
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(r"http://localhost/containers/json.*"),
+        json=[],
+        is_optional=True,
+        is_reusable=True,
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(r"http://victorialogs:9428/.*"),
+        json={},
+        is_optional=True,
+        is_reusable=True,
+    )
 
 
 @pytest.fixture
