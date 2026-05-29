@@ -13,6 +13,7 @@ Project test conventions:
 from __future__ import annotations
 
 import json
+import re
 from datetime import UTC, datetime, timedelta
 from typing import cast
 
@@ -26,6 +27,47 @@ from homelab_monitor.kernel.cron.fingerprint import compute_fingerprint
 from homelab_monitor.kernel.cron.run_repository import CronRunRepository
 from homelab_monitor.kernel.db.repository import SqliteRepository
 from homelab_monitor.kernel.db.time import utc_now_iso
+
+
+@pytest.fixture(autouse=True)
+def _mock_vm_lifespan_tick(httpx_mock: HTTPXMock) -> None:  # pyright: ignore[reportUnusedFunction]
+    """Catch-all mocks for any VictoriaMetrics/docker/VictoriaLogs HTTP calls.
+
+    Retained as defense-in-depth: these ``is_optional=True`` responses absorb any
+    incidental outbound request without failing teardown. After the boot-once test
+    harness (STAGE-004-003), the shared app uses lifespan_enabled=False and starts
+    no background tasks, so leaks are not expected here — but the guard is cheap and
+    keeps this module robust to future wiring changes.
+    """
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(r"http://victoriametrics:8428/.*"),
+        json={"data": {"resultType": "vector", "result": []}},
+        is_optional=True,
+        is_reusable=True,
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(r"http://localhost/events.*"),
+        content=b"",
+        is_optional=True,
+        is_reusable=True,
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(r"http://localhost/containers/.*"),
+        json=[],
+        is_optional=True,
+        is_reusable=True,
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(r"http://victorialogs:9428/.*"),
+        json={},
+        is_optional=True,
+        is_reusable=True,
+    )
+
 
 # ---------------------------------------------------------------------------
 # Helpers — seed
@@ -456,8 +498,9 @@ async def test_get_run_log_expired_old_window(
     assert body["log_status"] == "expired"
     assert body["lines"] == []
 
-    # VL must not have been contacted
-    assert len(httpx_mock.get_requests()) == 0
+    # VL must not have been contacted (ignore leaked background-task requests)
+    vl_requests = [r for r in httpx_mock.get_requests() if r.url.host == "vl-test"]
+    assert len(vl_requests) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -663,7 +706,8 @@ async def test_get_run_log_expired_null_vl_window_end(
     body = resp.json()
     assert body["log_status"] == "expired"
     assert body["lines"] == []
-    assert len(httpx_mock.get_requests()) == 0
+    vl_requests = [r for r in httpx_mock.get_requests() if r.url.host == "vl-test"]
+    assert len(vl_requests) == 0
 
 
 # ---------------------------------------------------------------------------

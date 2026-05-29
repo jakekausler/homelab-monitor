@@ -384,6 +384,9 @@ async def test_lifespan_requests_cron_discovery_on_startup(
     monkeypatch.setenv("HOMELAB_MONITOR_HTTPS_ONLY_COOKIES", "false")
     monkeypatch.setenv("HOMELAB_MONITOR_BCRYPT_COST", "4")
     monkeypatch.setenv("HOMELAB_MONITOR_AUTO_MIGRATE", "1")
+    # This test asserts startup discovery IS requested; ensure the gate is not
+    # suppressed by a leaked env var from the session-scoped _shared_app fixture.
+    monkeypatch.delenv("HOMELAB_MONITOR_DISABLE_STARTUP_CRON_DISCOVERY", raising=False)
 
     calls: list[tuple[str, str]] = []
     real_request = Scheduler.request_immediate_run

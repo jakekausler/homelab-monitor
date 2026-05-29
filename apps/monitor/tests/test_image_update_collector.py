@@ -1064,3 +1064,31 @@ async def test_process_one_container_returns_zero_when_fetch_digest_payload_none
     # No state row was upserted.
     rows = await state_repo.list_all()
     assert len(rows) == 0
+
+
+@pytest.mark.asyncio
+async def test_fetch_digest_payload_returns_none_on_unparseable_image_ref(
+    repo: SqliteRepository,
+) -> None:
+    """_fetch_digest_payload returns None when parse_image_ref raises ImageRefParseError.
+
+    Targets image_update_collector.py lines 402-403 directly (coverage gap after
+    lifespan-boot harness change).  '<none>' is the Docker sentinel value used
+    for containers with no image tag, which parse_image_ref rejects.
+    """
+    # Wire only what _fetch_digest_payload needs up to the parse step (which
+    # raises before any socket/registry call, so those can be None).
+    collector = ImageUpdateCollector(
+        db=repo,
+        socket_client=MagicMock(spec=DockerSocketClient),
+        registry_client=MagicMock(spec=RegistryDigestClient),
+    )
+
+    result = await collector._fetch_digest_payload(  # pyright: ignore[reportPrivateUsage]
+        container_name="test-container",
+        image_ref="<none>",
+        image_id="sha256:abc123",
+        now="2026-05-29T00:00:00Z",
+    )
+
+    assert result is None

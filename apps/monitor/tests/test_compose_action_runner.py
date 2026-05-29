@@ -1419,3 +1419,89 @@ async def test_neither_refresher_called_on_failure(repo: SqliteRepository, tmp_p
     # Assert: neither refresher was called
     mock_local_build_refresher.assert_not_called()
     mock_image_refresher.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_trigger_image_recheck_sets_image_ref_when_config_image_is_str(
+    repo: SqliteRepository, tmp_path: Path
+) -> None:
+    """_trigger_image_recheck sets image_ref from Config.Image when it is a str.
+
+    Targets compose_action_runner.py lines 639-641 directly (coverage gap after
+    lifespan-boot harness change).  Calls _trigger_image_recheck() directly so
+    this test does not depend on the full pull/restart flow.
+    """
+    compose_path = _write_compose(tmp_path, "services:\n  nginx:\n    image: nginx:latest\n")
+    config = BuildSourcesConfig(
+        compose_files=[
+            ComposeFileEntry(host_path=str(compose_path), container_path=str(compose_path))
+        ]
+    )
+    socket_client = _make_socket_client()
+    socket_client.inspect_container = AsyncMock(
+        return_value={
+            "Id": "abc123",
+            "Image": "sha256:deadbeef",
+            "Config": {"Image": "nginx:latest"},
+        }
+    )
+    runner = _make_runner(repo, loader=_loader_with(config), socket_client=socket_client)
+
+    refresher_args: dict[str, str] = {}
+
+    async def _capture_refresher(*, container_name: str, image_ref: str, image_id: str) -> None:
+        refresher_args["container_name"] = container_name
+        refresher_args["image_ref"] = image_ref
+        refresher_args["image_id"] = image_id
+
+    runner.set_image_update_refresher(_capture_refresher)
+
+    # Call the private method directly — acceptable for targeted coverage of a
+    # defensive branch that the lifespan-boot harness no longer exercises.
+    await runner._trigger_image_recheck(container_name="nginx")  # pyright: ignore[reportPrivateUsage]
+
+    assert refresher_args.get("image_ref") == "nginx:latest"
+    assert refresher_args.get("image_id") == "sha256:deadbeef"
+    assert refresher_args.get("container_name") == "nginx"
+
+
+@pytest.mark.asyncio
+async def test_trigger_image_recheck_empty_image_ref_when_config_image_not_str(
+    repo: SqliteRepository, tmp_path: Path
+) -> None:
+    """_trigger_image_recheck leaves image_ref empty when Config.Image is not a str.
+
+    Targets compose_action_runner.py branch arc 639->641 (False branch of
+    `if isinstance(img, str)`) — coverage gap after lifespan-boot harness change.
+    """
+    compose_path = _write_compose(tmp_path, "services:\n  nginx:\n    image: nginx:latest\n")
+    config = BuildSourcesConfig(
+        compose_files=[
+            ComposeFileEntry(host_path=str(compose_path), container_path=str(compose_path))
+        ]
+    )
+    socket_client = _make_socket_client()
+    # Config is a dict but Image key is absent (None from .get()) — not a str.
+    socket_client.inspect_container = AsyncMock(
+        return_value={
+            "Id": "abc123",
+            "Image": "sha256:deadbeef",
+            "Config": {},  # no "Image" key → config.get("Image") returns None
+        }
+    )
+    runner = _make_runner(repo, loader=_loader_with(config), socket_client=socket_client)
+
+    refresher_args: dict[str, str] = {}
+
+    async def _capture_refresher(*, container_name: str, image_ref: str, image_id: str) -> None:
+        refresher_args["container_name"] = container_name
+        refresher_args["image_ref"] = image_ref
+        refresher_args["image_id"] = image_id
+
+    runner.set_image_update_refresher(_capture_refresher)
+
+    await runner._trigger_image_recheck(container_name="nginx")  # pyright: ignore[reportPrivateUsage]
+
+    # image_ref should be empty string (False branch of isinstance(img, str)).
+    assert refresher_args.get("image_ref") == ""
+    assert refresher_args.get("image_id") == "sha256:deadbeef"
