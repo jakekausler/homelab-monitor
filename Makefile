@@ -46,7 +46,11 @@ test:
 
 .PHONY: test-fast
 test-fast:
-	uv run --directory $(MONITOR_DIR) pytest -m "not slow" --no-cov
+	# NOTE: a CLI -m expression OVERRIDES pyproject's addopts `-m 'not integration'`
+	# (pytest takes the last -m, it does not AND them). So we must restate the
+	# integration exclusion here, or integration-only tests leak in and block on
+	# Rig.boot()'s 30s token poll. See STAGE-004-001 Finalize diagnosis.
+	uv run --directory $(MONITOR_DIR) pytest -m "not slow and not integration" --no-cov
 
 .PHONY: test-nocov
 test-nocov:

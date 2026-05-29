@@ -12,6 +12,15 @@ type = "docker_logs"
 include_containers = ["homelab-noisy-logger-test"]
 auto_partial_merge = true
 
+# Multiline codec — MUST stay byte-identical to deploy/vector/vector.toml.template's
+# [sources.docker_logs.multiline] block. A drift guard unit test
+# (test_vector_template.py::test_test_fixture_multiline_matches_template) enforces this.
+[sources.docker_logs.multiline]
+start_pattern = '^(\d{4}-\d{2}-\d{2}T?\d{0,2}:?\d{0,2}|\d{4}/\d{2}/\d{2}|(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2}|\w+\[\d+\]:|<\d+>|Traceback \(most recent call last\):|panic:|Exception in thread|[\w.]*(Error|Exception):|Unhandled Exception:|PHP (Fatal|Parse|Warning)|thread .+? panicked|\*\*\* ERROR|fatal:|FATAL:|PANIC:|Crashed:|\[ERROR\]|\[FATAL\]|\[FATA\]|Process \d+|kernel:|sshd\[\d+\]:|Bug:|BUG:|Oops:|general protection fault|Call Trace:|RIP:|CPU:|CMD:|sudo:)'
+condition_pattern = '^(\s|#\d+ |Caused by:|stack backtrace:|Stack trace:|goroutine |note:|\.\.\. \d+ more|main\.|0x[0-9a-f]+|thrown in|[\w.]*(Error|Exception):)'
+mode = "continue_through"
+timeout_ms = 1000
+
 [transforms.add_labels]
 type = "remap"
 inputs = ["docker_logs"]

@@ -15,16 +15,59 @@
 #   is not mounted (vector continues running other sources).
 #
 # Per-stream throttle (50 lines/sec/service) is enforced by the throttle transform.
+#
+# Multiline codec (STAGE-004-001):
+# - [sources.docker_logs.multiline] and [sources.journald.multiline] coalesce
+#   continuation lines (Python/Java/Go/Rust/Ruby/Node/.NET/PHP/C++ stack traces,
+#   kernel oops, sshd PAM stanzas, etc.) into a single event.
+# - mode = "continue_through": a NEW event begins on a line matching
+#   start_pattern; subsequent lines matching condition_pattern are MERGED into
+#   it; the first line matching NEITHER ends the event. The 1000 ms timeout also
+#   closes a group.
+# - start_pattern enumerates FIRST-LINE markers (timestamps, syslog prefixes,
+#   "Traceback (most recent call last):", "panic:", exception-class lines like
+#   "RuntimeError:"/"java.lang.NullPointerException:", "PHP Fatal", etc.).
+#   condition_pattern enumerates CONTINUATION markers (indented lines via ^\s,
+#   PHP "#N" frames, "Caused by:", "stack backtrace:", "goroutine ", hex frame
+#   addresses, "thrown in", and trailing exception-class terminators so a
+#   Python traceback's closing "ValueError:" merges instead of splitting).
+# - continue_through (not halt_before) is required because the same token
+#   (e.g. "ValueError:") is a LEADING line in Java/Ruby/Node/.NET but a TRAILING
+#   line in Python; only continue_through stitches both correctly. Verified live
+#   against Vector 0.41.1 for all 9 languages + negative controls.
+# - Vector uses the Rust `regex` crate which does NOT support look-around
+#   (?!, ?=, ?<!, ?<=). Patterns MUST use positive enumeration only; the
+#   _assert_no_lookarounds() test in test_vector_template.py enforces this.
+# - Multiline applies ONLY to [sources.docker_logs]. Vector's journald source
+#   type does NOT support a multiline sub-table (it would reject the whole
+#   config); journald delivers discrete entries already. hmrun is downstream of
+#   journald via hmrun_filter and is likewise unaffected.
+# - To recognize a new event family: add its first line to start_pattern and its
+#   continuation lines to condition_pattern in the docker_logs multiline block
+#   (kept byte-identical to deploy/compose/test-fixtures/vector.toml; a
+#   drift-guard test enforces this).
 
 [sources.docker_logs]
 type = "docker_logs"
 exclude_containers = ${VECTOR_DOCKER_EXCLUDE}
 auto_partial_merge = true
 
+[sources.docker_logs.multiline]
+start_pattern = '^(\d{4}-\d{2}-\d{2}T?\d{0,2}:?\d{0,2}|\d{4}/\d{2}/\d{2}|(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2}|\w+\[\d+\]:|<\d+>|Traceback \(most recent call last\):|panic:|Exception in thread|[\w.]*(Error|Exception):|Unhandled Exception:|PHP (Fatal|Parse|Warning)|thread .+? panicked|\*\*\* ERROR|fatal:|FATAL:|PANIC:|Crashed:|\[ERROR\]|\[FATAL\]|\[FATA\]|Process \d+|kernel:|sshd\[\d+\]:|Bug:|BUG:|Oops:|general protection fault|Call Trace:|RIP:|CPU:|CMD:|sudo:)'
+condition_pattern = '^(\s|#\d+ |Caused by:|stack backtrace:|Stack trace:|goroutine |note:|\.\.\. \d+ more|main\.|0x[0-9a-f]+|thrown in|[\w.]*(Error|Exception):)'
+mode = "continue_through"
+timeout_ms = 1000
+
 [sources.journald]
 type = "journald"
 include_units = []
 current_boot_only = true
+# NOTE: Vector's `journald` source type does NOT accept a `multiline` sub-table
+# (verified against Vector 0.41.1 — it rejects the ENTIRE config and crash-loops).
+# journald delivers each log entry as a discrete record already, so codec-level
+# multiline stitching is neither supported nor needed here. Multiline coalescing
+# applies ONLY to the docker_logs source. If journald-side stitching is ever
+# required, do it via a downstream `reduce` transform, not a source codec.
 
 [transforms.add_labels]
 type = "remap"

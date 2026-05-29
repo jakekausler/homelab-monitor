@@ -147,6 +147,7 @@ services:
     command:
       - "-datasource.url=http://victoriametrics:8428"
       - "-notifier.url=http://alertmanager:9093"
+      - "-remoteWrite.url=http://victoriametrics:8428"
       - "-rule=/etc/vmalert/metrics/*.yaml"
       - "-evaluationInterval=5s"
       - "-configCheckInterval=10s"

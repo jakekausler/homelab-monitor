@@ -80,6 +80,41 @@ mappings, and it is loaded ONLY by `make dev` / `make dev-clean` (hybrid mode).
 container-internal. The host-port values default to the CLAUDE.md port-map
 table and are overridable via the `HM_DEV_*_PORT` vars in `deploy/dev/dev.env`.
 
+## Vector multi-line log stitching (STAGE-004-001)
+
+The `[sources.docker_logs.multiline]` block in `deploy/vector/vector.toml.template`
+coalesces continuation lines into a single event before any transforms see it.
+
+**Mode: `continue_through`** — a new event begins on a line matching `start_pattern`;
+subsequent lines matching `condition_pattern` are merged into it; the first line
+matching neither ends the event. The 1000 ms timeout also closes a group.
+
+**Patterns:**
+- `start_pattern` enumerates first-line markers: ISO and syslog timestamps, month-name
+  syslog dates, exception-class prefixes (`RuntimeError:`, `java.lang.NullPointerException:`,
+  etc.), `Traceback (most recent call last):`, `panic:`, `PHP Fatal`, kernel, sshd, etc.
+- `condition_pattern` enumerates continuation markers: indented lines (`^\s`), PHP stack
+  frames (`#N`), `Caused by:`, `stack backtrace:`, `goroutine `, hex addresses (`0x...`),
+  `thrown in`, and trailing exception-class suffixes (so a Python traceback's closing
+  `ValueError:` merges instead of splitting).
+
+**Verified languages:** Python, Java, Go, Ruby, Node.js, .NET, C++, Rust, PHP.
+
+**Critical constraint — no lookarounds:**
+Vector uses the Rust `regex` crate which does not support lookahead or lookbehind
+(`(?!`, `(?=`, `(?<!`, `(?<=`). Patterns use positive enumeration only. The test
+`_assert_no_lookarounds(pattern)` in `apps/monitor/tests/test_vector_template.py`
+enforces this on every CI run.
+
+**Multiline applies ONLY to `[sources.docker_logs]`.**
+Vector's `journald` source type does not accept a multiline sub-table (verified against
+Vector 0.41.1 — it rejects the entire config). journald delivers discrete entries already.
+
+**To add a new language/event family:**
+Extend `start_pattern` (first-line markers) and `condition_pattern` (continuation lines)
+in the `[sources.docker_logs.multiline]` block in `deploy/vector/vector.toml.template`.
+Keep it byte-identical to `deploy/compose/test-fixtures/vector.toml`; a drift-guard test enforces this.
+
 ## Master key generation
 
 ```bash

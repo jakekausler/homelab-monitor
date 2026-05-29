@@ -169,6 +169,20 @@ class Rig:
         )
         resp.raise_for_status()
 
+    def plant_log_lines_via_noisy_logger(self, lines: list[str], delay_ms: int = 50) -> None:
+        """POST to noisy-logger /log_lines to print multiple lines (drives vector -> VL).
+
+        Lines are emitted with `delay_ms` ms between each, giving the Vector
+        docker_logs source time to read them as a sequence. Used by
+        STAGE-004-001 multiline codec integration tests.
+        """
+        resp = httpx.post(
+            f"{self.urls.noisy_logger}/log_lines",
+            json={"lines": lines, "delay_ms": delay_ms},
+            timeout=10.0,
+        )
+        resp.raise_for_status()
+
     # ----- alert polling -----
 
     def wait_for_alert(
