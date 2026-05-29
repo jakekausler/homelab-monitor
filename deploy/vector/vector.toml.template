@@ -141,9 +141,40 @@ if exists(.image) {
 }
 '''
 
+[transforms.docker_severity_extract]
+type = "remap"
+inputs = ["docker_enrich"]
+source = '''
+# Extract canonical severity from docker log message text. Only acts on docker
+# lines still at the add_labels default ("info"); journald lines (whose .severity
+# was set from .PRIORITY) and any line whose severity was set elsewhere are skipped.
+# exists(.label) is the docker discriminator (mirrors docker_enrich).
+# Patterns are anchored to message start with optional ANSI escape + optional ISO
+# timestamp prefix. No regex lookarounds (Rust regex constraint). Highest severity
+# wins on tie (emergency > alert > critical > error > warn > notice > debug).
+if (.severity == "info" || is_null(.severity)) && exists(.label) && exists(.message) {
+  msg = to_string(.message) ?? ""
+  if match(msg, r'(?i)^(?:\x1b\[[0-9;]+m)?(?:\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?\s+)?(?:\[)?(?:EMERGENCY|EMERG|PANIC)(?:\]|\b)|^(?:\x1b\[[0-9;]+m)?.{0,80}\blevel=(?:emergency|emerg|panic)\b') {
+    .severity = "emergency"
+  } else if match(msg, r'(?i)^(?:\x1b\[[0-9;]+m)?(?:\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?\s+)?(?:\[)?ALERT(?:\]|\b)|^(?:\x1b\[[0-9;]+m)?.{0,80}\blevel=alert\b') {
+    .severity = "alert"
+  } else if match(msg, r'(?i)^(?:\x1b\[[0-9;]+m)?(?:\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?\s+)?(?:\[)?(?:CRITICAL|CRIT|FATAL)(?:\]|\b)|^(?:\x1b\[[0-9;]+m)?.{0,80}\blevel=(?:critical|crit|fatal)\b') {
+    .severity = "critical"
+  } else if match(msg, r'(?i)^(?:\x1b\[[0-9;]+m)?(?:\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?\s+)?(?:\[)?(?:ERROR|ERR)(?:\]|\b)|^(?:\x1b\[[0-9;]+m)?.{0,80}\blevel=err(?:or)?\b') {
+    .severity = "error"
+  } else if match(msg, r'(?i)^(?:\x1b\[[0-9;]+m)?(?:\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?\s+)?(?:\[)?(?:WARN|WARNING)(?:\]|\b)|^(?:\x1b\[[0-9;]+m)?.{0,80}\blevel=warn(?:ing)?\b') {
+    .severity = "warn"
+  } else if match(msg, r'(?i)^(?:\x1b\[[0-9;]+m)?(?:\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?\s+)?(?:\[)?NOTICE(?:\]|\b)|^(?:\x1b\[[0-9;]+m)?.{0,80}\blevel=notice\b') {
+    .severity = "notice"
+  } else if match(msg, r'(?i)^(?:\x1b\[[0-9;]+m)?(?:\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?\s+)?(?:\[)?DEBUG(?:\]|\b)|^(?:\x1b\[[0-9;]+m)?.{0,80}\blevel=debug\b') {
+    .severity = "debug"
+  }
+}
+'''
+
 [transforms.drop_noise]
 type = "filter"
-inputs = ["docker_enrich"]
+inputs = ["docker_severity_extract"]
 condition = '''
 .message != null && .message != "" && .SYSLOG_IDENTIFIER != "hmrun"
 '''

@@ -13,6 +13,8 @@ prod-rig refinement (3b) with a live `vector validate` run.
 from __future__ import annotations
 
 import re as _re
+import shutil
+import subprocess
 import tomllib
 from pathlib import Path
 from typing import Any
@@ -20,8 +22,13 @@ from typing import Any
 import pytest
 import regex as _regex
 
+from homelab_monitor.kernel.logs.models import (
+    _CANONICAL_SEVERITIES,  # pyright: ignore[reportPrivateUsage]
+)
+
 _TEMPLATE_PATH = Path(__file__).parents[3] / "deploy" / "vector" / "vector.toml.template"
 _MULTILINE_TIMEOUT_MS = 1000
+_EXPECTED_SEVERITY_PATTERNS = 7  # emergency, alert, critical, error, warn, notice, debug
 
 
 def _render_template(docker_exclude: str = "[]") -> str:
@@ -431,13 +438,13 @@ def test_docker_enrich_inputs_is_parse_json(parsed_config: dict[str, Any]) -> No
     assert inputs == ["parse_json"], f"docker_enrich.inputs must be ['parse_json'], got {inputs}"
 
 
-def test_drop_noise_inputs_is_docker_enrich(parsed_config: dict[str, Any]) -> None:
-    """drop_noise must now read from docker_enrich (rewired from parse_json)."""
+def test_drop_noise_inputs_is_docker_severity_extract(parsed_config: dict[str, Any]) -> None:
+    """drop_noise must now read from docker_severity_extract (rewired from docker_enrich)."""
     transforms = parsed_config.get("transforms", {})
     drop_noise = transforms.get("drop_noise", {})
     inputs = drop_noise.get("inputs", [])
-    assert inputs == ["docker_enrich"], (
-        f"drop_noise.inputs must be ['docker_enrich'] after rewire, got {inputs}"
+    assert inputs == ["docker_severity_extract"], (
+        f"drop_noise.inputs must be ['docker_severity_extract'] after rewire, got {inputs}"
     )
 
 
@@ -512,3 +519,255 @@ def test_sinks_vl_inputs_unchanged(parsed_config: dict[str, Any]) -> None:
     assert inputs == ["throttle", "hmrun_shaped"], (
         f"sinks.vl.inputs must be ['throttle', 'hmrun_shaped'], got {inputs}"
     )
+
+
+# ---------------------------------------------------------------------------
+# STAGE-004-004A: docker_severity_extract structural checks
+# ---------------------------------------------------------------------------
+
+
+def test_docker_severity_extract_transform_present(parsed_config: dict[str, Any]) -> None:
+    """[transforms.docker_severity_extract] table must exist."""
+    transforms = parsed_config.get("transforms", {})
+    assert "docker_severity_extract" in transforms, (
+        f"docker_severity_extract missing from transforms; keys: {list(transforms.keys())}"
+    )
+
+
+def test_docker_severity_extract_inputs_is_docker_enrich(parsed_config: dict[str, Any]) -> None:
+    """docker_severity_extract must read from docker_enrich."""
+    transforms = parsed_config.get("transforms", {})
+    inputs = transforms.get("docker_severity_extract", {}).get("inputs", [])
+    assert inputs == ["docker_enrich"], (
+        f"docker_severity_extract.inputs must be ['docker_enrich'], got {inputs}"
+    )
+
+
+def test_throttle_inputs_unchanged(parsed_config: dict[str, Any]) -> None:
+    """throttle.inputs must remain ['drop_noise'] — regression guard."""
+    transforms = parsed_config.get("transforms", {})
+    inputs = transforms.get("throttle", {}).get("inputs", [])
+    assert inputs == ["drop_noise"], (
+        f"throttle.inputs must be ['drop_noise'] (unchanged), got {inputs}"
+    )
+
+
+def test_docker_severity_extract_source_has_guard(parsed_config: dict[str, Any]) -> None:
+    """docker_severity_extract source must have the docker+info guard."""
+    source = (
+        parsed_config.get("transforms", {}).get("docker_severity_extract", {}).get("source", "")
+    )
+    assert '.severity == "info"' in source, (
+        'guard .severity == "info" missing from docker_severity_extract source'
+    )
+    assert "is_null(.severity)" in source, (
+        "guard is_null(.severity) missing from docker_severity_extract source"
+    )
+    assert "exists(.label)" in source, (
+        "docker discriminator exists(.label) missing from docker_severity_extract source"
+    )
+
+
+def test_docker_severity_extract_source_assigns_canonical_severities(
+    parsed_config: dict[str, Any],
+) -> None:
+    """Source must assign all 7 non-info canonical severities (emergency through debug).
+
+    Checks LHS assignments only — source tokens like FATAL/PANIC/EMERG/CRIT/WARNING/ERR
+    are inputs that map to canonical values; they must NOT appear as assigned values.
+    """
+    source = (
+        parsed_config.get("transforms", {}).get("docker_severity_extract", {}).get("source", "")
+    )
+    for level in ("emergency", "alert", "critical", "error", "warn", "notice", "debug"):
+        assert f'.severity = "{level}"' in source, (
+            f'.severity = "{level}" assignment missing from docker_severity_extract source'
+        )
+
+
+def test_docker_severity_extract_source_has_no_lookarounds(
+    parsed_config: dict[str, Any],
+) -> None:
+    """docker_severity_extract VRL source must not use regex lookarounds."""
+    source = (
+        parsed_config.get("transforms", {}).get("docker_severity_extract", {}).get("source", "")
+    )
+    _assert_no_lookarounds(source)
+
+
+def test_docker_severity_extract_patterns_compile(parsed_config: dict[str, Any]) -> None:
+    """Every r'...' pattern literal in docker_severity_extract source must compile
+    with Python re (smoke-check; authoritative check is the vector validate test).
+    """
+    source = (
+        parsed_config.get("transforms", {}).get("docker_severity_extract", {}).get("source", "")
+    )
+    # Extract VRL raw-string literals r'...' (single-quote delimited).
+    # The pattern captures content between r' and ' allowing escaped chars.
+    raw_patterns = _re.findall(r"r'((?:\\.|[^'\\])*)'", source)
+    assert raw_patterns, "No r'...' patterns found in docker_severity_extract source"
+    for pat in raw_patterns:
+        try:
+            _re.compile(pat)
+        except _re.error as exc:
+            pytest.fail(
+                f"Pattern failed to compile with Python re (VRL syntax smoke-check):\n"
+                f"  pattern: {pat!r}\n"
+                f"  error:   {exc}"
+            )
+
+
+def test_docker_severity_extract_patterns_match_canonical_forms(
+    parsed_config: dict[str, Any],
+) -> None:
+    """ERROR pattern (index 3, emergency=0,alert=1,critical=2,error=3) must match
+    the canonical forms: bare, bracketed, HA-timestamp, ANSI-HA, logfmt.
+    Must NOT match mid-sentence prose or INFO lines.
+    """
+    source = (
+        parsed_config.get("transforms", {}).get("docker_severity_extract", {}).get("source", "")
+    )
+    raw_patterns = _re.findall(r"r'((?:\\.|[^'\\])*)'", source)
+    # Patterns are in order: emergency(0), alert(1), critical(2), error(3),
+    # warn(4), notice(5), debug(6). Index 3 is the ERROR pattern.
+    assert len(raw_patterns) == _EXPECTED_SEVERITY_PATTERNS, (
+        f"Expected exactly {_EXPECTED_SEVERITY_PATTERNS} r'...' patterns, found {len(raw_patterns)}"
+    )
+    error_pat = _re.compile(raw_patterns[3], _re.IGNORECASE)
+
+    should_match = [
+        "ERROR foo",
+        "[ERROR] foo",
+        "2026-05-29 08:39:23.890 ERROR (MainThread) bar",
+        "\x1b[31m2026-05-29T08:39:23Z ERROR baz",
+        'time="2026-05-29T08:39:23Z" level=error msg="test"',
+    ]
+    for msg in should_match:
+        assert error_pat.search(msg) is not None, f"ERROR pattern should match {msg!r} but did not"
+
+    should_not_match = [
+        "INFO doing thing",
+        "This operation encountered an error but recovered.",
+    ]
+    for msg in should_not_match:
+        assert error_pat.search(msg) is None, f"ERROR pattern should NOT match {msg!r} but did"
+
+    # Test CRITICAL pattern (index 2)
+    critical_pat = _re.compile(raw_patterns[2], _re.IGNORECASE)
+
+    should_match_critical = [
+        "CRITICAL: out of memory",
+        "CRITICAL (Main) message",
+        "2026-05-29 10:00:00.123 CRITICAL (Main) message",
+        "CRIT failure",
+        "[CRITICAL] system down",
+    ]
+    for msg in should_match_critical:
+        assert critical_pat.search(msg) is not None, (
+            f"CRITICAL pattern should match {msg!r} but did not"
+        )
+
+    should_not_match_critical = [
+        "This is critical to fix",
+        "CRITICAL_VALUE constant",
+    ]
+    for msg in should_not_match_critical:
+        assert critical_pat.search(msg) is None, (
+            f"CRITICAL pattern should NOT match {msg!r} but did"
+        )
+
+    # Test WARN pattern (index 4)
+    warn_pat = _re.compile(raw_patterns[4], _re.IGNORECASE)
+
+    should_match_warn = [
+        "WARN something",
+        "WARNING deprecation",
+        "[WARN] foo",
+        "2026-05-29 10:00:00.123 WARNING (X) msg",
+        'time="2026-05-29T08:39:23Z" level=warn msg="test"',
+    ]
+    for msg in should_match_warn:
+        assert warn_pat.search(msg) is not None, f"WARN pattern should match {msg!r} but did not"
+
+    should_not_match_warn = [
+        "The system will warn you later",
+        "WARNING_LEVEL constant",
+    ]
+    for msg in should_not_match_warn:
+        assert warn_pat.search(msg) is None, f"WARN pattern should NOT match {msg!r} but did"
+
+
+def test_docker_severity_extract_emitted_values_are_canonical(
+    parsed_config: dict[str, Any],
+) -> None:
+    """Every .severity = "..." assignment in docker_severity_extract source must
+    be a member of _CANONICAL_SEVERITIES (catches typo regressions).
+    """
+    source = (
+        parsed_config.get("transforms", {}).get("docker_severity_extract", {}).get("source", "")
+    )
+    assigned = _re.findall(r'\.severity\s*=\s*"([^"]+)"', source)
+    assert assigned, 'No .severity = "..." assignments found in docker_severity_extract source'
+    bad = [v for v in assigned if v not in _CANONICAL_SEVERITIES]
+    assert not bad, (
+        f"docker_severity_extract assigns non-canonical severity values: {bad}; "
+        f"canonical set: {sorted(_CANONICAL_SEVERITIES)}"
+    )
+
+
+def test_docker_severity_extract_fatal_maps_to_critical(
+    parsed_config: dict[str, Any],
+) -> None:
+    """FATAL must map to critical (not error). Design decision D-FATAL-MAPS-TO-CRITICAL.
+
+    Patterns are in order: emergency(0), alert(1), critical(2), error(3).
+    Index 2 is the CRITICAL/CRIT/FATAL pattern; index 3 is ERROR/ERR.
+    """
+    source = (
+        parsed_config.get("transforms", {}).get("docker_severity_extract", {}).get("source", "")
+    )
+    raw_patterns = _re.findall(r"r'((?:\\.|[^'\\])*)'", source)
+    assert len(raw_patterns) == _EXPECTED_SEVERITY_PATTERNS, (
+        f"Expected exactly {_EXPECTED_SEVERITY_PATTERNS} r'...' patterns, found {len(raw_patterns)}"
+    )
+    critical_pat = _re.compile(raw_patterns[2], _re.IGNORECASE)
+    error_pat = _re.compile(raw_patterns[3], _re.IGNORECASE)
+
+    assert critical_pat.search("FATAL: out of memory") is not None, (
+        "FATAL: out of memory should match CRITICAL pattern (D-FATAL-MAPS-TO-CRITICAL)"
+    )
+    assert error_pat.search("FATAL: out of memory") is None, (
+        "FATAL: out of memory must NOT match ERROR pattern (belongs in critical)"
+    )
+
+
+@pytest.mark.slow
+def test_rendered_template_passes_vector_validate(tmp_path: Path) -> None:
+    """Authoritative VRL compile check via `vector validate`.
+
+    Closes the STAGE-004-004 false-green gap: template-parse tests + `vector
+    validate --no-environment` both passed on a config that crash-looped Vector
+    with a VRL syntax error (segs[length-1]). Plain `vector validate` compiles
+    every remap transform's VRL and catches such errors authoritatively.
+
+    Skips when the vector binary is not on PATH so developer machines without
+    Vector installed don't fail this test. CI installs Vector in the integration
+    job; the test runs there.
+    """
+    if shutil.which("vector") is None:
+        pytest.skip("vector binary not on PATH")
+    # Render the template with placeholder substitutions sufficient for validate.
+    rendered = _render_template()
+    out = tmp_path / "vector.toml"
+    out.write_text(rendered, encoding="utf-8")
+    result = subprocess.run(
+        ["vector", "validate", str(out)],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    if result.returncode != 0:
+        pytest.fail(
+            "vector validate failed:\nstdout:\n" + result.stdout + "\nstderr:\n" + result.stderr
+        )
