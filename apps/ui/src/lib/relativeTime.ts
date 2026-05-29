@@ -82,3 +82,31 @@ export function formatDuration(seconds: number | null): string {
   const m = Math.floor((s % 3600) / 60)
   return `${h}h ${m}m`
 }
+
+const LOG_TS_RE = /^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}:\d{2})(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?$/
+
+/**
+ * Format a log line's UTC timestamp for display: drop sub-seconds and the
+ * 'T', append ' UTC'. STILL UTC — no zone shift here.
+ *
+ * '2026-05-29T12:53:53.162712958Z' -> '2026-05-29 12:53:53 UTC'
+ *
+ * Implementation note: deliberately does NOT use Date parsing — Date would
+ * zone-shift the display and truncate nanosecond precision unpredictably.
+ * A regex extracts the date + HH:MM:SS and discards the fractional seconds
+ * and any zone suffix.
+ *
+ * STAGE-004-009 will layer America/New_York (configurable) zone conversion
+ * onto THIS exact helper — keep the signature and return shape stable.
+ *
+ * Returns `raw ?? ''` for null/undefined/empty, and the raw string unchanged
+ * when it does not match the ISO-ish shape.
+ */
+export function formatLogTimestamp(raw: string | null | undefined): string {
+  if (raw == null || raw === '') return raw ?? ''
+  const match = LOG_TS_RE.exec(raw)
+  if (match === null) return raw
+  const date = match[1] ?? ''
+  const time = match[2] ?? ''
+  return `${date} ${time} UTC`
+}

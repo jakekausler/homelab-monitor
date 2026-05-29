@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '@/api/client'
@@ -82,7 +82,9 @@ describe('DockerContainerLogsViewerBody', () => {
     const body = await screen.findByTestId('logs-body')
     expect(body.textContent).toContain('INFO line 1')
     expect(body.textContent).toContain('INFO line 2')
-    expect(body.textContent).toContain('2026-05-21T14:30:00Z')
+    expect(body.textContent).toContain('2026-05-21 14:30:00 UTC')
+    const lastLogAt = screen.getByTestId('last-log-at')
+    expect(lastLogAt.textContent).toContain('2026-05-21 14:30:05 UTC')
   })
 
   it('renders no_lines empty state', async () => {
@@ -192,5 +194,21 @@ describe('DockerContainerLogsViewerBody', () => {
     renderBody()
     const btn = await screen.findByTestId('refresh-logs')
     expect(btn).toBeDisabled()
+  })
+
+  it('renders the wrap toggle', async () => {
+    renderBody()
+    expect(await screen.findByTestId('wrap-toggle')).toBeInTheDocument()
+  })
+
+  it('toggling wrap switches the log body to wrapping mode', async () => {
+    renderBody()
+    await screen.findByTestId('logs-body')
+    const toggle = screen.getByTestId('wrap-toggle')
+    const checkbox = within(toggle).getByRole('checkbox')
+    expect(checkbox).not.toBeChecked()
+    fireEvent.click(checkbox)
+    expect(checkbox).toBeChecked()
+    expect(screen.getByTestId('logs-body').className).toContain('whitespace-normal')
   })
 })

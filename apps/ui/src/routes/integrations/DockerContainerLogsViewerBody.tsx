@@ -6,6 +6,10 @@ import { ApiError } from '@/api/client'
 import { dockerLogsQueryKeys, useContainerLogs, useListContainers } from '@/api/docker'
 import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/EmptyState'
+import { LogViewer } from '@/components/logs/LogViewer'
+import { WrapToggle } from '@/components/logs/WrapToggle'
+import { formatLogTimestamp } from '@/lib/relativeTime'
+import type { UseLogsResult } from '@/components/logs/types'
 import { StatusBadge } from '@/routes/integrations/badges'
 
 const SINCE_PRESETS = ['5m', '15m', '1h', '6h', '24h', '7d'] as const
@@ -20,6 +24,7 @@ export function DockerContainerLogsViewerBody({
   containerName,
 }: DockerContainerLogsViewerBodyProps) {
   const [since, setSince] = useState<SincePreset>(DEFAULT_SINCE)
+  const [wrap, setWrap] = useState(false)
   const logs = useContainerLogs(containerName, since)
   const qc = useQueryClient()
 
@@ -32,6 +37,7 @@ export function DockerContainerLogsViewerBody({
 
   const isUnknown = logs.error instanceof ApiError && logs.error.status === 404
   const isUnavailable = logs.error instanceof ApiError && logs.error.status === 503
+  const isGenericError = logs.error instanceof ApiError && !isUnknown && !isUnavailable
 
   if (isUnknown) {
     return (
@@ -41,22 +47,22 @@ export function DockerContainerLogsViewerBody({
     )
   }
 
-  return (
-    <div className="space-y-4">
-      {/* Header with controls */}
+  const header = (
+    <>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-2">
           <span className="font-medium">{containerName}</span>
           {cachedRow?.status != null && <StatusBadge status={cachedRow.status} />}
           {logs.data && logs.data.lines.length > 0 && (
             <span className="text-xs text-muted-foreground" data-testid="last-log-at">
-              last: {logs.data.lines[logs.data.lines.length - 1]?.timestamp}
+              Last: {formatLogTimestamp(logs.data.lines[logs.data.lines.length - 1]?.timestamp)}
             </span>
           )}
         </div>
         <div className="flex items-center gap-2">
+          <WrapToggle checked={wrap} onChange={setWrap} id="docker-wrap" />
           <label className="text-xs text-muted-foreground" htmlFor="since-picker">
-            since:
+            Since:
           </label>
           <select
             id="since-picker"
@@ -83,56 +89,54 @@ export function DockerContainerLogsViewerBody({
           </Button>
         </div>
       </div>
-
-      {/* Body */}
-      {logs.isLoading && <p className="text-sm text-muted-foreground">Loading logs…</p>}
-
-      {isUnavailable && (
-        <div
-          className="rounded-md border border-amber-500/40 bg-amber-500/10 p-4 text-sm text-amber-800 dark:text-amber-200"
-          data-testid="unavailable-banner"
-          role="status"
-        >
-          Logs temporarily unavailable. The Refresh button still works.
-        </div>
-      )}
-
-      {logs.error && !isUnknown && !isUnavailable && (
+      {isGenericError && (
         <p role="alert" className="text-sm text-red-600">
-          Failed to load logs: {logs.error.message}
+          Failed to load logs: {logs.error?.message}
         </p>
       )}
+    </>
+  )
 
-      {logs.data && logs.data.log_status === 'no_lines' && (
-        <EmptyState testId="no-lines">
-          No log lines in the last {since}. Try widening the time window.
-        </EmptyState>
-      )}
+  const useLogs = (): UseLogsResult => {
+    if (isUnavailable) {
+      return {
+        lines: undefined,
+        isLoading: false,
+        isError: true,
+        error: logs.error instanceof ApiError ? logs.error : undefined,
+        logStatus: 'unavailable',
+      }
+    }
+    if (isGenericError) {
+      // Generic error rendered in the header above; LogViewer renders nothing.
+      return {
+        lines: undefined,
+        isLoading: false,
+        isError: false,
+        error: undefined,
+      }
+    }
+    return {
+      lines: logs.data?.lines,
+      isLoading: logs.isLoading,
+      isError: false,
+      error: undefined,
+      logStatus:
+        logs.data?.log_status === 'no_lines'
+          ? 'no_lines'
+          : logs.data?.log_status === 'available'
+            ? 'available'
+            : undefined,
+      truncated: logs.data?.truncated,
+    }
+  }
 
-      {logs.data && logs.data.log_status === 'available' && (
-        <div className="space-y-2">
-          {logs.data.truncated && (
-            <p
-              className="rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-xs text-amber-800 dark:text-amber-200"
-              data-testid="truncated-banner"
-              role="status"
-            >
-              Showing first {String(logs.data.lines.length)} lines. Narrow the time window to see
-              all entries.
-            </p>
-          )}
-          <pre
-            className="overflow-x-auto rounded-md border border-border bg-muted/30 p-3 text-xs font-mono"
-            data-testid="logs-body"
-          >
-            {logs.data.lines.map((entry, i) => (
-              <div key={`${entry.timestamp}-${String(i)}`}>
-                <span className="text-muted-foreground">{entry.timestamp}</span> {entry.message}
-              </div>
-            ))}
-          </pre>
-        </div>
-      )}
-    </div>
+  return (
+    <LogViewer
+      useLogs={useLogs}
+      headerSlot={header}
+      emptyStateCopy={`No log lines in the last ${since}. Try widening the time window.`}
+      wrap={wrap}
+    />
   )
 }

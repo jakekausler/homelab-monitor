@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { formatAbsolute, formatRelative } from '@/lib/relativeTime'
+import { formatAbsolute, formatLogTimestamp, formatRelative } from '@/lib/relativeTime'
 
 const NOW = Date.parse('2026-05-11T12:00:00Z')
 
@@ -69,5 +69,41 @@ describe('formatAbsolute', () => {
     const out = formatAbsolute('2026-05-11T12:00:00Z')
     expect(out).not.toBe('—')
     expect(out.length).toBeGreaterThan(0)
+  })
+})
+
+describe('formatLogTimestamp', () => {
+  it('formats nanosecond ISO to friendly UTC', () => {
+    expect(formatLogTimestamp('2026-05-29T12:53:53.162712958Z')).toBe('2026-05-29 12:53:53 UTC')
+  })
+
+  it('formats millisecond ISO to friendly UTC', () => {
+    expect(formatLogTimestamp('2026-05-21T14:30:00.123Z')).toBe('2026-05-21 14:30:00 UTC')
+  })
+
+  it('formats plain Z ISO to friendly UTC', () => {
+    expect(formatLogTimestamp('2026-05-21T14:30:00Z')).toBe('2026-05-21 14:30:00 UTC')
+  })
+
+  it('treats space-separated no-zone input as UTC (idempotent-ish)', () => {
+    expect(formatLogTimestamp('2026-05-21 14:30:00')).toBe('2026-05-21 14:30:00 UTC')
+  })
+
+  it('drops a positive offset suffix WITHOUT shifting the clock', () => {
+    expect(formatLogTimestamp('2026-05-21T14:30:00+02:00')).toBe('2026-05-21 14:30:00 UTC')
+  })
+
+  it('drops a negative compact offset suffix WITHOUT shifting the clock', () => {
+    expect(formatLogTimestamp('2026-05-21T14:30:00-0500')).toBe('2026-05-21 14:30:00 UTC')
+  })
+
+  it('passes through a non-ISO string unchanged', () => {
+    expect(formatLogTimestamp('not-a-timestamp')).toBe('not-a-timestamp')
+  })
+
+  it('returns empty string for empty/null/undefined', () => {
+    expect(formatLogTimestamp('')).toBe('')
+    expect(formatLogTimestamp(null)).toBe('')
+    expect(formatLogTimestamp(undefined)).toBe('')
   })
 })

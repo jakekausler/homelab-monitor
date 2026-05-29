@@ -7,7 +7,7 @@ import {
   createRoute,
   createRouter,
 } from '@tanstack/react-router'
-import { cleanup, render, screen, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '@/api/client'
@@ -29,6 +29,7 @@ vi.mock('@/api/crons', () => ({
 
 vi.mock('@/lib/relativeTime', () => ({
   formatDuration: (n: number | null) => (n === null ? '—' : `${String(n)}s`),
+  formatLogTimestamp: (raw: string | null | undefined) => raw ?? '',
 }))
 
 import { useCronRunLog } from '@/api/crons'
@@ -395,5 +396,28 @@ describe('CronRunLogViewerPage', () => {
     renderWithRouter()
     await screen.findByTestId('run-log-header')
     expect(screen.getByLabelText('Run state ok')).toBeInTheDocument()
+  })
+
+  it('renders the wrap toggle when data is present', async () => {
+    renderWithRouter()
+    expect(await screen.findByTestId('wrap-toggle')).toBeInTheDocument()
+  })
+
+  it('toggling wrap switches the log body to wrapping mode', async () => {
+    vi.mocked(useCronRunLog).mockReturnValue({
+      isLoading: false,
+      isFetching: false,
+      error: null,
+      data: makeLogData({
+        log_status: 'available',
+        lines: [{ timestamp: '2026-05-01T12:00:01Z', message: 'hello' }],
+      }),
+    } as unknown as ReturnType<typeof useCronRunLog>)
+    renderWithRouter()
+    const body = await screen.findByTestId('log-body')
+    expect(body.className).toContain('overflow-x-auto')
+    const checkbox = within(screen.getByTestId('wrap-toggle')).getByRole('checkbox')
+    fireEvent.click(checkbox)
+    expect(screen.getByTestId('log-body').className).toContain('whitespace-normal')
   })
 })

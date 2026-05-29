@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { Link, useParams } from '@tanstack/react-router'
 import { useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, RefreshCw } from 'lucide-react'
@@ -6,6 +7,9 @@ import { ApiError } from '@/api/client'
 import { cronQueryKeys, useCronRunLog } from '@/api/crons'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { LogBanner } from '@/components/logs/LogBanner'
+import { LogLineList } from '@/components/logs/LogLineList'
+import { WrapToggle } from '@/components/logs/WrapToggle'
 import { RunStateBadge } from '@/components/crons/badges'
 import { formatDuration } from '@/lib/relativeTime'
 
@@ -17,6 +21,7 @@ export function CronRunLogViewerPage() {
   const runId = params.run_id ?? ''
   const log = useCronRunLog(fingerprint, runId)
   const qc = useQueryClient()
+  const [wrap, setWrap] = useState(false)
 
   // 503 vl_unavailable: surface the soft "temporarily unavailable" banner.
   const isUnavailable = log.error instanceof ApiError && log.error.status === 503
@@ -54,12 +59,15 @@ export function CronRunLogViewerPage() {
           </p>
         )}
         {log.data && (
-          <RunLogHeader
-            data={log.data}
-            runId={runId}
-            onRefresh={handleRefresh}
-            isRefreshing={log.isFetching}
-          />
+          <div className="flex items-center justify-between gap-3">
+            <RunLogHeader
+              data={log.data}
+              runId={runId}
+              onRefresh={handleRefresh}
+              isRefreshing={log.isFetching}
+            />
+            <WrapToggle checked={wrap} onChange={setWrap} id="cron-wrap" />
+          </div>
         )}
       </header>
 
@@ -78,7 +86,7 @@ export function CronRunLogViewerPage() {
           Log text no longer available (past VictoriaLogs retention).
         </p>
       )}
-      {log.data && log.data.log_status !== 'expired' && <RunLogBody data={log.data} />}
+      {log.data && log.data.log_status !== 'expired' && <RunLogBody data={log.data} wrap={wrap} />}
     </div>
   )
 }
@@ -134,40 +142,34 @@ function RunLogHeader({
   )
 }
 
-function RunLogBody({ data }: { data: import('@/api/types').Schema<'RunLogResponse'> }) {
+function RunLogBody({
+  data,
+  wrap,
+}: {
+  data: import('@/api/types').Schema<'RunLogResponse'>
+  wrap: boolean
+}) {
   return (
     <div className="space-y-2">
       {data.log_status === 'running' && (
-        <p
-          className="rounded-md border border-blue-500/30 bg-blue-500/10 p-2 text-xs text-blue-900 dark:text-blue-200"
-          data-testid="running-banner"
-        >
+        <LogBanner tone="blue" testId="running-banner">
           Run in progress — output as of now.
-        </p>
+        </LogBanner>
       )}
       {/* TODO: EPIC-004 STAGE-004-005 — cursor-based pagination + custom datetime range picker */}
       {data.truncated && (
-        <p
-          className="rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-xs text-amber-800 dark:text-amber-200"
-          data-testid="truncated-banner"
-        >
+        <LogBanner tone="amber" testId="truncated-banner">
           Output truncated at {String(data.lines.length)} lines.
-        </p>
+        </LogBanner>
       )}
-      <pre
-        className="overflow-x-auto rounded-md border border-border bg-muted/30 p-3 text-xs font-mono"
-        data-testid="log-body"
-      >
-        {data.lines.length === 0 ? (
+      <LogLineList
+        lines={data.lines}
+        testId="log-body"
+        wrap={wrap}
+        emptyContent={
           <span className="text-muted-foreground">No log lines captured for this run.</span>
-        ) : (
-          data.lines.map((line, i) => (
-            <div key={`${line.timestamp}-${String(i)}`}>
-              <span className="text-muted-foreground">{line.timestamp}</span> {line.message}
-            </div>
-          ))
-        )}
-      </pre>
+        }
+      />
     </div>
   )
 }
