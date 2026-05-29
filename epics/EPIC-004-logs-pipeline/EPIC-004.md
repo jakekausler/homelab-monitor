@@ -2,11 +2,11 @@
 
 ## Status: Not Started
 
-## Stages Counter: 0 / 44 Complete
+## Stages Counter: 2 / 44 Complete
 
-## Current Stage: STAGE-004-001
+## Current Stage: STAGE-004-003
 
-## Current Phase: Finalize (Refinement complete 2026-05-28)
+## Current Phase: STAGE-004-003 Design (Not Started)
 
 ## Overview
 
@@ -70,8 +70,8 @@ Stages MUST be implemented in order. No parallelization. Each stage lands a sing
 
 | # | Stage | Theme |
 |---|---|---|
-| STAGE-004-001 | Multi-line log handling | Vector multiline codec stitches tracebacks / stack traces into single events. Lands first so all downstream stages get clean events. |
-| STAGE-004-002 | Backend `LogLine` shape convergence | All 3 endpoints (docker / cron / generic) return one converged `LogLine` shape. Existing UI continues to work. |
+| STAGE-004-001 | Multi-line log handling | Vector multiline codec stitches tracebacks / stack traces into single events. Lands first so all downstream stages get clean events. ✅ Complete |
+| STAGE-004-002 | Backend `LogLine` shape convergence | All 3 endpoints (docker / cron / generic) return one converged `LogLine` shape. Existing UI continues to work. ✅ Complete |
 | STAGE-004-003 | `<LogViewer>` extraction + cron/docker viewer refactor | Shared component; embedding contract documented for future detail pages. |
 | STAGE-004-004 | Container label enrichment | `compose_project`, `compose_service`, image labels as top-level VL fields. |
 | STAGE-004-005 | Cron fingerprint enrichment | hmrun transform adds `cron_fingerprint`; Drain consumer's model-key override hook uses it. |
