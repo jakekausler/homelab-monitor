@@ -43,3 +43,15 @@
 - Canonical values: every emitted severity is in the 8-set (debug/info/notice/warn/error/critical/alert/emergency). FATAL→critical (NOT error); PANIC→emergency; ERR→error; CRIT→critical; WARNING→warn.
 - Authoritative gate: the slow @pytest.mark.slow `test_rendered_template_passes_vector_validate` runs plain `vector validate` (NOT --no-environment) against the rendered template. Skips locally when vector binary absent; runs in CI. Closes the STAGE-004-004 false-green gap.
 - VRL `match()` is infallible — `match!` is rejected by Vector with E620. Use plain `match()` for regex match calls in VRL.
+
+## STAGE-004-005 — Cron fingerprint enrichment
+
+- After any monitor rebuild + wrapper re-apply, verify a fresh hmrun cron line in VictoriaLogs carries a top-level `cron_fingerprint` (full 64-char) AND `run_id`, with a CLEAN `_msg` (no `HM_FP=`/`HM_RUN=` prefix) and raw `HM_FP`/`HM_RUN` fields absent. Quick check:
+  `curl -s 'http://127.0.0.1:19428/select/logsql/query' --data-urlencode 'query=service:hmrun AND cron_fingerprint:* AND _time:30m' --data-urlencode 'limit=3'`
+- Verify the VL `cron_fingerprint` matches `cron_runs.cron_fingerprint` for the same cron (cross-correlation invariant — consumed by Drain STAGE-004-025 model key `cron:<fingerprint>`, deep-links STAGE-004-021, failure correlation STAGE-004-034).
+- Verify the legacy fallback: old-format hmrun lines (text-prefix `HM_RUN=<uuid> `, no HM_FP) still get `run_id` extracted and do not break the `hmrun_shaped` transform.
+- Wrapper invariant: `logger --journald` per-line emission must remain best-effort (`|| true`) — a logger failure must NEVER break the wrapped cron; the original output line still goes to real stdout regardless.
+- PRIORITY=5 (notice) is the chosen severity for hmrun structured-field lines — if a future change alters logger emission, confirm severity stays "notice" in VL.
+- **Boundary markers must carry the fingerprint too:** HM_RUN_START / HM_RUN_END lines must arrive in VL with `_TRANSPORT=journal` and a populated `cron_fingerprint` (NOT empty). They are emitted via `logger --journald` in the wrapper's `log_marker()` (NOT `logger --tag`, which would produce `_TRANSPORT=syslog` with no structured fields). Quick check: `curl -s 'http://127.0.0.1:19428/select/logsql/query' --data-urlencode 'query=service:hmrun AND _time:30m AND ("HM_RUN_START" OR "HM_RUN_END")' --data-urlencode 'limit=10'` → every START/END record has non-empty `cron_fingerprint`.
+- **Version-coupled tests reference the constant:** wrapper-format-version tests must reference `WRAPPER_FORMAT_VERSION` (not hardcode a literal) so a version bump doesn't break the suite. If a future bump breaks tests asserting `== "x.y.z"`, change them to reference the constant. (The two `_parse_semver(...)` parser unit tests legitimately use literals.)
+- **WRAPPER_FORMAT_VERSION bump → re-apply wrapper:** changing the wrapper template format requires bumping `WRAPPER_FORMAT_VERSION` AND re-applying the host wrapper (`/usr/local/bin/cron-with-heartbeat.sh`) for the change to take effect on live crons.
