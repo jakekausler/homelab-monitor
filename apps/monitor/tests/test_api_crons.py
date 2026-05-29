@@ -7,6 +7,7 @@ from httpx import AsyncClient
 from sqlalchemy import text
 
 from homelab_monitor.kernel.cron.fingerprint import compute_fingerprint
+from homelab_monitor.kernel.cron.wrapper_constants import WRAPPER_FORMAT_VERSION
 from homelab_monitor.kernel.db.repository import SqliteRepository
 from homelab_monitor.kernel.db.time import utc_now_iso
 
@@ -851,9 +852,6 @@ async def _seed_wrapper_cron(
 ) -> str:
     """Seed a cron with wrapper_installed set and return its fingerprint."""
     from homelab_monitor.kernel.cron.fingerprint import compute_fingerprint  # noqa: PLC0415
-    from homelab_monitor.kernel.cron.wrapper_constants import (  # noqa: PLC0415
-        WRAPPER_FORMAT_VERSION,
-    )
 
     fp = compute_fingerprint(
         host="host-a",
@@ -1048,9 +1046,12 @@ async def test_wrapper_health_format_outdated_when_version_old(
 async def test_wrapper_health_ok_when_version_current(
     authenticated_client: AsyncClient, repo: SqliteRepository
 ) -> None:
-    """wrapper_installed=True, wrapper_format_version='1.0.0' (and not stale) → 'ok'."""
+    """wrapper_installed=True, wrapper_format_version=current (and not stale) → 'ok'."""
     fp = await _seed_wrapper_cron_with_version(
-        repo, name="fo-current", wrapper_installed=True, wrapper_format_version="1.0.0"
+        repo,
+        name="fo-current",
+        wrapper_installed=True,
+        wrapper_format_version=WRAPPER_FORMAT_VERSION,
     )
     resp = await authenticated_client.get(f"/api/crons/{fp}")
     assert resp.status_code == 200  # noqa: PLR2004
@@ -1137,7 +1138,7 @@ def test_wrapper_format_is_current_equal_is_true() -> None:
         _wrapper_format_is_current,  # pyright: ignore[reportPrivateUsage]
     )
 
-    assert _wrapper_format_is_current("1.0.0") is True
+    assert _wrapper_format_is_current(WRAPPER_FORMAT_VERSION) is True
 
 
 def test_wrapper_format_is_current_newer_is_true() -> None:

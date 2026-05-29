@@ -11,10 +11,12 @@
 # Usage (the rewritten crontab line):
 #   cron-with-heartbeat.sh <fingerprint> -- <real command and args>
 #
-# Behavior: generates a per-run UUID; emits HM_RUN_START / HM_RUN_END journald
-# boundary markers under SYSLOG_IDENTIFIER=hmrun; runs the real command with
-# every output line copied (prefixed `HM_RUN=<uuid> `) through `logger --tag
-# hmrun`; the ORIGINAL un-prefixed output still goes to stdout/stderr. Heartbeat
+# Behavior: generates a per-run UUID; emits HM_RUN_START / HM_RUN_END structured
+# journald boundary markers (SYSLOG_IDENTIFIER=hmrun, PRIORITY, HM_RUN=<uuid>,
+# HM_FP=<fp>) via `logger --journald`; runs the real command with every output
+# line copied through `logger --journald` as a structured journal entry carrying
+# the same fields plus a clean MESSAGE (no text prefix); the ORIGINAL output
+# still goes to stdout/stderr. Heartbeat
 # POSTs (/start, /ok|/fail) are best-effort and bounded — a network failure
 # NEVER blocks or alters the real command. The real command's exit code is
 # ALWAYS preserved and returned as this wrapper's exit code.
@@ -72,6 +74,12 @@ if [ -z "$RUN_ID" ]; then
 	done
 fi
 
+# --- journald priority ------------------------------------------------------
+# `logger --journald` IGNORES -p/--priority; the priority must be supplied as an
+# explicit PRIORITY field. 5 = syslog severity "notice", matching the previous
+# `logger --tag hmrun` default of user.notice (verified: `man logger`).
+PRIO=5
+
 # --- Helpers ----------------------------------------------------------------
 # hb_post <path-suffix> — best-effort heartbeat POST. Bounded, output discarded,
 # never fails the script. Skipped entirely if URL_BASE is empty.
@@ -83,11 +91,18 @@ hb_post() {
 		"$URL_BASE/api/hb/$FINGERPRINT/$1" >/dev/null 2>&1 || true
 }
 
-# log_marker <message> — best-effort journald marker under tag hmrun. `logger`
-# missing or failing must NEVER break the cron.
+# log_marker <message> — best-effort STRUCTURED journald marker. Emits the same
+# SYSLOG_IDENTIFIER=hmrun + PRIORITY + HM_RUN + HM_FP structured fields as the
+# output-capture path so the HM_RUN_START / HM_RUN_END boundary markers ALSO
+# carry cron_fingerprint (D-FINGERPRINT-PER-LINE). Uses `logger --journald`
+# (native journald entry, _TRANSPORT=journal) NOT `logger --tag` (text-only,
+# syslog transport, no structured fields). `logger` missing or failing must
+# NEVER break the cron.
 log_marker() {
 	command -v logger >/dev/null 2>&1 || return 0
-	logger --tag hmrun -- "$1" 2>/dev/null || true
+	printf 'SYSLOG_IDENTIFIER=hmrun\nPRIORITY=%s\nHM_RUN=%s\nHM_FP=%s\nMESSAGE=%s\n' \
+		"$PRIO" "$RUN_ID" "$FINGERPRINT" "$1" \
+		| logger --journald 2>/dev/null || true
 }
 
 # --- Start boundary ---------------------------------------------------------
@@ -106,12 +121,13 @@ fi
 # Pure POSIX — no pipefail, no $PIPESTATUS, no mkfifo.
 #
 # The `while read` loop echoes each line to stdout (original output preserved)
-# AND, if logger is available and a RUN_ID exists, pipes a `HM_RUN=<uuid> `-
-# prefixed copy through `logger --tag hmrun`. stderr is merged into stdout via
-# 2>&1 so stderr lines are captured too; both are echoed back to the wrapper's
-# stdout. (Splitting stderr back out is not POSIX-feasible without named pipes;
-# merging is the accepted, documented behavior — journald gets both streams
-# tagged, and the human sees combined output, same as `cmd 2>&1`.)
+# AND, if logger is available and a RUN_ID exists, emits one structured journald
+# entry per line via `logger --journald` (SYSLOG_IDENTIFIER=hmrun, PRIORITY,
+# HM_RUN=<uuid>, HM_FP=<fingerprint>, clean MESSAGE — no text prefix). stderr is
+# merged into stdout via 2>&1 so stderr lines are captured too; both are echoed
+# back to the wrapper's stdout. (Splitting stderr back out is not POSIX-feasible
+# without named pipes; merging is the accepted, documented behavior — journald
+# gets both streams, and the human sees combined output, same as `cmd 2>&1`.)
 CODEFILE=$(mktemp 2>/dev/null) || CODEFILE=''
 # Clean the temp file on any exit path.
 trap '[ -n "$CODEFILE" ] && rm -f "$CODEFILE"' EXIT INT TERM
@@ -120,8 +136,18 @@ if [ -n "$CODEFILE" ]; then
 	{ "$@" 2>&1; echo $? > "$CODEFILE"; } | while IFS= read -r _line; do
 		printf '%s\n' "$_line"
 		if [ -n "$RUN_ID" ] && command -v logger >/dev/null 2>&1; then
-			printf 'HM_RUN=%s %s\n' "$RUN_ID" "$_line" \
-				| logger --tag hmrun 2>/dev/null || true
+			# Emit one structured journald entry per line. --journald reads
+			# newline-delimited FIELD=value pairs from stdin and IGNORES
+			# --tag/-p, so SYSLOG_IDENTIFIER + PRIORITY are explicit fields.
+			# The `while IFS= read -r _line` loop delivers exactly ONE line
+			# (no embedded newline), so MESSAGE is always a single field on
+			# its own line; an '=' inside the line is harmless because
+			# MESSAGE is the last field (value = everything after the first
+			# '='). HM_FP carries the full 64-char fingerprint. logger
+			# failure must NEVER break the cron, hence `2>/dev/null || true`.
+			printf 'SYSLOG_IDENTIFIER=hmrun\nPRIORITY=%s\nHM_RUN=%s\nHM_FP=%s\nMESSAGE=%s\n' \
+				"$PRIO" "$RUN_ID" "$FINGERPRINT" "$_line" \
+				| logger --journald 2>/dev/null || true
 		fi
 	done
 	# Read the real command's exit code back from the temp file. A missing or

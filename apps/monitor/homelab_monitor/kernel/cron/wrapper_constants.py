@@ -30,7 +30,7 @@ WRAPPER_ENV_PATH: Final[str] = "/etc/homelab-monitor/wrapper.env"
 
 #: The run-log-capable generic wrapper format version. A semver STRING. The
 #: pre-run-log baked-fingerprint wrapper recorded NO wrapper_format_version.
-WRAPPER_FORMAT_VERSION: Final[str] = "1.0.0"
+WRAPPER_FORMAT_VERSION: Final[str] = "1.1.0"
 
 #: Matches a wrapped crontab command (NEW format):
 #:   <WRAPPER_PATH> <fingerprint> -- <inner command>

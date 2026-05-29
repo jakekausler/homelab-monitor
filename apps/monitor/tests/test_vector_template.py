@@ -741,6 +741,77 @@ def test_docker_severity_extract_fatal_maps_to_critical(
     )
 
 
+# ---------------------------------------------------------------------------
+# STAGE-004-005: hmrun_shaped cron_fingerprint structured-field enrichment
+# ---------------------------------------------------------------------------
+
+
+def _hmrun_shaped_source(parsed_config: dict[str, Any]) -> str:
+    return parsed_config.get("transforms", {}).get("hmrun_shaped", {}).get("source", "")
+
+
+def test_hmrun_shaped_sets_cron_fingerprint_from_hm_fp(parsed_config: dict[str, Any]) -> None:
+    """hmrun_shaped must assign .cron_fingerprint from the structured .HM_FP field."""
+    source = _hmrun_shaped_source(parsed_config)
+    assert ".cron_fingerprint = .HM_FP" in source, (
+        "hmrun_shaped must set .cron_fingerprint = .HM_FP"
+    )
+
+
+def test_hmrun_shaped_guards_hm_fp_with_exists(parsed_config: dict[str, Any]) -> None:
+    """HM_FP extraction must be guarded by exists(.HM_FP) (absent-field safe)."""
+    source = _hmrun_shaped_source(parsed_config)
+    assert "exists(.HM_FP)" in source, "hmrun_shaped must guard HM_FP with exists(.HM_FP)"
+
+
+def test_hmrun_shaped_sets_run_id_from_hm_run(parsed_config: dict[str, Any]) -> None:
+    """hmrun_shaped must assign .run_id from the structured .HM_RUN field
+    (D-ENRICHMENT-IS-ADDITIVE: run_id independent of fingerprint)."""
+    source = _hmrun_shaped_source(parsed_config)
+    assert ".run_id = .HM_RUN" in source, "hmrun_shaped must set .run_id = .HM_RUN"
+    assert "exists(.HM_RUN)" in source, "hmrun_shaped must guard HM_RUN with exists(.HM_RUN)"
+
+
+def test_hmrun_shaped_retains_legacy_regex_fallback(parsed_config: dict[str, Any]) -> None:
+    """The transitional fallback regex branch (HM_RUN=<uuid> prefix) must be retained
+    so legacy/in-flight lines still parse run_id during rollout."""
+    source = _hmrun_shaped_source(parsed_config)
+    assert "parse_regex" in source, "legacy fallback parse_regex missing from hmrun_shaped"
+    assert "{36}" in source, "legacy 36-char uuid fallback pattern missing from hmrun_shaped"
+
+
+def test_hmrun_shaped_deletes_raw_journald_fields(parsed_config: dict[str, Any]) -> None:
+    """Raw HM_RUN / HM_FP journald keys must be deleted after extraction (no double-ship)."""
+    source = _hmrun_shaped_source(parsed_config)
+    assert "del(.HM_RUN)" in source, "hmrun_shaped must del(.HM_RUN) after extraction"
+    assert "del(.HM_FP)" in source, "hmrun_shaped must del(.HM_FP) after extraction"
+
+
+def test_hmrun_shaped_source_has_no_lookarounds(parsed_config: dict[str, Any]) -> None:
+    """hmrun_shaped VRL source must not use regex lookarounds (Rust regex crate)."""
+    _assert_no_lookarounds(_hmrun_shaped_source(parsed_config))
+
+
+def test_hmrun_filter_inputs_unchanged(parsed_config: dict[str, Any]) -> None:
+    """Regression guard: hmrun_filter still reads from journald and matches hmrun."""
+    transforms = parsed_config.get("transforms", {})
+    hmrun_filter = transforms.get("hmrun_filter", {})
+    assert hmrun_filter.get("inputs", []) == ["journald"], (
+        "hmrun_filter.inputs must be ['journald']"
+    )
+    assert 'SYSLOG_IDENTIFIER == "hmrun"' in hmrun_filter.get("condition", ""), (
+        "hmrun_filter must still filter SYSLOG_IDENTIFIER == 'hmrun'"
+    )
+
+
+def test_sinks_vl_inputs_still_includes_hmrun_shaped(parsed_config: dict[str, Any]) -> None:
+    """Regression guard: sinks.vl.inputs unchanged at ['throttle', 'hmrun_shaped']."""
+    inputs = parsed_config.get("sinks", {}).get("vl", {}).get("inputs", [])
+    assert inputs == ["throttle", "hmrun_shaped"], (
+        f"sinks.vl.inputs must remain ['throttle', 'hmrun_shaped'], got {inputs}"
+    )
+
+
 @pytest.mark.slow
 def test_rendered_template_passes_vector_validate(tmp_path: Path) -> None:
     """Authoritative VRL compile check via `vector validate`.

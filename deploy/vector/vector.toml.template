@@ -308,15 +308,18 @@ enabled = true
 # HMRUN RUN-CAPTURE PIPELINE
 # ==========================
 # A-mode cron wrapper output. The cron-with-heartbeat.sh wrapper logs every
-# captured output line under SYSLOG_IDENTIFIER=hmrun, each line prefixed
-# `HM_RUN=<uuid> `. It also emits HM_RUN_START / HM_RUN_END boundary markers
-# (same identifier, no HM_RUN= prefix — they pass through unmodified).
+# captured output line AND the HM_RUN_START / HM_RUN_END boundary markers under
+# SYSLOG_IDENTIFIER=hmrun via `logger --journald`, as native journald entries
+# carrying STRUCTURED fields HM_RUN=<uuid> and HM_FP=<fingerprint> plus a clean
+# MESSAGE (no text prefix).
 #
-# This branch parses the HM_RUN=<uuid> prefix into a REGULAR `run_id` field
-# (NOT a stream field — one stream per run would explode stream cardinality;
-# VictoriaLogs warns against that) and strips the prefix from the message body.
-# It does NOT collide with the cron-events branch: that branch filters
-# SYSLOG_IDENTIFIER == "CRON"/"crond"; this one filters == "hmrun".
+# This branch reads those structured fields directly into REGULAR `run_id` and
+# `cron_fingerprint` fields (NOT stream fields — one stream per run would explode
+# stream cardinality; VictoriaLogs warns against that). A TRANSITIONAL fallback
+# (below) parses the legacy `HM_RUN=<uuid> ` MESSAGE-text prefix for in-flight
+# lines emitted before the wrapper upgrade. It does NOT collide with the
+# cron-events branch: that branch filters SYSLOG_IDENTIFIER == "CRON"/"crond";
+# this one filters == "hmrun".
 
 [transforms.hmrun_filter]
 type = "filter"
@@ -337,14 +340,33 @@ source = '''
 if !exists(.severity) || is_null(.severity) {
   .severity = .PRIORITY || "info"
 }
-# Parse the `HM_RUN=<uuid> ` line prefix. Boundary markers (HM_RUN_START /
-# HM_RUN_END) do NOT carry the prefix, so the regex simply does not match and
-# the line passes through with run_id unset.
-matched, err = parse_regex(.message, r'^HM_RUN=(?P<run_id>[0-9a-fA-F-]{36}) (?P<body>.*)$')
-if err == null && matched != null {
-  .run_id = matched.run_id
-  .message = matched.body
+# STAGE-004-005: prefer the structured journald fields emitted by the
+# `logger --journald` wrapper (HM_RUN / HM_FP). Each extraction is INDEPENDENT
+# (D-ENRICHMENT-IS-ADDITIVE): a missing HM_FP must not block run_id, and vice
+# versa. No regex needed for this path — the fields arrive as top-level keys.
+if exists(.HM_RUN) {
+  .run_id = .HM_RUN
 }
+if exists(.HM_FP) {
+  .cron_fingerprint = .HM_FP
+}
+# TRANSITIONAL FALLBACK: legacy / in-flight lines emitted before the wrapper
+# upgrade rolled out carry the old `HM_RUN=<uuid> ` MESSAGE-text prefix and NO
+# structured fields. Parse them so run_id + clean message still work during
+# rollout. Boundary markers (HM_RUN_START / HM_RUN_END) do NOT carry the prefix
+# and do NOT set the structured fields, so they pass through untouched.
+# Only run the fallback when the structured run_id is absent.
+if !exists(.run_id) {
+  matched, err = parse_regex(.message, r'^HM_RUN=(?P<run_id>[0-9a-fA-F-]{36}) (?P<body>.*)$')
+  if err == null && matched != null {
+    .run_id = matched.run_id
+    .message = matched.body
+  }
+}
+# Drop the raw journald fields so they are not double-shipped to VictoriaLogs.
+# (Use del() — VRL no-op on absent fields, so unconditional is safe.)
+del(.HM_RUN)
+del(.HM_FP)
 '''
 
 # NON-SYSTEMD FALLBACK: cron_syslog source

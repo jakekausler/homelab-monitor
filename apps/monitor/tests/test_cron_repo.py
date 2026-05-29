@@ -10,6 +10,7 @@ from sqlalchemy import text
 from homelab_monitor.kernel.cron.fingerprint import compute_fingerprint
 from homelab_monitor.kernel.cron.repository import CronRepo
 from homelab_monitor.kernel.cron.schemas import CronUpdate, RegisterCronBody
+from homelab_monitor.kernel.cron.wrapper_constants import WRAPPER_FORMAT_VERSION
 from homelab_monitor.kernel.db.repository import SqliteRepository
 from homelab_monitor.kernel.db.time import utc_now_iso
 
@@ -1204,11 +1205,11 @@ async def test_set_wrapper_format_version(repo: SqliteRepository) -> None:
 
     await asyncio.sleep(0.01)  # ensure clock advances
 
-    await cron_repo.set_wrapper_format_version(fp, "1.0.0")
+    await cron_repo.set_wrapper_format_version(fp, WRAPPER_FORMAT_VERSION)
 
     record = await cron_repo.get_cron(fp)
     assert record is not None
-    assert record.wrapper_format_version == "1.0.0"
+    assert record.wrapper_format_version == WRAPPER_FORMAT_VERSION
 
     row_after = await repo.fetch_one(
         text("SELECT updated_at FROM crons WHERE fingerprint = :fp"),

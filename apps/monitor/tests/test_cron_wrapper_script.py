@@ -22,6 +22,8 @@ from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
+from homelab_monitor.kernel.cron.wrapper_constants import WRAPPER_FORMAT_VERSION
+
 # ---------------------------------------------------------------------------
 # Tiny HTTP server for receiving heartbeat POSTs
 # ---------------------------------------------------------------------------
@@ -68,7 +70,7 @@ def _build_wrapper(token_file: str, env_file: str) -> str:
     return (
         tmpl.replace("{{TOKEN_FILE_PATH}}", token_file)
         .replace("{{WRAPPER_ENV_PATH}}", env_file)
-        .replace("{{WRAPPER_FORMAT_VERSION}}", "1.0.0")
+        .replace("{{WRAPPER_FORMAT_VERSION}}", WRAPPER_FORMAT_VERSION)
     )
 
 
@@ -133,7 +135,7 @@ def _run_wrapper(
 
 
 class TestWrapperScript:
-    _FP = "abc12345678901234"
+    _FP = "b3d04508bdd33e915854ddd7d6729c2d708e1faf793761c8a79395ffad5f75ad"
 
     def test_exit_code_preserved_through_logger_pipe(self, tmp_path: Path) -> None:
         """Exit-code preservation through the tempfile technique for several codes."""
@@ -278,13 +280,13 @@ class TestWrapperScript:
         server.shutdown()
 
         log_content = log_file.read_text(encoding="utf-8") if log_file.exists() else ""
-        assert f"HM_RUN_START fp={self._FP}" in log_content, (
-            f"HM_RUN_START not in logger log:\n{log_content}"
+        assert f"MESSAGE=HM_RUN_START fp={self._FP}" in log_content, (
+            f"HM_RUN_START structured marker not in logger log:\n{log_content}"
         )
-        assert f"HM_RUN_END fp={self._FP}" in log_content, (
-            f"HM_RUN_END not in logger log:\n{log_content}"
+        assert f"MESSAGE=HM_RUN_END fp={self._FP}" in log_content, (
+            f"HM_RUN_END structured marker not in logger log:\n{log_content}"
         )
-        assert "HM_RUN=" in log_content, f"HM_RUN= prefix not in logger log:\n{log_content}"
+        assert "HM_RUN=" in log_content, f"HM_RUN= field not in logger log:\n{log_content}"
 
     def test_original_output_on_stdout(self, tmp_path: Path) -> None:
         """Wrapper's stdout contains the original un-prefixed command output."""
@@ -311,7 +313,7 @@ class TestWrapperScript:
         assert not result.stdout.startswith("HM_RUN=")
 
     def test_stderr_is_captured(self, tmp_path: Path) -> None:
-        """stderr is merged via 2>&1 — fake logger receives HM_RUN=<uuid> <stderr line>."""
+        """stderr merged via 2>&1; fake logger gets MESSAGE=<stderr line> + HM_RUN/HM_FP fields."""
         log_file = tmp_path / "logger.log"
         fake_bin = tmp_path / "fake_bin"
         fake_bin.mkdir()
@@ -437,3 +439,48 @@ class TestWrapperScript:
             check=False,
         )
         assert "unbound variable" not in (result.stderr or ""), f"set -u tripped: {result.stderr}"
+
+    def test_rendered_wrapper_uses_logger_journald(self, tmp_path: Path) -> None:
+        """The rendered wrapper must invoke `logger --journald` and supply the
+        HM_FP / HM_RUN / SYSLOG_IDENTIFIER / PRIORITY structured fields
+        (STAGE-004-005: journald structured-field enrichment)."""
+        token_file = _write_token(tmp_path)
+        env_file = _write_env(tmp_path, "http://127.0.0.1:9")
+        content = _build_wrapper(str(token_file), str(env_file))
+        assert "logger --journald" in content, "wrapper must use logger --journald per line"
+        assert "SYSLOG_IDENTIFIER=hmrun" in content, "wrapper must emit SYSLOG_IDENTIFIER=hmrun"
+        assert "HM_FP=" in content, "wrapper must emit the HM_FP structured field"
+        assert "HM_RUN=" in content, "wrapper must emit the HM_RUN structured field"
+        assert "PRIORITY=" in content, "wrapper must emit an explicit PRIORITY field"
+
+    def test_hm_fp_field_emitted_to_logger(self, tmp_path: Path) -> None:
+        """Fake logger on PATH captures the HM_FP=<fingerprint> field for a run line."""
+        log_file = tmp_path / "logger.log"
+        fake_bin = tmp_path / "fake_bin"
+        fake_bin.mkdir()
+        _write_fake_logger(fake_bin, log_file)
+
+        server, port = _start_server()
+        url_base = f"http://127.0.0.1:{port}"
+        token_file = _write_token(tmp_path)
+        env_file = _write_env(tmp_path, url_base)
+        content = _build_wrapper(str(token_file), str(env_file))
+        script = _write_wrapper(tmp_path, content)
+
+        env = dict(os.environ)
+        env["PATH"] = str(fake_bin) + ":" + env.get("PATH", "/usr/bin:/bin")
+
+        _run_wrapper(script, self._FP, "sh", "-c", "echo line_one", env=env)
+        time.sleep(0.15)
+        server.shutdown()
+
+        log_content = log_file.read_text(encoding="utf-8") if log_file.exists() else ""
+        assert f"HM_FP={self._FP}" in log_content, (
+            f"HM_FP=<fingerprint> field not captured by logger:\n{log_content}"
+        )
+        assert "SYSLOG_IDENTIFIER=hmrun" in log_content, (
+            f"SYSLOG_IDENTIFIER=hmrun field not captured by logger:\n{log_content}"
+        )
+        assert "MESSAGE=line_one" in log_content, (
+            f"MESSAGE=line_one field not captured by logger:\n{log_content}"
+        )

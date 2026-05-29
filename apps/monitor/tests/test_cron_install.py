@@ -31,6 +31,7 @@ from homelab_monitor.kernel.cron.install import (
 from homelab_monitor.kernel.cron.repository import CronRecord
 from homelab_monitor.kernel.cron.wrapper_constants import (
     TOKEN_FILE_PATH,
+    WRAPPER_FORMAT_VERSION,
     WRAPPER_PATH,
     WRAPPER_SEPARATOR,
     build_invocation_prefix,
@@ -264,7 +265,7 @@ async def test_build_install_kit_produces_correct_diff(tmp_path: Path) -> None:
     assert _FINGERPRINT not in kit.wrapper_content
     assert "https://monitor.example.com" not in kit.wrapper_content
     # The format version IS baked in (constant placeholder substitution)
-    assert "1.0.0" in kit.wrapper_content
+    assert WRAPPER_FORMAT_VERSION in kit.wrapper_content
 
     diff = kit.crontab_diff
     assert diff.source_path == _SOURCE_PATH

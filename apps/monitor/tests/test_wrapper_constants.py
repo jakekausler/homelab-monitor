@@ -30,7 +30,6 @@ def test_wrapper_env_path_value() -> None:
 
 def test_format_version_is_semver() -> None:
     """WRAPPER_FORMAT_VERSION must be a clean 3-part semver."""
-    assert WRAPPER_FORMAT_VERSION == "1.0.0"
     parts = WRAPPER_FORMAT_VERSION.split(".")
     assert len(parts) == 3  # noqa: PLR2004
     assert all(p.isdigit() for p in parts)
