@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import math
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
@@ -327,17 +328,180 @@ def load_vl_retention_days() -> int:
     return int(raw)
 
 
+# ---------------------------------------------------------------------------
+# STAGE-004-006: log redaction patterns (logs.redact:)
+# ---------------------------------------------------------------------------
+
+_REDACT_LOOKAROUND_TOKENS: tuple[str, ...] = ("(?=", "(?!", "(?<=", "(?<!")
+
+
+@dataclass(frozen=True, slots=True)
+class RedactPattern:
+    """One redaction rule rendered into the Vector redact VRL block.
+
+    ``name`` becomes the ``pattern_type`` metric label AND the ``.rdt_<name>``
+    marker field, so it MUST be a valid metric-label + VRL-field token
+    (lowercase snake_case; validated below). ``pattern`` is a Rust-regex-crate
+    pattern (NO lookarounds). ``replacement`` is the literal replacement string
+    (may contain ``${1}`` capture backrefs).
+    """
+
+    name: str
+    pattern: str
+    replacement: str
+
+
+#: The v1 default redaction policy (ships with the public release; used when
+#: homelab-monitor.yaml omits ``logs.redact``). EPIC-007/008 ADD host-specific
+#: patterns to the yaml later — no code change needed.
+DEFAULT_REDACT_PATTERNS: tuple[RedactPattern, ...] = (
+    RedactPattern(
+        name="bearer_token",
+        pattern=r"(?i)bearer\s+[A-Za-z0-9._-]{20,}",
+        replacement="Bearer [REDACTED]",
+    ),
+    RedactPattern(
+        name="jwt",
+        pattern=r"eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+",
+        replacement="[REDACTED_JWT]",
+    ),
+    RedactPattern(
+        name="password_in_url",
+        pattern=r"://[^:@/\s]+:[^@/\s]+@",
+        replacement="://[REDACTED]:[REDACTED]@",
+    ),
+    RedactPattern(
+        name="aws_access_key",
+        pattern=r"AKIA[0-9A-Z]{16}",
+        replacement="[REDACTED_AWS_KEY]",
+    ),
+    RedactPattern(
+        name="api_key_generic",
+        pattern=(
+            r"(?i)(api[-_]?key|api[-_]?token|access[-_]?token|secret[-_]?key)"
+            r"[\"']?\s*[:=]\s*[\"']?[A-Za-z0-9._-]{16,}"
+        ),
+        replacement="${1}=[REDACTED]",
+    ),
+)
+
+_REDACT_KEY = "logs"
+_REDACT_SUBKEY = "redact"
+_REDACT_NAME_RE = re.compile(r"^[a-z][a-z0-9_]*$")
+
+
+def _assert_redact_no_lookarounds(pattern: str, name: str) -> None:
+    """Raise ValueError if pattern contains a regex lookaround (Rust regex crate)."""
+    for token in _REDACT_LOOKAROUND_TOKENS:
+        if token in pattern:
+            msg = (
+                f"logs.redact entry {name!r} pattern uses lookaround {token!r}; "
+                "Vector's Rust regex crate rejects lookarounds"
+            )
+            raise ValueError(msg)
+
+
+def load_redact_patterns() -> list[RedactPattern]:
+    """Load the redaction policy from YAML ``logs.redact``.
+
+    Sources:
+      - ``logs.redact`` present  → parse + validate that list.
+      - ``logs`` absent OR ``logs.redact`` absent → ``DEFAULT_REDACT_PATTERNS``.
+      - ``logs.redact: []`` (explicit empty list) → empty list (redaction OFF).
+
+    Validation (raises ValueError):
+      - root not a mapping; ``logs`` not a mapping; ``redact`` not a list.
+      - any entry not a mapping.
+      - any entry missing ``name`` / ``pattern`` / ``replacement`` or with a
+        non-string / empty value for any of them.
+      - ``name`` not lowercase snake_case (``^[a-z][a-z0-9_]*$``).
+      - duplicate ``name``.
+      - ``pattern`` containing a regex lookaround.
+    """
+    config_path = Path(os.environ.get("HOMELAB_MONITOR_CONFIG", _DEFAULT_CONFIG_PATH))
+    if not config_path.is_file():
+        return list(DEFAULT_REDACT_PATTERNS)
+
+    with config_path.open(encoding="utf-8") as f:
+        raw_obj: object = yaml.safe_load(f) or {}
+    if not isinstance(raw_obj, dict):
+        msg = f"config root must be a mapping, got {type(raw_obj).__name__}"
+        raise ValueError(msg)
+    raw = cast(dict[str, Any], raw_obj)
+
+    if _REDACT_KEY not in raw:
+        return list(DEFAULT_REDACT_PATTERNS)
+    logs_obj: object = raw.get(_REDACT_KEY) or {}
+    if not isinstance(logs_obj, dict):
+        msg = f"{_REDACT_KEY} must be a mapping, got {type(logs_obj).__name__}"
+        raise ValueError(msg)
+    logs = cast(dict[str, Any], logs_obj)
+
+    if _REDACT_SUBKEY not in logs:
+        return list(DEFAULT_REDACT_PATTERNS)
+    redact_obj: object = logs.get(_REDACT_SUBKEY)
+    if redact_obj is None:
+        # `redact:` with empty value → defaults (mirror empty-section precedent).
+        return list(DEFAULT_REDACT_PATTERNS)
+    if not isinstance(redact_obj, list):
+        msg = f"{_REDACT_KEY}.{_REDACT_SUBKEY} must be a list, got {type(redact_obj).__name__}"
+        raise ValueError(msg)
+    redact_list = cast(list[object], redact_obj)
+
+    patterns: list[RedactPattern] = []
+    seen: set[str] = set()
+    for idx, entry_obj in enumerate(redact_list):
+        patterns.append(_validate_redact_entry(idx, entry_obj, seen))
+    return patterns
+
+
+def _validate_redact_entry(idx: int, entry_obj: object, seen: set[str]) -> RedactPattern:
+    """Validate and convert one raw logs.redact entry into a RedactPattern."""
+    if not isinstance(entry_obj, dict):
+        msg = f"logs.redact[{idx}] must be a mapping, got {type(entry_obj).__name__}"
+        raise ValueError(msg)
+    entry = cast(dict[str, Any], entry_obj)
+    name = entry.get("name")
+    pattern = entry.get("pattern")
+    replacement = entry.get("replacement")
+    for field_name, value in (
+        ("name", name),
+        ("pattern", pattern),
+        ("replacement", replacement),
+    ):
+        if not isinstance(value, str) or not value:
+            msg = (
+                f"logs.redact[{idx}] field {field_name!r} must be a non-empty string, got {value!r}"
+            )
+            raise ValueError(msg)
+    name_s = cast(str, name)
+    pattern_s = cast(str, pattern)
+    replacement_s = cast(str, replacement)
+    if not _REDACT_NAME_RE.match(name_s):
+        msg = f"logs.redact[{idx}] name {name_s!r} must be lowercase snake_case (^[a-z][a-z0-9_]*$)"
+        raise ValueError(msg)
+    if name_s in seen:
+        msg = f"logs.redact has duplicate name {name_s!r}"
+        raise ValueError(msg)
+    seen.add(name_s)
+    _assert_redact_no_lookarounds(pattern_s, name_s)
+    return RedactPattern(name=name_s, pattern=pattern_s, replacement=replacement_s)
+
+
 __all__ = [
+    "DEFAULT_REDACT_PATTERNS",
     "CronAnomalyConfig",
     "CronRunReconcilerConfig",
     "DiskBudgetConfig",
     "LogStreamBudgetConfig",
+    "RedactPattern",
     "VlQueryLimits",
     "get_public_url",
     "load_cron_anomaly_config",
     "load_cron_run_reconciler_config",
     "load_disk_budget_config",
     "load_log_stream_budget_config",
+    "load_redact_patterns",
     "load_vl_query_limits",
     "load_vl_retention_days",
 ]

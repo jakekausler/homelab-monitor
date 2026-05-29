@@ -179,16 +179,28 @@ condition = '''
 .message != null && .message != "" && .SYSLOG_IDENTIFIER != "hmrun"
 '''
 
+[transforms.redact_main]
+type = "remap"
+inputs = ["drop_noise"]
+source = '''
+${VECTOR_REDACT_TRANSFORMS}'''
+
+[transforms.strip_markers_main]
+type = "remap"
+inputs = ["redact_main"]
+source = '''
+${VECTOR_REDACT_STRIP_MARKERS}'''
+
 [transforms.throttle]
 type = "throttle"
-inputs = ["drop_noise"]
+inputs = ["strip_markers_main"]
 threshold = 50
 window_secs = 1
 key_field = "service"
 
 [sinks.vl]
 type = "http"
-inputs = ["throttle", "hmrun_shaped"]
+inputs = ["throttle", "strip_markers_hmrun"]
 uri = "http://victorialogs:9428/insert/jsonline?_msg_field=message"
 encoding.codec = "json"
 framing.method = "newline_delimited"
@@ -369,6 +381,18 @@ del(.HM_RUN)
 del(.HM_FP)
 '''
 
+[transforms.redact_hmrun]
+type = "remap"
+inputs = ["hmrun_shaped"]
+source = '''
+${VECTOR_REDACT_TRANSFORMS}'''
+
+[transforms.strip_markers_hmrun]
+type = "remap"
+inputs = ["redact_hmrun"]
+source = '''
+${VECTOR_REDACT_STRIP_MARKERS}'''
+
 # NON-SYSTEMD FALLBACK: cron_syslog source
 # ==========================================
 # MUTUALLY EXCLUSIVE with cron_journald_filter. Uncomment ONLY on non-systemd
@@ -382,3 +406,24 @@ del(.HM_FP)
 #
 # Then update cron_journald_filter to take input from cron_syslog instead of journald,
 # or create a new filter branch for syslog.
+
+# REDACTION METRICS PIPELINE (STAGE-004-006)
+# ==========================================
+# log_to_metric taps BOTH redact outputs (markers still present) and emits one
+# vector_redactions_total counter per pattern_type. redact_main/redact_hmrun set
+# .rdt_<name> = 0 on every line and = 1 on a match; each counter entry uses
+# increment_by_value = true, so it adds 0 for non-matching lines and 1 per match
+# (total == lines-with-pattern). The field is ALWAYS present, so log_to_metric
+# never hits its field-absent error+drop path (Vector 0.41 does NOT skip absent
+# fields — it errors and drops the event). pattern_type is a STATIC literal —
+# never matched text. The VL-bound path strips .rdt_* via strip_markers_* so
+# these markers never reach VictoriaLogs.
+[transforms.redaction_metric]
+type = "log_to_metric"
+inputs = ["redact_main", "redact_hmrun"]
+${VECTOR_REDACT_METRICS}
+
+[sinks.redaction_metrics]
+type = "prometheus_exporter"
+inputs = ["redaction_metric"]
+address = "0.0.0.0:9598"

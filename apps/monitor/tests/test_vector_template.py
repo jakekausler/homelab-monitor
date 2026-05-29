@@ -33,9 +33,20 @@ _EXPECTED_SEVERITY_PATTERNS = 7  # emergency, alert, critical, error, warn, noti
 
 def _render_template(docker_exclude: str = "[]") -> str:
     """Substitute template placeholders with dummy values."""
+    from homelab_monitor.kernel.config import DEFAULT_REDACT_PATTERNS  # noqa: PLC0415
+    from homelab_monitor.kernel.cron.render import (  # noqa: PLC0415
+        build_redact_metric_entries,
+        build_redact_strip_markers,
+        build_redact_vrl,
+    )
+
     text = _TEMPLATE_PATH.read_text(encoding="utf-8")
     text = text.replace("${CRON_EVENTS_INGEST_TOKEN}", "dummy-token-for-test")
     text = text.replace("${VECTOR_DOCKER_EXCLUDE}", docker_exclude)
+    pats = list(DEFAULT_REDACT_PATTERNS)
+    text = text.replace("${VECTOR_REDACT_TRANSFORMS}", build_redact_vrl(pats))
+    text = text.replace("${VECTOR_REDACT_STRIP_MARKERS}", build_redact_strip_markers(pats))
+    text = text.replace("${VECTOR_REDACT_METRICS}", build_redact_metric_entries(pats))
     return text
 
 
@@ -76,12 +87,15 @@ def test_hmrun_shaped_transform_present(parsed_config: dict[str, Any]) -> None:
     )
 
 
-def test_sinks_vl_inputs_includes_hmrun_shaped(parsed_config: dict[str, Any]) -> None:
-    """[sinks.vl].inputs must include 'hmrun_shaped'."""
+def test_sinks_vl_inputs_rewired(parsed_config: dict[str, Any]) -> None:
+    """[sinks.vl].inputs must be ['throttle', 'strip_markers_hmrun'] (STAGE-004-006 rewired)."""
     sinks = parsed_config.get("sinks", {})
     vl = sinks.get("vl", {})
     inputs = vl.get("inputs", [])
-    assert "hmrun_shaped" in inputs, f"hmrun_shaped not in sinks.vl.inputs: {inputs}"
+    assert inputs == ["throttle", "strip_markers_hmrun"], (
+        f"sinks.vl.inputs should be ['throttle', 'strip_markers_hmrun'] "
+        f"after redaction rewire, got: {inputs}"
+    )
 
 
 def test_drop_noise_excludes_hmrun(parsed_config: dict[str, Any]) -> None:
@@ -508,19 +522,6 @@ def test_docker_enrich_source_has_no_lookarounds(parsed_config: dict[str, Any]) 
     _assert_no_lookarounds(source)
 
 
-def test_sinks_vl_inputs_unchanged(parsed_config: dict[str, Any]) -> None:
-    """[sinks.vl].inputs must remain ['throttle', 'hmrun_shaped'].
-
-    docker_enrich does not touch the sink wiring.
-    """
-    sinks = parsed_config.get("sinks", {})
-    vl = sinks.get("vl", {})
-    inputs = vl.get("inputs", [])
-    assert inputs == ["throttle", "hmrun_shaped"], (
-        f"sinks.vl.inputs must be ['throttle', 'hmrun_shaped'], got {inputs}"
-    )
-
-
 # ---------------------------------------------------------------------------
 # STAGE-004-004A: docker_severity_extract structural checks
 # ---------------------------------------------------------------------------
@@ -543,12 +544,12 @@ def test_docker_severity_extract_inputs_is_docker_enrich(parsed_config: dict[str
     )
 
 
-def test_throttle_inputs_unchanged(parsed_config: dict[str, Any]) -> None:
-    """throttle.inputs must remain ['drop_noise'] — regression guard."""
+def test_throttle_inputs_rewired(parsed_config: dict[str, Any]) -> None:
+    """throttle.inputs must be ['strip_markers_main'] (STAGE-004-006 rewired)."""
     transforms = parsed_config.get("transforms", {})
     inputs = transforms.get("throttle", {}).get("inputs", [])
-    assert inputs == ["drop_noise"], (
-        f"throttle.inputs must be ['drop_noise'] (unchanged), got {inputs}"
+    assert inputs == ["strip_markers_main"], (
+        f"throttle.inputs should be ['strip_markers_main'] after redaction rewire, got {inputs}"
     )
 
 
@@ -801,14 +802,6 @@ def test_hmrun_filter_inputs_unchanged(parsed_config: dict[str, Any]) -> None:
     )
     assert 'SYSLOG_IDENTIFIER == "hmrun"' in hmrun_filter.get("condition", ""), (
         "hmrun_filter must still filter SYSLOG_IDENTIFIER == 'hmrun'"
-    )
-
-
-def test_sinks_vl_inputs_still_includes_hmrun_shaped(parsed_config: dict[str, Any]) -> None:
-    """Regression guard: sinks.vl.inputs unchanged at ['throttle', 'hmrun_shaped']."""
-    inputs = parsed_config.get("sinks", {}).get("vl", {}).get("inputs", [])
-    assert inputs == ["throttle", "hmrun_shaped"], (
-        f"sinks.vl.inputs must remain ['throttle', 'hmrun_shaped'], got {inputs}"
     )
 
 

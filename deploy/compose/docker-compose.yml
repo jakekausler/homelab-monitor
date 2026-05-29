@@ -298,6 +298,10 @@ services:
       - "2000"
     environment:
       VECTOR_DATA_DIR: /var/lib/vector
+    # Redaction metrics (STAGE-004-006): prometheus_exporter on :9598, scraped
+    # by vmagent over homelab-monitor-net (job_name: vector). Not host-published.
+    expose:
+      - "9598"
     # The monitor renders vector.toml (with the cron-events ingest token
     # substituted) into data_vector_config at boot. Vector --configs the
     # rendered file. A named volume cannot overlay a single file path, so the

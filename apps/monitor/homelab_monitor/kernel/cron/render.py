@@ -26,6 +26,7 @@ from typing import Final
 from structlog.stdlib import BoundLogger
 
 from homelab_monitor.kernel.auth.repository import AuthRepository
+from homelab_monitor.kernel.config import RedactPattern, load_redact_patterns
 from homelab_monitor.kernel.cron.log_ingest_token import ensure_cron_events_token
 from homelab_monitor.kernel.secrets.repository import AsyncSecretsRepository
 
@@ -48,10 +49,109 @@ class VectorRenderContext:
         docker_exclude_csv: Raw ``VECTOR_DOCKER_EXCLUDE`` env-var value (may
             be empty). Passed through ``csv_to_toml_array`` to render the
             ``${VECTOR_DOCKER_EXCLUDE}`` TOML array literal.
+        redact_vrl: The generated redact remap VRL body (from
+            ``build_redact_vrl``). Substituted VERBATIM into the
+            ``${VECTOR_REDACT_TRANSFORMS}`` placeholder inside BOTH the
+            ``redact_main`` and ``redact_hmrun`` transform source bodies in
+            the template, so both paths run byte-identical VRL.
+        redact_strip_markers: The generated del(.rdt_<name>) body (from
+            ``build_redact_strip_markers``). Substituted into
+            ``${VECTOR_REDACT_STRIP_MARKERS}``.
+        redact_metrics: The generated [[transforms.redaction_metric.metrics]]
+            TOML entries (from ``build_redact_metric_entries``). Substituted
+            into ``${VECTOR_REDACT_METRICS}``.
     """
 
     cron_events_token: str
     docker_exclude_csv: str
+    redact_vrl: str = ""
+    redact_strip_markers: str = ""
+    redact_metrics: str = ""
+
+
+def _escape_regex_for_vrl_raw_string(pattern: str) -> str:
+    """Escape a regex pattern for embedding in a VRL raw-string regex arg r'...'.
+
+    VRL slash-delimited regex literals (/.../) are NOT usable in Vector 0.41.1 —
+    the lexer rejects '\\s', '?', quotes, etc. (E203/E202). The working form, used
+    by every other transform (docker_severity_extract, cron_parsed, hmrun_shaped),
+    is the raw-string regex argument r'...'. r'...' is single-quote delimited and
+    has NO escape char, so a literal "'" would terminate the string; Rust's regex
+    crate accepts \\x27 (a single quote) which contains no literal quote. Slashes
+    need NO escaping in raw-string regex args.
+    """
+    return pattern.replace("'", r"\x27")
+
+
+def build_redact_vrl(patterns: list[RedactPattern]) -> str:
+    """Generate the shared redact remap VRL body for the given patterns.
+
+    Per pattern, the API-correct idiom (match() detect → replace() → marker):
+
+        if match(to_string(.message) ?? "", r'<pattern with \\x27 for quotes>') {
+          .message = replace(to_string(.message) ?? "", r'<pattern>', "<replacement>")
+          .rdt_<name> = 1
+        }
+
+    ``match()`` is INFALLIBLE (no `!`). The .rdt_<name> marker is an integer (0
+    default, 1 on match — always set so log_to_metric's field always exists) the
+    downstream log_to_metric taps; strip_markers del()s it before VL. The body
+    is identical for the main and hmrun paths (drift-guard enforced).
+
+    Empty pattern list → a no-op body ("# no redaction patterns configured\\n")
+    so the template still renders valid TOML.
+    """
+    if not patterns:
+        return "# no redaction patterns configured\n"
+    blocks: list[str] = []
+    # Initialize every marker to 0 so log_to_metric's field=rdt_<name> always
+    # exists (Vector 0.41 log_to_metric errors+drops the event when the field is
+    # absent — it does NOT skip). Integer 0/1 (NOT boolean) because log_to_metric
+    # parses the field as a float; booleans raise "Failed to parse field as float".
+    blocks.extend(f".rdt_{p.name} = 0" for p in patterns)
+    for p in patterns:
+        lit = _escape_regex_for_vrl_raw_string(p.pattern)
+        repl = p.replacement.replace("\\", "\\\\").replace('"', '\\"').replace("$", "$$")
+        blocks.append(
+            f"if match(to_string(.message) ?? \"\", r'{lit}') {{\n"
+            f'  .message = replace(to_string(.message) ?? "", r\'{lit}\', "{repl}")\n'
+            f"  .rdt_{p.name} = 1\n"
+            f"}}"
+        )
+    return "\n".join(blocks) + "\n"
+
+
+def build_redact_strip_markers(patterns: list[RedactPattern]) -> str:
+    """Generate the del(.rdt_<name>) body that strips markers before VL.
+
+    Identical for the main and hmrun strip transforms (drift-guarded). del()
+    is a VRL no-op on absent fields, so unconditional del is safe.
+    """
+    if not patterns:
+        return "# no redaction markers to strip\n"
+    return "\n".join(f"del(.rdt_{p.name})" for p in patterns) + "\n"
+
+
+def build_redact_metric_entries(patterns: list[RedactPattern]) -> str:
+    """Generate the [[transforms.redaction_metric.metrics]] TOML entries.
+
+    One counter entry per pattern: increments vector_redactions_total when
+    .rdt_<name> is present; tags.pattern_type is a STATIC literal (the pattern
+    name), never matched text.
+    """
+    if not patterns:
+        return "# no redaction metrics configured"
+    entries: list[str] = []
+    for p in patterns:
+        entries.append(
+            "[[transforms.redaction_metric.metrics]]\n"
+            'type = "counter"\n'
+            f'field = "rdt_{p.name}"\n'
+            'name = "vector_redactions_total"\n'
+            "increment_by_value = true\n"
+            f'tags.pattern_type = "{p.name}"'
+        )
+    return "\n\n".join(entries)
 
 
 def csv_to_toml_array(csv: str, log: BoundLogger) -> str:
@@ -103,6 +203,10 @@ def render_config(
     Placeholders substituted:
     - ``${CRON_EVENTS_INGEST_TOKEN}`` → context.cron_events_token
     - ``${VECTOR_DOCKER_EXCLUDE}`` → TOML array literal from context.docker_exclude_csv
+    - ``${VECTOR_REDACT_TRANSFORMS}`` → context.redact_vrl (generated redact body, used in
+      BOTH redact_main and redact_hmrun)
+    - ``${VECTOR_REDACT_STRIP_MARKERS}`` → context.redact_strip_markers (generated del body)
+    - ``${VECTOR_REDACT_METRICS}`` → context.redact_metrics (generated metric entries)
 
     Atomic write: writes to a sibling ``.tmp`` file and ``os.replace``s the
     result so a concurrently-starting Vector never reads a partial file.
@@ -129,6 +233,9 @@ def render_config(
     substitutions: dict[str, str] = {
         "${CRON_EVENTS_INGEST_TOKEN}": context.cron_events_token,
         "${VECTOR_DOCKER_EXCLUDE}": csv_to_toml_array(context.docker_exclude_csv, log),
+        "${VECTOR_REDACT_TRANSFORMS}": context.redact_vrl,
+        "${VECTOR_REDACT_STRIP_MARKERS}": context.redact_strip_markers,
+        "${VECTOR_REDACT_METRICS}": context.redact_metrics,
     }
     rendered = template
     for placeholder, value in substitutions.items():
@@ -214,9 +321,24 @@ async def render_on_boot(
         return None
 
     docker_exclude_csv = os.environ.get("VECTOR_DOCKER_EXCLUDE", "")
+    try:
+        redact_patterns = load_redact_patterns()
+    except Exception as exc:  # config error → render empty (no redaction) but log loudly
+        log.error(
+            "vector.redact.config_invalid",
+            error=str(exc),
+            consequence="redaction patterns NOT applied this boot (config rejected)",
+        )
+        redact_patterns = []
+    redact_vrl = build_redact_vrl(redact_patterns)
+    redact_strip_markers = build_redact_strip_markers(redact_patterns)
+    redact_metrics = build_redact_metric_entries(redact_patterns)
     context = VectorRenderContext(
         cron_events_token=token,
         docker_exclude_csv=docker_exclude_csv,
+        redact_vrl=redact_vrl,
+        redact_strip_markers=redact_strip_markers,
+        redact_metrics=redact_metrics,
     )
     try:
         render_config(
@@ -235,6 +357,9 @@ __all__ = [
     "CONFIG_GROUP_NAME",
     "TEMPLATE_PLACEHOLDER",
     "VectorRenderContext",
+    "build_redact_metric_entries",
+    "build_redact_strip_markers",
+    "build_redact_vrl",
     "render_config",
     "render_on_boot",
 ]

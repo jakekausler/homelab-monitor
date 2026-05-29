@@ -229,6 +229,9 @@ async def test_render_on_boot_reads_vector_docker_exclude_from_env(
     ctx_spy.assert_called_once_with(
         cron_events_token="the-token",
         docker_exclude_csv="mycontainer",
+        redact_vrl=mock.ANY,
+        redact_strip_markers=mock.ANY,
+        redact_metrics=mock.ANY,
     )
 
 
@@ -266,4 +269,47 @@ async def test_render_on_boot_default_env_uses_empty_csv(
     ctx_spy.assert_called_once_with(
         cron_events_token="tok",
         docker_exclude_csv="",
+        redact_vrl=mock.ANY,
+        redact_strip_markers=mock.ANY,
+        redact_metrics=mock.ANY,
     )
+
+
+@pytest.mark.asyncio
+async def test_render_on_boot_swallows_redact_config_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """load_redact_patterns ValueError → logged, empty fallback, render still succeeds."""
+    monkeypatch.delenv("VECTOR_DOCKER_EXCLUDE", raising=False)
+
+    tmpl = _write_template(
+        tmp_path,
+        '"${CRON_EVENTS_INGEST_TOKEN}" ${VECTOR_DOCKER_EXCLUDE}',
+    )
+    out = tmp_path / "vector.toml"
+
+    with (
+        mock.patch(
+            "homelab_monitor.kernel.cron.render.ensure_cron_events_token",
+            return_value="tok-fallback",
+        ),
+        mock.patch(
+            "homelab_monitor.kernel.cron.render.load_redact_patterns",
+            side_effect=ValueError("logs.redact[0] must be a mapping, got str"),
+        ),
+        mock.patch(
+            "homelab_monitor.kernel.cron.render.VectorRenderContext",
+            wraps=VectorRenderContext,
+        ) as ctx_spy,
+    ):
+        result = await render_on_boot(
+            auth_repo=mock.AsyncMock(),
+            secrets_repo=mock.AsyncMock(),
+            template_path=tmpl,
+            output_path=out,
+            log=_make_log(),
+        )
+
+    assert result == "tok-fallback"
+    ctx_spy.assert_called_once()
+    assert out.exists()

@@ -269,6 +269,27 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
         degraded.append("cron_run_reconciler")
 
     try:
+        from homelab_monitor.kernel.metrics.redaction_audit import (  # noqa: PLC0415
+            RedactionAuditCollector,
+        )
+
+        loader.register(
+            RedactionAuditCollector,
+            {
+                "name": "redaction_audit",
+                "interval_seconds": int(RedactionAuditCollector.interval.total_seconds()),
+                "timeout_seconds": int(RedactionAuditCollector.timeout.total_seconds()),
+            },
+        )
+    except Exception as exc:  # pragma: no cover -- defensive
+        log.warning(
+            "lifespan.collector_register_failed",
+            name="redaction_audit",
+            error=str(exc),
+        )
+        degraded.append("redaction_audit")
+
+    try:
         from homelab_monitor.kernel.metrics.docker_socket_collector import (  # noqa: PLC0415
             DockerSocketCollector,
         )
