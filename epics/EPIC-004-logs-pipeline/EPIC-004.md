@@ -2,11 +2,11 @@
 
 ## Status: In Progress
 
-## Stages Counter: 7 / 45 Complete
+## Stages Counter: 8 / 45 Complete
 
-## Current Stage: STAGE-004-007
+## Current Stage: STAGE-004-008
 
-## Current Phase: STAGE-004-007 Design (Not Started)
+## Current Phase: STAGE-004-008 Design (Not Started)
 
 ## Overview
 
@@ -77,8 +77,8 @@ Stages MUST be implemented in order. No parallelization. Each stage lands a sing
 | STAGE-004-004A | Docker log severity-level extraction | Parse error/warn tokens from docker log messages; enable severity tinting in `<LogViewer>`. ✅ Complete |
 | STAGE-004-005 | Cron fingerprint enrichment | hmrun transform adds `cron_fingerprint`; Drain consumer's model-key override hook uses it. | ✅ Complete |
 | STAGE-004-006 | Redaction pipeline | Vector VRL + audit metric + yaml-driven patterns. | ✅ Complete |
-| STAGE-004-007 | Cursor pagination | All 3 endpoints + `<LogViewer>`. Fixes STAGE-003-011's D-DEFER-PAGINATION. | ← CURRENT |
-| STAGE-004-008 | Custom datetime range picker | All 3 viewer surfaces. Fixes STAGE-003-011's D-DEFER-CUSTOM-RANGE. |
+| STAGE-004-007 | Cursor pagination | All 3 endpoints + `<LogViewer>`. Fixes STAGE-003-011's D-DEFER-PAGINATION. | ✅ Complete |
+| STAGE-004-008 | Custom datetime range picker | All 3 viewer surfaces. Fixes STAGE-003-011's D-DEFER-CUSTOM-RANGE. | ← CURRENT |
 | STAGE-004-009 | Local-time rendering with UTC toggle | Applies via `<LogViewer>`. |
 
 ### Explorer wave (S10-S22)
