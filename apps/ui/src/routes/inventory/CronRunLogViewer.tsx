@@ -7,11 +7,11 @@ import { ApiError } from '@/api/client'
 import { cronQueryKeys, useCronRunLog } from '@/api/crons'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { LogBanner } from '@/components/logs/LogBanner'
-import { LogLineList } from '@/components/logs/LogLineList'
+import { LogViewer } from '@/components/logs/LogViewer'
 import { WrapToggle } from '@/components/logs/WrapToggle'
 import { RunStateBadge } from '@/components/crons/badges'
 import { formatDuration } from '@/lib/relativeTime'
+import type { UseLogsResult } from '@/components/logs/types'
 
 const RUN_ID_DISPLAY_PREFIX = 12
 
@@ -23,15 +23,25 @@ export function CronRunLogViewerPage() {
   const qc = useQueryClient()
   const [wrap, setWrap] = useState(false)
 
-  // 503 vl_unavailable: surface the soft "temporarily unavailable" banner.
   const isUnavailable = log.error instanceof ApiError && log.error.status === 503
+  const isGenericError = log.error instanceof ApiError && !isUnavailable
 
   const handleRefresh = () => {
     void qc.invalidateQueries({ queryKey: cronQueryKeys.runLog(fingerprint, runId) })
   }
 
-  return (
-    <div className="space-y-4">
+  const pages = log.data?.pages ?? []
+  const firstPage = pages[0]
+  // pages accumulate newest-first (pages[0] = newest window, later pages =
+  // OLDER via "Load older"). Each page is internally oldest->newest, so flatten
+  // in REVERSE page order to render globally oldest->newest (older pages on top).
+  const flatLines = pages
+    .slice()
+    .reverse()
+    .flatMap((p) => p.lines)
+
+  const header = (
+    <>
       <Link
         to="/inventory/crons/$fingerprint/runs"
         params={{ fingerprint }}
@@ -41,27 +51,19 @@ export function CronRunLogViewerPage() {
         <ArrowLeft className="mr-1 size-4" />
         Back to runs
       </Link>
-
-      {/* Sticky metadata header */}
       <header
         className="sticky top-0 z-10 -mx-4 space-y-2 border-b border-border bg-background/95 px-4 py-3 backdrop-blur"
         data-testid="run-log-header"
       >
-        {log.isLoading && <p className="text-muted-foreground">Loading run log…</p>}
-        {isUnavailable && (
-          <p className="text-amber-700 dark:text-amber-300" role="status">
-            Logs temporarily unavailable — try again shortly.
-          </p>
-        )}
-        {log.error && !isUnavailable && (
+        {isGenericError && (
           <p role="alert" className="text-red-600">
-            {log.error.message}
+            {log.error?.message}
           </p>
         )}
-        {log.data && (
+        {firstPage && (
           <div className="flex items-center justify-between gap-3">
             <RunLogHeader
-              data={log.data}
+              data={firstPage}
               runId={runId}
               onRefresh={handleRefresh}
               isRefreshing={log.isFetching}
@@ -70,24 +72,52 @@ export function CronRunLogViewerPage() {
           </div>
         )}
       </header>
+    </>
+  )
 
-      {/* Body */}
-      {isUnavailable && (
-        <div
-          className="rounded-md border border-amber-500/40 bg-amber-500/10 p-4 text-sm text-amber-800 dark:text-amber-200"
-          data-testid="unavailable-banner"
-        >
-          The log backend is temporarily unavailable. The run still happened — its metadata will
-          appear here once the backend recovers.
-        </div>
-      )}
-      {log.data?.log_status === 'expired' && (
-        <p className="text-sm text-muted-foreground" data-testid="expired-notice">
-          Log text no longer available (past VictoriaLogs retention).
-        </p>
-      )}
-      {log.data && log.data.log_status !== 'expired' && <RunLogBody data={log.data} wrap={wrap} />}
-    </div>
+  const useLogs = (): UseLogsResult => {
+    if (isUnavailable) {
+      return {
+        lines: undefined,
+        isLoading: false,
+        isError: true,
+        error: log.error instanceof ApiError ? log.error : undefined,
+        logStatus: 'unavailable',
+      }
+    }
+    if (isGenericError) {
+      return { lines: undefined, isLoading: false, isError: false, error: undefined }
+    }
+    return {
+      lines: flatLines,
+      isLoading: log.isLoading,
+      isError: false,
+      error: undefined,
+      logStatus:
+        firstPage?.log_status === 'expired'
+          ? 'expired'
+          : firstPage?.log_status === 'running'
+            ? 'running'
+            : firstPage?.log_status === 'available'
+              ? 'available'
+              : undefined,
+      truncated: firstPage?.truncated,
+      hasMore: log.hasNextPage,
+      isLoadingOlder: log.isFetchingNextPage,
+      loadOlder: () => {
+        void log.fetchNextPage()
+      },
+    }
+  }
+
+  return (
+    <LogViewer
+      useLogs={useLogs}
+      headerSlot={header}
+      emptyStateCopy="No log lines captured for this run."
+      unavailableCopy="The log backend is temporarily unavailable. The run still happened — its metadata will appear here once the backend recovers."
+      wrap={wrap}
+    />
   )
 }
 
@@ -138,38 +168,6 @@ function RunLogHeader({
           {isRefreshing ? 'Refreshing…' : 'Refresh'}
         </Button>
       )}
-    </div>
-  )
-}
-
-function RunLogBody({
-  data,
-  wrap,
-}: {
-  data: import('@/api/types').Schema<'RunLogResponse'>
-  wrap: boolean
-}) {
-  return (
-    <div className="space-y-2">
-      {data.log_status === 'running' && (
-        <LogBanner tone="blue" testId="running-banner">
-          Run in progress — output as of now.
-        </LogBanner>
-      )}
-      {/* TODO: EPIC-004 STAGE-004-005 — cursor-based pagination + custom datetime range picker */}
-      {data.truncated && (
-        <LogBanner tone="amber" testId="truncated-banner">
-          Output truncated at {String(data.lines.length)} lines.
-        </LogBanner>
-      )}
-      <LogLineList
-        lines={data.lines}
-        testId="log-body"
-        wrap={wrap}
-        emptyContent={
-          <span className="text-muted-foreground">No log lines captured for this run.</span>
-        }
-      />
     </div>
   )
 }

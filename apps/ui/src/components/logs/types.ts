@@ -26,6 +26,10 @@ export interface UseLogsResult {
   error: ApiError | undefined
   logStatus?: LogViewerStatus | undefined
   truncated?: boolean | undefined
+  /** STAGE-004-007: cursor pagination (all optional — existing callers unaffected). */
+  hasMore?: boolean | undefined
+  isLoadingOlder?: boolean | undefined
+  loadOlder?: (() => void) | undefined
 }
 
 export interface LogViewerProps {

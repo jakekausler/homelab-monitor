@@ -61,7 +61,10 @@ describe('DockerContainerLogsViewerBody', () => {
       isLoading: false,
       isFetching: false,
       error: null,
-      data: makeData(),
+      data: { pages: [makeData()], pageParams: [undefined] },
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
     } as never)
   })
 
@@ -70,13 +73,21 @@ describe('DockerContainerLogsViewerBody', () => {
       isLoading: false,
       isFetching: false,
       error: null,
-      data: makeData({
-        log_status: 'available',
-        lines: [
-          { timestamp: '2026-05-21T14:30:00Z', message: 'INFO line 1' },
-          { timestamp: '2026-05-21T14:30:05Z', message: 'INFO line 2' },
+      data: {
+        pages: [
+          makeData({
+            log_status: 'available',
+            lines: [
+              { timestamp: '2026-05-21T14:30:00Z', message: 'INFO line 1' },
+              { timestamp: '2026-05-21T14:30:05Z', message: 'INFO line 2' },
+            ],
+          }),
         ],
-      }),
+        pageParams: [undefined],
+      },
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
     } as never)
     renderBody()
     const body = await screen.findByTestId('logs-body')
@@ -92,7 +103,10 @@ describe('DockerContainerLogsViewerBody', () => {
       isLoading: false,
       isFetching: false,
       error: null,
-      data: makeData({ log_status: 'no_lines', lines: [] }),
+      data: { pages: [makeData({ log_status: 'no_lines', lines: [] })], pageParams: [undefined] },
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
     } as never)
     renderBody()
     expect(await screen.findByTestId('no-lines')).toBeInTheDocument()
@@ -110,7 +124,10 @@ describe('DockerContainerLogsViewerBody', () => {
         retryAfterSeconds: null,
         details: null,
       }),
-      data: undefined,
+      data: { pages: [], pageParams: [] },
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
     } as never)
     renderBody()
     expect(await screen.findByTestId('container-unknown')).toBeInTheDocument()
@@ -127,7 +144,10 @@ describe('DockerContainerLogsViewerBody', () => {
         retryAfterSeconds: null,
         details: null,
       }),
-      data: undefined,
+      data: { pages: [], pageParams: [] },
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
     } as never)
     renderBody()
     expect(await screen.findByTestId('unavailable-banner')).toBeInTheDocument()
@@ -138,7 +158,10 @@ describe('DockerContainerLogsViewerBody', () => {
       isLoading: false,
       isFetching: false,
       error: null,
-      data: makeData({ truncated: true }),
+      data: { pages: [makeData({ truncated: true })], pageParams: [undefined] },
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
     } as never)
     renderBody()
     expect(await screen.findByTestId('truncated-banner')).toBeInTheDocument()
@@ -189,7 +212,10 @@ describe('DockerContainerLogsViewerBody', () => {
       isLoading: false,
       isFetching: true,
       error: null,
-      data: makeData(),
+      data: { pages: [makeData()], pageParams: [undefined] },
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
     } as never)
     renderBody()
     const btn = await screen.findByTestId('refresh-logs')
@@ -210,5 +236,35 @@ describe('DockerContainerLogsViewerBody', () => {
     fireEvent.click(checkbox)
     expect(checkbox).toBeChecked()
     expect(screen.getByTestId('logs-body').className).toContain('whitespace-normal')
+  })
+
+  it('renders older pages above newer pages in multi-page load', async () => {
+    // pages[0] = newest window (newer-1), pages[1] = older window (older-1)
+    // After reverse, should render: older-1 then newer-1
+    vi.mocked(useContainerLogs).mockReturnValue({
+      isLoading: false,
+      isFetching: false,
+      error: null,
+      data: {
+        pages: [
+          makeData({
+            log_status: 'available',
+            lines: [{ timestamp: '2026-05-21T14:30:10Z', message: 'newer-1' }],
+          }),
+          makeData({
+            log_status: 'available',
+            lines: [{ timestamp: '2026-05-21T14:30:00Z', message: 'older-1' }],
+          }),
+        ],
+        pageParams: [undefined, 'cursor-1'],
+      },
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
+    } as never)
+    renderBody()
+    const body = await screen.findByTestId('logs-body')
+    const text = body.textContent ?? ''
+    expect(text.indexOf('older-1')).toBeLessThan(text.indexOf('newer-1'))
   })
 })

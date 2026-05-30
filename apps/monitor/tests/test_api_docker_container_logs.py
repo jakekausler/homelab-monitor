@@ -140,8 +140,8 @@ async def test_get_container_logs_available(
     assert body["container_name"] == "homeassistant"
     assert body["log_status"] == "available"
     assert len(body["lines"]) == 2  # noqa: PLR2004
-    assert body["lines"][0]["message"] == "line one"
-    assert body["lines"][1]["message"] == "line two"
+    assert body["lines"][0]["message"] == "line two"
+    assert body["lines"][1]["message"] == "line one"
     assert body["truncated"] is False
     assert body["window_start"] is not None
     assert body["window_end"] is not None
@@ -157,15 +157,24 @@ async def test_get_container_logs_truncated_at_500(
     """200 truncated: VL returns 501 lines, server caps at 500 and sets truncated=True."""
     monkeypatch.setenv(VL_URL_ENV, VL_URL)
     await _seed_docker_container(repo, target_id="abc1", name="homeassistant")
-    # 501 lines: VL client reads limit+1 == 501 NDJSON lines, then sees the
-    # 501st and flags truncated=True.
-    httpx_mock.add_response(method="GET", text=_make_ndjson(*(f"line-{i}" for i in range(501))))
+    # 501 lines, all at one _time: VL client reads limit+1 == 501 NDJSON lines,
+    # sees the 501st and flags truncated=True. Because all 501 share one ns, the
+    # A1 paginator's [GROUP-COMPLETE] branch fires a SECOND exact-ns VL query to
+    # complete the boundary same-ns group, so mark the response reusable to serve
+    # both fetches. The completed group of 501 lines is returned whole (a page
+    # never splits a same-ns group).
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(r"http://vl-test:9428/.*"),
+        text=_make_ndjson(*(f"line-{i}" for i in range(501))),
+        is_reusable=True,
+    )
 
     resp = await authenticated_client.get("/api/integrations/docker/containers/homeassistant/logs")
     assert resp.status_code == HTTP_OK
     body = resp.json()
     assert body["log_status"] == "available"
-    assert len(body["lines"]) == 500  # noqa: PLR2004
+    assert len(body["lines"]) == 501  # noqa: PLR2004
     assert body["truncated"] is True
 
 
@@ -237,6 +246,21 @@ async def test_get_container_logs_vl_unavailable(
 
 
 @pytest.mark.asyncio
+async def test_get_container_logs_400_on_malformed_cursor(
+    authenticated_client: AsyncClient,
+    repo: SqliteRepository,
+) -> None:
+    """A malformed cursor returns 400 with code 'invalid_cursor'."""
+    await _seed_docker_container(repo, target_id="abc1", name="homeassistant")
+    resp = await authenticated_client.get(
+        "/api/integrations/docker/containers/homeassistant/logs",
+        params={"cursor": "!!!garbage!!!"},
+    )
+    assert resp.status_code == 400  # noqa: PLR2004
+    assert resp.json()["error"]["code"] == "invalid_cursor"
+
+
+@pytest.mark.asyncio
 async def test_get_container_logs_since_clamped_at_7d(
     authenticated_client: AsyncClient,
     repo: SqliteRepository,
@@ -297,11 +321,14 @@ async def test_get_container_logs_limit_clamped_at_500(
     """limit=10000 → silently clamped to 500. VL HTTP request limit param == 501."""
     monkeypatch.setenv(VL_URL_ENV, VL_URL)
     await _seed_docker_container(repo, target_id="abc1", name="homeassistant")
-    # Match VL URL with regex to avoid catching setup fixture mocks
+    # Match VL URL with regex. All 501 lines share one _time, so the A1
+    # paginator's [GROUP-COMPLETE] branch fires a SECOND exact-ns VL query; mark
+    # reusable to serve both fetches.
     httpx_mock.add_response(
         method="GET",
         url=re.compile(r"http://vl-test:9428/.*"),
         text=_make_ndjson(*(f"line-{i}" for i in range(501))),
+        is_reusable=True,
     )
 
     resp = await authenticated_client.get(
@@ -309,12 +336,12 @@ async def test_get_container_logs_limit_clamped_at_500(
     )
     assert resp.status_code == HTTP_OK
     body = resp.json()
-    assert len(body["lines"]) == 500  # noqa: PLR2004
+    assert len(body["lines"]) == 501  # noqa: PLR2004
     assert body["truncated"] is True
-    # Verify the VL client requested limit+1 == 501 (cap+1 detection)
-    # Filter to only VL requests
+    # First VL request is the page fetch (limit == 501, cap+1 detection); the
+    # second is the [GROUP-COMPLETE] exact-ns query.
     requests = [r for r in httpx_mock.get_requests() if "vl-test" in str(r.url)]
-    assert len(requests) == 1
+    assert len(requests) == 2  # noqa: PLR2004
     assert requests[0].url.params.get("limit") == "501"
 
 

@@ -23,9 +23,10 @@ from homelab_monitor.kernel.api.dependencies import (
     require_session,
     require_user_or_token,
 )
+from homelab_monitor.kernel.api.errors import HttpProblem
 from homelab_monitor.kernel.auth.models import ApiToken, User
 from homelab_monitor.kernel.auth.scopes import Scope
-from homelab_monitor.kernel.config import VlQueryLimits, load_vl_query_limits
+from homelab_monitor.kernel.config import load_vl_query_limits
 from homelab_monitor.kernel.db.repositories.compose_actions_repository import (
     ComposeActionRow,
     ComposeActionsRepository,
@@ -54,6 +55,10 @@ from homelab_monitor.kernel.db.repository import SqliteRepository
 from homelab_monitor.kernel.docker.compose_action_runner import ComposeActionRunner
 from homelab_monitor.kernel.docker.socket_client import DockerSocketClient
 from homelab_monitor.kernel.logs.models import LogLine, from_victorialogs_line
+from homelab_monitor.kernel.logs.pagination import (
+    InvalidCursorError,
+    paginate_older,
+)
 from homelab_monitor.kernel.logs.victorialogs_client import (
     VictoriaLogsClient,
     VictoriaLogsClientError,
@@ -132,6 +137,8 @@ class ContainerLogsResponse(BaseModel):
     truncated: bool
     window_start: str | None
     window_end: str | None
+    next_cursor: str | None = None
+    has_more: bool = False
 
 
 def _get_targets_repo(
@@ -501,6 +508,7 @@ async def get_container_logs(  # noqa: PLR0913 -- FastAPI route with injected de
     vl_url: Annotated[str, Depends(get_vl_url)],
     since: Annotated[str, Query()] = _LOGS_DEFAULT_SINCE,
     limit: Annotated[int, Query(ge=1)] = _LOGS_DEFAULT_LIMIT,
+    cursor: Annotated[str | None, Query()] = None,
 ) -> ContainerLogsResponse:
     """Fetch recent log lines for one container from VictoriaLogs.
 
@@ -543,18 +551,25 @@ async def get_container_logs(  # noqa: PLR0913 -- FastAPI route with injected de
     # Build the LogsQL query — D-LOG-LABEL-SERVICE.
     expr = f"service:{logsql_quote_phrase(name)}"
 
-    # Run the VL query via the bounded client.
+    # Run the VL query via the bounded client + A1 paginator.
     base_limits = load_vl_query_limits()
-    # Override max_lines for this stage's tighter cap (500 vs default 10000).
-    # The VlQueryLimits dataclass is frozen; rebuild with our cap.
-    capped_limits = VlQueryLimits(
-        max_lines=effective_limit,
-        max_bytes=base_limits.max_bytes,
-        timeout_seconds=base_limits.timeout_seconds,
-    )
-    client = VictoriaLogsClient(vl_url=vl_url, http_client=http_client, limits=capped_limits)
+    client = VictoriaLogsClient(vl_url=vl_url, http_client=http_client, limits=base_limits)
     try:
-        result = await client.query(expr=expr, start=window_start, end=window_end)
+        page = await paginate_older(
+            client=client,
+            expr=expr,
+            window_start=window_start,
+            window_end=window_end,
+            page_size=effective_limit,
+            base_limits=base_limits,
+            cursor=cursor,
+        )
+    except InvalidCursorError as exc:
+        raise HttpProblem(
+            status_code=400,
+            code="invalid_cursor",
+            message=str(exc),
+        ) from exc
     except VictoriaLogsClientError as exc:
         # D-API-CONTRACT: 503 with populated body, lines=[].
         raise HTTPException(
@@ -569,7 +584,7 @@ async def get_container_logs(  # noqa: PLR0913 -- FastAPI route with injected de
             ).model_dump(),
         ) from exc
 
-    if len(result.lines) == 0:
+    if len(page.lines) == 0 and cursor is None:
         log_status: _ContainerLogStatus = "no_lines"
     else:
         log_status = "available"
@@ -577,10 +592,12 @@ async def get_container_logs(  # noqa: PLR0913 -- FastAPI route with injected de
     return ContainerLogsResponse(
         container_name=name,
         log_status=log_status,
-        lines=[from_victorialogs_line(ln) for ln in result.lines],
-        truncated=result.truncated,
+        lines=[from_victorialogs_line(ln) for ln in page.lines],
+        truncated=page.truncated,
         window_start=window_start,
         window_end=window_end,
+        next_cursor=page.next_cursor,
+        has_more=page.has_more,
     )
 
 

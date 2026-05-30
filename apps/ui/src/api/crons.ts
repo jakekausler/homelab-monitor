@@ -1,8 +1,10 @@
 import {
+  useInfiniteQuery,
   useMutation,
   useQuery,
   useQueryClient,
   type UseMutationResult,
+  type UseInfiniteQueryResult,
   type UseQueryResult,
 } from '@tanstack/react-query'
 
@@ -241,17 +243,25 @@ export function useListCronRuns(
 export function useCronRunLog(
   fingerprint: string,
   runId: string,
-): UseQueryResult<RunLogResponse, ApiError> {
-  return useQuery({
+): UseInfiniteQueryResult<
+  { pages: RunLogResponse[]; pageParams: (string | undefined)[] },
+  ApiError
+> {
+  return useInfiniteQuery({
     queryKey: cronQueryKeys.runLog(fingerprint, runId),
-    queryFn: async () => {
+    initialPageParam: undefined as string | undefined,
+    queryFn: async ({ pageParam }) => {
+      const query: Record<string, string> = {}
+      if (pageParam) query.cursor = pageParam
       const result = await apiClient.GET('/api/crons/{fingerprint}/runs/{run_id}/log', {
-        params: { path: { fingerprint, run_id: runId } },
+        params: { path: { fingerprint, run_id: runId }, query },
       })
       return unwrap<RunLogResponse>(result)
     },
+    getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
     enabled: fingerprint.length > 0 && runId.length > 0,
     retry: false,
-    refetchInterval: (query) => (query.state.data?.log_status === 'running' ? 5000 : false),
+    refetchInterval: (query) =>
+      query.state.data?.pages[0]?.log_status === 'running' ? 5000 : false,
   })
 }

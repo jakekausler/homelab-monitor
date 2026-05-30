@@ -161,6 +161,17 @@ class VictoriaLogsClient:
 
         return self._parse_ndjson(resp.text)
 
+    def with_limits(self, limits: VlQueryLimits) -> VictoriaLogsClient:
+        """Return a new client sharing this client's URL + http client but with
+        different bounded limits. Used by the A1 paginator to set the per-page
+        limit (page_size + boundary_n) without mutating the original client.
+        """
+        return VictoriaLogsClient(
+            vl_url=self._vl_url,
+            http_client=self._http_client,
+            limits=limits,
+        )
+
     def _parse_ndjson(self, body: str) -> VlQueryResult:
         """Parse VL NDJSON, applying the max-lines + max-bytes caps."""
         lines: list[VlLogLine] = []

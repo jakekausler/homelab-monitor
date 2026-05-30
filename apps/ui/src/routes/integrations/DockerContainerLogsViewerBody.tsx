@@ -47,15 +47,25 @@ export function DockerContainerLogsViewerBody({
     )
   }
 
+  const pages = logs.data?.pages ?? []
+  const firstPage = pages[0]
+  // pages accumulate newest-first (pages[0] = newest window, later pages =
+  // OLDER via "Load older"). Each page is internally oldest->newest, so flatten
+  // in REVERSE page order to render globally oldest->newest (older pages on top).
+  const flatLines = pages
+    .slice()
+    .reverse()
+    .flatMap((p) => p.lines)
+
   const header = (
     <>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-2">
           <span className="font-medium">{containerName}</span>
           {cachedRow?.status != null && <StatusBadge status={cachedRow.status} />}
-          {logs.data && logs.data.lines.length > 0 && (
+          {flatLines.length > 0 && (
             <span className="text-xs text-muted-foreground" data-testid="last-log-at">
-              Last: {formatLogTimestamp(logs.data.lines[logs.data.lines.length - 1]?.timestamp)}
+              Last: {formatLogTimestamp(flatLines[flatLines.length - 1]?.timestamp)}
             </span>
           )}
         </div>
@@ -117,17 +127,22 @@ export function DockerContainerLogsViewerBody({
       }
     }
     return {
-      lines: logs.data?.lines,
+      lines: flatLines,
       isLoading: logs.isLoading,
       isError: false,
       error: undefined,
       logStatus:
-        logs.data?.log_status === 'no_lines'
+        firstPage?.log_status === 'no_lines'
           ? 'no_lines'
-          : logs.data?.log_status === 'available'
+          : firstPage?.log_status === 'available'
             ? 'available'
             : undefined,
-      truncated: logs.data?.truncated,
+      truncated: firstPage?.truncated,
+      hasMore: logs.hasNextPage,
+      isLoadingOlder: logs.isFetchingNextPage,
+      loadOlder: () => {
+        void logs.fetchNextPage()
+      },
     }
   }
 

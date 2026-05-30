@@ -151,7 +151,10 @@ describe('CronRunLogViewerPage', () => {
       isLoading: false,
       isFetching: false,
       error: null,
-      data: makeLogData(),
+      data: { pages: [makeLogData()], pageParams: [undefined] },
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
     } as unknown as ReturnType<typeof useCronRunLog>)
   })
 
@@ -161,9 +164,12 @@ describe('CronRunLogViewerPage', () => {
       isFetching: false,
       error: null,
       data: undefined,
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
     } as unknown as ReturnType<typeof useCronRunLog>)
     renderWithRouter()
-    expect(await screen.findByText('Loading run log…')).toBeInTheDocument()
+    expect(await screen.findByText('Loading logs…')).toBeInTheDocument()
   })
 
   it('renders log entries for available log', async () => {
@@ -171,17 +177,25 @@ describe('CronRunLogViewerPage', () => {
       isLoading: false,
       isFetching: false,
       error: null,
-      data: makeLogData({
-        log_status: 'available',
-        lines: [
-          { timestamp: '2026-05-01T12:00:01Z', message: 'Starting backup' },
-          { timestamp: '2026-05-01T12:00:05Z', message: 'Files copied' },
-          { timestamp: '2026-05-01T12:00:29Z', message: 'Done' },
+      data: {
+        pages: [
+          makeLogData({
+            log_status: 'available',
+            lines: [
+              { timestamp: '2026-05-01T12:00:01Z', message: 'Starting backup' },
+              { timestamp: '2026-05-01T12:00:05Z', message: 'Files copied' },
+              { timestamp: '2026-05-01T12:00:29Z', message: 'Done' },
+            ],
+          }),
         ],
-      }),
+        pageParams: [undefined],
+      },
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
     } as unknown as ReturnType<typeof useCronRunLog>)
     renderWithRouter()
-    const body = await screen.findByTestId('log-body')
+    const body = await screen.findByTestId('logs-body')
     expect(within(body).getByText('Starting backup')).toBeInTheDocument()
     expect(within(body).getByText('Files copied')).toBeInTheDocument()
     expect(within(body).getByText('Done')).toBeInTheDocument()
@@ -192,13 +206,21 @@ describe('CronRunLogViewerPage', () => {
       isLoading: false,
       isFetching: false,
       error: null,
-      data: makeLogData({
-        log_status: 'available',
-        lines: [{ timestamp: '2026-05-01T12:00:01Z', message: 'hello' }],
-      }),
+      data: {
+        pages: [
+          makeLogData({
+            log_status: 'available',
+            lines: [{ timestamp: '2026-05-01T12:00:01Z', message: 'hello' }],
+          }),
+        ],
+        pageParams: [undefined],
+      },
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
     } as unknown as ReturnType<typeof useCronRunLog>)
     renderWithRouter()
-    const body = await screen.findByTestId('log-body')
+    const body = await screen.findByTestId('logs-body')
     expect(within(body).getByText('2026-05-01T12:00:01Z')).toBeInTheDocument()
   })
 
@@ -207,11 +229,17 @@ describe('CronRunLogViewerPage', () => {
       isLoading: false,
       isFetching: false,
       error: null,
-      data: makeLogData({ log_status: 'available', lines: [] }),
+      data: {
+        pages: [makeLogData({ log_status: 'available', lines: [] })],
+        pageParams: [undefined],
+      },
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
     } as unknown as ReturnType<typeof useCronRunLog>)
     renderWithRouter()
-    const body = await screen.findByTestId('log-body')
-    expect(within(body).getByText('No log lines captured for this run.')).toBeInTheDocument()
+    const body = await screen.findByTestId('logs-body')
+    expect(body.textContent).toBe('')
   })
 
   it('renders truncated banner when truncated is true', async () => {
@@ -219,20 +247,28 @@ describe('CronRunLogViewerPage', () => {
       isLoading: false,
       isFetching: false,
       error: null,
-      data: makeLogData({
-        log_status: 'available',
-        truncated: true,
-        lines: [{ timestamp: 't1', message: 'line' }],
-      }),
+      data: {
+        pages: [
+          makeLogData({
+            log_status: 'available',
+            truncated: true,
+            lines: [{ timestamp: 't1', message: 'line' }],
+          }),
+        ],
+        pageParams: [undefined],
+      },
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
     } as unknown as ReturnType<typeof useCronRunLog>)
     renderWithRouter()
     expect(await screen.findByTestId('truncated-banner')).toBeInTheDocument()
-    expect(screen.getByTestId('truncated-banner')).toHaveTextContent('Output truncated')
+    expect(screen.getByTestId('truncated-banner')).toHaveTextContent('Narrow the time window')
   })
 
   it('omits truncated banner when truncated is false', async () => {
     renderWithRouter()
-    await screen.findByTestId('log-body')
+    await screen.findByTestId('logs-body')
     expect(screen.queryByTestId('truncated-banner')).toBeNull()
   })
 
@@ -241,13 +277,21 @@ describe('CronRunLogViewerPage', () => {
       isLoading: false,
       isFetching: false,
       error: null,
-      data: makeLogData({
-        state: 'running',
-        log_status: 'running',
-        exit_code: null,
-        duration_seconds: null,
-        lines: [],
-      }),
+      data: {
+        pages: [
+          makeLogData({
+            state: 'running',
+            log_status: 'running',
+            exit_code: null,
+            duration_seconds: null,
+            lines: [],
+          }),
+        ],
+        pageParams: [undefined],
+      },
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
     } as unknown as ReturnType<typeof useCronRunLog>)
     renderWithRouter()
     expect(await screen.findByTestId('running-banner')).toBeInTheDocument()
@@ -257,7 +301,7 @@ describe('CronRunLogViewerPage', () => {
 
   it('omits Refresh button when log_status is available', async () => {
     renderWithRouter()
-    await screen.findByTestId('log-body')
+    await screen.findByTestId('logs-body')
     expect(screen.queryByTestId('refresh-log')).toBeNull()
   })
 
@@ -270,13 +314,21 @@ describe('CronRunLogViewerPage', () => {
       isLoading: false,
       isFetching: false,
       error: null,
-      data: makeLogData({
-        state: 'running',
-        log_status: 'running',
-        exit_code: null,
-        duration_seconds: null,
-        lines: [],
-      }),
+      data: {
+        pages: [
+          makeLogData({
+            state: 'running',
+            log_status: 'running',
+            exit_code: null,
+            duration_seconds: null,
+            lines: [],
+          }),
+        ],
+        pageParams: [undefined],
+      },
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
     } as unknown as ReturnType<typeof useCronRunLog>)
     renderWithRouter()
     expect(await screen.findByTestId('refresh-log')).toBeInTheDocument()
@@ -287,7 +339,10 @@ describe('CronRunLogViewerPage', () => {
       isLoading: false,
       isFetching: false,
       error: null,
-      data: makeLogData({ log_status: 'expired', lines: [] }),
+      data: { pages: [makeLogData({ log_status: 'expired', lines: [] })], pageParams: [undefined] },
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
     } as unknown as ReturnType<typeof useCronRunLog>)
     renderWithRouter()
     expect(await screen.findByTestId('expired-notice')).toBeInTheDocument()
@@ -299,11 +354,14 @@ describe('CronRunLogViewerPage', () => {
       isLoading: false,
       isFetching: false,
       error: null,
-      data: makeLogData({ log_status: 'expired', lines: [] }),
+      data: { pages: [makeLogData({ log_status: 'expired', lines: [] })], pageParams: [undefined] },
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
     } as unknown as ReturnType<typeof useCronRunLog>)
     renderWithRouter()
     await screen.findByTestId('expired-notice')
-    expect(screen.queryByTestId('log-body')).toBeNull()
+    expect(screen.queryByTestId('logs-body')).toBeNull()
   })
 
   it('renders unavailable banner on 503 ApiError', async () => {
@@ -317,12 +375,15 @@ describe('CronRunLogViewerPage', () => {
         retryAfterSeconds: null,
         details: null,
       }),
-      data: undefined,
+      data: { pages: [], pageParams: [] },
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
     } as unknown as ReturnType<typeof useCronRunLog>)
     renderWithRouter()
     expect(await screen.findByTestId('unavailable-banner')).toBeInTheDocument()
     expect(screen.getByRole('status')).toHaveTextContent(
-      'Logs temporarily unavailable — try again shortly.',
+      'The log backend is temporarily unavailable.',
     )
   })
 
@@ -337,7 +398,10 @@ describe('CronRunLogViewerPage', () => {
         retryAfterSeconds: null,
         details: null,
       }),
-      data: undefined,
+      data: { pages: [], pageParams: [] },
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
     } as unknown as ReturnType<typeof useCronRunLog>)
     renderWithRouter()
     expect(await screen.findByRole('alert')).toHaveTextContent('Internal server error')
@@ -349,7 +413,13 @@ describe('CronRunLogViewerPage', () => {
       isLoading: false,
       isFetching: false,
       error: null,
-      data: makeLogData({ anomaly_flags: 'duration_outlier,exit_code_changed', lines: [] }),
+      data: {
+        pages: [makeLogData({ anomaly_flags: 'duration_outlier,exit_code_changed', lines: [] })],
+        pageParams: [undefined],
+      },
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
     } as unknown as ReturnType<typeof useCronRunLog>)
     renderWithRouter()
     await screen.findByTestId('run-log-header')
@@ -370,7 +440,10 @@ describe('CronRunLogViewerPage', () => {
       isLoading: false,
       isFetching: false,
       error: null,
-      data: makeLogData({ lines: [] }),
+      data: { pages: [makeLogData({ lines: [] })], pageParams: [undefined] },
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
     } as unknown as ReturnType<typeof useCronRunLog>)
     renderWithRouter(`/inventory/crons/${FP}/runs/${longRunId}`)
     const header = await screen.findByTestId('run-log-header')
@@ -391,7 +464,10 @@ describe('CronRunLogViewerPage', () => {
       isLoading: false,
       isFetching: false,
       error: null,
-      data: makeLogData({ state: 'ok', lines: [] }),
+      data: { pages: [makeLogData({ state: 'ok', lines: [] })], pageParams: [undefined] },
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
     } as unknown as ReturnType<typeof useCronRunLog>)
     renderWithRouter()
     await screen.findByTestId('run-log-header')
@@ -408,16 +484,54 @@ describe('CronRunLogViewerPage', () => {
       isLoading: false,
       isFetching: false,
       error: null,
-      data: makeLogData({
-        log_status: 'available',
-        lines: [{ timestamp: '2026-05-01T12:00:01Z', message: 'hello' }],
-      }),
+      data: {
+        pages: [
+          makeLogData({
+            log_status: 'available',
+            lines: [{ timestamp: '2026-05-01T12:00:01Z', message: 'hello' }],
+          }),
+        ],
+        pageParams: [undefined],
+      },
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
     } as unknown as ReturnType<typeof useCronRunLog>)
     renderWithRouter()
-    const body = await screen.findByTestId('log-body')
+    const body = await screen.findByTestId('logs-body')
     expect(body.className).toContain('overflow-x-auto')
     const checkbox = within(screen.getByTestId('wrap-toggle')).getByRole('checkbox')
     fireEvent.click(checkbox)
-    expect(screen.getByTestId('log-body').className).toContain('whitespace-normal')
+    expect(screen.getByTestId('logs-body').className).toContain('whitespace-normal')
+  })
+
+  it('renders older pages above newer pages in multi-page load', async () => {
+    // pages[0] = newest window (newer-1), pages[1] = older window (older-1)
+    // After reverse, should render: older-1 then newer-1
+    vi.mocked(useCronRunLog).mockReturnValue({
+      isLoading: false,
+      isFetching: false,
+      error: null,
+      data: {
+        pages: [
+          makeLogData({
+            log_status: 'available',
+            lines: [{ timestamp: '2026-05-01T12:00:10Z', message: 'newer-1' }],
+          }),
+          makeLogData({
+            log_status: 'available',
+            lines: [{ timestamp: '2026-05-01T12:00:00Z', message: 'older-1' }],
+          }),
+        ],
+        pageParams: [undefined, 'cursor-1'],
+      },
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
+    } as unknown as ReturnType<typeof useCronRunLog>)
+    renderWithRouter()
+    const body = await screen.findByTestId('logs-body')
+    const text = body.textContent ?? ''
+    expect(text.indexOf('older-1')).toBeLessThan(text.indexOf('newer-1'))
   })
 })

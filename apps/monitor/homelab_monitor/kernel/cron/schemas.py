@@ -356,6 +356,8 @@ class RunLogResponse(BaseModel):
     anomaly_flags: str
     lines: list[LogLine]
     truncated: bool
+    next_cursor: str | None = None
+    has_more: bool = False
 
 
 # ---------- Helpers ----------

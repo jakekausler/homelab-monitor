@@ -537,6 +537,33 @@ async def test_get_run_log_503_on_vl_error(
     assert resp.json()["error"]["code"] == "vl_unavailable"
 
 
+@pytest.mark.asyncio
+async def test_get_run_log_400_on_malformed_cursor(
+    authenticated_client: AsyncClient,
+    repo: SqliteRepository,
+) -> None:
+    """A malformed cursor returns 400 with code 'invalid_cursor'."""
+    fp = await _seed_cron(repo, name="log-badcur")
+    now_ts = "2026-05-19T00:00:00+00:00"
+    await _seed_run(
+        repo,
+        run_id="log-badcur-run",
+        cron_fingerprint=fp,
+        state="ok",
+        started_at=now_ts,
+        ended_at=now_ts,
+        vl_window_start=now_ts,
+        vl_window_end=now_ts,
+    )
+
+    resp = await authenticated_client.get(
+        f"/api/crons/{fp}/runs/log-badcur-run/log",
+        params={"cursor": "!!!garbage!!!"},
+    )
+    assert resp.status_code == 400  # noqa: PLR2004
+    assert resp.json()["error"]["code"] == "invalid_cursor"
+
+
 # ---------------------------------------------------------------------------
 # 404 cases
 # ---------------------------------------------------------------------------

@@ -636,6 +636,7 @@ export const dockerLogsQueryKeys = {
 /**
  * Fetch recent log lines for one container from VictoriaLogs.
  * Manual refresh only (no refetchInterval per D-MANUAL-REFRESH-V1).
+ * STAGE-004-007: A1 cursor pagination.
  *
  * @param containerName — container name (route param)
  * @param since — duration string Xs|Xm|Xh|Xd, default 15m
@@ -643,18 +644,22 @@ export const dockerLogsQueryKeys = {
 export function useContainerLogs(
   containerName: string,
   since: string,
-): UseQueryResult<ContainerLogsResponse, ApiError> {
-  return useQuery({
+): UseInfiniteQueryResult<
+  { pages: ContainerLogsResponse[]; pageParams: (string | undefined)[] },
+  ApiError
+> {
+  return useInfiniteQuery({
     queryKey: dockerLogsQueryKeys.logs(containerName, since),
-    queryFn: async () => {
+    initialPageParam: undefined as string | undefined,
+    queryFn: async ({ pageParam }) => {
+      const query: Record<string, string> = { since }
+      if (pageParam) query.cursor = pageParam
       const result = await apiClient.GET('/api/integrations/docker/containers/{name}/logs', {
-        params: {
-          path: { name: containerName },
-          query: { since },
-        },
+        params: { path: { name: containerName }, query },
       })
       return unwrap<ContainerLogsResponse>(result)
     },
+    getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
     enabled: containerName.length > 0,
     retry: false,
   })

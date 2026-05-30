@@ -29,7 +29,7 @@ from typing import Annotated
 
 import httpx
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from starlette.responses import PlainTextResponse
 from starlette.responses import Response as _FastApiResponse
 
@@ -92,6 +92,12 @@ from homelab_monitor.kernel.cron.schemas import (
 from homelab_monitor.kernel.db.time import utc_now_iso
 from homelab_monitor.kernel.heartbeat.schemas import query_model
 from homelab_monitor.kernel.logs.models import from_victorialogs_line
+from homelab_monitor.kernel.logs.pagination import (
+    InvalidCursorError as LogInvalidCursorError,
+)
+from homelab_monitor.kernel.logs.pagination import (
+    paginate_older,
+)
 from homelab_monitor.kernel.logs.victorialogs_client import (
     VictoriaLogsClient,
     VictoriaLogsClientError,
@@ -101,6 +107,8 @@ from homelab_monitor.kernel.logs.victorialogs_client import (
 from homelab_monitor.plugins.discoverers.cron_discoverer import resolve_hostname
 
 router = APIRouter(prefix="/crons", tags=["crons"])
+
+_RUN_LOG_PAGE_SIZE = 500
 
 # Throttle state for discover-now endpoint
 _DISCOVER_NOW_THROTTLE_SECONDS = 10.0
@@ -367,6 +375,7 @@ async def get_cron_run_log(  # noqa: PLR0913 -- explicit dependency injection pe
     run_repo: Annotated[CronRunRepository, Depends(get_cron_run_repo)],
     http_client: Annotated[httpx.AsyncClient, Depends(get_http_client)],
     vl_url: Annotated[str, Depends(get_vl_url)],
+    cursor: Annotated[str | None, Query()] = None,
 ) -> RunLogResponse:
     """Fetch a single run's log lines from VictoriaLogs.
 
@@ -406,6 +415,7 @@ async def get_cron_run_log(  # noqa: PLR0913 -- explicit dependency injection pe
             log_status="running",
             vl_url=vl_url,
             http_client=http_client,
+            cursor=cursor,
         )
 
     # Closed run: decide expired vs available based on vl_window_end + retention.
@@ -442,6 +452,7 @@ async def get_cron_run_log(  # noqa: PLR0913 -- explicit dependency injection pe
         log_status="available",
         vl_url=vl_url,
         http_client=http_client,
+        cursor=cursor,
     )
 
 
@@ -468,19 +479,36 @@ async def _query_run_log(  # noqa: PLR0913
     log_status: RunLogStatus,
     vl_url: str,
     http_client: httpx.AsyncClient,
+    cursor: str | None,
 ) -> RunLogResponse:
-    """Build the LogsQL query, call VL, and assemble a RunLogResponse.
+    """Build the LogsQL query, call VL via the A1 paginator, assemble a
+    RunLogResponse. Pagination is WITHIN the run's finite window (B2).
 
-    Raises HttpProblem(503, 'vl_unavailable') on VictoriaLogsClientError.
+    Raises HttpProblem(503, 'vl_unavailable') on VictoriaLogsClientError and
+    HttpProblem(400, 'invalid_cursor') on a malformed cursor.
     """
     if run.source == "wrapper":
         expr = build_amode_query(run.run_id)
     else:
         expr = build_bmode_query(cron_command)
-    limits = load_vl_query_limits()
-    client = VictoriaLogsClient(vl_url=vl_url, http_client=http_client, limits=limits)
+    base_limits = load_vl_query_limits()
+    client = VictoriaLogsClient(vl_url=vl_url, http_client=http_client, limits=base_limits)
     try:
-        result = await client.query(expr=expr, start=window_start, end=window_end)
+        page = await paginate_older(
+            client=client,
+            expr=expr,
+            window_start=window_start,
+            window_end=window_end,
+            page_size=_RUN_LOG_PAGE_SIZE,
+            base_limits=base_limits,
+            cursor=cursor,
+        )
+    except LogInvalidCursorError as exc:
+        raise HttpProblem(
+            status_code=400,
+            code="invalid_cursor",
+            message=str(exc),
+        ) from exc
     except VictoriaLogsClientError as exc:
         raise HttpProblem(
             status_code=503,
@@ -494,8 +522,10 @@ async def _query_run_log(  # noqa: PLR0913
         line_count=run.line_count,
         byte_count=run.byte_count,
         anomaly_flags=run.anomaly_flags,
-        lines=[from_victorialogs_line(line) for line in result.lines],
-        truncated=result.truncated,
+        lines=[from_victorialogs_line(line) for line in page.lines],
+        truncated=page.truncated,
+        next_cursor=page.next_cursor,
+        has_more=page.has_more,
     )
 
 

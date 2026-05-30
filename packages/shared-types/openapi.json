@@ -741,6 +741,11 @@
             "title": "Container Name",
             "type": "string"
           },
+          "has_more": {
+            "default": false,
+            "title": "Has More",
+            "type": "boolean"
+          },
           "lines": {
             "items": {
               "$ref": "#/components/schemas/LogLine"
@@ -757,6 +762,17 @@
             ],
             "title": "Log Status",
             "type": "string"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
           },
           "truncated": {
             "title": "Truncated",
@@ -2440,6 +2456,11 @@
         "additionalProperties": false,
         "description": "Response for GET /api/logs/query.",
         "properties": {
+          "has_more": {
+            "default": false,
+            "title": "Has More",
+            "type": "boolean"
+          },
           "lines": {
             "items": {
               "$ref": "#/components/schemas/LogLine"
@@ -3028,6 +3049,11 @@
             ],
             "title": "Duration Seconds"
           },
+          "has_more": {
+            "default": false,
+            "title": "Has More",
+            "type": "boolean"
+          },
           "line_count": {
             "anyOf": [
               {
@@ -3054,6 +3080,17 @@
             ],
             "title": "Log Status",
             "type": "string"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
           },
           "state": {
             "enum": [
@@ -4636,6 +4673,22 @@
               "title": "Run Id",
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
           }
         ],
         "responses": {
@@ -5266,6 +5319,22 @@
               "minimum": 1,
               "title": "Limit",
               "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
             }
           }
         ],
@@ -6011,11 +6080,29 @@
             "name": "limit",
             "required": false,
             "schema": {
-              "default": 100,
+              "default": 500,
               "maximum": 5000,
               "minimum": 1,
               "title": "Limit",
               "type": "integer"
+            }
+          },
+          {
+            "description": "Opaque pagination cursor",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Opaque pagination cursor",
+              "title": "Cursor"
             }
           }
         ],

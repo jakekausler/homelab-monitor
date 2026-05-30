@@ -233,6 +233,7 @@ class LogsQueryResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
     lines: list[LogLine]
     next_cursor: str | None = None
+    has_more: bool = False
 
 
 class LogsStreamSummary(BaseModel):
