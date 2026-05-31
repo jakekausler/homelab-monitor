@@ -91,3 +91,14 @@
 4. **Persistence:** Toggle to UTC, navigate away and back (and across docker↔cron viewers) — the preference persists (localStorage `homelab-monitor:timezone`, shared across all log viewers).
 5. **Format consistency:** Local and UTC formats both show seconds only (no milliseconds). `formatLogTimestamp(raw)` with no opts still returns the UTC fast-path (back-compat for non-viewer callers).
 6. **Downstream:** The Logs Explorer (STAGE-004-010) consumes `<LogViewer>` and inherits this toggle automatically — no extra timezone work there.
+
+## STAGE-004-010 — Logs Explorer skeleton (/logs)
+
+- Navigate to `/logs` (sidebar "Logs" entry) → search box + TimeRangeControl + LogViewer render.
+- First load (no params) shows last-1h match-all (`*`) recent lines.
+- Type a whole-word term present in logs (e.g. `zigbee2mqtt`) + Search → results filter (translated to `_msg:"<term>"`).
+- Clear (×) button stays visible while a committed filter is active, even after the input is emptied; clicking it returns to match-all.
+- "Load older" paginates (cursor pagination from STAGE-004-007); UTC + Wrap toggles work.
+- Deep-link `/logs?q=connection%20refused&since=24h` reproduces the view; custom range via `?start&end`.
+- Empty search omits `?q`. Whole-word matching (substrings do not match).
+- Unit/route tests: logsQlTranslate.test.ts, LogsExplorerPage.test.tsx.

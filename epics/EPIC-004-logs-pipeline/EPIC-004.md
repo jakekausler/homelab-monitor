@@ -2,11 +2,11 @@
 
 ## Status: In Progress
 
-## Stages Counter: 10 / 45 Complete
+## Stages Counter: 11 / 45 Complete
 
-## Current Stage: STAGE-004-010
+## Current Stage: STAGE-004-011
 
-## Current Phase: STAGE-004-010 Design (Not Started)
+## Current Phase: STAGE-004-011 Design (Not Started)
 
 ## Overview
 
@@ -85,7 +85,7 @@ Stages MUST be implemented in order. No parallelization. Each stage lands a sing
 
 | # | Stage | Theme |
 |---|---|---|
-| STAGE-004-010 | Logs Explorer skeleton at `/logs` | Plain-text search + range + paginated results via `<LogViewer>`. |
+| STAGE-004-010 | Logs Explorer skeleton at `/logs` | Plain-text search + range + paginated results via `<LogViewer>`. | ✅ Complete |
 | STAGE-004-011 | LogsQL advanced mode + syntax highlighting | "Advanced (LogsQL)" toggle; CodeMirror-based editor with basic token highlighting. |
 | STAGE-004-012 | Stream picker sidebar | Distinct services with line counts; click injects filter via separate state (composes with LogsQL). |
 | STAGE-004-013 | Saved queries | SQLite-backed; named queries restore full Explorer state. |
