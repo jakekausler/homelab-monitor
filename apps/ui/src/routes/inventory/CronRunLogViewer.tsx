@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Link, useParams } from '@tanstack/react-router'
+import { Link, useNavigate, useParams, useSearch } from '@tanstack/react-router'
 import { useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, RefreshCw } from 'lucide-react'
 
@@ -8,9 +8,11 @@ import { cronQueryKeys, useCronRunLog } from '@/api/crons'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { LogViewer } from '@/components/logs/LogViewer'
+import { TimeRangeControl } from '@/components/logs/TimeRangeControl'
 import { WrapToggle } from '@/components/logs/WrapToggle'
 import { RunStateBadge } from '@/components/crons/badges'
 import { formatDuration } from '@/lib/relativeTime'
+import { parseIso, toIsoZ, type TimeRangeValue } from '@/lib/timeRange'
 import type { UseLogsResult } from '@/components/logs/types'
 
 const RUN_ID_DISPLAY_PREFIX = 12
@@ -22,6 +24,9 @@ export function CronRunLogViewerPage() {
   const log = useCronRunLog(fingerprint, runId)
   const qc = useQueryClient()
   const [wrap, setWrap] = useState(false)
+
+  const search = useSearch({ strict: false })
+  const navigate = useNavigate()
 
   const isUnavailable = log.error instanceof ApiError && log.error.status === 503
   const isGenericError = log.error instanceof ApiError && !isUnavailable
@@ -35,10 +40,61 @@ export function CronRunLogViewerPage() {
   // pages accumulate newest-first (pages[0] = newest window, later pages =
   // OLDER via "Load older"). Each page is internally oldest->newest, so flatten
   // in REVERSE page order to render globally oldest->newest (older pages on top).
-  const flatLines = pages
+  const allLines = pages
     .slice()
     .reverse()
     .flatMap((p) => p.lines)
+
+  // STAGE-004-008 — the run window has NO backend field on RunLogResponse, so
+  // derive [min, max] from the flattened line timestamps (earliest → latest).
+  const lineTimes = allLines.map((l) => parseIso(l.timestamp)).filter((d): d is Date => d !== null)
+  const runMin =
+    lineTimes.length > 0 ? new Date(Math.min(...lineTimes.map((d) => d.getTime()))) : undefined
+  const runMax =
+    lineTimes.length > 0 ? new Date(Math.max(...lineTimes.map((d) => d.getTime()))) : undefined
+
+  // Selected narrow window from URL (custom) — defaults to full run window.
+  const selStart = search.start !== undefined ? parseIso(search.start) : null
+  const selEnd = search.end !== undefined ? parseIso(search.end) : null
+  const hasNarrow = selStart !== null || selEnd !== null
+
+  // Client-side filter: resolve open bounds to the run window, then filter.
+  const flatLines = hasNarrow
+    ? allLines.filter((l) => {
+        const t = parseIso(l.timestamp)
+        if (t === null) return false
+        const filterStart = selStart ?? runMin
+        const filterEnd = selEnd ?? runMax
+        if (filterStart === undefined || filterEnd === undefined) return true
+        return t.getTime() >= filterStart.getTime() && t.getTime() <= filterEnd.getTime()
+      })
+    : allLines
+
+  const rangeValue: TimeRangeValue = hasNarrow
+    ? { kind: 'custom', start: selStart ?? undefined, end: selEnd ?? undefined }
+    : runMin !== undefined && runMax !== undefined
+      ? { kind: 'custom', start: runMin, end: runMax }
+      : { kind: 'preset', token: '15m' }
+
+  const handleRangeChange = (v: TimeRangeValue): void => {
+    if (v.kind === 'custom') {
+      void navigate({
+        to: '/inventory/crons/$fingerprint/runs/$run_id',
+        params: { fingerprint, run_id: runId },
+        search: {
+          start: v.start !== undefined ? toIsoZ(v.start) : undefined,
+          end: v.end !== undefined ? toIsoZ(v.end) : undefined,
+        },
+      })
+    } else {
+      // Preset in bounded mode is unusual; treat as "clear narrowing".
+      void navigate({
+        to: '/inventory/crons/$fingerprint/runs/$run_id',
+        params: { fingerprint, run_id: runId },
+        search: { start: undefined, end: undefined },
+      })
+    }
+  }
 
   const header = (
     <>
@@ -61,14 +117,26 @@ export function CronRunLogViewerPage() {
           </p>
         )}
         {firstPage && (
-          <div className="flex items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center justify-between gap-3">
             <RunLogHeader
               data={firstPage}
               runId={runId}
               onRefresh={handleRefresh}
               isRefreshing={log.isFetching}
             />
-            <WrapToggle checked={wrap} onChange={setWrap} id="cron-wrap" />
+            <div className="flex items-center gap-2">
+              {runMin !== undefined && runMax !== undefined && (
+                <TimeRangeControl
+                  value={rangeValue}
+                  onChange={handleRangeChange}
+                  mode="bounded"
+                  min={runMin}
+                  max={runMax}
+                  presets={[]}
+                />
+              )}
+              <WrapToggle checked={wrap} onChange={setWrap} id="cron-wrap" />
+            </div>
           </div>
         )}
       </header>

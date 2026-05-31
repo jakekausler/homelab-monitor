@@ -182,6 +182,14 @@ const cronRunLogViewerRoute = createRoute({
   getParentRoute: () => inventoryLayoutRoute,
   path: '/crons/$fingerprint/runs/$run_id',
   component: CronRunLogViewerPage,
+  // STAGE-004-008 — custom range is CLIENT-SIDE narrowing (no backend call),
+  // but reflected in the URL per the locked decision. Bounded to the run window.
+  validateSearch: (
+    search: Record<string, unknown>,
+  ): { start?: string | undefined; end?: string | undefined } => ({
+    start: typeof search.start === 'string' ? search.start : undefined,
+    end: typeof search.end === 'string' ? search.end : undefined,
+  }),
 })
 
 const dockerIntegrationRoute = createRoute({
@@ -225,6 +233,15 @@ const containerLogsRoute = createRoute({
   getParentRoute: () => containerPageRoute,
   path: 'logs',
   component: ContainerLogsTab,
+  // STAGE-004-008 — URL is the source of truth for the selected time range.
+  // `start`+`end` (ISO, custom) take precedence over `since` (preset token).
+  validateSearch: (
+    search: Record<string, unknown>,
+  ): { since?: string | undefined; start?: string | undefined; end?: string | undefined } => ({
+    since: typeof search.since === 'string' ? search.since : undefined,
+    start: typeof search.start === 'string' ? search.start : undefined,
+    end: typeof search.end === 'string' ? search.end : undefined,
+  }),
 })
 
 const containerActionsRoute = createRoute({

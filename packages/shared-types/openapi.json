@@ -5288,7 +5288,7 @@
     },
     "/api/integrations/docker/containers/{name}/logs": {
       "get": {
-        "description": "Fetch recent log lines for one container from VictoriaLogs.\n\nAuth: session-only (operator dashboard). LogsQL is constructed server-side\nusing `service:\"<name>\"` (vector's add_labels guarantees this label).\n\nHard caps:\n  - limit: silently clamped at 500.\n  - since: silently clamped at 7d.\n  - max-bytes / timeout: inherited from VlQueryLimits (load_vl_query_limits()).",
+        "description": "Fetch recent log lines for one container from VictoriaLogs.\n\nAuth: session-only (operator dashboard). LogsQL is constructed server-side\nusing `service:\"<name>\"` (vector's add_labels guarantees this label).\n\nTime window: supply EITHER `since` (Xs|Xm|Xh|Xd, default 15m, 7d cap) OR an\nexplicit ISO-8601 `start`+`end` pair (30d cap, shared validation with\n/api/logs/query). The two are mutually exclusive (422 if both given).\n\nHard caps:\n  - limit: silently clamped at 500.\n  - since: silently clamped at 7d.\n  - start/end span: max 30d (HttpProblem 400 if exceeded).\n  - max-bytes / timeout: inherited from VlQueryLimits (load_vl_query_limits()).",
         "operationId": "get_container_logs_api_integrations_docker_containers__name__logs_get",
         "parameters": [
           {
@@ -5305,9 +5305,47 @@
             "name": "since",
             "required": false,
             "schema": {
-              "default": "15m",
-              "title": "Since",
-              "type": "string"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Since"
+            }
+          },
+          {
+            "in": "query",
+            "name": "start",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Start"
+            }
+          },
+          {
+            "in": "query",
+            "name": "end",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "End"
             }
           },
           {
@@ -5349,11 +5387,14 @@
             },
             "description": "Logs available or window empty"
           },
+          "400": {
+            "description": "Invalid start/end range (format, order, or >30d)"
+          },
           "404": {
             "description": "Container not in inventory"
           },
           "422": {
-            "description": "Invalid since parameter"
+            "description": "Invalid since param, or start/end+since conflict"
           },
           "503": {
             "description": "VictoriaLogs temporarily unavailable"

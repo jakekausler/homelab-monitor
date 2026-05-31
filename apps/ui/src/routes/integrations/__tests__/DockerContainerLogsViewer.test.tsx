@@ -12,7 +12,14 @@ vi.mock('@/api/docker', () => ({
   useContainerLogs: vi.fn(),
   useListContainers: vi.fn(),
   dockerLogsQueryKeys: {
-    logs: (n: string, s: string) => ['integrations', 'docker', 'containers', n, 'logs', s],
+    logs: (n: string, range: { since: string } | { start: string; end: string }) => [
+      'integrations',
+      'docker',
+      'containers',
+      n,
+      'logs',
+      'since' in range ? `since:${range.since}` : `range:${range.start}..${range.end}`,
+    ],
   },
 }))
 
@@ -45,7 +52,7 @@ function renderBody() {
     ...render(
       <QueryClientProvider client={qc}>
         <TooltipProvider>
-          <DockerContainerLogsViewerBody containerName={NAME} />
+          <DockerContainerLogsViewerBody containerName={NAME} since="15m" onRangeChange={vi.fn()} />
         </TooltipProvider>
       </QueryClientProvider>,
     ),
@@ -174,13 +181,34 @@ describe('DockerContainerLogsViewerBody', () => {
     expect(screen.queryByTestId('truncated-banner')).toBeNull()
   })
 
-  it('since picker change triggers new query', async () => {
+  it('selecting a preset in the time-range control updates the URL via onRangeChange', async () => {
+    const onRangeChange = vi.fn()
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(
+      <QueryClientProvider client={qc}>
+        <TooltipProvider>
+          <DockerContainerLogsViewerBody
+            containerName={NAME}
+            since="15m"
+            onRangeChange={onRangeChange}
+          />
+        </TooltipProvider>
+      </QueryClientProvider>,
+    )
+    fireEvent.click(await screen.findByTestId('time-range-trigger'))
+    fireEvent.click(screen.getByTestId('preset-1h'))
+    expect(onRangeChange).toHaveBeenCalledWith({
+      since: '1h',
+      start: undefined,
+      end: undefined,
+    })
+  })
+
+  it('passes the preset since to useContainerLogs as a range object', async () => {
     renderBody()
-    const picker = await screen.findByTestId<HTMLSelectElement>('since-picker')
-    fireEvent.change(picker, { target: { value: '1h' } })
-    // Assert the hook was called twice: once with default '15m', once with '1h'.
+    await screen.findByTestId('logs-body')
     const calls = vi.mocked(useContainerLogs).mock.calls
-    expect(calls.some(([, since]) => since === '1h')).toBe(true)
+    expect(calls.some(([, range]) => 'since' in (range as object))).toBe(true)
   })
 
   it('Refresh button calls invalidateQueries', async () => {
@@ -266,5 +294,77 @@ describe('DockerContainerLogsViewerBody', () => {
     const body = await screen.findByTestId('logs-body')
     const text = body.textContent ?? ''
     expect(text.indexOf('older-1')).toBeLessThan(text.indexOf('newer-1'))
+  })
+
+  it('Refresh on open-end window re-resolves end to a later "now"', async () => {
+    const startIso = '2026-05-21T14:00:00.000Z'
+    const t0 = new Date('2026-05-21T15:00:00.000Z')
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    vi.setSystemTime(t0)
+
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(
+      <QueryClientProvider client={qc}>
+        <TooltipProvider>
+          <DockerContainerLogsViewerBody
+            containerName={NAME}
+            start={startIso}
+            onRangeChange={vi.fn()}
+          />
+        </TooltipProvider>
+      </QueryClientProvider>,
+    )
+    await screen.findByTestId('logs-body')
+
+    // Capture the end from the first batch of calls (open-end resolved to t0).
+    const callsBefore = vi.mocked(useContainerLogs).mock.calls
+    const firstCustomCall = callsBefore.find(
+      ([, range]) => 'start' in (range as object) && 'end' in (range as object),
+    )
+    expect(firstCustomCall).toBeDefined()
+    const end1 = (firstCustomCall![1] as { start: string; end: string }).end
+
+    // Advance time by 60 seconds and click Refresh → refreshNonce bumps →
+    // useMemo re-runs with new Date() = t0 + 60s → end re-resolves to a later timestamp.
+    vi.setSystemTime(new Date(t0.getTime() + 60_000))
+    fireEvent.click(screen.getByTestId('refresh-logs'))
+
+    // After the click, useContainerLogs should have been called again with a later end.
+    const callsAfter = vi.mocked(useContainerLogs).mock.calls
+    const laterCalls = callsAfter.filter(
+      ([, range]) => 'start' in (range as object) && 'end' in (range as object),
+    )
+    const end2 = (laterCalls[laterCalls.length - 1]![1] as { start: string; end: string }).end
+    expect(new Date(end2).getTime()).toBeGreaterThan(new Date(end1).getTime())
+
+    vi.useRealTimers()
+  })
+
+  it('open-bound custom: start-only URL activates custom mode and passes resolved {start,end} to useContainerLogs', async () => {
+    const startIso = '2026-05-21T14:00:00.000Z'
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(
+      <QueryClientProvider client={qc}>
+        <TooltipProvider>
+          <DockerContainerLogsViewerBody
+            containerName={NAME}
+            start={startIso}
+            onRangeChange={vi.fn()}
+          />
+        </TooltipProvider>
+      </QueryClientProvider>,
+    )
+    await screen.findByTestId('logs-body')
+    // useContainerLogs must have been called with a {start, end} range (not {since}).
+    const calls = vi.mocked(useContainerLogs).mock.calls
+    const customCall = calls.find(
+      ([, range]) => 'start' in (range as object) && 'end' in (range as object),
+    )
+    expect(customCall).toBeDefined()
+    // end should be a recent ISO string (resolved to ~now), not undefined or empty.
+    const range = customCall![1] as { start: string; end: string }
+    expect(range.start).toBe(startIso)
+    expect(typeof range.end).toBe('string')
+    expect(range.end.length).toBeGreaterThan(0)
   })
 })

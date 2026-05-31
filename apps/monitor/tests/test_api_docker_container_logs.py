@@ -15,6 +15,7 @@ from homelab_monitor.kernel.db.repository import SqliteRepository
 from homelab_monitor.kernel.db.time import utc_now_iso
 
 HTTP_OK = 200
+HTTP_BAD_REQUEST = 400
 HTTP_UNAUTHORIZED = 401
 HTTP_NOT_FOUND = 404
 HTTP_UNPROCESSABLE = 422
@@ -423,3 +424,141 @@ async def test_get_container_logs_401_without_session(repo: SqliteRepository) ->
     async with AsyncClient(transport=transport, base_url="http://test") as anon:
         resp = await anon.get("/api/integrations/docker/containers/homeassistant/logs")
         assert resp.status_code == HTTP_UNAUTHORIZED
+
+
+# ---------------------------------------------------------------------------
+# STAGE-004-008 — explicit start/end window
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_container_logs_start_end_happy_path(
+    authenticated_client: AsyncClient,
+    repo: SqliteRepository,
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Explicit start/end returns that exact window verbatim in the response."""
+    monkeypatch.setenv(VL_URL_ENV, VL_URL)
+    await _seed_docker_container(repo, target_id="abc1", name="homeassistant")
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(r"http://vl-test:9428/.*"),
+        text=_make_ndjson("only line"),
+    )
+    start = "2026-05-01T00:00:00+00:00"
+    end = "2026-05-02T00:00:00+00:00"
+    resp = await authenticated_client.get(
+        "/api/integrations/docker/containers/homeassistant/logs",
+        params={"start": start, "end": end},
+    )
+    assert resp.status_code == HTTP_OK
+    body = resp.json()
+    assert body["window_start"] == start
+    assert body["window_end"] == end
+    assert body["log_status"] == "available"
+
+
+@pytest.mark.asyncio
+async def test_get_container_logs_start_after_end_400(
+    authenticated_client: AsyncClient,
+    repo: SqliteRepository,
+) -> None:
+    """start >= end → 400 invalid_range."""
+    await _seed_docker_container(repo, target_id="abc1", name="homeassistant")
+    resp = await authenticated_client.get(
+        "/api/integrations/docker/containers/homeassistant/logs",
+        params={"start": "2026-05-02T00:00:00+00:00", "end": "2026-05-01T00:00:00+00:00"},
+    )
+    assert resp.status_code == HTTP_BAD_REQUEST
+    assert resp.json()["error"]["code"] == "invalid_range"
+
+
+@pytest.mark.asyncio
+async def test_get_container_logs_range_too_wide_400(
+    authenticated_client: AsyncClient,
+    repo: SqliteRepository,
+) -> None:
+    """span > 30 days → 400 range_too_wide."""
+    await _seed_docker_container(repo, target_id="abc1", name="homeassistant")
+    resp = await authenticated_client.get(
+        "/api/integrations/docker/containers/homeassistant/logs",
+        params={"start": "2026-01-01T00:00:00+00:00", "end": "2026-03-01T00:00:00+00:00"},
+    )
+    assert resp.status_code == HTTP_BAD_REQUEST
+    assert resp.json()["error"]["code"] == "range_too_wide"
+
+
+@pytest.mark.asyncio
+async def test_get_container_logs_bad_iso_400(
+    authenticated_client: AsyncClient,
+    repo: SqliteRepository,
+) -> None:
+    """non-ISO start → 400 invalid_time_format."""
+    await _seed_docker_container(repo, target_id="abc1", name="homeassistant")
+    resp = await authenticated_client.get(
+        "/api/integrations/docker/containers/homeassistant/logs",
+        params={"start": "not-a-date", "end": "2026-05-02T00:00:00+00:00"},
+    )
+    assert resp.status_code == HTTP_BAD_REQUEST
+    assert resp.json()["error"]["code"] == "invalid_time_format"
+
+
+@pytest.mark.asyncio
+async def test_get_container_logs_since_and_range_mutually_exclusive_422(
+    authenticated_client: AsyncClient,
+    repo: SqliteRepository,
+) -> None:
+    """Supplying both since and start/end → 422."""
+    await _seed_docker_container(repo, target_id="abc1", name="homeassistant")
+    resp = await authenticated_client.get(
+        "/api/integrations/docker/containers/homeassistant/logs",
+        params={
+            "since": "1h",
+            "start": "2026-05-01T00:00:00+00:00",
+            "end": "2026-05-02T00:00:00+00:00",
+        },
+    )
+    assert resp.status_code == HTTP_UNPROCESSABLE
+
+
+@pytest.mark.asyncio
+async def test_get_container_logs_partial_range_422(
+    authenticated_client: AsyncClient,
+    repo: SqliteRepository,
+) -> None:
+    """Supplying only start (no end) → 422."""
+    await _seed_docker_container(repo, target_id="abc1", name="homeassistant")
+    resp = await authenticated_client.get(
+        "/api/integrations/docker/containers/homeassistant/logs",
+        params={"start": "2026-05-01T00:00:00+00:00"},
+    )
+    assert resp.status_code == HTTP_UNPROCESSABLE
+
+
+@pytest.mark.asyncio
+async def test_get_container_logs_bare_call_defaults_to_15m(
+    authenticated_client: AsyncClient,
+    repo: SqliteRepository,
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No params → since defaults to 15m (window spans ~15 minutes)."""
+    monkeypatch.setenv(VL_URL_ENV, VL_URL)
+    await _seed_docker_container(repo, target_id="abc1", name="homeassistant")
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(r"http://vl-test:9428/.*"),
+        text=_make_ndjson("ok"),
+    )
+    resp = await authenticated_client.get("/api/integrations/docker/containers/homeassistant/logs")
+    assert resp.status_code == HTTP_OK
+    body = resp.json()
+    start = datetime.fromisoformat(body["window_start"])
+    end = datetime.fromisoformat(body["window_end"])
+    delta = end - start
+    assert (
+        timedelta(minutes=15) - timedelta(seconds=5)
+        <= delta
+        <= timedelta(minutes=15) + timedelta(seconds=5)
+    )

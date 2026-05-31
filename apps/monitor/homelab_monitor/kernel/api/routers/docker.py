@@ -59,6 +59,7 @@ from homelab_monitor.kernel.logs.pagination import (
     InvalidCursorError,
     paginate_older,
 )
+from homelab_monitor.kernel.logs.time_window import parse_and_validate_window
 from homelab_monitor.kernel.logs.victorialogs_client import (
     VictoriaLogsClient,
     VictoriaLogsClientError,
@@ -495,8 +496,9 @@ def _parse_since(since: str) -> int:
     response_model=ContainerLogsResponse,
     responses={
         200: {"description": "Logs available or window empty"},
+        400: {"description": "Invalid start/end range (format, order, or >30d)"},
         404: {"description": "Container not in inventory"},
-        422: {"description": "Invalid since parameter"},
+        422: {"description": "Invalid since param, or start/end+since conflict"},
         503: {"description": "VictoriaLogs temporarily unavailable"},
     },
 )
@@ -506,7 +508,9 @@ async def get_container_logs(  # noqa: PLR0913 -- FastAPI route with injected de
     targets_repo: Annotated[TargetsRepository, Depends(_get_targets_repo)],
     http_client: Annotated[httpx.AsyncClient, Depends(get_http_client)],
     vl_url: Annotated[str, Depends(get_vl_url)],
-    since: Annotated[str, Query()] = _LOGS_DEFAULT_SINCE,
+    since: Annotated[str | None, Query()] = None,
+    start: Annotated[str | None, Query()] = None,
+    end: Annotated[str | None, Query()] = None,
     limit: Annotated[int, Query(ge=1)] = _LOGS_DEFAULT_LIMIT,
     cursor: Annotated[str | None, Query()] = None,
 ) -> ContainerLogsResponse:
@@ -515,15 +519,33 @@ async def get_container_logs(  # noqa: PLR0913 -- FastAPI route with injected de
     Auth: session-only (operator dashboard). LogsQL is constructed server-side
     using `service:"<name>"` (vector's add_labels guarantees this label).
 
+    Time window: supply EITHER `since` (Xs|Xm|Xh|Xd, default 15m, 7d cap) OR an
+    explicit ISO-8601 `start`+`end` pair (30d cap, shared validation with
+    /api/logs/query). The two are mutually exclusive (422 if both given).
+
     Hard caps:
       - limit: silently clamped at 500.
       - since: silently clamped at 7d.
+      - start/end span: max 30d (HttpProblem 400 if exceeded).
       - max-bytes / timeout: inherited from VlQueryLimits (load_vl_query_limits()).
     """
     # Clamp limit silently (per D-API-CONTRACT: no 422 for over-cap limit).
     effective_limit = min(limit, _LOGS_MAX_LINES)
-    # Parse + clamp since (raises 422 on bad format).
-    window_seconds = _parse_since(since)
+
+    # STAGE-004-008 — resolve the [start, end] window from EITHER an explicit
+    # ISO start/end pair OR a since-duration token. Mutually exclusive.
+    has_explicit_range = start is not None or end is not None
+    since_supplied = since is not None
+    if has_explicit_range and since_supplied:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="start/end and since are mutually exclusive",
+        )
+    if has_explicit_range and (start is None or end is None):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="start and end must be supplied together",
+        )
 
     # 404 if container not in inventory.
     rows = await targets_repo.list_docker_containers(include_hidden=False)
@@ -542,11 +564,19 @@ async def get_container_logs(  # noqa: PLR0913 -- FastAPI route with injected de
         )
 
     # Build the [start, end] window.
-    now = datetime.now(UTC)
-    window_end_dt = now
-    window_start_dt = now - timedelta(seconds=window_seconds)
-    window_start = window_start_dt.isoformat()
-    window_end = window_end_dt.isoformat()
+    if has_explicit_range:
+        # Explicit ISO range path: 30-day cap, ISO parse, start<end (shared with
+        # /api/logs/query). Raises HttpProblem(400, ...) on violation.
+        assert start is not None  # narrowed by has_explicit_range + pair check
+        assert end is not None
+        window_start, window_end = parse_and_validate_window(start, end)
+    else:
+        # since-duration path: 7-day cap (raises 422 on bad format).
+        effective_since = since if since is not None else _LOGS_DEFAULT_SINCE
+        window_seconds = _parse_since(effective_since)
+        now = datetime.now(UTC)
+        window_start = (now - timedelta(seconds=window_seconds)).isoformat()
+        window_end = now.isoformat()
 
     # Build the LogsQL query — D-LOG-LABEL-SERVICE.
     expr = f"service:{logsql_quote_phrase(name)}"

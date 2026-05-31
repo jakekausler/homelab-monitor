@@ -628,31 +628,40 @@ export function useDeleteProbeTarget() {
 
 type ContainerLogsResponse = Schema<'ContainerLogsResponse'>
 
+/** STAGE-004-008 — either a preset duration token OR an explicit ISO window. */
+export type ContainerLogsRange = { since: string } | { start: string; end: string }
+
+function rangeKeyPart(range: ContainerLogsRange): string {
+  return 'since' in range ? `since:${range.since}` : `range:${range.start}..${range.end}`
+}
+
 export const dockerLogsQueryKeys = {
-  logs: (containerName: string, since: string) =>
-    ['integrations', 'docker', 'containers', containerName, 'logs', since] as const,
+  logs: (containerName: string, range: ContainerLogsRange) =>
+    ['integrations', 'docker', 'containers', containerName, 'logs', rangeKeyPart(range)] as const,
 }
 
 /**
  * Fetch recent log lines for one container from VictoriaLogs.
  * Manual refresh only (no refetchInterval per D-MANUAL-REFRESH-V1).
  * STAGE-004-007: A1 cursor pagination.
+ * STAGE-004-008: accepts a preset `since` OR an explicit ISO `start`/`end`.
  *
  * @param containerName — container name (route param)
- * @param since — duration string Xs|Xm|Xh|Xd, default 15m
+ * @param range — `{ since }` preset token OR `{ start, end }` ISO window
  */
 export function useContainerLogs(
   containerName: string,
-  since: string,
+  range: ContainerLogsRange,
 ): UseInfiniteQueryResult<
   { pages: ContainerLogsResponse[]; pageParams: (string | undefined)[] },
   ApiError
 > {
   return useInfiniteQuery({
-    queryKey: dockerLogsQueryKeys.logs(containerName, since),
+    queryKey: dockerLogsQueryKeys.logs(containerName, range),
     initialPageParam: undefined as string | undefined,
     queryFn: async ({ pageParam }) => {
-      const query: Record<string, string> = { since }
+      const query: Record<string, string> =
+        'since' in range ? { since: range.since } : { start: range.start, end: range.end }
       if (pageParam) query.cursor = pageParam
       const result = await apiClient.GET('/api/integrations/docker/containers/{name}/logs', {
         params: { path: { name: containerName }, query },

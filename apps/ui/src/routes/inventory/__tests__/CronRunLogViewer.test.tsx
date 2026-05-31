@@ -116,6 +116,12 @@ function renderWithRouter(initialPath: string = `/inventory/crons/${FP}/runs/${R
     getParentRoute: () => cronRunsListRoute,
     path: '/$run_id',
     component: CronRunLogViewerPage,
+    validateSearch: (
+      search: Record<string, unknown>,
+    ): { start?: string | undefined; end?: string | undefined } => ({
+      start: typeof search.start === 'string' ? search.start : undefined,
+      end: typeof search.end === 'string' ? search.end : undefined,
+    }),
   })
 
   const router = createRouter({
@@ -533,5 +539,68 @@ describe('CronRunLogViewerPage', () => {
     const body = await screen.findByTestId('logs-body')
     const text = body.textContent ?? ''
     expect(text.indexOf('older-1')).toBeLessThan(text.indexOf('newer-1'))
+  })
+
+  it('renders the bounded time-range control when lines have timestamps', async () => {
+    vi.mocked(useCronRunLog).mockReturnValue({
+      isLoading: false,
+      isFetching: false,
+      error: null,
+      data: {
+        pages: [
+          makeLogData({
+            log_status: 'available',
+            lines: [
+              { timestamp: '2026-05-01T12:00:01Z', message: 'a' },
+              { timestamp: '2026-05-01T12:00:20Z', message: 'b' },
+            ],
+          }),
+        ],
+        pageParams: [undefined],
+      },
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
+    } as unknown as ReturnType<typeof useCronRunLog>)
+    renderWithRouter()
+    expect(await screen.findByTestId('time-range-trigger')).toBeInTheDocument()
+  })
+
+  it('open-bound custom: start-only URL filters lines from selStart to runMax (open end resolves to run max)', async () => {
+    const startIso = '2026-05-01T12:00:05Z'
+    vi.mocked(useCronRunLog).mockReturnValue({
+      isLoading: false,
+      isFetching: false,
+      error: null,
+      data: {
+        pages: [
+          makeLogData({
+            log_status: 'available',
+            lines: [
+              { timestamp: '2026-05-01T12:00:01Z', message: 'before-start' },
+              { timestamp: '2026-05-01T12:00:05Z', message: 'at-start' },
+              { timestamp: '2026-05-01T12:00:20Z', message: 'after-start' },
+            ],
+          }),
+        ],
+        pageParams: [undefined],
+      },
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
+    } as unknown as ReturnType<typeof useCronRunLog>)
+
+    // URL has only ?start= (no end) → open end should resolve to runMax (12:00:20Z).
+    renderWithRouter(`/inventory/crons/${FP}/runs/${RUN_ID}?start=${encodeURIComponent(startIso)}`)
+
+    const body = await screen.findByTestId('logs-body')
+    const text = body.textContent ?? ''
+
+    // 'before-start' is before selStart → filtered out.
+    expect(text).not.toContain('before-start')
+    // 'at-start' is at selStart → included.
+    expect(text).toContain('at-start')
+    // 'after-start' is after selStart and <= runMax → included.
+    expect(text).toContain('after-start')
   })
 })

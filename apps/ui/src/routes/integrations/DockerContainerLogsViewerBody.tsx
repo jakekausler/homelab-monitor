@@ -1,38 +1,119 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { RefreshCw } from 'lucide-react'
 
 import { ApiError } from '@/api/client'
-import { dockerLogsQueryKeys, useContainerLogs, useListContainers } from '@/api/docker'
+import {
+  dockerLogsQueryKeys,
+  useContainerLogs,
+  useListContainers,
+  type ContainerLogsRange,
+} from '@/api/docker'
 import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/EmptyState'
 import { LogViewer } from '@/components/logs/LogViewer'
+import { TimeRangeControl } from '@/components/logs/TimeRangeControl'
 import { WrapToggle } from '@/components/logs/WrapToggle'
 import { formatLogTimestamp } from '@/lib/relativeTime'
+import {
+  parseIso,
+  resolveCustomWindow,
+  toIsoZ,
+  type PresetToken,
+  type TimeRangeValue,
+} from '@/lib/timeRange'
 import type { UseLogsResult } from '@/components/logs/types'
 import { StatusBadge } from '@/routes/integrations/badges'
 
-const SINCE_PRESETS = ['5m', '15m', '1h', '6h', '24h', '7d'] as const
-type SincePreset = (typeof SINCE_PRESETS)[number]
-const DEFAULT_SINCE: SincePreset = '15m'
+const DEFAULT_SINCE: PresetToken = '15m'
+const PRESET_TOKENS: readonly PresetToken[] = ['5m', '15m', '1h', '6h', '24h', '7d']
 
 interface DockerContainerLogsViewerBodyProps {
   containerName: string
+  since?: string | undefined
+  start?: string | undefined
+  end?: string | undefined
+  onRangeChange?: ((next: { since?: string; start?: string; end?: string }) => void) | undefined
+}
+
+function isPresetToken(s: string): s is PresetToken {
+  return (PRESET_TOKENS as readonly string[]).includes(s)
 }
 
 export function DockerContainerLogsViewerBody({
   containerName,
+  since,
+  start,
+  end,
+  onRangeChange,
 }: DockerContainerLogsViewerBodyProps) {
-  const [since, setSince] = useState<SincePreset>(DEFAULT_SINCE)
   const [wrap, setWrap] = useState(false)
-  const logs = useContainerLogs(containerName, since)
+  // Bumping this re-resolves an OPEN end to a fresh "now", changing the query
+  // key so Refresh extends the window to the present (live-tail groundwork).
+  const [refreshNonce, setRefreshNonce] = useState(0)
+
+  // Custom mode is active when EITHER start OR end is present in the URL; the
+  // missing bound is OPEN. parseIso returns null on absent/garbage → open bound.
+  const customStart = start !== undefined ? parseIso(start) : null
+  const customEnd = end !== undefined ? parseIso(end) : null
+  const hasCustom = customStart !== null || customEnd !== null
+
+  const presetToken: PresetToken =
+    since !== undefined && isPresetToken(since) ? since : DEFAULT_SINCE
+
+  // For an OPEN end we resolve to "now", but the query key must stay STABLE
+  // between refreshes (else every render's fresh `now` churns the key and
+  // refetch-loops). So memoize the resolved window on [URL bounds, refreshNonce]:
+  // `now` is only re-read when refreshNonce bumps (handleRefresh) — which is
+  // exactly when we WANT the open end to extend to the present.
+  const resolved = useMemo(
+    () =>
+      hasCustom
+        ? resolveCustomWindow(
+            { start: customStart ?? undefined, end: customEnd ?? undefined },
+            { now: new Date(), maxSpanDays: 30 },
+          )
+        : null,
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: re-resolve only on URL change or explicit refresh
+    [start, end, refreshNonce],
+  )
+
+  const range: ContainerLogsRange =
+    resolved !== null
+      ? { start: toIsoZ(resolved.start), end: toIsoZ(resolved.end) }
+      : { since: presetToken }
+
+  // The control shows the RAW (possibly-open) URL bounds, not the resolved ones,
+  // so an open end keeps reading "Now" instead of freezing to a timestamp.
+  const value: TimeRangeValue = hasCustom
+    ? {
+        kind: 'custom',
+        start: customStart ?? undefined,
+        end: customEnd ?? undefined,
+      }
+    : { kind: 'preset', token: presetToken }
+
+  const logs = useContainerLogs(containerName, range)
   const qc = useQueryClient()
 
   const containerList = useListContainers()
   const cachedRow = containerList.data?.containers.find((c) => c.name === containerName) ?? null
 
   const handleRefresh = () => {
-    void qc.invalidateQueries({ queryKey: dockerLogsQueryKeys.logs(containerName, since) })
+    setRefreshNonce((n) => n + 1)
+    void qc.invalidateQueries({ queryKey: dockerLogsQueryKeys.logs(containerName, range) })
+  }
+
+  const handleRangeChange = (v: TimeRangeValue): void => {
+    if (onRangeChange === undefined) return
+    if (v.kind === 'preset') {
+      onRangeChange({ since: v.token })
+    } else {
+      const next: { since?: string; start?: string; end?: string } = {}
+      if (v.start !== undefined) next.start = toIsoZ(v.start)
+      if (v.end !== undefined) next.end = toIsoZ(v.end)
+      onRangeChange(next)
+    }
   }
 
   const isUnknown = logs.error instanceof ApiError && logs.error.status === 404
@@ -49,13 +130,14 @@ export function DockerContainerLogsViewerBody({
 
   const pages = logs.data?.pages ?? []
   const firstPage = pages[0]
-  // pages accumulate newest-first (pages[0] = newest window, later pages =
-  // OLDER via "Load older"). Each page is internally oldest->newest, so flatten
-  // in REVERSE page order to render globally oldest->newest (older pages on top).
   const flatLines = pages
     .slice()
     .reverse()
     .flatMap((p) => p.lines)
+
+  const emptyCopy = hasCustom
+    ? 'No log lines in the selected range. Try widening the time window.'
+    : `No log lines in the last ${presetToken}. Try widening the time window.`
 
   const header = (
     <>
@@ -71,22 +153,7 @@ export function DockerContainerLogsViewerBody({
         </div>
         <div className="flex items-center gap-2">
           <WrapToggle checked={wrap} onChange={setWrap} id="docker-wrap" />
-          <label className="text-xs text-muted-foreground" htmlFor="since-picker">
-            Since:
-          </label>
-          <select
-            id="since-picker"
-            data-testid="since-picker"
-            className="rounded border border-input bg-background px-2 py-1 text-xs"
-            value={since}
-            onChange={(e) => setSince(e.target.value as SincePreset)}
-          >
-            {SINCE_PRESETS.map((p) => (
-              <option key={p} value={p}>
-                {p}
-              </option>
-            ))}
-          </select>
+          <TimeRangeControl value={value} onChange={handleRangeChange} presets={PRESET_TOKENS} />
           <Button
             size="sm"
             variant="outline"
@@ -118,7 +185,6 @@ export function DockerContainerLogsViewerBody({
       }
     }
     if (isGenericError) {
-      // Generic error rendered in the header above; LogViewer renders nothing.
       return {
         lines: undefined,
         isLoading: false,
@@ -146,12 +212,5 @@ export function DockerContainerLogsViewerBody({
     }
   }
 
-  return (
-    <LogViewer
-      useLogs={useLogs}
-      headerSlot={header}
-      emptyStateCopy={`No log lines in the last ${since}. Try widening the time window.`}
-      wrap={wrap}
-    />
-  )
+  return <LogViewer useLogs={useLogs} headerSlot={header} emptyStateCopy={emptyCopy} wrap={wrap} />
 }

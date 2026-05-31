@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
 from typing import cast
 
 import httpx
@@ -28,6 +27,7 @@ from homelab_monitor.kernel.logs.pagination import (
     InvalidCursorError,
     paginate_older,
 )
+from homelab_monitor.kernel.logs.time_window import parse_and_validate_window
 from homelab_monitor.kernel.logs.victorialogs_client import (
     VictoriaLogsClient,
     VictoriaLogsClientError,
@@ -39,7 +39,9 @@ router = APIRouter()
 _MAX_EXPR_LEN = 4096
 _DEFAULT_LIMIT = 500
 _MAX_LIMIT = 5000
-_MAX_RANGE_DAYS = 30
+# Range validation (ISO parse, start<end, no-future, ≤30d) lives in
+# kernel.logs.time_window.parse_and_validate_window, shared with the docker logs
+# endpoint.
 
 
 @router.get("/logs/query", response_model=LogsQueryResponse)
@@ -72,36 +74,9 @@ async def logs_query(  # noqa: PLR0913
             message="expression too long",
         )
 
-    # Validate ISO-8601 start/end
-    try:
-        start_dt = datetime.fromisoformat(start)
-        end_dt = datetime.fromisoformat(end)
-    except ValueError as exc:
-        raise HttpProblem(
-            status_code=400,
-            code="invalid_time_format",
-            message="start and end must be ISO-8601 timestamps",
-        ) from exc
-
-    # Normalize tzinfo to avoid TypeError on naive vs aware mix.
-    if start_dt.tzinfo is None:
-        start_dt = start_dt.replace(tzinfo=UTC)
-    if end_dt.tzinfo is None:
-        end_dt = end_dt.replace(tzinfo=UTC)
-
-    if start_dt >= end_dt:
-        raise HttpProblem(
-            status_code=400,
-            code="invalid_range",
-            message="end must be after start",
-        )
-
-    if (end_dt - start_dt) > timedelta(days=_MAX_RANGE_DAYS):
-        raise HttpProblem(
-            status_code=400,
-            code="range_too_wide",
-            message=f"time range cannot exceed {_MAX_RANGE_DAYS} days",
-        )
+    # Validate ISO-8601 start/end via shared helper (STAGE-004-008 extraction).
+    # Raises HttpProblem(400, ...) with identical code/message as before.
+    parse_and_validate_window(start, end)
 
     base_limits = load_vl_query_limits()
     client = VictoriaLogsClient(vl_url=vl_url, http_client=http_client, limits=base_limits)
