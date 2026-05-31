@@ -9,9 +9,11 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { LogViewer } from '@/components/logs/LogViewer'
 import { TimeRangeControl } from '@/components/logs/TimeRangeControl'
+import { TimezoneToggle } from '@/components/logs/TimezoneToggle'
 import { WrapToggle } from '@/components/logs/WrapToggle'
 import { RunStateBadge } from '@/components/crons/badges'
 import { formatDuration } from '@/lib/relativeTime'
+import { useTimezonePreference } from '@/lib/useTimezonePreference'
 import { parseIso, toIsoZ, type TimeRangeValue } from '@/lib/timeRange'
 import type { UseLogsResult } from '@/components/logs/types'
 
@@ -24,6 +26,8 @@ export function CronRunLogViewerPage() {
   const log = useCronRunLog(fingerprint, runId)
   const qc = useQueryClient()
   const [wrap, setWrap] = useState(false)
+  // STAGE-004-009 timezone wiring; Explorer (STAGE-004-010) mirrors this.
+  const [timezone, toggleTimezone] = useTimezonePreference()
 
   const search = useSearch({ strict: false })
   const navigate = useNavigate()
@@ -136,6 +140,11 @@ export function CronRunLogViewerPage() {
                 />
               )}
               <WrapToggle checked={wrap} onChange={setWrap} id="cron-wrap" />
+              <TimezoneToggle
+                checked={timezone === 'utc'}
+                onChange={toggleTimezone}
+                id="cron-tz-toggle"
+              />
             </div>
           </div>
         )}
@@ -185,6 +194,7 @@ export function CronRunLogViewerPage() {
       emptyStateCopy="No log lines captured for this run."
       unavailableCopy="The log backend is temporarily unavailable. The run still happened — its metadata will appear here once the backend recovers."
       wrap={wrap}
+      timezone={timezone}
     />
   )
 }

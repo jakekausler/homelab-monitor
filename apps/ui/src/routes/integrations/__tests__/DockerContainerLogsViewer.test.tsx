@@ -7,6 +7,9 @@ import { DockerContainerLogsViewerBody } from '@/routes/integrations/DockerConta
 import { TooltipProvider } from '@/components/ui/tooltip'
 
 afterEach(cleanup)
+afterEach(() => {
+  localStorage.removeItem('homelab-monitor:timezone')
+})
 
 vi.mock('@/api/docker', () => ({
   useContainerLogs: vi.fn(),
@@ -100,9 +103,10 @@ describe('DockerContainerLogsViewerBody', () => {
     const body = await screen.findByTestId('logs-body')
     expect(body.textContent).toContain('INFO line 1')
     expect(body.textContent).toContain('INFO line 2')
-    expect(body.textContent).toContain('2026-05-21 14:30:00 UTC')
+    // Default render is local (America/New_York, EDT in May, UTC-4).
+    expect(body.textContent).toContain('2026-05-21 10:30:00 EDT')
     const lastLogAt = screen.getByTestId('last-log-at')
-    expect(lastLogAt.textContent).toContain('2026-05-21 14:30:05 UTC')
+    expect(lastLogAt.textContent).toContain('Last: 2026-05-21 10:30:05 EDT')
   })
 
   it('renders no_lines empty state', async () => {
@@ -264,6 +268,48 @@ describe('DockerContainerLogsViewerBody', () => {
     fireEvent.click(checkbox)
     expect(checkbox).toBeChecked()
     expect(screen.getByTestId('logs-body').className).toContain('whitespace-normal')
+  })
+
+  it('clicking the UTC timezone toggle flips both row and header timestamps', async () => {
+    // Ensure localStorage is clean so the hook initialises to 'local' (default).
+    localStorage.removeItem('homelab-monitor:timezone')
+
+    vi.mocked(useContainerLogs).mockReturnValue({
+      isLoading: false,
+      isFetching: false,
+      error: null,
+      data: {
+        pages: [
+          makeData({
+            log_status: 'available',
+            lines: [{ timestamp: '2026-05-21T14:30:00Z', message: 'toggle-test-line' }],
+          }),
+        ],
+        pageParams: [undefined],
+      },
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
+    } as never)
+
+    renderBody()
+    const body = await screen.findByTestId('logs-body')
+    const lastLogAt = screen.getByTestId('last-log-at')
+
+    // Default (local / EDT, UTC-4 in May): row and header both show EDT.
+    expect(body.textContent).toContain('2026-05-21 10:30:00 EDT')
+    expect(lastLogAt.textContent).toContain('2026-05-21 10:30:00 EDT')
+
+    // Click the UTC toggle (the checkbox inside data-testid="timezone-toggle").
+    const toggleLabel = screen.getByTestId('timezone-toggle')
+    const checkbox = toggleLabel.querySelector('input[type="checkbox"]')!
+    expect(checkbox).not.toBeChecked()
+    fireEvent.click(checkbox)
+    expect(checkbox).toBeChecked()
+
+    // After toggle: BOTH row timestamp AND the "Last:" header timestamp flip to UTC.
+    expect(body.textContent).toContain('2026-05-21 14:30:00 UTC')
+    expect(screen.getByTestId('last-log-at').textContent).toContain('2026-05-21 14:30:00 UTC')
   })
 
   it('renders older pages above newer pages in multi-page load', async () => {

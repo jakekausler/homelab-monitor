@@ -86,27 +86,96 @@ export function formatDuration(seconds: number | null): string {
 const LOG_TS_RE = /^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}:\d{2})(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?$/
 
 /**
- * Format a log line's UTC timestamp for display: drop sub-seconds and the
- * 'T', append ' UTC'. STILL UTC — no zone shift here.
- *
- * '2026-05-29T12:53:53.162712958Z' -> '2026-05-29 12:53:53 UTC'
- *
- * Implementation note: deliberately does NOT use Date parsing — Date would
- * zone-shift the display and truncate nanosecond precision unpredictably.
- * A regex extracts the date + HH:MM:SS and discards the fractional seconds
- * and any zone suffix.
- *
- * STAGE-004-009 will layer America/New_York (configurable) zone conversion
- * onto THIS exact helper — keep the signature and return shape stable.
- *
- * Returns `raw ?? ''` for null/undefined/empty, and the raw string unchanged
- * when it does not match the ISO-ish shape.
+ * Default display timezone. The 'local' branch of formatLogTimestamp renders
+ * the CONFIGURED zone (NOT the browser zone) via an explicit Intl timeZone.
  */
-export function formatLogTimestamp(raw: string | null | undefined): string {
+// configurable: future env var (YAGNI — single constant seam for now)
+export const DEFAULT_DISPLAY_TZ = 'America/New_York'
+
+/** Options for formatLogTimestamp / formatLogTimestampParts. */
+export interface LogTimestampOptions {
+  timezone?: 'local' | 'utc'
+  tz?: string
+}
+
+/**
+ * Format a log line's UTC timestamp for display.
+ *
+ * - No opts, or opts.timezone === 'utc' (or undefined): UTC fast-path — drop
+ *   sub-seconds and the 'T', append ' UTC'. NO Date parsing, NO zone shift.
+ *   '2026-05-29T12:53:53.162712958Z' -> '2026-05-29 12:53:53 UTC'  (unchanged)
+ *
+ * - opts.timezone === 'local': convert the instant to the CONFIGURED zone
+ *   (DEFAULT_DISPLAY_TZ, or opts.tz) and append ' <ZONE>':
+ *   '2026-07-01T12:00:00.123Z' -> '2026-07-01 08:00:00 EDT'
+ *
+ * Returns `raw ?? ''` for null/undefined/empty. Returns the raw string
+ * unchanged when it does not match the ISO-ish shape OR the instant is invalid.
+ */
+export function formatLogTimestamp(
+  raw: string | null | undefined,
+  opts?: LogTimestampOptions,
+): string {
   if (raw == null || raw === '') return raw ?? ''
-  const match = LOG_TS_RE.exec(raw)
-  if (match === null) return raw
-  const date = match[1] ?? ''
-  const time = match[2] ?? ''
-  return `${date} ${time} UTC`
+
+  // BACK-COMPAT: default + explicit 'utc' run the original regex fast-path,
+  // byte-for-byte identical to the pre-STAGE-004-009 behavior.
+  if (opts?.timezone !== 'local') {
+    const match = LOG_TS_RE.exec(raw)
+    if (match === null) return raw
+    const date = match[1] ?? ''
+    const time = match[2] ?? ''
+    return `${date} ${time} UTC`
+  }
+
+  // 'local' = the CONFIGURED zone (DEFAULT_DISPLAY_TZ), via explicit Intl
+  // timeZone — NOT the browser zone. Do not replace with toLocaleString().
+  // Only convert inputs that match the same ISO-ish shape the UTC path accepts;
+  // anything else falls through to the raw passthrough (matches UTC behavior).
+  if (LOG_TS_RE.exec(raw) === null) return raw
+  const instant = Date.parse(raw)
+  if (Number.isNaN(instant)) return raw
+  const tz = opts.tz ?? DEFAULT_DISPLAY_TZ
+  const date = new Date(instant)
+
+  // Wall-clock in the target zone. en-CA yields 'YYYY-MM-DD, HH:MM:SS' (24h).
+  const wall = new Intl.DateTimeFormat('en-CA', {
+    timeZone: tz,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).format(date)
+  // Normalize the comma separator -> single space: 'YYYY-MM-DD HH:MM:SS'.
+  // en-CA + hour12:false can emit a "24:00:00" hour at midnight on some ICU
+  // builds; normalize it to "00:" so midnight reads YYYY-MM-DD 00:00:00.
+  const wallClock = wall.replace(', ', ' ').replace(/ 24:/, ' 00:')
+
+  // Short zone label (EDT / EST) for the target zone at this instant.
+  const zoneParts = new Intl.DateTimeFormat('en-US', {
+    timeZone: tz,
+    timeZoneName: 'short',
+  }).formatToParts(date)
+  const zone = zoneParts.find((p) => p.type === 'timeZoneName')?.value ?? ''
+
+  return `${wallClock} ${zone}`
+}
+
+/**
+ * Compose BOTH formats from the one shared formatter (NOT a parallel impl):
+ * `display` is the requested format, `tooltip` is the OTHER format. Used to
+ * set a native `title=` tooltip showing the alternate zone.
+ */
+export function formatLogTimestampParts(
+  raw: string | null | undefined,
+  opts?: LogTimestampOptions,
+): { display: string; tooltip: string } {
+  const activeTimezone: 'local' | 'utc' = opts?.timezone ?? 'local'
+  const otherTimezone: 'local' | 'utc' = activeTimezone === 'utc' ? 'local' : 'utc'
+  const display = formatLogTimestamp(raw, { ...opts, timezone: activeTimezone })
+  const tooltip = formatLogTimestamp(raw, { ...opts, timezone: otherTimezone })
+  return { display, tooltip }
 }

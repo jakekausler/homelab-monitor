@@ -30,7 +30,7 @@ function makeUseLogs(r: Partial<UseLogsResult>): () => UseLogsResult {
 }
 
 describe('LogViewer', () => {
-  it('renders available lines', () => {
+  it('renders available lines in local time by default', () => {
     render(
       <LogViewer
         useLogs={makeUseLogs({
@@ -43,7 +43,37 @@ describe('LogViewer', () => {
     const body = screen.getByTestId('logs-body')
     expect(body.textContent).toContain('INFO a')
     expect(body.textContent).toContain('INFO b')
+    // Default is local (America/New_York, EDT in May).
+    expect(body.textContent).toContain('2026-05-21 10:30:00 EDT')
+  })
+
+  it('renders timestamps in UTC when timezone="utc"', () => {
+    render(
+      <LogViewer
+        timezone="utc"
+        useLogs={makeUseLogs({
+          logStatus: 'available',
+          lines: [line('INFO a')],
+        })}
+      />,
+    )
+
+    const body = screen.getByTestId('logs-body')
     expect(body.textContent).toContain('2026-05-21 14:30:00 UTC')
+  })
+
+  it('timestamp span carries the other-zone tooltip', () => {
+    render(
+      <LogViewer
+        timezone="local"
+        useLogs={makeUseLogs({
+          logStatus: 'available',
+          lines: [line('INFO a')],
+        })}
+      />,
+    )
+
+    expect(screen.getByTitle('2026-05-21 14:30:00 UTC')).toBeInTheDocument()
   })
 
   it('renders available with empty lines', () => {

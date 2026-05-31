@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 
 import { cn } from '@/lib/utils'
-import { formatLogTimestamp } from '@/lib/relativeTime'
+import { formatLogTimestampParts } from '@/lib/relativeTime'
 import { parseAnsi } from './ansi'
 import { severityTintClass } from './severity'
 import type { LogLine } from './types'
@@ -14,9 +14,17 @@ interface LogLineListProps {
   testId?: string
   /** Soft-wrap long lines instead of horizontal scroll. Default false. */
   wrap?: boolean
+  /** STAGE-004-009: UTC vs configured-local timestamps. Default 'local'. */
+  timezone?: 'local' | 'utc'
 }
 
-export function LogLineList({ lines, emptyContent, testId, wrap = false }: LogLineListProps) {
+export function LogLineList({
+  lines,
+  emptyContent,
+  testId,
+  wrap = false,
+  timezone = 'local',
+}: LogLineListProps) {
   return (
     <pre
       className={cn(
@@ -28,19 +36,37 @@ export function LogLineList({ lines, emptyContent, testId, wrap = false }: LogLi
       {lines.length === 0
         ? emptyContent
         : lines.map((line, i) => (
-            <LogRow key={`${line.timestamp}-${String(i)}`} line={line} wrap={wrap} />
+            <LogRow
+              key={`${line.timestamp}-${String(i)}`}
+              line={line}
+              wrap={wrap}
+              timezone={timezone}
+            />
           ))}
     </pre>
   )
 }
 
-function LogRow({ line, wrap }: { line: LogLine; wrap: boolean }) {
+function LogRow({
+  line,
+  wrap,
+  timezone,
+}: {
+  line: LogLine
+  wrap: boolean
+  timezone: 'local' | 'utc'
+}) {
   const tint = severityTintClass(line.severity)
   const segments = parseAnsi(line.message)
+  // STAGE-004-009: `display` is the chosen zone; `title` shows the OTHER zone.
+  const ts = formatLogTimestampParts(line.timestamp, { timezone })
   return (
     <div className="grid grid-cols-[auto_1fr] items-start gap-x-2">
-      <span className="whitespace-nowrap border-r border-border pr-2 text-muted-foreground">
-        {formatLogTimestamp(line.timestamp)}
+      <span
+        className="whitespace-nowrap border-r border-border pr-2 text-muted-foreground"
+        title={ts.tooltip}
+      >
+        {ts.display}
       </span>
       <span className={cn(wrap ? 'whitespace-pre-wrap break-all' : 'whitespace-pre')}>
         {segments.map((seg, j) => (

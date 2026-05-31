@@ -15,6 +15,9 @@ import { CronRunLogViewerPage } from '@/routes/inventory/CronRunLogViewer'
 import { TooltipProvider } from '@/components/ui/tooltip'
 
 afterEach(cleanup)
+afterEach(() => {
+  localStorage.removeItem('homelab-monitor:timezone')
+})
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -30,6 +33,10 @@ vi.mock('@/api/crons', () => ({
 vi.mock('@/lib/relativeTime', () => ({
   formatDuration: (n: number | null) => (n === null ? '—' : `${String(n)}s`),
   formatLogTimestamp: (raw: string | null | undefined) => raw ?? '',
+  formatLogTimestampParts: (raw: string | null | undefined) => ({
+    display: raw ?? '',
+    tooltip: raw ?? '',
+  }),
 }))
 
 import { useCronRunLog } from '@/api/crons'
@@ -478,6 +485,49 @@ describe('CronRunLogViewerPage', () => {
     renderWithRouter()
     await screen.findByTestId('run-log-header')
     expect(screen.getByLabelText('Run state ok')).toBeInTheDocument()
+  })
+
+  it('UTC timezone toggle is present, starts unchecked (local), and becomes checked after click', async () => {
+    // The @/lib/relativeTime mock in this file returns raw timestamps unchanged,
+    // so we cannot assert EDT↔UTC text conversion here. Instead we verify the
+    // toggle is wired to the hook by asserting its checked-state flips. The full
+    // text-conversion behaviour is covered by the Docker viewer toggle test and
+    // the useTimezonePreference / relativeTime unit tests.
+
+    // Ensure localStorage is clean so the hook initialises to 'local' (default).
+    localStorage.removeItem('homelab-monitor:timezone')
+
+    vi.mocked(useCronRunLog).mockReturnValue({
+      isLoading: false,
+      isFetching: false,
+      error: null,
+      data: {
+        pages: [
+          makeLogData({
+            log_status: 'available',
+            lines: [{ timestamp: '2026-05-01T12:00:01Z', message: 'toggle-cron-line' }],
+          }),
+        ],
+        pageParams: [undefined],
+      },
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
+    } as unknown as ReturnType<typeof useCronRunLog>)
+
+    renderWithRouter()
+    await screen.findByTestId('logs-body')
+
+    const toggleLabel = screen.getByTestId('timezone-toggle')
+    const checkbox = toggleLabel.querySelector('input[type="checkbox"]')!
+
+    // Default is local → unchecked.
+    expect(checkbox).not.toBeChecked()
+
+    fireEvent.click(checkbox)
+
+    // After click → UTC → checked.
+    expect(checkbox).toBeChecked()
   })
 
   it('renders the wrap toggle when data is present', async () => {

@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
 
-import { formatAbsolute, formatLogTimestamp, formatRelative } from '@/lib/relativeTime'
+import {
+  DEFAULT_DISPLAY_TZ,
+  formatAbsolute,
+  formatLogTimestamp,
+  formatLogTimestampParts,
+  formatRelative,
+} from '@/lib/relativeTime'
 
 const NOW = Date.parse('2026-05-11T12:00:00Z')
 
@@ -105,5 +111,88 @@ describe('formatLogTimestamp', () => {
     expect(formatLogTimestamp('')).toBe('')
     expect(formatLogTimestamp(null)).toBe('')
     expect(formatLogTimestamp(undefined)).toBe('')
+  })
+})
+
+describe('DEFAULT_DISPLAY_TZ', () => {
+  it('is America/New_York', () => {
+    expect(DEFAULT_DISPLAY_TZ).toBe('America/New_York')
+  })
+})
+
+describe('formatLogTimestamp — utc opt (explicit) matches no-opts', () => {
+  it('explicit utc opt is byte-identical to no-opts', () => {
+    const raw = '2026-05-29T12:53:53.162712958Z'
+    expect(formatLogTimestamp(raw, { timezone: 'utc' })).toBe(formatLogTimestamp(raw))
+    expect(formatLogTimestamp(raw, { timezone: 'utc' })).toBe('2026-05-29 12:53:53 UTC')
+  })
+})
+
+describe('formatLogTimestamp — local', () => {
+  it('converts a summer UTC instant to EDT wall-clock + zone (seconds only)', () => {
+    expect(formatLogTimestamp('2026-07-01T12:00:00.123Z', { timezone: 'local' })).toBe(
+      '2026-07-01 08:00:00 EDT',
+    )
+  })
+
+  it('converts a winter UTC instant to EST wall-clock + zone (DST aware)', () => {
+    expect(formatLogTimestamp('2026-01-01T12:00:00.000Z', { timezone: 'local' })).toBe(
+      '2026-01-01 07:00:00 EST',
+    )
+  })
+
+  it('handles a day-boundary crossing when shifting UTC -> ET', () => {
+    expect(formatLogTimestamp('2026-07-01T02:00:00Z', { timezone: 'local' })).toBe(
+      '2026-06-30 22:00:00 EDT',
+    )
+  })
+
+  it('formats an instant with no fractional seconds (seconds only)', () => {
+    expect(formatLogTimestamp('2026-07-01T12:00:00Z', { timezone: 'local' })).toBe(
+      '2026-07-01 08:00:00 EDT',
+    )
+  })
+
+  it('drops sub-second precision from the display (seconds only)', () => {
+    expect(formatLogTimestamp('2026-07-01T12:00:00.162712958Z', { timezone: 'local' })).toBe(
+      '2026-07-01 08:00:00 EDT',
+    )
+  })
+
+  it('returns raw unchanged for non-ISO input in local mode', () => {
+    expect(formatLogTimestamp('not-a-timestamp', { timezone: 'local' })).toBe('not-a-timestamp')
+  })
+
+  it('returns empty string for null/undefined/empty in local mode', () => {
+    expect(formatLogTimestamp('', { timezone: 'local' })).toBe('')
+    expect(formatLogTimestamp(null, { timezone: 'local' })).toBe('')
+    expect(formatLogTimestamp(undefined, { timezone: 'local' })).toBe('')
+  })
+
+  it('honors an explicit tz override', () => {
+    // UTC zone via tz override → wall-clock equals the input clock.
+    expect(formatLogTimestamp('2026-07-01T12:00:00.500Z', { timezone: 'local', tz: 'UTC' })).toBe(
+      '2026-07-01 12:00:00 UTC',
+    )
+  })
+})
+
+describe('formatLogTimestampParts', () => {
+  it('local display + UTC tooltip', () => {
+    const parts = formatLogTimestampParts('2026-07-01T12:00:00.123Z', { timezone: 'local' })
+    expect(parts.display).toBe('2026-07-01 08:00:00 EDT')
+    expect(parts.tooltip).toBe('2026-07-01 12:00:00 UTC')
+  })
+
+  it('utc display + local tooltip', () => {
+    const parts = formatLogTimestampParts('2026-07-01T12:00:00.123Z', { timezone: 'utc' })
+    expect(parts.display).toBe('2026-07-01 12:00:00 UTC')
+    expect(parts.tooltip).toBe('2026-07-01 08:00:00 EDT')
+  })
+
+  it('no opts → display local, tooltip UTC', () => {
+    const parts = formatLogTimestampParts('2026-07-01T12:00:00.123Z')
+    expect(parts.display).toBe('2026-07-01 08:00:00 EDT')
+    expect(parts.tooltip).toBe('2026-07-01 12:00:00 UTC')
   })
 })

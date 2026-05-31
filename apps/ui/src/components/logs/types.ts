@@ -37,7 +37,7 @@ export interface LogViewerProps {
   headerSlot?: ReactNode
   emptyStateCopy?: string
   unavailableCopy?: string
-  /** Reserved for STAGE-004-009 (UTC→local conversion); currently inert. */
+  /** STAGE-004-009: UTC vs configured-local timestamp rendering. Default 'local'. */
   timezone?: 'local' | 'utc'
   /** Soft-wrap long log lines. Default false. */
   wrap?: boolean

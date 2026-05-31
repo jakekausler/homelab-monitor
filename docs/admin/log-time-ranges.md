@@ -44,6 +44,45 @@ backend enforces the same rules and returns HTTP `400` on any violation.
 The 30-day cap matches VictoriaLogs retention. Querying beyond that window is
 accepted but returns nothing — VL has no data older than its retention horizon.
 
+## Local time vs UTC
+
+### Default: local time
+
+Log timestamps render in the configured display zone — `America/New_York` — regardless
+of the browser's own timezone. A viewer in another timezone still sees Eastern time.
+The zone label reflects DST automatically: `EDT` in summer, `EST` in winter. Example:
+
+```
+2026-05-31 10:07:57 EDT
+```
+
+### UTC toggle
+
+A **UTC** checkbox in the log viewer header flips all timestamps to UTC and back:
+
+```
+2026-05-31 14:07:57 UTC
+```
+
+The toggle applies to every per-row timestamp in the log list **and** to the
+viewer's header **Last:** timestamp simultaneously. Both formats show seconds
+only — no milliseconds.
+
+### Tooltip
+
+Hovering any timestamp shows the other format as a native tooltip: hover a local
+stamp to see its UTC equivalent, or hover a UTC stamp to see the Eastern equivalent.
+
+### Persistence
+
+The choice persists across navigation and across all log viewers. It is stored in
+the browser's `localStorage` under the key `homelab-monitor:timezone`; the default
+is `local`.
+
+> **Note:** The display zone is `America/New_York` for this release and is a
+> compile-time constant (not a user-facing setting). A future environment variable
+> will make it configurable. All timestamps are stored and queried internally as UTC.
+
 ## Where the control appears
 
 - **Docker container logs** — open bounds resolve as above, no window constraints.

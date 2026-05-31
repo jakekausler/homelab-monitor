@@ -13,8 +13,10 @@ import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/EmptyState'
 import { LogViewer } from '@/components/logs/LogViewer'
 import { TimeRangeControl } from '@/components/logs/TimeRangeControl'
+import { TimezoneToggle } from '@/components/logs/TimezoneToggle'
 import { WrapToggle } from '@/components/logs/WrapToggle'
-import { formatLogTimestamp } from '@/lib/relativeTime'
+import { formatLogTimestampParts } from '@/lib/relativeTime'
+import { useTimezonePreference } from '@/lib/useTimezonePreference'
 import {
   parseIso,
   resolveCustomWindow,
@@ -48,6 +50,8 @@ export function DockerContainerLogsViewerBody({
   onRangeChange,
 }: DockerContainerLogsViewerBodyProps) {
   const [wrap, setWrap] = useState(false)
+  // STAGE-004-009 timezone wiring; Explorer (STAGE-004-010) mirrors this.
+  const [timezone, toggleTimezone] = useTimezonePreference()
   // Bumping this re-resolves an OPEN end to a fresh "now", changing the query
   // key so Refresh extends the window to the present (live-tail groundwork).
   const [refreshNonce, setRefreshNonce] = useState(0)
@@ -139,20 +143,34 @@ export function DockerContainerLogsViewerBody({
     ? 'No log lines in the selected range. Try widening the time window.'
     : `No log lines in the last ${presetToken}. Try widening the time window.`
 
+  const lastTimestamp =
+    flatLines.length > 0 ? flatLines[flatLines.length - 1]?.timestamp : undefined
+  const lastTs =
+    lastTimestamp !== undefined ? formatLogTimestampParts(lastTimestamp, { timezone }) : null
+
   const header = (
     <>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-2">
           <span className="font-medium">{containerName}</span>
           {cachedRow?.status != null && <StatusBadge status={cachedRow.status} />}
-          {flatLines.length > 0 && (
-            <span className="text-xs text-muted-foreground" data-testid="last-log-at">
-              Last: {formatLogTimestamp(flatLines[flatLines.length - 1]?.timestamp)}
+          {lastTs !== null && (
+            <span
+              className="text-xs text-muted-foreground"
+              data-testid="last-log-at"
+              title={lastTs.tooltip}
+            >
+              Last: {lastTs.display}
             </span>
           )}
         </div>
         <div className="flex items-center gap-2">
           <WrapToggle checked={wrap} onChange={setWrap} id="docker-wrap" />
+          <TimezoneToggle
+            checked={timezone === 'utc'}
+            onChange={toggleTimezone}
+            id="docker-tz-toggle"
+          />
           <TimeRangeControl value={value} onChange={handleRangeChange} presets={PRESET_TOKENS} />
           <Button
             size="sm"
@@ -212,5 +230,13 @@ export function DockerContainerLogsViewerBody({
     }
   }
 
-  return <LogViewer useLogs={useLogs} headerSlot={header} emptyStateCopy={emptyCopy} wrap={wrap} />
+  return (
+    <LogViewer
+      useLogs={useLogs}
+      headerSlot={header}
+      emptyStateCopy={emptyCopy}
+      wrap={wrap}
+      timezone={timezone}
+    />
+  )
 }

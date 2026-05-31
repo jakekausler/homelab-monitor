@@ -20,13 +20,30 @@ function line(message: string, severity: string | null = null): LogLine {
 }
 
 describe('LogLineList', () => {
-  it('renders lines', () => {
+  it('renders lines with local timestamps by default', () => {
     render(<LogLineList lines={[line('a'), line('b')]} testId="x" />)
 
     const body = screen.getByTestId('x')
     expect(body.textContent).toContain('a')
     expect(body.textContent).toContain('b')
+    // 2026-05-21T14:30:00Z in America/New_York (EDT, UTC-4) = 10:30:00.
+    expect(body.textContent).toContain('2026-05-21 10:30:00 EDT')
+  })
+
+  it('renders UTC timestamps when timezone="utc"', () => {
+    render(<LogLineList lines={[line('a')]} testId="x" timezone="utc" />)
+
+    const body = screen.getByTestId('x')
     expect(body.textContent).toContain('2026-05-21 14:30:00 UTC')
+  })
+
+  it('sets a title tooltip showing the other zone', () => {
+    render(<LogLineList lines={[line('a')]} testId="x" timezone="local" />)
+
+    // The timestamp span carries the UTC format as its title.
+    const tsSpan = screen.getByTitle('2026-05-21 14:30:00 UTC')
+    expect(tsSpan).toBeInTheDocument()
+    expect(tsSpan.textContent).toBe('2026-05-21 10:30:00 EDT')
   })
 
   it('renders empty with emptyContent', () => {

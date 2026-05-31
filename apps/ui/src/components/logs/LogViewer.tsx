@@ -16,6 +16,7 @@ export function LogViewer({
   emptyStateCopy,
   unavailableCopy,
   wrap,
+  timezone,
 }: LogViewerProps) {
   const {
     lines,
@@ -79,7 +80,12 @@ export function LogViewer({
               entries.
             </LogBanner>
           )}
-          <LogLineList lines={lines ?? []} testId="logs-body" wrap={wrap ?? false} />
+          <LogLineList
+            lines={lines ?? []}
+            testId="logs-body"
+            wrap={wrap ?? false}
+            timezone={timezone ?? 'local'}
+          />
         </div>
       )}
     </div>
