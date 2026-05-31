@@ -21,6 +21,7 @@ import { ContainerOverviewTab } from '@/routes/integrations/ContainerOverviewTab
 import { ContainerProbesTab } from '@/routes/integrations/ContainerProbesTab'
 import { ContainerLogsTab } from '@/routes/integrations/ContainerLogsTab'
 import { ContainerActionsTab } from '@/routes/integrations/ContainerActionsTab'
+import { LogsExplorerPage } from '@/routes/logs/LogsExplorerPage'
 import { AppShell } from '@/components/AppShell'
 import { ErrorDisplay } from '@/components/ErrorDisplay'
 
@@ -92,6 +93,27 @@ const metricsRoute = createRoute({
   getParentRoute: () => protectedLayoutRoute,
   path: '/metrics',
   component: MetricsPage,
+})
+
+const logsRoute = createRoute({
+  getParentRoute: () => protectedLayoutRoute,
+  path: '/logs',
+  component: LogsExplorerPage,
+  // STAGE-004-010 — URL is the source of truth. `start`+`end` (ISO, custom) take
+  // precedence over `since` (preset token); `q` is the plain-text search term.
+  validateSearch: (
+    search: Record<string, unknown>,
+  ): {
+    q?: string | undefined
+    since?: string | undefined
+    start?: string | undefined
+    end?: string | undefined
+  } => ({
+    q: typeof search.q === 'string' ? search.q : undefined,
+    since: typeof search.since === 'string' ? search.since : undefined,
+    start: typeof search.start === 'string' ? search.start : undefined,
+    end: typeof search.end === 'string' ? search.end : undefined,
+  }),
 })
 
 const inventoryLayoutRoute = createRoute({
@@ -257,6 +279,7 @@ const routeTree = rootRoute.addChildren([
     overviewRoute,
     alertsRoute,
     metricsRoute,
+    logsRoute,
     inventoryLayoutRoute.addChildren([
       inventoryIndexRoute,
       cronsListRoute,

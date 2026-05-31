@@ -33,7 +33,7 @@ const NAV_ITEMS: NavItem[] = [
   { label: 'Inventory', to: '/inventory/crons', icon: Boxes },
   { label: 'Integrations', icon: Cable, isSectionLabel: true },
   { label: 'Docker', to: '/integrations/docker', icon: Container, indent: true },
-  { label: 'Logs', icon: ScrollText, disabledNote: 'Coming soon' },
+  { label: 'Logs', to: '/logs', icon: ScrollText },
   { label: 'Metrics', to: '/metrics', icon: Gauge },
   { label: 'Runbooks', icon: FileText, disabledNote: 'Coming soon' },
   { label: 'Auto-fix history', icon: Wand2, disabledNote: 'Coming soon' },

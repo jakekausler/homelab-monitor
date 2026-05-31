@@ -87,4 +87,4 @@ is `local`.
 
 - **Docker container logs** — open bounds resolve as above, no window constraints.
 - **Cron run logs** — bounds clamped to the run's time window.
-- **Logs Explorer** — forthcoming (STAGE-004-010); same control and URL conventions.
+- **Logs Explorer** (`/logs`) — same control and URL conventions. See [Logs Explorer](logs-explorer.md).

@@ -1,0 +1,35 @@
+import { describe, expect, it } from 'vitest'
+
+import { translateSearchToLogsQl } from '../logsQlTranslate'
+
+describe('translateSearchToLogsQl', () => {
+  it('empty string → match-all', () => {
+    expect(translateSearchToLogsQl('')).toBe('*')
+  })
+
+  it('whitespace-only → match-all', () => {
+    expect(translateSearchToLogsQl('   ')).toBe('*')
+  })
+
+  it('plain phrase → quoted _msg filter', () => {
+    expect(translateSearchToLogsQl('connection refused')).toBe('_msg:"connection refused"')
+  })
+
+  it('trims surrounding whitespace before quoting', () => {
+    expect(translateSearchToLogsQl('  padded  ')).toBe('_msg:"padded"')
+  })
+
+  it('escapes an embedded double-quote', () => {
+    expect(translateSearchToLogsQl('say "hi"')).toBe('_msg:"say \\"hi\\""')
+  })
+
+  it('escapes an embedded backslash', () => {
+    expect(translateSearchToLogsQl('a\\b')).toBe('_msg:"a\\\\b"')
+  })
+
+  it('escapes backslash FIRST then quote when both present', () => {
+    // Input:  \"   (one backslash, one quote)
+    // Expect: _msg:"\\\""  →  backslash becomes \\, quote becomes \"
+    expect(translateSearchToLogsQl('\\"')).toBe('_msg:"\\\\\\""')
+  })
+})
