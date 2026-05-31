@@ -2,11 +2,11 @@
 
 ## Status: In Progress
 
-## Stages Counter: 9 / 45 Complete
+## Stages Counter: 10 / 45 Complete
 
-## Current Stage: STAGE-004-009
+## Current Stage: STAGE-004-010
 
-## Current Phase: STAGE-004-009 Design (Not Started)
+## Current Phase: STAGE-004-010 Design (Not Started)
 
 ## Overview
 
@@ -79,7 +79,7 @@ Stages MUST be implemented in order. No parallelization. Each stage lands a sing
 | STAGE-004-006 | Redaction pipeline | Vector VRL + audit metric + yaml-driven patterns. | ✅ Complete |
 | STAGE-004-007 | Cursor pagination | All 3 endpoints + `<LogViewer>`. Fixes STAGE-003-011's D-DEFER-PAGINATION. | ✅ Complete |
 | STAGE-004-008 | Custom datetime range picker | All 3 viewer surfaces. Fixes STAGE-003-011's D-DEFER-CUSTOM-RANGE. | ✅ Complete |
-| STAGE-004-009 | Local-time rendering with UTC toggle | Applies via `<LogViewer>`. | ← CURRENT |
+| STAGE-004-009 | Local-time rendering with UTC toggle | Applies via `<LogViewer>`. | ✅ Complete |
 
 ### Explorer wave (S10-S22)
 

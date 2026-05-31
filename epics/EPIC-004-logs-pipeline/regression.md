@@ -82,3 +82,12 @@
 4. **Cron run log — bounded narrowing:** On a cron run log viewer with a long run, the bounded time-range control narrows displayed lines (client-side filter) within [run start, run end]; open bounds fall back to the run's edges; cannot exceed the run window.
 5. **Preset compatibility:** All 6 presets (5m/15m/1h/6h/24h/7d) still work on docker viewer and set `?since=…`. Clearing both custom bounds on docker reverts to the 15m preset (intended).
 6. **KNOWN FLAKY (pre-existing, not STAGE-008):** `apps/monitor/tests/test_api_cron_events.py::test_bmode_two_cmds_exit_closes_most_recent` intermittently fails with `assert 'unknown' == 'running'` (B-mode cron run-state timing). Observed during STAGE-008 Refinement: failed once, passed on unchanged re-run. Unrelated to the logs-pipeline work (no cron-event code touched). Flagged for a future dedicated fix; re-run verify if it fails.
+
+## STAGE-004-009 — Local-time timestamp rendering with UTC toggle
+
+1. **Local-time timestamp rendering:** Open a log viewer (docker container logs or cron run log). By default, timestamps render in configured local time (America/New_York) as `YYYY-MM-DD HH:MM:SS EDT/EST` (seconds only, no milliseconds; zone label reflects DST). NOT browser-local, NOT UTC by default.
+2. **UTC toggle:** The "UTC" toggle in the viewer header flips ALL timestamps (per-row AND the docker "Last:" header timestamp) to `YYYY-MM-DD HH:MM:SS UTC` and back. Both surfaces convert together.
+3. **Tooltip (other format):** Hovering a timestamp shows the OTHER format via native title tooltip (hover a local stamp → see the UTC equivalent, and vice versa). Both formats are seconds-only (no ms).
+4. **Persistence:** Toggle to UTC, navigate away and back (and across docker↔cron viewers) — the preference persists (localStorage `homelab-monitor:timezone`, shared across all log viewers).
+5. **Format consistency:** Local and UTC formats both show seconds only (no milliseconds). `formatLogTimestamp(raw)` with no opts still returns the UTC fast-path (back-compat for non-viewer callers).
+6. **Downstream:** The Logs Explorer (STAGE-004-010) consumes `<LogViewer>` and inherits this toggle automatically — no extra timezone work there.
