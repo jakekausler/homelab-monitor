@@ -95,10 +95,47 @@ back keeps your LogsQL expression.
 On narrow viewports the LogsQL editor is rendered as a plain textarea (no syntax
 highlighting) for tap-friendliness. **Enter** still submits the query.
 
+## Services sidebar
+
+The left **Services** panel lists every distinct `service` value present in the
+current time window, each with a line count, sorted by count (descending). It
+gives you a menu of available log sources without needing to know LogsQL.
+
+### Selecting services
+
+Click a service row to filter results to that service. The selected service
+appears as a chip above the search box; click its **×** to deselect it.
+
+You can select multiple services. The selections are OR'd together, then AND'd
+with whatever your current search or LogsQL query matches. For example, selecting
+`home-assistant` and `pi-hole` shows lines from either source, restricted to your
+current search term.
+
+The service filter works in **both plain search mode and advanced LogsQL mode**.
+It wraps on top of whatever your query produces and never modifies the text you
+typed.
+
+### Count semantics
+
+The counts and the service list reflect the **selected time window only**. They
+refresh when you change the time range and are **not** affected by your current
+search text or which services are already selected — the sidebar always shows what
+exists in the window. This is intentional: it is a picker of available sources,
+not a live result count.
+
+If more than 100 distinct services exist in the window, only the top 100 by count
+are listed and a **Showing top results** notice appears below the list.
+
+### Mobile
+
+On narrow screens the sidebar is hidden. A **Services** button appears above the
+log list and opens the picker as an overlay dialog. Selected-service chips still
+appear above the search box.
+
 ## Deep-linking and bookmarking
 
-The search term and time range are encoded in the URL, making any view shareable
-and bookmarkable.
+The search term, time range, and selected services are encoded in the URL, making
+any view shareable and bookmarkable.
 
 | URL parameter | Meaning |
 | --- | --- |
@@ -106,6 +143,7 @@ and bookmarkable.
 | `logsql` | Advanced-mode LogsQL expression (URL-encoded). |
 | `since` | Active preset, e.g. `since=24h` |
 | `start` / `end` | Custom range bounds as ISO timestamps |
+| `services` | Comma-separated selected service names, e.g. `services=home-assistant,pi-hole` |
 
 `q` and `logsql` are mutually exclusive. A URL containing `logsql` opens the
 explorer directly in advanced mode.
@@ -117,10 +155,11 @@ Examples:
 /logs?logsql=service%3Afoo&since=24h
 /logs?logsql=service%3Ahome-assistant%20AND%20severity%3Aerror%20%7C%20stats%20count()&since=1h
 /logs?start=2026-05-30T00:00:00Z&end=2026-05-31T00:00:00Z
+/logs?q=error&since=6h&services=home-assistant,pi-hole
 /logs
 ```
 
 ## What's next
 
-Stream picker, saved queries, query history, field inspector, histogram, export,
-and live tail are planned in later stages.
+Saved queries, query history, field inspector, histogram, export, and live tail
+are planned in later stages.

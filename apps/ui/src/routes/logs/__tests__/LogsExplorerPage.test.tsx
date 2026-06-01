@@ -24,17 +24,22 @@ afterEach(() => {
 // (expr, start, end) args to assert the plain-text → LogsQL translation.
 vi.mock('@/api/logs', () => ({
   useLogsQuery: vi.fn(),
+  useLogsServicesQuery: vi.fn(),
 }))
 
 // Force the LogsQlEditor narrow-viewport textarea path. NOTE: LogsExplorerBody
 // renders <LogsQlEditor> which calls useMediaQuery('(max-width: 767px)'); a
 // false here means "not narrow" → the wide/CodeMirror branch. To keep CM6 out of
 // jsdom, return TRUE so the shell renders the plain textarea directly.
+// LogsExplorerBody uses the SAME query for mobile-drawer detection — returning true
+// means the tests exercise the MOBILE drawer path. To assert the DESKTOP inline sidebar,
+// override per-test via vi.mocked(useMediaQuery).mockReturnValue(false).
 vi.mock('@/lib/useMediaQuery', () => ({
   useMediaQuery: vi.fn(() => true),
 }))
 
-import { useLogsQuery } from '@/api/logs'
+import { useLogsQuery, useLogsServicesQuery } from '@/api/logs'
+import { useMediaQuery } from '@/lib/useMediaQuery'
 
 // Typed against the REAL generated schema so a contract change breaks this test
 // instead of passing against a stale hand-written shape.
@@ -66,12 +71,19 @@ function renderRoute(initialPath = '/logs') {
       since?: string | undefined
       start?: string | undefined
       end?: string | undefined
+      services?: string[] | undefined
     } => ({
       q: typeof search.q === 'string' ? search.q : undefined,
       logsql: typeof search.logsql === 'string' ? search.logsql : undefined,
       since: typeof search.since === 'string' ? search.since : undefined,
       start: typeof search.start === 'string' ? search.start : undefined,
       end: typeof search.end === 'string' ? search.end : undefined,
+      services:
+        typeof search.services === 'string'
+          ? search.services.split(',').filter((s) => s.length > 0)
+          : Array.isArray(search.services)
+            ? (search.services as unknown[]).filter((s): s is string => typeof s === 'string')
+            : undefined,
     }),
   })
 
@@ -110,8 +122,24 @@ describe('LogsExplorerPage', () => {
     } as unknown as ReturnType<typeof useLogsQuery>)
   }
 
+  function mockServicesQuery(overrides: Record<string, unknown> = {}): void {
+    vi.mocked(useLogsServicesQuery).mockReturnValue({
+      data: {
+        services: [
+          { service: 'home-assistant', count: 1204 },
+          { service: 'nginx', count: 12 },
+        ],
+        truncated: false,
+      },
+      isLoading: false,
+      isError: false,
+      ...overrides,
+    } as unknown as ReturnType<typeof useLogsServicesQuery>)
+  }
+
   beforeEach(() => {
     mockLogsQuery()
+    mockServicesQuery()
   })
 
   it('renders the search input, time-range control, and a log viewer region', async () => {
@@ -296,5 +324,101 @@ describe('LogsExplorerPage', () => {
     await screen.findByTestId('logsql-editor-textarea')
     const calls = vi.mocked(useLogsQuery).mock.calls
     expect(calls.some(([expr]) => expr === '*')).toBe(true)
+  })
+
+  it('sidebar renders rows from mocked services (desktop)', async () => {
+    vi.mocked(useMediaQuery).mockReturnValue(false)
+    renderRoute()
+    await screen.findByTestId('logs-search-input')
+    const rows = screen.getAllByTestId('stream-picker-row')
+    expect(rows).toHaveLength(2)
+    expect(rows[0]).toHaveAttribute('data-service', 'home-assistant')
+    expect(screen.getByText('1,204')).toBeInTheDocument()
+  })
+
+  it('clicking a row selects and writes URL with services param', async () => {
+    vi.mocked(useMediaQuery).mockReturnValue(false)
+    renderRoute()
+    await screen.findByTestId('logs-search-input')
+    const rows = screen.getAllByTestId('stream-picker-row')
+    fireEvent.click(rows[0]!)
+    // Chip should appear
+    expect(await screen.findByTestId('service-chip')).toHaveAttribute(
+      'data-service',
+      'home-assistant',
+    )
+    // useLogsQuery should be called with the services CSV
+    const calls = vi.mocked(useLogsQuery).mock.calls
+    expect(calls.some(([, , , services]) => services === 'home-assistant')).toBe(true)
+  })
+
+  it('chip × removes the service', async () => {
+    renderRoute('/logs?services=home-assistant&since=1h')
+    await screen.findByTestId('logs-search-input')
+    const chip = await screen.findByTestId('service-chip')
+    expect(chip).toBeInTheDocument()
+    const removeBtn = screen.getByTestId('service-chip-remove')
+    fireEvent.click(removeBtn)
+    expect(screen.queryByTestId('service-chip')).not.toBeInTheDocument()
+    const calls = vi.mocked(useLogsQuery).mock.calls
+    expect(calls.some(([, , , services]) => services === '')).toBe(true)
+  })
+
+  it('services CSV is forwarded into useLogsQuery', async () => {
+    renderRoute('/logs?services=a,b')
+    await screen.findByTestId('logs-search-input')
+    const calls = vi.mocked(useLogsQuery).mock.calls
+    expect(calls.some(([, , , services]) => services === 'a,b')).toBe(true)
+  })
+
+  it('selection survives in advanced mode', async () => {
+    renderRoute('/logs?logsql=service%3Afoo&services=nginx')
+    const editor = await screen.findByTestId<HTMLTextAreaElement>('logsql-editor-textarea')
+    expect(editor.value).toBe('service:foo')
+    expect(await screen.findByTestId('service-chip')).toHaveAttribute('data-service', 'nginx')
+    const calls = vi.mocked(useLogsQuery).mock.calls
+    expect(
+      calls.some(([expr, , , services]) => expr === 'service:foo' && services === 'nginx'),
+    ).toBe(true)
+  })
+
+  it('selection survives in plain mode', async () => {
+    renderRoute('/logs?q=boom&services=nginx')
+    const input = await screen.findByTestId<HTMLInputElement>('logs-search-input')
+    expect(input.value).toBe('boom')
+    expect(await screen.findByTestId('service-chip')).toHaveAttribute('data-service', 'nginx')
+    const calls = vi.mocked(useLogsQuery).mock.calls
+    expect(
+      calls.some(([expr, , , services]) => expr === '_msg:"boom"' && services === 'nginx'),
+    ).toBe(true)
+  })
+
+  it('shows truncated banner when services are truncated', async () => {
+    mockServicesQuery({ data: { services: [{ service: 'a', count: 1 }], truncated: true } })
+    vi.mocked(useMediaQuery).mockReturnValue(false)
+    renderRoute()
+    await screen.findByTestId('logs-search-input')
+    expect(screen.getByTestId('stream-picker-truncated')).toBeInTheDocument()
+  })
+
+  it('mobile drawer toggle (mobile path)', async () => {
+    // Override useMediaQuery per-test to explicitly set mobile mode
+    // The default module mock returns true, which means isMobile=true, so we're in mobile path
+    vi.mocked(useMediaQuery).mockImplementation((query) => {
+      // Return true for the LogsExplorerBody's mobile detection query
+      if (query === '(max-width: 767px)') return true
+      return true
+    })
+    renderRoute()
+    await screen.findByTestId('logs-search-input')
+    // Mobile drawer is hidden by default
+    expect(screen.queryByTestId('stream-picker')).not.toBeInTheDocument()
+    // Toggle button should be present
+    const toggle = screen.getByTestId('stream-picker-toggle')
+    expect(toggle).toBeInTheDocument()
+    // Click to open — Dialog mounts in a portal, so use findBy (async)
+    fireEvent.click(toggle)
+    // Assert the dialog is present by checking the StreamPickerSidebar root
+    expect(await screen.findByTestId('stream-picker')).toBeInTheDocument()
   })
 })

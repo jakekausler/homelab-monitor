@@ -109,12 +109,19 @@ const logsRoute = createRoute({
     since?: string | undefined
     start?: string | undefined
     end?: string | undefined
+    services?: string[] | undefined
   } => ({
     q: typeof search.q === 'string' ? search.q : undefined,
     logsql: typeof search.logsql === 'string' ? search.logsql : undefined,
     since: typeof search.since === 'string' ? search.since : undefined,
     start: typeof search.start === 'string' ? search.start : undefined,
     end: typeof search.end === 'string' ? search.end : undefined,
+    services:
+      typeof search.services === 'string'
+        ? search.services.split(',').filter((s) => s.length > 0)
+        : Array.isArray(search.services)
+          ? (search.services as unknown[]).filter((s): s is string => typeof s === 'string')
+          : undefined,
   }),
 })
 

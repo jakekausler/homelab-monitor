@@ -2486,6 +2486,29 @@
         "title": "LogsQueryResponse",
         "type": "object"
       },
+      "LogsServicesResponse": {
+        "additionalProperties": false,
+        "description": "Response for GET /api/logs/services.\n\n`services` is sorted DESC by count. `truncated` is True when the number of\ndistinct services exceeded the requested `limit` (only the top `limit` are\nreturned).",
+        "properties": {
+          "services": {
+            "items": {
+              "$ref": "#/components/schemas/ServiceCount"
+            },
+            "title": "Services",
+            "type": "array"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "services",
+          "truncated"
+        ],
+        "title": "LogsServicesResponse",
+        "type": "object"
+      },
       "LogsStreamSummary": {
         "additionalProperties": false,
         "description": "Per-stream byte/rate summary for the streams panel.",
@@ -3118,6 +3141,26 @@
           "truncated"
         ],
         "title": "RunLogResponse",
+        "type": "object"
+      },
+      "ServiceCount": {
+        "additionalProperties": false,
+        "description": "One distinct `service` value + its line count over the query window.",
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "service": {
+            "title": "Service",
+            "type": "string"
+          }
+        },
+        "required": [
+          "service",
+          "count"
+        ],
+        "title": "ServiceCount",
         "type": "object"
       },
       "Severity": {
@@ -6145,6 +6188,24 @@
               "description": "Opaque pagination cursor",
               "title": "Cursor"
             }
+          },
+          {
+            "description": "CSV of service values to AND-filter",
+            "in": "query",
+            "name": "services",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "CSV of service values to AND-filter",
+              "title": "Services"
+            }
           }
         ],
         "responses": {
@@ -6170,6 +6231,71 @@
           }
         },
         "summary": "Logs Query"
+      }
+    },
+    "/api/logs/services": {
+      "get": {
+        "description": "Distinct `service` values + line counts over [start, end], for the\nstream-picker sidebar (STAGE-004-012).\n\nFORWARD-COMPAT: STAGE-004-018's /api/logs/fields will generalize distinct-\nvalue+count discovery and may absorb/replace this endpoint. Do not couple\nnew callers beyond the stream picker.\n\nAuth: cookie session required. CSRF NOT enforced on GET. Same window-\nvalidation rules as /api/logs/query.",
+        "operationId": "logs_services_api_logs_services_get",
+        "parameters": [
+          {
+            "description": "ISO-8601 UTC start time",
+            "in": "query",
+            "name": "start",
+            "required": true,
+            "schema": {
+              "description": "ISO-8601 UTC start time",
+              "title": "Start",
+              "type": "string"
+            }
+          },
+          {
+            "description": "ISO-8601 UTC end time",
+            "in": "query",
+            "name": "end",
+            "required": true,
+            "schema": {
+              "description": "ISO-8601 UTC end time",
+              "title": "End",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 1000,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogsServicesResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Logs Services"
       }
     },
     "/api/logs/streams": {

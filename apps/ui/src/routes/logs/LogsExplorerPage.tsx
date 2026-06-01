@@ -47,6 +47,9 @@ export function LogsExplorerPage() {
   const start = typeof search.start === 'string' ? search.start : undefined
   const end = typeof search.end === 'string' ? search.end : undefined
 
+  // Read the `services` URL param (array form, set by router validateSearch):
+  const servicesParam = Array.isArray(search.services) ? search.services : undefined
+
   // Three independent committed values + one live value per mode. Toggling modes
   // preserves BOTH texts; only the ACTIVE mode's committed value drives the
   // query and the URL. Seeded once from the URL: `logsql` present → advanced.
@@ -56,17 +59,25 @@ export function LogsExplorerPage() {
   const [committedLogsQl, setCommittedLogsQl] = useState<string>(logsql ?? '')
   const [liveLogsQl, setLiveLogsQl] = useState<string>(logsql ?? '')
   const [range, setRange] = useState<TimeRangeValue>(() => initialRange(since, start, end))
+  const [selectedServices, setSelectedServices] = useState<string[]>(servicesParam ?? [])
 
   // Build the URL search object by OMITTING absent keys (exactOptionalPropertyTypes:
   // never write `key: undefined`). Advanced → write `logsql`, omit `q`. Plain →
   // write `q`, omit `logsql`. Empty active text → omit that key entirely.
-  const writeUrl = (advanced: boolean, plain: string, lql: string, r: TimeRangeValue): void => {
+  const writeUrl = (
+    advanced: boolean,
+    plain: string,
+    lql: string,
+    r: TimeRangeValue,
+    svcs: string[],
+  ): void => {
     const next: {
       q?: string
       logsql?: string
       since?: string
       start?: string
       end?: string
+      services?: string[]
     } = {}
     if (advanced) {
       if (lql.length > 0) next.logsql = lql
@@ -79,16 +90,17 @@ export function LogsExplorerPage() {
       if (r.start !== undefined) next.start = toIsoZ(r.start)
       if (r.end !== undefined) next.end = toIsoZ(r.end)
     }
+    if (svcs.length > 0) next.services = svcs
     void navigate({ to: '/logs', search: next })
   }
 
   const handleSubmitSearch = (): void => {
     if (advancedMode) {
       setCommittedLogsQl(liveLogsQl)
-      writeUrl(true, committedPlainText, liveLogsQl, range)
+      writeUrl(true, committedPlainText, liveLogsQl, range, selectedServices)
     } else {
       setCommittedPlainText(livePlainText)
-      writeUrl(false, livePlainText, committedLogsQl, range)
+      writeUrl(false, livePlainText, committedLogsQl, range, selectedServices)
     }
   }
 
@@ -98,24 +110,32 @@ export function LogsExplorerPage() {
     if (advancedMode) {
       setLiveLogsQl('')
       setCommittedLogsQl('')
-      writeUrl(true, committedPlainText, '', range)
+      writeUrl(true, committedPlainText, '', range, selectedServices)
     } else {
       setLivePlainText('')
       setCommittedPlainText('')
-      writeUrl(false, '', committedLogsQl, range)
+      writeUrl(false, '', committedLogsQl, range, selectedServices)
     }
   }
 
   const handleRangeChange = (next: TimeRangeValue): void => {
     setRange(next)
-    writeUrl(advancedMode, committedPlainText, committedLogsQl, next)
+    writeUrl(advancedMode, committedPlainText, committedLogsQl, next, selectedServices)
   }
 
   const handleToggleAdvanced = (nextAdvanced: boolean): void => {
     setAdvancedMode(nextAdvanced)
     // Rewrite the URL to reflect the NEW active mode's COMMITTED value. Both
     // texts are preserved in state across the toggle.
-    writeUrl(nextAdvanced, committedPlainText, committedLogsQl, range)
+    writeUrl(nextAdvanced, committedPlainText, committedLogsQl, range, selectedServices)
+  }
+
+  const handleToggleService = (service: string): void => {
+    setSelectedServices((prev) => {
+      const next = prev.includes(service) ? prev.filter((s) => s !== service) : [...prev, service]
+      writeUrl(advancedMode, committedPlainText, committedLogsQl, range, next)
+      return next
+    })
   }
 
   return (
@@ -127,12 +147,14 @@ export function LogsExplorerPage() {
         committedLogsQl={committedLogsQl}
         liveLogsQl={liveLogsQl}
         range={range}
+        selectedServices={selectedServices}
         onLivePlainTextChange={setLivePlainText}
         onLiveLogsQlChange={setLiveLogsQl}
         onToggleAdvanced={handleToggleAdvanced}
         onSubmitSearch={handleSubmitSearch}
         onClearSearch={handleClearSearch}
         onRangeChange={handleRangeChange}
+        onToggleService={handleToggleService}
       />
     </div>
   )

@@ -26,6 +26,7 @@ __all__ = [
     "HealthzResponse",
     "IngestResponse",
     "LogsQueryResponse",
+    "LogsServicesResponse",
     "LogsStreamSummary",
     "LogsStreamsResponse",
     "MetricsRangeResponse",
@@ -33,6 +34,7 @@ __all__ = [
     "MetricsSnapshotResponse",
     "OutcomeView",
     "RetryResponse",
+    "ServiceCount",
     "VMRangeData",
     "VMRangeResult",
     "VersionResponse",
@@ -252,3 +254,24 @@ class LogsStreamsResponse(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     streams: list[LogsStreamSummary]
+
+
+class ServiceCount(BaseModel):
+    """One distinct `service` value + its line count over the query window."""
+
+    model_config = ConfigDict(extra="forbid")
+    service: str
+    count: int
+
+
+class LogsServicesResponse(BaseModel):
+    """Response for GET /api/logs/services.
+
+    `services` is sorted DESC by count. `truncated` is True when the number of
+    distinct services exceeded the requested `limit` (only the top `limit` are
+    returned).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    services: list[ServiceCount]
+    truncated: bool

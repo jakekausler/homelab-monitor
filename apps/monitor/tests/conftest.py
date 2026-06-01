@@ -24,6 +24,7 @@ from prometheus_client import CollectorRegistry
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from homelab_monitor.kernel.alerts.repository import AlertRepository
+from homelab_monitor.kernel.api.routers import logs as logs_router
 from homelab_monitor.kernel.api.sse import SseBroker
 from homelab_monitor.kernel.auth.rate_limit import InProcessLoginRateLimiter
 from homelab_monitor.kernel.auth.repository import AuthRepository
@@ -46,6 +47,7 @@ from homelab_monitor.kernel.docker.compose_action_runner import ComposeActionRun
 from homelab_monitor.kernel.docker.socket_client import DockerSocketClient
 from homelab_monitor.kernel.heartbeat.repository import HeartbeatRepo
 from homelab_monitor.kernel.logs.multiplex import MultiplexLogsWriter
+from homelab_monitor.kernel.logs.services import ServicesCache
 from homelab_monitor.kernel.logs.vl_writer import VictoriaLogsWriter
 from homelab_monitor.kernel.metrics.multiplex import MultiplexMetricsWriter
 from homelab_monitor.kernel.metrics.prometheus_writer import PrometheusRegistryWriter
@@ -254,6 +256,9 @@ async def _per_test_db(  # noqa: PLR0915  # pyright: ignore[reportUnusedFunction
     )
     logs_writer = MultiplexLogsWriter([in_memory_logs_writer, vl_writer])
     log_stream_state: LogStreamState = {}
+
+    # Reset module-level services cache (fresh per test).
+    logs_router._services_cache = ServicesCache()  # pyright: ignore[reportPrivateUsage]
 
     # ---- plugin loader (fresh; re-register minimal set + persist to fresh DB) ----
     loader = PluginLoader(log=log)

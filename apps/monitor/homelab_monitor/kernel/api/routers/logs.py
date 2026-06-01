@@ -18,6 +18,7 @@ from homelab_monitor.kernel.api.dependencies import (
 from homelab_monitor.kernel.api.errors import HttpProblem
 from homelab_monitor.kernel.api.schemas import (
     LogsQueryResponse,
+    LogsServicesResponse,
     LogsStreamsResponse,
 )
 from homelab_monitor.kernel.auth.models import User
@@ -27,10 +28,15 @@ from homelab_monitor.kernel.logs.pagination import (
     InvalidCursorError,
     paginate_older,
 )
+from homelab_monitor.kernel.logs.services import (
+    ServicesCache,
+    fetch_services,
+)
 from homelab_monitor.kernel.logs.time_window import parse_and_validate_window
 from homelab_monitor.kernel.logs.victorialogs_client import (
     VictoriaLogsClient,
     VictoriaLogsClientError,
+    logsql_quote_phrase,
 )
 from homelab_monitor.plugins.collectors.builtin.log_stream_budget import LogStreamState
 
@@ -43,6 +49,32 @@ _MAX_LIMIT = 5000
 # kernel.logs.time_window.parse_and_validate_window, shared with the docker logs
 # endpoint.
 
+_SERVICES_DEFAULT_LIMIT = 100
+_SERVICES_MIN_LIMIT = 1
+_SERVICES_MAX_LIMIT = 1000
+
+# Process-wide 30s TTL cache keyed on (start, end, limit). Module-scoped so it
+# survives across requests within a worker. Clock injectable only in tests via
+# the module-level rebind (see test).
+_services_cache = ServicesCache()
+
+
+def _compose_services_expr(expr: str, services_csv: str | None) -> str:
+    """AND a `(service:"a" OR service:"b" …)` clause onto the user's expr.
+
+    The user's `expr` is wrapped in parens and passed through VERBATIM — never
+    parsed or mutated. Each service value is escaped via the canonical
+    `logsql_quote_phrase`. Empty/absent `services_csv` returns `expr` unchanged.
+    """
+    if services_csv is None:
+        return expr
+    services = [s for s in (part.strip() for part in services_csv.split(",")) if s]
+    if not services:
+        return expr
+    services = services[:_SERVICES_MAX_LIMIT]
+    or_clause = " OR ".join(f"service:{logsql_quote_phrase(s)}" for s in services)
+    return f"({or_clause}) AND ({expr})"
+
 
 @router.get("/logs/query", response_model=LogsQueryResponse)
 async def logs_query(  # noqa: PLR0913
@@ -51,6 +83,7 @@ async def logs_query(  # noqa: PLR0913
     end: str = Query(..., description="ISO-8601 UTC end time"),
     limit: int = Query(_DEFAULT_LIMIT, ge=1, le=_MAX_LIMIT),
     cursor: str | None = Query(None, description="Opaque pagination cursor"),
+    services: str | None = Query(None, description="CSV of service values to AND-filter"),
     _user: User = Depends(require_session()),  # noqa: B008
     vl_url: str = Depends(get_vl_url),
     http_client: httpx.AsyncClient = Depends(get_http_client),  # noqa: B008
@@ -78,12 +111,14 @@ async def logs_query(  # noqa: PLR0913
     # Raises HttpProblem(400, ...) with identical code/message as before.
     parse_and_validate_window(start, end)
 
+    effective_expr = _compose_services_expr(expr, services)
+
     base_limits = load_vl_query_limits()
     client = VictoriaLogsClient(vl_url=vl_url, http_client=http_client, limits=base_limits)
     try:
         page = await paginate_older(
             client=client,
-            expr=expr,
+            expr=effective_expr,
             window_start=start,
             window_end=end,
             page_size=limit,
@@ -110,6 +145,52 @@ async def logs_query(  # noqa: PLR0913
         next_cursor=page.next_cursor,
         has_more=page.has_more,
     )
+
+
+@router.get("/logs/services", response_model=LogsServicesResponse)
+async def logs_services(
+    start: str = Query(..., description="ISO-8601 UTC start time"),
+    end: str = Query(..., description="ISO-8601 UTC end time"),
+    limit: int = Query(_SERVICES_DEFAULT_LIMIT, ge=_SERVICES_MIN_LIMIT, le=_SERVICES_MAX_LIMIT),
+    _user: User = Depends(require_session()),  # noqa: B008
+    vl_url: str = Depends(get_vl_url),
+    http_client: httpx.AsyncClient = Depends(get_http_client),  # noqa: B008
+) -> LogsServicesResponse:
+    """Distinct `service` values + line counts over [start, end], for the
+    stream-picker sidebar (STAGE-004-012).
+
+    FORWARD-COMPAT: STAGE-004-018's /api/logs/fields will generalize distinct-
+    value+count discovery and may absorb/replace this endpoint. Do not couple
+    new callers beyond the stream picker.
+
+    Auth: cookie session required. CSRF NOT enforced on GET. Same window-
+    validation rules as /api/logs/query.
+    """
+    log: BoundLogger = cast(
+        BoundLogger,
+        structlog.get_logger().bind(component="logs_services"),
+    )
+    parse_and_validate_window(start, end)
+
+    key = (start, end, limit)
+    cached = _services_cache.get(key)
+    if cached is not None:
+        return cached
+
+    base_limits = load_vl_query_limits()
+    client = VictoriaLogsClient(vl_url=vl_url, http_client=http_client, limits=base_limits)
+    try:
+        response = await fetch_services(client=client, start=start, end=end, limit=limit)
+    except VictoriaLogsClientError as exc:
+        log.warning("logs_services.upstream_error", error=str(exc))
+        raise HttpProblem(
+            status_code=502,
+            code="upstream_unavailable",
+            message="victorialogs stats query failed",
+        ) from exc
+
+    _services_cache.put(key, response)
+    return response
 
 
 @router.get("/logs/streams", response_model=LogsStreamsResponse)

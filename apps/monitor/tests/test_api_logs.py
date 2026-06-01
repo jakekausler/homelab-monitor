@@ -353,3 +353,371 @@ async def test_query_400_on_malformed_cursor(
     )
     assert resp.status_code == 400  # noqa: PLR2004
     assert resp.json()["error"]["code"] == "invalid_cursor"
+
+
+@pytest.mark.asyncio
+async def test_services_requires_session(authenticated_client: AsyncClient) -> None:
+    """Missing session cookie returns 401."""
+    app = cast(FastAPI, authenticated_client._transport.app)  # pyright: ignore[reportAttributeAccessIssue, reportPrivateUsage, reportUnknownMemberType]
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as anon:
+        resp = await anon.get(
+            "/api/logs/services",
+            params={
+                "start": "2026-05-07T00:00:00Z",
+                "end": "2026-05-07T01:00:00Z",
+            },
+        )
+    assert resp.status_code == 401  # noqa: PLR2004
+
+
+@pytest.mark.asyncio
+async def test_services_happy_path(
+    authenticated_client: AsyncClient,
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Happy path: VL returns services; endpoint parses and sorts."""
+    monkeypatch.setenv("HOMELAB_MONITOR_VL_URL", "http://vl-test:9428")
+    ndjson = (
+        '{"_stream_id":"","_msg":"","_time":"","service":"nginx","count":"10"}\n'
+        '{"_stream_id":"","_msg":"","_time":"","service":"ssh","count":"3"}\n'
+    )
+    # Register permissive mock for lifespan startup request to VictoriaMetrics
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(r"http://victoriametrics:8428/.*"),
+        json={"data": {"resultType": "vector", "result": []}},
+        is_optional=True,
+    )
+    httpx_mock.add_response(
+        url=re.compile(r"http://vl-test:9428/select/logsql/query.*"),
+        method="GET",
+        text=ndjson,
+    )
+    resp = await authenticated_client.get(
+        "/api/logs/services",
+        params={
+            "start": "2026-05-07T00:00:00Z",
+            "end": "2026-05-07T01:00:00Z",
+        },
+    )
+    assert resp.status_code == 200  # noqa: PLR2004
+    body = resp.json()
+    assert len(body["services"]) == 2  # noqa: PLR2004
+    assert body["services"][0]["service"] == "nginx"
+    assert body["services"][0]["count"] == 10  # noqa: PLR2004
+    assert body["services"][1]["service"] == "ssh"
+    assert body["services"][1]["count"] == 3  # noqa: PLR2004
+    assert body["truncated"] is False
+
+
+@pytest.mark.asyncio
+async def test_services_truncated(
+    authenticated_client: AsyncClient,
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When services exceed limit, truncated is True and only top N returned."""
+    monkeypatch.setenv("HOMELAB_MONITOR_VL_URL", "http://vl-test:9428")
+    ndjson = (
+        '{"_stream_id":"","_msg":"","_time":"","service":"nginx","count":"10"}\n'
+        '{"_stream_id":"","_msg":"","_time":"","service":"ssh","count":"3"}\n'
+    )
+    # Register permissive mock for lifespan startup request to VictoriaMetrics
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(r"http://victoriametrics:8428/.*"),
+        json={"data": {"resultType": "vector", "result": []}},
+        is_optional=True,
+    )
+    httpx_mock.add_response(
+        url=re.compile(r"http://vl-test:9428/select/logsql/query.*"),
+        method="GET",
+        text=ndjson,
+    )
+    resp = await authenticated_client.get(
+        "/api/logs/services",
+        params={
+            "start": "2026-05-07T00:00:00Z",
+            "end": "2026-05-07T01:00:00Z",
+            "limit": 1,
+        },
+    )
+    assert resp.status_code == 200  # noqa: PLR2004
+    body = resp.json()
+    assert len(body["services"]) == 1
+    assert body["services"][0]["service"] == "nginx"
+    assert body["truncated"] is True
+
+
+@pytest.mark.asyncio
+async def test_services_rejects_invalid_timestamp_format(
+    authenticated_client: AsyncClient,
+) -> None:
+    """Non-ISO-8601 start timestamp returns 400."""
+    resp = await authenticated_client.get(
+        "/api/logs/services",
+        params={
+            "start": "not-a-date",
+            "end": "2026-05-07T01:00:00Z",
+        },
+    )
+    assert resp.status_code == 400  # noqa: PLR2004
+    assert resp.json()["error"]["code"] == "invalid_time_format"
+
+
+@pytest.mark.asyncio
+async def test_services_rejects_inverted_range(
+    authenticated_client: AsyncClient,
+) -> None:
+    """end before start returns 400."""
+    resp = await authenticated_client.get(
+        "/api/logs/services",
+        params={
+            "start": "2026-05-07T01:00:00Z",
+            "end": "2026-05-07T00:00:00Z",
+        },
+    )
+    assert resp.status_code == 400  # noqa: PLR2004
+    assert resp.json()["error"]["code"] == "invalid_range"
+
+
+@pytest.mark.asyncio
+async def test_services_rejects_range_too_wide(
+    authenticated_client: AsyncClient,
+) -> None:
+    """Range exceeding MAX_RANGE_DAYS returns 400."""
+    resp = await authenticated_client.get(
+        "/api/logs/services",
+        params={
+            "start": "2026-01-01T00:00:00Z",
+            "end": "2026-04-01T00:00:00Z",  # 90 days
+        },
+    )
+    assert resp.status_code == 400  # noqa: PLR2004
+    assert resp.json()["error"]["code"] == "range_too_wide"
+
+
+@pytest.mark.asyncio
+async def test_services_502_on_vl_error(
+    authenticated_client: AsyncClient,
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """VL returning 500 surfaces as 502 ``upstream_unavailable``."""
+    monkeypatch.setenv("HOMELAB_MONITOR_VL_URL", "http://vl-test:9428")
+    httpx_mock.add_response(
+        url=re.compile(r"http://vl-test:9428/select/logsql/query.*"),
+        method="GET",
+        status_code=500,
+        text="vl error",
+    )
+    resp = await authenticated_client.get(
+        "/api/logs/services",
+        params={
+            "start": "2026-05-07T02:00:00Z",
+            "end": "2026-05-07T03:00:00Z",
+        },
+    )
+    assert resp.status_code == 502  # noqa: PLR2004
+    assert resp.json()["error"]["code"] == "upstream_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_services_skips_rows_missing_service_or_count(
+    authenticated_client: AsyncClient,
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Rows missing service or count fields are silently skipped."""
+    monkeypatch.setenv("HOMELAB_MONITOR_VL_URL", "http://vl-test:9428")
+    ndjson = (
+        '{"_stream_id":"","_msg":"","_time":"","service":"","count":"5"}\n'
+        '{"_stream_id":"","_msg":"","_time":"","service":"nginx","count":"10"}\n'
+        '{"_stream_id":"","_msg":"","_time":"","service":"ssh"}\n'
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(r"http://victoriametrics:8428/.*"),
+        json={"data": {"resultType": "vector", "result": []}},
+        is_optional=True,
+    )
+    httpx_mock.add_response(
+        url=re.compile(r"http://vl-test:9428/select/logsql/query.*"),
+        method="GET",
+        text=ndjson,
+    )
+    resp = await authenticated_client.get(
+        "/api/logs/services",
+        params={
+            "start": "2026-05-07T04:00:00Z",
+            "end": "2026-05-07T05:00:00Z",
+        },
+    )
+    assert resp.status_code == 200  # noqa: PLR2004
+    body = resp.json()
+    assert len(body["services"]) == 1
+    assert body["services"][0]["service"] == "nginx"
+
+
+@pytest.mark.asyncio
+async def test_services_skips_rows_with_non_integer_count(
+    authenticated_client: AsyncClient,
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Rows with non-integer count are silently skipped (ValueError branch)."""
+    monkeypatch.setenv("HOMELAB_MONITOR_VL_URL", "http://vl-test:9428")
+    ndjson = (
+        '{"_stream_id":"","_msg":"","_time":"","service":"broken","count":"abc"}\n'
+        '{"_stream_id":"","_msg":"","_time":"","service":"nginx","count":"7"}\n'
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(r"http://victoriametrics:8428/.*"),
+        json={"data": {"resultType": "vector", "result": []}},
+        is_optional=True,
+    )
+    httpx_mock.add_response(
+        url=re.compile(r"http://vl-test:9428/select/logsql/query.*"),
+        method="GET",
+        text=ndjson,
+    )
+    resp = await authenticated_client.get(
+        "/api/logs/services",
+        params={
+            "start": "2026-05-07T05:00:00Z",
+            "end": "2026-05-07T06:00:00Z",
+        },
+    )
+    assert resp.status_code == 200  # noqa: PLR2004
+    body = resp.json()
+    assert len(body["services"]) == 1
+    assert body["services"][0]["service"] == "nginx"
+    assert body["services"][0]["count"] == 7  # noqa: PLR2004
+
+
+@pytest.mark.asyncio
+async def test_services_cache_hit(
+    authenticated_client: AsyncClient,
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Identical requests use cache; second request has no VL call."""
+    from homelab_monitor.kernel.api.routers import logs as logs_router  # noqa: PLC0415
+    from homelab_monitor.kernel.logs.services import (  # noqa: PLC0415
+        ServicesCache,
+    )
+
+    monkeypatch.setenv("HOMELAB_MONITOR_VL_URL", "http://vl-test:9428")
+    ndjson = '{"_stream_id":"","_msg":"","_time":"","service":"nginx","count":"10"}\n'
+    # Register permissive mock for lifespan startup request to VictoriaMetrics
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(r"http://victoriametrics:8428/.*"),
+        json={"data": {"resultType": "vector", "result": []}},
+        is_optional=True,
+    )
+    # Single non-repeating response — second request must hit cache
+    httpx_mock.add_response(
+        url=re.compile(r"http://vl-test:9428/select/logsql/query.*"),
+        method="GET",
+        text=ndjson,
+        is_optional=False,
+    )
+
+    # Inject a cache with fixed clock so both requests hit within TTL
+    monkeypatch.setattr(logs_router, "_services_cache", ServicesCache(clock=lambda: 0.0))
+
+    params = {
+        "start": "2026-05-07T00:00:00Z",
+        "end": "2026-05-07T01:00:00Z",
+    }
+
+    # First request should hit VL
+    resp1 = await authenticated_client.get("/api/logs/services", params=params)
+    assert resp1.status_code == 200  # noqa: PLR2004
+
+    # Second request should hit cache (no new VL call)
+    resp2 = await authenticated_client.get("/api/logs/services", params=params)
+    assert resp2.status_code == 200  # noqa: PLR2004
+    assert resp1.json() == resp2.json()
+
+
+@pytest.mark.asyncio
+async def test_query_with_services_composes_filter(
+    authenticated_client: AsyncClient,
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """services param is composed into the query as (service:...) AND (expr)."""
+    monkeypatch.setenv("HOMELAB_MONITOR_VL_URL", "http://vl-test:9428")
+    ndjson = '{"_stream_id": "svc.host", "_msg": "test", "_time": "2026-05-07T00:00:00+00:00"}\n'
+    # Register permissive mock for lifespan startup request to VictoriaMetrics
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(r"http://victoriametrics:8428/.*"),
+        json={"data": {"resultType": "vector", "result": []}},
+        is_optional=True,
+    )
+    # Capture the VL query to verify composition
+    httpx_mock.add_response(
+        url=re.compile(r"http://vl-test:9428/select/logsql/query.*"),
+        method="GET",
+        text=ndjson,
+    )
+    resp = await authenticated_client.get(
+        "/api/logs/query",
+        params={
+            "expr": "*",
+            "start": "2026-05-07T00:00:00Z",
+            "end": "2026-05-07T01:00:00Z",
+            "services": "home-assistant",
+        },
+    )
+    assert resp.status_code == 200  # noqa: PLR2004
+
+    # Verify the VL call included the composed query
+    requests = httpx_mock.get_requests()
+    vl_request = next(r for r in requests if "logsql/query" in r.url.path)
+    query_param = vl_request.url.params["query"]
+    assert 'service:"home-assistant"' in query_param
+    assert "AND" in query_param
+
+
+@pytest.mark.asyncio
+async def test_query_without_services_unchanged(
+    authenticated_client: AsyncClient,
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Absent services param leaves query unchanged."""
+    monkeypatch.setenv("HOMELAB_MONITOR_VL_URL", "http://vl-test:9428")
+    ndjson = '{"_stream_id": "svc.host", "_msg": "test", "_time": "2026-05-07T00:00:00+00:00"}\n'
+    # Register permissive mock for lifespan startup request to VictoriaMetrics
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(r"http://victoriametrics:8428/.*"),
+        json={"data": {"resultType": "vector", "result": []}},
+        is_optional=True,
+    )
+    httpx_mock.add_response(
+        url=re.compile(r"http://vl-test:9428/select/logsql/query.*"),
+        method="GET",
+        text=ndjson,
+    )
+    resp = await authenticated_client.get(
+        "/api/logs/query",
+        params={
+            "expr": "*",
+            "start": "2026-05-07T00:00:00Z",
+            "end": "2026-05-07T01:00:00Z",
+        },
+    )
+    assert resp.status_code == 200  # noqa: PLR2004
+
+    # Verify the VL call has unmodified query
+    requests = httpx_mock.get_requests()
+    vl_request = next(r for r in requests if "logsql/query" in r.url.path)
+    query_param = vl_request.url.params["query"]
+    assert query_param == "*"

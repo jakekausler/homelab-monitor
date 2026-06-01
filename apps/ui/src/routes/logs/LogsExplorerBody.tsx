@@ -2,15 +2,18 @@ import { useMemo, useState } from 'react'
 import { RefreshCw, X } from 'lucide-react'
 
 import { ApiError } from '@/api/client'
-import { useLogsQuery } from '@/api/logs'
+import { useLogsQuery, useLogsServicesQuery } from '@/api/logs'
 import { Button } from '@/components/ui/button'
+import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { AdvancedToggle } from '@/components/logs/AdvancedToggle'
 import { LogViewer } from '@/components/logs/LogViewer'
 import { LogsQlEditor } from '@/components/logs/LogsQlEditor'
+import { StreamPickerSidebar } from '@/components/logs/StreamPickerSidebar'
 import { TimeRangeControl } from '@/components/logs/TimeRangeControl'
 import { TimezoneToggle } from '@/components/logs/TimezoneToggle'
 import { WrapToggle } from '@/components/logs/WrapToggle'
 import { translateSearchToLogsQl } from '@/lib/logsQlTranslate'
+import { useMediaQuery } from '@/lib/useMediaQuery'
 import { useTimezonePreference } from '@/lib/useTimezonePreference'
 import {
   ALL_PRESETS,
@@ -37,6 +40,8 @@ interface LogsExplorerBodyProps {
   liveLogsQl: string
   /** Committed time range (mirrors the URL). */
   range: TimeRangeValue
+  /** Selected service values (AND'd server-side). */
+  selectedServices: string[]
   /** Update the live plain-text input (no query/URL change). */
   onLivePlainTextChange: (next: string) => void
   /** Update the live LogsQL editor text (no query/URL change). */
@@ -49,6 +54,8 @@ interface LogsExplorerBodyProps {
   onClearSearch: () => void
   /** Range picker change → Page writes URL (since OR start/end). */
   onRangeChange: (next: TimeRangeValue) => void
+  /** Toggle a service in/out of the selection (row click + chip ×). */
+  onToggleService: (service: string) => void
 }
 
 export function LogsExplorerBody({
@@ -58,12 +65,14 @@ export function LogsExplorerBody({
   committedLogsQl,
   liveLogsQl,
   range,
+  selectedServices,
   onLivePlainTextChange,
   onLiveLogsQlChange,
   onToggleAdvanced,
   onSubmitSearch,
   onClearSearch,
   onRangeChange,
+  onToggleService,
 }: LogsExplorerBodyProps) {
   const [wrap, setWrap] = useState(false)
   // STAGE-004-009 timezone wiring (mirrors the Docker viewer).
@@ -106,7 +115,16 @@ export function LogsExplorerBody({
   // resolves to '*'), and startIso/endIso are always non-empty ISO strings. Do
   // NOT add a redundant empty-guard — useLogsQuery's `enabled` is effectively
   // always true for this consumer by design.
-  const logs = useLogsQuery(expr, startIso, endIso)
+  const servicesCsv = selectedServices.join(',')
+  const logs = useLogsQuery(expr, startIso, endIso, servicesCsv)
+
+  // Services query — depends on window ONLY, window-only refetch.
+  const servicesQuery = useLogsServicesQuery(startIso, endIso)
+  const servicesData = servicesQuery.data
+
+  // Mobile detection + drawer state.
+  const isMobile = useMediaQuery('(max-width: 767px)')
+  const [pickerOpen, setPickerOpen] = useState(false)
 
   const handleRefresh = (): void => {
     setRefreshNonce((n) => n + 1)
@@ -131,6 +149,29 @@ export function LogsExplorerBody({
 
   const header = (
     <>
+      {selectedServices.length > 0 && (
+        <div data-testid="selected-services" className="flex flex-wrap items-center gap-2">
+          {selectedServices.map((svc) => (
+            <span
+              key={svc}
+              data-testid="service-chip"
+              data-service={svc}
+              className="inline-flex items-center gap-1 rounded-full border border-border bg-accent px-2 py-0.5 text-xs"
+            >
+              {svc}
+              <button
+                type="button"
+                aria-label={`Remove ${svc}`}
+                data-testid="service-chip-remove"
+                onClick={() => onToggleService(svc)}
+                className="text-muted-foreground hover:text-foreground"
+              >
+                <X className="size-3" />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <form
           className="flex flex-1 items-center gap-2"
@@ -256,14 +297,50 @@ export function LogsExplorerBody({
     }
   }
 
-  return (
-    <LogViewer
-      useLogs={useLogs}
-      headerSlot={header}
-      emptyStateCopy={EMPTY_COPY}
-      unavailableCopy={UNAVAILABLE_COPY}
-      wrap={wrap}
-      timezone={timezone}
+  const sidebar = (
+    <StreamPickerSidebar
+      services={servicesData?.services ?? []}
+      truncated={servicesData?.truncated ?? false}
+      selectedServices={selectedServices}
+      onToggleService={onToggleService}
+      isLoading={servicesQuery.isLoading}
+      isError={servicesQuery.isError}
     />
+  )
+
+  return (
+    <div className="flex gap-4">
+      {!isMobile && <aside className="hidden w-56 shrink-0 md:block">{sidebar}</aside>}
+      <div className="min-w-0 flex-1">
+        {isMobile && (
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            data-testid="stream-picker-toggle"
+            onClick={() => setPickerOpen(true)}
+            className="mb-2"
+          >
+            Services
+          </Button>
+        )}
+        <LogViewer
+          useLogs={useLogs}
+          headerSlot={header}
+          emptyStateCopy={EMPTY_COPY}
+          unavailableCopy={UNAVAILABLE_COPY}
+          wrap={wrap}
+          timezone={timezone}
+        />
+      </div>
+      {isMobile && (
+        <Dialog open={pickerOpen} onOpenChange={setPickerOpen}>
+          <DialogContent className="max-w-xs">
+            <DialogTitle>Services</DialogTitle>
+            {sidebar}
+          </DialogContent>
+        </Dialog>
+      )}
+    </div>
   )
 }
