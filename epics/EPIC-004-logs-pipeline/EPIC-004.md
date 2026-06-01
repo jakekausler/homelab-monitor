@@ -2,7 +2,7 @@
 
 ## Status: In Progress
 
-## Stages Counter: 12 / 45 Complete
+## Stages Counter: 12 / 47 Complete
 
 ## Current Stage: STAGE-004-012
 
@@ -94,6 +94,8 @@ Stages MUST be implemented in order. No parallelization. Each stage lands a sing
 | STAGE-004-016 | Field inspector | Click a line → side panel with parsed fields + copy + add-to-filter. |
 | STAGE-004-017 | Generic nested-field extraction at ingest | Vector flattens JSONL nested objects into dotted-path top-level fields (with `json.` prefix); depth + count caps. |
 | STAGE-004-018 | Filter-scope-aware field discovery | "Available fields" panel shows only fields present in current scope (sample-based, cached). |
+| STAGE-004-018A | LogsQL editor autocomplete + field suggestions | In-editor code completion in advanced mode; LogsQL keywords + field names + sample values from scope-aware discovery (STAGE-004-018). Inserted (user request) — autocomplete deferred from STAGE-004-011. |
+| STAGE-004-018B | Configurable visible columns in logs results | Add/remove/reorder result columns (service, host, severity, discovered fields) to separate line types in the unified view; opt-in `<LogViewer>` columns. Inserted (user request). |
 | STAGE-004-019 | Histogram of line counts | Stacked-by-severity bar chart above results; click bucket to narrow range. |
 | STAGE-004-020 | Log-line export | Download matching lines as .txt or .json with streamed backend + cap. |
 | STAGE-004-021 | "Open in Explorer" deep-link | Buttons on docker + cron viewers; helper documented for future detail pages. |
