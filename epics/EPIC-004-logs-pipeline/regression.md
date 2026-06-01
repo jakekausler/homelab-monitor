@@ -102,3 +102,15 @@
 - Deep-link `/logs?q=connection%20refused&since=24h` reproduces the view; custom range via `?start&end`.
 - Empty search omits `?q`. Whole-word matching (substrings do not match).
 - Unit/route tests: logsQlTranslate.test.ts, LogsExplorerPage.test.tsx.
+
+## STAGE-004-011 — LogsQL advanced mode + syntax highlighting
+
+- `/logs` → "Advanced (LogsQL)" toggle swaps the plain input for a CodeMirror editor with basic syntax highlighting (keywords/fields/strings/numbers/operators).
+- CodeMirror editor: visible caret; clicking anywhere in the box positions the cursor; focus ring on focus; Enter submits, Shift+Enter inserts newline.
+- Toggling modes preserves BOTH the plain-text and LogsQL text.
+- Advanced mode sends the raw LogsQL as `expr` (NOT `_msg:"…"`-wrapped); plain mode still translates.
+- URL: advanced → `?logsql=…` (omit `q`); plain → `?q=…` (omit `logsql`). Deep-link `/logs?logsql=service%3Afoo` opens advanced mode + queries raw.
+- Mobile (narrow viewport): editor falls back to a plain textarea (no CodeMirror), Enter submits.
+- Editor lazy-loads as a separate chunk (LogsQlEditorImpl) only when advanced is first enabled on desktop.
+- Clock-skew: a 1h-preset query with end==now must return 200 (not range_in_future); end=now+1h must still 400. (Regression for the STAGE-011 Refinement clock-skew fix.)
+- Backend: `apps/monitor/tests/test_time_window.py` covers the 5s FUTURE_SKEW_GRACE boundary (within-grace allowed, beyond-grace rejected).
