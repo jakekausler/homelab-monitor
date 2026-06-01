@@ -15,6 +15,14 @@ from homelab_monitor.kernel.api.errors import HttpProblem
 # Max custom range width. Mirrors /api/logs/query (_MAX_RANGE_DAYS).
 MAX_RANGE_DAYS = 30
 
+# Clock-skew grace for the no-future check. The Logs Explorer sends an absolute
+# `end` equal to the BROWSER's "now"; if the browser clock leads the container
+# clock, a strict `end > now` check spuriously raises range_in_future. 5s
+# comfortably covers typical host/container NTP skew + request latency while
+# remaining far smaller than any genuine future-range mistake (minutes-to-days),
+# so it never masks a real bug. See test_time_window.py.
+FUTURE_SKEW_GRACE = timedelta(seconds=5)
+
 
 def parse_and_validate_window(
     start: str, end: str, *, now: datetime | None = None
@@ -25,7 +33,7 @@ def parse_and_validate_window(
       - both must be ISO-8601 parseable (datetime.fromisoformat).
       - naive datetimes are UTC-normalized.
       - start must be strictly before end.
-      - neither start nor end may be in the future.
+      - neither start nor end may be in the future (beyond a small clock-skew grace).
       - (end - start) must not exceed MAX_RANGE_DAYS (30 days).
 
     ``now`` is injectable for deterministic testing; defaults to
@@ -58,7 +66,8 @@ def parse_and_validate_window(
         )
 
     _now = now if now is not None else datetime.now(UTC)
-    if start_dt > _now or end_dt > _now:
+    _future_limit = _now + FUTURE_SKEW_GRACE
+    if start_dt > _future_limit or end_dt > _future_limit:
         raise HttpProblem(
             status_code=400,
             code="range_in_future",

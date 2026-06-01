@@ -34,6 +34,9 @@ export default mergeConfig(
           'src/routes/__root.tsx',
           'src/router.tsx',
           'src/api/crons.ts',
+          // CodeMirror 6 EditorView is non-functional in jsdom; LogsQlEditorImpl
+          // is validated via the textarea-fallback unit tests + manual Refinement.
+          'src/components/logs/LogsQlEditorImpl.tsx',
           'playwright/**',
           '**/*.test.{ts,tsx}',
         ],

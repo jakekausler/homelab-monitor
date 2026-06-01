@@ -26,6 +26,14 @@ vi.mock('@/api/logs', () => ({
   useLogsQuery: vi.fn(),
 }))
 
+// Force the LogsQlEditor narrow-viewport textarea path. NOTE: LogsExplorerBody
+// renders <LogsQlEditor> which calls useMediaQuery('(max-width: 767px)'); a
+// false here means "not narrow" → the wide/CodeMirror branch. To keep CM6 out of
+// jsdom, return TRUE so the shell renders the plain textarea directly.
+vi.mock('@/lib/useMediaQuery', () => ({
+  useMediaQuery: vi.fn(() => true),
+}))
+
 import { useLogsQuery } from '@/api/logs'
 
 // Typed against the REAL generated schema so a contract change breaks this test
@@ -54,11 +62,13 @@ function renderRoute(initialPath = '/logs') {
       search: Record<string, unknown>,
     ): {
       q?: string | undefined
+      logsql?: string | undefined
       since?: string | undefined
       start?: string | undefined
       end?: string | undefined
     } => ({
       q: typeof search.q === 'string' ? search.q : undefined,
+      logsql: typeof search.logsql === 'string' ? search.logsql : undefined,
       since: typeof search.since === 'string' ? search.since : undefined,
       start: typeof search.start === 'string' ? search.start : undefined,
       end: typeof search.end === 'string' ? search.end : undefined,
@@ -216,5 +226,75 @@ describe('LogsExplorerPage', () => {
     mockLogsQuery({ isLoading: true, data: undefined })
     renderRoute()
     expect(await screen.findByText('Loading logs…')).toBeInTheDocument()
+  })
+
+  it('toggling Advanced on shows the LogsQL editor; toggling off restores the plain input', async () => {
+    renderRoute()
+    await screen.findByTestId('logs-search-input')
+    // Flip Advanced on.
+    const toggleCheckbox = screen.getByTestId('logs-advanced-toggle').querySelector('input')!
+    fireEvent.click(toggleCheckbox)
+    expect(await screen.findByTestId('logsql-editor-textarea')).toBeInTheDocument()
+    expect(screen.queryByTestId('logs-search-input')).toBeNull()
+    // Flip Advanced off.
+    fireEvent.click(toggleCheckbox)
+    expect(await screen.findByTestId('logs-search-input')).toBeInTheDocument()
+    expect(screen.queryByTestId('logsql-editor-textarea')).toBeNull()
+  })
+
+  it("preserves each mode's text across toggles", async () => {
+    renderRoute()
+    const plainInput = await screen.findByTestId<HTMLInputElement>('logs-search-input')
+    fireEvent.change(plainInput, { target: { value: 'plain-term' } })
+    // Switch to advanced, type LogsQL.
+    const toggleCheckbox = screen.getByTestId('logs-advanced-toggle').querySelector('input')!
+    fireEvent.click(toggleCheckbox)
+    const editor = await screen.findByTestId<HTMLTextAreaElement>('logsql-editor-textarea')
+    fireEvent.change(editor, { target: { value: 'service:home-assistant' } })
+    // Back to plain — the plain text is still there.
+    fireEvent.click(toggleCheckbox)
+    const plainAgain = await screen.findByTestId<HTMLInputElement>('logs-search-input')
+    expect(plainAgain.value).toBe('plain-term')
+    // Back to advanced — the LogsQL text is still there.
+    fireEvent.click(toggleCheckbox)
+    const editorAgain = await screen.findByTestId<HTMLTextAreaElement>('logsql-editor-textarea')
+    expect(editorAgain.value).toBe('service:home-assistant')
+  })
+
+  it('advanced mode sends the committed LogsQL as expr RAW (not translated)', async () => {
+    renderRoute()
+    await screen.findByTestId('logs-search-input')
+    const toggleCheckbox = screen.getByTestId('logs-advanced-toggle').querySelector('input')!
+    fireEvent.click(toggleCheckbox)
+    const editor = await screen.findByTestId('logsql-editor-textarea')
+    fireEvent.change(editor, {
+      target: { value: 'service:home-assistant AND severity:error' },
+    })
+    vi.mocked(useLogsQuery).mockClear()
+    fireEvent.click(screen.getByTestId('logs-search-submit'))
+    const calls = vi.mocked(useLogsQuery).mock.calls
+    // RAW: the exact LogsQL string, NOT wrapped in _msg:"…".
+    expect(calls.some(([expr]) => expr === 'service:home-assistant AND severity:error')).toBe(true)
+    expect(calls.every(([expr]) => !String(expr).startsWith('_msg:'))).toBe(true)
+  })
+
+  it('deep-links into advanced mode from ?logsql and queries it raw', async () => {
+    renderRoute('/logs?logsql=service%3Afoo')
+    const editor = await screen.findByTestId<HTMLTextAreaElement>('logsql-editor-textarea')
+    expect(editor.value).toBe('service:foo')
+    expect(screen.queryByTestId('logs-search-input')).toBeNull()
+    const calls = vi.mocked(useLogsQuery).mock.calls
+    expect(calls.some(([expr]) => expr === 'service:foo')).toBe(true)
+  })
+
+  it('advanced mode with empty committed LogsQL queries match-all (*)', async () => {
+    renderRoute()
+    await screen.findByTestId('logs-search-input')
+    vi.mocked(useLogsQuery).mockClear()
+    const toggleCheckbox = screen.getByTestId('logs-advanced-toggle').querySelector('input')!
+    fireEvent.click(toggleCheckbox)
+    await screen.findByTestId('logsql-editor-textarea')
+    const calls = vi.mocked(useLogsQuery).mock.calls
+    expect(calls.some(([expr]) => expr === '*')).toBe(true)
   })
 })

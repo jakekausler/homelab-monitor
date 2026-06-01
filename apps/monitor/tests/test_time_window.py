@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from homelab_monitor.kernel.api.errors import HttpProblem
 from homelab_monitor.kernel.logs.time_window import (
+    FUTURE_SKEW_GRACE,
     MAX_RANGE_DAYS,
     parse_and_validate_window,
 )
@@ -107,3 +108,37 @@ def test_future_check_fires_after_ordering_check() -> None:
     with pytest.raises(HttpProblem) as exc:
         parse_and_validate_window(future_start, future_end, now=anchor)
     assert exc.value.code == "invalid_range"  # ordering fires first
+
+
+def test_grace_constant_is_five_seconds() -> None:
+    # Pin the contract: the clock-skew grace is 5 seconds.
+    assert timedelta(seconds=5) == FUTURE_SKEW_GRACE
+
+
+def test_end_within_skew_grace_is_allowed() -> None:
+    # Browser clock leads the server by a few seconds: end slightly in the
+    # future (within the 5s grace) must be accepted.
+    anchor = _now_anchor()
+    start = "2026-05-30T11:00:00+00:00"
+    end = "2026-05-30T12:00:03+00:00"  # 3 s after anchor (within grace)
+    assert parse_and_validate_window(start, end, now=anchor) == (start, end)
+
+
+def test_end_beyond_skew_grace_raises_range_in_future() -> None:
+    anchor = _now_anchor()
+    start = "2026-05-30T11:00:00+00:00"
+    end = "2026-05-30T12:00:10+00:00"  # 10 s after anchor (beyond 5s grace)
+    with pytest.raises(HttpProblem) as exc:
+        parse_and_validate_window(start, end, now=anchor)
+    assert exc.value.status_code == HTTP_BAD_REQUEST
+    assert exc.value.code == "range_in_future"
+
+
+def test_start_beyond_skew_grace_raises_range_in_future() -> None:
+    anchor = _now_anchor()
+    start = "2026-05-30T12:00:10+00:00"  # 10 s after anchor (beyond grace)
+    end = "2026-05-30T12:00:20+00:00"
+    with pytest.raises(HttpProblem) as exc:
+        parse_and_validate_window(start, end, now=anchor)
+    assert exc.value.status_code == HTTP_BAD_REQUEST
+    assert exc.value.code == "range_in_future"

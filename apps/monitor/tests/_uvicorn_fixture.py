@@ -228,6 +228,11 @@ async def uvicorn_server(
     # built-in ``noop`` collector is registered unconditionally, which is
     # all the SSE tests need to see scheduler.tick events.
     monkeypatch.setenv("HOMELAB_MONITOR_PLUGINS_DIR", "/dev/null")
+    # Point the Docker socket at a nonexistent path (mirrors conftest.py) so the
+    # startup image-update collectors short-circuit instead of enumerating real
+    # containers + making remote registry calls — which, when a real Docker
+    # daemon is reachable on the host, blows the 20s uvicorn startup budget.
+    monkeypatch.setenv("HOMELAB_MONITOR_DOCKER_SOCKET", "/tmp/hm-test-nonexistent-docker.sock")
 
     # Bootstrap the test user out-of-band before uvicorn starts.
     await _bootstrap_test_user(db_url)

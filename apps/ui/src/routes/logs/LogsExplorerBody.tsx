@@ -4,7 +4,9 @@ import { RefreshCw, X } from 'lucide-react'
 import { ApiError } from '@/api/client'
 import { useLogsQuery } from '@/api/logs'
 import { Button } from '@/components/ui/button'
+import { AdvancedToggle } from '@/components/logs/AdvancedToggle'
 import { LogViewer } from '@/components/logs/LogViewer'
+import { LogsQlEditor } from '@/components/logs/LogsQlEditor'
 import { TimeRangeControl } from '@/components/logs/TimeRangeControl'
 import { TimezoneToggle } from '@/components/logs/TimezoneToggle'
 import { WrapToggle } from '@/components/logs/WrapToggle'
@@ -23,27 +25,42 @@ const EMPTY_COPY = 'No matches in the selected range. Try a wider time range or 
 const UNAVAILABLE_COPY = 'Logs backend (VictoriaLogs) is unavailable. Check service health.'
 
 interface LogsExplorerBodyProps {
-  /** The COMMITTED search text (already reflected in the URL ?q). */
-  committedSearchText: string
-  /** The live (uncommitted) text shown in the input. */
-  liveSearchText: string
+  /** Advanced (raw LogsQL) mode vs plain-text mode. */
+  advancedMode: boolean
+  /** COMMITTED plain-text search (reflected in the URL ?q when plain mode). */
+  committedPlainText: string
+  /** Live (uncommitted) plain-text input value. */
+  livePlainText: string
+  /** COMMITTED raw LogsQL (reflected in the URL ?logsql when advanced mode). */
+  committedLogsQl: string
+  /** Live (uncommitted) LogsQL editor value. */
+  liveLogsQl: string
   /** Committed time range (mirrors the URL). */
   range: TimeRangeValue
-  /** Update the live input text (no query/URL change). */
-  onLiveSearchTextChange: (next: string) => void
-  /** Commit the live text → updates URL ?q and triggers the query. */
+  /** Update the live plain-text input (no query/URL change). */
+  onLivePlainTextChange: (next: string) => void
+  /** Update the live LogsQL editor text (no query/URL change). */
+  onLiveLogsQlChange: (next: string) => void
+  /** Flip advanced/plain mode (preserves both texts; rewrites the URL). */
+  onToggleAdvanced: (next: boolean) => void
+  /** Commit the active mode's live text → updates URL + triggers the query. */
   onSubmitSearch: () => void
-  /** Clear the search text (commits empty → omits ?q). */
+  /** Clear the ACTIVE mode's text (commits empty → omits that URL key). */
   onClearSearch: () => void
   /** Range picker change → Page writes URL (since OR start/end). */
   onRangeChange: (next: TimeRangeValue) => void
 }
 
 export function LogsExplorerBody({
-  committedSearchText,
-  liveSearchText,
+  advancedMode,
+  committedPlainText,
+  livePlainText,
+  committedLogsQl,
+  liveLogsQl,
   range,
-  onLiveSearchTextChange,
+  onLivePlainTextChange,
+  onLiveLogsQlChange,
+  onToggleAdvanced,
   onSubmitSearch,
   onClearSearch,
   onRangeChange,
@@ -55,7 +72,14 @@ export function LogsExplorerBody({
   // groundwork) WITHOUT churning the query key on every render.
   const [refreshNonce, setRefreshNonce] = useState(0)
 
-  const expr = translateSearchToLogsQl(committedSearchText)
+  // Active mode decides the expr: advanced sends the COMMITTED raw LogsQL
+  // verbatim (empty → match-all '*' to keep the always-enabled invariant);
+  // plain translates the committed text into _msg:"…".
+  const expr = advancedMode
+    ? committedLogsQl.trim().length > 0
+      ? committedLogsQl
+      : '*'
+    : translateSearchToLogsQl(committedPlainText)
 
   // Resolve the committed range to absolute [startIso, endIso]. `now` must stay
   // STABLE across renders (else the open-end window re-reads new Date() each
@@ -108,7 +132,6 @@ export function LogsExplorerBody({
   const header = (
     <>
       <div className="flex flex-wrap items-center justify-between gap-3">
-        {/* STAGE-004-011 will add an advanced LogsQL (CodeMirror) editor here; keep this input swappable. */}
         <form
           className="flex flex-1 items-center gap-2"
           onSubmit={(e) => {
@@ -116,18 +139,31 @@ export function LogsExplorerBody({
             onSubmitSearch()
           }}
         >
-          <input
-            type="text"
-            data-testid="logs-search-input"
-            aria-label="Search logs"
-            className="flex h-9 w-full max-w-md rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-            placeholder="Search logs (plain text)…"
-            value={liveSearchText}
-            onChange={(e) => {
-              onLiveSearchTextChange(e.target.value)
-            }}
-          />
-          {(liveSearchText.length > 0 || committedSearchText.length > 0) && (
+          {advancedMode ? (
+            <LogsQlEditor
+              value={liveLogsQl}
+              onChange={onLiveLogsQlChange}
+              onSubmit={onSubmitSearch}
+              placeholder="Enter LogsQL…"
+              ariaLabel="LogsQL query"
+              className="w-full max-w-md"
+            />
+          ) : (
+            <input
+              type="text"
+              data-testid="logs-search-input"
+              aria-label="Search logs"
+              className="flex h-9 w-full max-w-md rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              placeholder="Search logs (plain text)…"
+              value={livePlainText}
+              onChange={(e) => {
+                onLivePlainTextChange(e.target.value)
+              }}
+            />
+          )}
+          {(advancedMode
+            ? liveLogsQl.length > 0 || committedLogsQl.length > 0
+            : livePlainText.length > 0 || committedPlainText.length > 0) && (
             <Button
               type="button"
               size="sm"
@@ -144,6 +180,7 @@ export function LogsExplorerBody({
           </Button>
         </form>
         <div className="flex items-center gap-2">
+          <AdvancedToggle checked={advancedMode} onChange={onToggleAdvanced} id="logs-advanced" />
           <WrapToggle checked={wrap} onChange={setWrap} id="logs-wrap" />
           <TimezoneToggle
             checked={timezone === 'utc'}

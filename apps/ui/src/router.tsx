@@ -105,11 +105,13 @@ const logsRoute = createRoute({
     search: Record<string, unknown>,
   ): {
     q?: string | undefined
+    logsql?: string | undefined
     since?: string | undefined
     start?: string | undefined
     end?: string | undefined
   } => ({
     q: typeof search.q === 'string' ? search.q : undefined,
+    logsql: typeof search.logsql === 'string' ? search.logsql : undefined,
     since: typeof search.since === 'string' ? search.since : undefined,
     start: typeof search.start === 'string' ? search.start : undefined,
     end: typeof search.end === 'string' ? search.end : undefined,
