@@ -114,3 +114,14 @@
 - Editor lazy-loads as a separate chunk (LogsQlEditorImpl) only when advanced is first enabled on desktop.
 - Clock-skew: a 1h-preset query with end==now must return 200 (not range_in_future); end=now+1h must still 400. (Regression for the STAGE-011 Refinement clock-skew fix.)
 - Backend: `apps/monitor/tests/test_time_window.py` covers the 5s FUTURE_SKEW_GRACE boundary (within-grace allowed, beyond-grace rejected).
+
+## STAGE-004-012 — Stream picker sidebar (distinct service values with line counts; click-to-filter)
+
+- "Logs Explorer: the `/logs` page shows a left 'Services' sidebar listing distinct services with line counts (sorted desc) for the current time window."
+- "Clicking a service row filters logs to that service (chip appears above the search box; results narrow); clicking a second service ORs them; chip × removes a service; the URL reflects `&services=a,b`."
+- "Service filtering works in BOTH plain search and advanced LogsQL modes (the selected services AND with whatever expr the active mode produces; user's expr never mutated)."
+- "Changing the time range refetches the services list/counts (counts are window-scoped, independent of expr/selection)."
+- "Sidebar shows a 'Show more'/truncated affordance when the distinct-service count exceeds the limit (default 100)."
+- "On mobile (≤767px), the sidebar is an overlay drawer toggled by a button; selected-service chips still show above the search box."
+- "Backend GET /api/logs/services?start&end&limit returns {services:[{service,count}], truncated} sorted desc; rejects bad ISO / inverted / >30d / far-future windows; 30s cache."
+- "Service values containing special chars (double-quote, backslash) filter correctly via the /api/logs/query `services` param (logsql_quote_phrase escaping) with no 500."
