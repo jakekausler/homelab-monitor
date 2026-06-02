@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from homelab_monitor.kernel.api.routers.logs import (
+    _SERVICES_MAX_LIMIT,  # pyright: ignore[reportPrivateUsage]
     _compose_services_expr,  # pyright: ignore[reportPrivateUsage]
 )
 from homelab_monitor.kernel.api.schemas import LogsServicesResponse, ServiceCount
@@ -28,30 +29,72 @@ class TestComposServicesExpr:
         result = _compose_services_expr("*", "  ,  ")
         assert result == "*"
 
-    def test_single_service(self) -> None:
-        """Single service is quoted and wrapped."""
-        result = _compose_services_expr("foo", "svc")
-        assert result == '(service:"svc") AND (foo)'
+    def test_single_identity(self) -> None:
+        """Single identity is quoted and wrapped."""
+        result = _compose_services_expr("foo", "docker:svc")
+        assert result == '(service:"svc" AND source_type:"docker") AND (foo)'
 
-    def test_multiple_services(self) -> None:
-        """Multiple services are OR'd together."""
-        result = _compose_services_expr("foo", "a,b")
-        assert result == '(service:"a" OR service:"b") AND (foo)'
+    def test_multiple_identities(self) -> None:
+        """Multiple identities are OR'd together."""
+        result = _compose_services_expr("foo", "docker:a,cron:b")
+        expected = (
+            '((service:"a" AND source_type:"docker") '
+            'OR (service:"b" AND source_type:"cron")) AND (foo)'
+        )
+        assert result == expected
 
     def test_escaping_backslash_and_quote(self) -> None:
-        """Service values with backslash and quote are escaped correctly."""
+        """Service and source_type values with backslash and quote are escaped correctly."""
         # Use logsql_quote_phrase to build the expected value
-        quoted = logsql_quote_phrase('we"ird\\x')
-        result = _compose_services_expr("foo", 'we"ird\\x')
-        expected = f"({f'service:{quoted}'}) AND (foo)"
+        service_quoted = logsql_quote_phrase('we"ird\\x')
+        result = _compose_services_expr("foo", 'docker:we"ird\\x')
+        expected = f'(service:{service_quoted} AND source_type:"docker") AND (foo)'
         assert result == expected
         # Verify the exact string
-        assert result == '(service:"we\\"ird\\\\x") AND (foo)'
+        assert result == '(service:"we\\"ird\\\\x" AND source_type:"docker") AND (foo)'
 
     def test_whitespace_trimming(self) -> None:
-        """Leading/trailing whitespace in service values is trimmed."""
-        result = _compose_services_expr("foo", " a , b ")
-        assert result == '(service:"a" OR service:"b") AND (foo)'
+        """Leading/trailing whitespace in identity entries is trimmed."""
+        result = _compose_services_expr("foo", " docker:a , cron:b ")
+        expected = (
+            '((service:"a" AND source_type:"docker") '
+            'OR (service:"b" AND source_type:"cron")) AND (foo)'
+        )
+        assert result == expected
+
+    def test_malformed_entry_no_colon_skipped(self) -> None:
+        """Entry without colon is skipped."""
+        result = _compose_services_expr("foo", "nocolon")
+        assert result == "foo"
+
+    def test_malformed_entry_empty_source_type_skipped(self) -> None:
+        """Entry with empty source_type is skipped."""
+        result = _compose_services_expr("foo", ":nginx")
+        assert result == "foo"
+
+    def test_malformed_entry_empty_service_skipped(self) -> None:
+        """Entry with empty service is skipped."""
+        result = _compose_services_expr("foo", "docker:")
+        assert result == "foo"
+
+    def test_mixed_valid_and_malformed(self) -> None:
+        """Malformed entries are skipped; valid ones are kept."""
+        result = _compose_services_expr("foo", "docker:nginx,nocolon")
+        assert result == '(service:"nginx" AND source_type:"docker") AND (foo)'
+
+    def test_service_with_colon_splits_on_first(self) -> None:
+        """Service name may contain colon; split only on FIRST colon."""
+        result = _compose_services_expr("foo", "docker:a:b")
+        assert result == '(service:"a:b" AND source_type:"docker") AND (foo)'
+
+    def test_identity_cap_respected(self) -> None:
+        """Number of valid identities is capped at _SERVICES_MAX_LIMIT."""
+        # Build a CSV with more than the limit
+        identities = [f"docker:s{i}" for i in range(_SERVICES_MAX_LIMIT + 5)]
+        csv = ",".join(identities)
+        result = _compose_services_expr("foo", csv)
+        # Count how many "AND source_type:" occurrences — should equal the limit
+        assert result.count("AND source_type:") == _SERVICES_MAX_LIMIT
 
 
 class TestServicesCacheClockInjection:
@@ -115,10 +158,10 @@ class TestServicesCacheClockInjection:
         cache = ServicesCache(ttl_seconds=30, clock=lambda: now[0])
 
         value1 = LogsServicesResponse(
-            services=[ServiceCount(service="a", count=1)], truncated=False
+            services=[ServiceCount(service="a", source_type="docker", count=1)], truncated=False
         )
         value2 = LogsServicesResponse(
-            services=[ServiceCount(service="b", count=2)], truncated=False
+            services=[ServiceCount(service="b", source_type="cron", count=2)], truncated=False
         )
 
         key1 = ("2026-01-01", "2026-01-02", 100)

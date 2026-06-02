@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '@/api/client'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { LogsExplorerPage } from '@/routes/logs/LogsExplorerPage'
+import { parseServicesParam } from '@/router'
 import type { Schema } from '@/api/types'
 
 afterEach(cleanup)
@@ -25,6 +26,8 @@ afterEach(() => {
 vi.mock('@/api/logs', () => ({
   useLogsQuery: vi.fn(),
   useLogsServicesQuery: vi.fn(),
+  identitiesToServicesCsv: (identities: Array<{ source_type: string; service: string }>) =>
+    identities.map((i) => `${i.source_type}:${i.service}`).join(','),
 }))
 
 // Force the LogsQlEditor narrow-viewport textarea path. NOTE: LogsExplorerBody
@@ -71,19 +74,14 @@ function renderRoute(initialPath = '/logs') {
       since?: string | undefined
       start?: string | undefined
       end?: string | undefined
-      services?: string[] | undefined
+      services?: { source_type: string; service: string }[] | undefined
     } => ({
       q: typeof search.q === 'string' ? search.q : undefined,
       logsql: typeof search.logsql === 'string' ? search.logsql : undefined,
       since: typeof search.since === 'string' ? search.since : undefined,
       start: typeof search.start === 'string' ? search.start : undefined,
       end: typeof search.end === 'string' ? search.end : undefined,
-      services:
-        typeof search.services === 'string'
-          ? search.services.split(',').filter((s) => s.length > 0)
-          : Array.isArray(search.services)
-            ? (search.services as unknown[]).filter((s): s is string => typeof s === 'string')
-            : undefined,
+      services: parseServicesParam(search.services),
     }),
   })
 
@@ -103,6 +101,42 @@ function renderRoute(initialPath = '/logs') {
     ),
   }
 }
+
+describe('parseServicesParam', () => {
+  it('parses docker:home-assistant correctly', () => {
+    const result = parseServicesParam('docker:home-assistant')
+    expect(result).toEqual([{ source_type: 'docker', service: 'home-assistant' }])
+  })
+
+  it('parses multiple identities', () => {
+    const result = parseServicesParam('docker:a,cron:b')
+    expect(result).toEqual([
+      { source_type: 'docker', service: 'a' },
+      { source_type: 'cron', service: 'b' },
+    ])
+  })
+
+  it('returns undefined for empty string', () => {
+    expect(parseServicesParam('')).toBeUndefined()
+  })
+
+  it('returns undefined for no colon', () => {
+    expect(parseServicesParam('nginx')).toBeUndefined()
+  })
+
+  it('skips malformed entries but keeps valid ones', () => {
+    expect(parseServicesParam('docker:a,garbage,cron:b')).toEqual([
+      { source_type: 'docker', service: 'a' },
+      { source_type: 'cron', service: 'b' },
+    ])
+  })
+
+  it('passes through an array of identity objects (TanStack round-trip)', () => {
+    expect(parseServicesParam([{ source_type: 'docker', service: 'nginx' }])).toEqual([
+      { source_type: 'docker', service: 'nginx' },
+    ])
+  })
+})
 
 describe('LogsExplorerPage', () => {
   // Replace the useLogsQuery mock return value. Defaults to a loaded, empty,
@@ -126,8 +160,8 @@ describe('LogsExplorerPage', () => {
     vi.mocked(useLogsServicesQuery).mockReturnValue({
       data: {
         services: [
-          { service: 'home-assistant', count: 1204 },
-          { service: 'nginx', count: 12 },
+          { service: 'home-assistant', source_type: 'docker', count: 1204 },
+          { service: 'nginx', source_type: 'docker', count: 12 },
         ],
         truncated: false,
       },
@@ -342,18 +376,18 @@ describe('LogsExplorerPage', () => {
     await screen.findByTestId('logs-search-input')
     const rows = screen.getAllByTestId('stream-picker-row')
     fireEvent.click(rows[0]!)
-    // Chip should appear
+    // Chip should appear with identity format
     expect(await screen.findByTestId('service-chip')).toHaveAttribute(
       'data-service',
       'home-assistant',
     )
-    // useLogsQuery should be called with the services CSV
+    // useLogsQuery should be called with the services CSV (type:service format)
     const calls = vi.mocked(useLogsQuery).mock.calls
-    expect(calls.some(([, , , services]) => services === 'home-assistant')).toBe(true)
+    expect(calls.some(([, , , services]) => services === 'docker:home-assistant')).toBe(true)
   })
 
   it('chip × removes the service', async () => {
-    renderRoute('/logs?services=home-assistant&since=1h')
+    renderRoute('/logs?services=docker:home-assistant&since=1h')
     await screen.findByTestId('logs-search-input')
     const chip = await screen.findByTestId('service-chip')
     expect(chip).toBeInTheDocument()
@@ -365,31 +399,31 @@ describe('LogsExplorerPage', () => {
   })
 
   it('services CSV is forwarded into useLogsQuery', async () => {
-    renderRoute('/logs?services=a,b')
+    renderRoute('/logs?services=docker:a,cron:b')
     await screen.findByTestId('logs-search-input')
     const calls = vi.mocked(useLogsQuery).mock.calls
-    expect(calls.some(([, , , services]) => services === 'a,b')).toBe(true)
+    expect(calls.some(([, , , services]) => services === 'docker:a,cron:b')).toBe(true)
   })
 
   it('selection survives in advanced mode', async () => {
-    renderRoute('/logs?logsql=service%3Afoo&services=nginx')
+    renderRoute('/logs?logsql=service:foo&services=docker:nginx')
     const editor = await screen.findByTestId<HTMLTextAreaElement>('logsql-editor-textarea')
     expect(editor.value).toBe('service:foo')
     expect(await screen.findByTestId('service-chip')).toHaveAttribute('data-service', 'nginx')
     const calls = vi.mocked(useLogsQuery).mock.calls
     expect(
-      calls.some(([expr, , , services]) => expr === 'service:foo' && services === 'nginx'),
+      calls.some(([expr, , , services]) => expr === 'service:foo' && services === 'docker:nginx'),
     ).toBe(true)
   })
 
   it('selection survives in plain mode', async () => {
-    renderRoute('/logs?q=boom&services=nginx')
+    renderRoute('/logs?q=boom&services=docker:nginx')
     const input = await screen.findByTestId<HTMLInputElement>('logs-search-input')
     expect(input.value).toBe('boom')
     expect(await screen.findByTestId('service-chip')).toHaveAttribute('data-service', 'nginx')
     const calls = vi.mocked(useLogsQuery).mock.calls
     expect(
-      calls.some(([expr, , , services]) => expr === '_msg:"boom"' && services === 'nginx'),
+      calls.some(([expr, , , services]) => expr === '_msg:"boom"' && services === 'docker:nginx'),
     ).toBe(true)
   })
 

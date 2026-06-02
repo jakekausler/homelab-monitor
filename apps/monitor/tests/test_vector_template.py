@@ -805,6 +805,87 @@ def test_hmrun_filter_inputs_unchanged(parsed_config: dict[str, Any]) -> None:
     )
 
 
+# ---------------------------------------------------------------------------
+# STAGE-004-012A: source_type_classify transform and identity-qualified stream picker
+# ---------------------------------------------------------------------------
+
+
+def _source_type_classify_source(parsed_config: dict[str, Any]) -> str:
+    return parsed_config.get("transforms", {}).get("source_type_classify", {}).get("source", "")
+
+
+def test_source_type_classify_transform_present(parsed_config: dict[str, Any]) -> None:
+    """[transforms.source_type_classify] table must exist."""
+    transforms = parsed_config.get("transforms", {})
+    assert "source_type_classify" in transforms, (
+        f"source_type_classify missing from transforms; keys: {list(transforms.keys())}"
+    )
+
+
+def test_source_type_classify_inputs_is_drop_noise(parsed_config: dict[str, Any]) -> None:
+    """[transforms.source_type_classify].inputs must be ['drop_noise']."""
+    transforms = parsed_config.get("transforms", {})
+    source_type_classify = transforms.get("source_type_classify", {})
+    assert source_type_classify.get("inputs") == ["drop_noise"], (
+        f"source_type_classify.inputs should be ['drop_noise'], got: "
+        f"{source_type_classify.get('inputs')}"
+    )
+
+
+def test_redact_main_inputs_is_source_type_classify(parsed_config: dict[str, Any]) -> None:
+    """[transforms.redact_main].inputs must be ['source_type_classify'] (chain rewired)."""
+    transforms = parsed_config.get("transforms", {})
+    redact_main = transforms.get("redact_main", {})
+    assert redact_main.get("inputs") == ["source_type_classify"], (
+        f"redact_main.inputs should be ['source_type_classify'], got: {redact_main.get('inputs')}"
+    )
+
+
+def test_source_type_classify_assigns_all_four_values(parsed_config: dict[str, Any]) -> None:
+    """source_type_classify source must assign all four source_type values."""
+    source = _source_type_classify_source(parsed_config)
+    assert '.source_type = "docker"' in source, "docker assignment missing"
+    assert '.source_type = "cron"' in source, "cron assignment missing"
+    assert '.source_type = "systemd"' in source, "systemd assignment missing"
+    assert '.source_type = "unknown"' in source, "unknown assignment missing"
+
+
+def test_source_type_classify_cron_before_systemd(parsed_config: dict[str, Any]) -> None:
+    """cron branch must come BEFORE systemd branch (precedence check)."""
+    source = _source_type_classify_source(parsed_config)
+    cron_idx = source.index('.source_type = "cron"')
+    systemd_idx = source.index('.source_type = "systemd"')
+    assert cron_idx < systemd_idx, (
+        f"cron branch must come before systemd (cron at {cron_idx}, systemd at {systemd_idx})"
+    )
+    # Also verify cron branch checks the right identifiers
+    assert '.SYSLOG_IDENTIFIER == "CRON"' in source, "CRON identifier check missing"
+    assert '.SYSLOG_IDENTIFIER == "crond"' in source, "crond identifier check missing"
+    assert 'includes(["cron.service", "crond.service"], ._SYSTEMD_UNIT)' in source, (
+        "cron.service/crond.service includes() check missing"
+    )
+    # Verify systemd branch is a bare exists check
+    assert "exists(._SYSTEMD_UNIT)" in source, "bare exists(._SYSTEMD_UNIT) check missing"
+
+
+def test_source_type_classify_docker_discriminator(parsed_config: dict[str, Any]) -> None:
+    """docker branch must use exists(.label) and exists(.image) discriminators."""
+    source = _source_type_classify_source(parsed_config)
+    assert "exists(.label)" in source, "exists(.label) check missing"
+    assert "exists(.image)" in source, "exists(.image) check missing"
+
+
+def test_source_type_classify_has_no_lookarounds(parsed_config: dict[str, Any]) -> None:
+    """source_type_classify VRL source must not use regex lookarounds."""
+    _assert_no_lookarounds(_source_type_classify_source(parsed_config))
+
+
+def test_hmrun_shaped_sets_source_type_cron(parsed_config: dict[str, Any]) -> None:
+    """hmrun_shaped must set .source_type = "cron"."""
+    source = _hmrun_shaped_source(parsed_config)
+    assert '.source_type = "cron"' in source, 'hmrun_shaped must set .source_type = "cron"'
+
+
 @pytest.mark.slow
 def test_rendered_template_passes_vector_validate(tmp_path: Path) -> None:
     """Authoritative VRL compile check via `vector validate`.

@@ -98,18 +98,50 @@ highlighting) for tap-friendliness. **Enter** still submits the query.
 ## Services sidebar
 
 The left **Services** panel lists every distinct `service` value present in the
-current time window, each with a line count, sorted by count (descending). It
+current time window, organized into collapsible sections by **source type**. It
 gives you a menu of available log sources without needing to know LogsQL.
+
+### Source types
+
+`source_type` is assigned at log ingest based on where the log came from: docker
+containers → `docker`, systemd/journald units → `systemd`, cron jobs (CRON/crond
+or the hmrun wrapper) → `cron`, anything else → `unknown`.
+
+### Section layout
+
+Services are grouped into sections in this order: **docker**, **cron**,
+**systemd**, then **unknown** last. Sections only appear when at least one service
+of that type is present in the current window.
+
+Each section header shows:
+
+- A **collapse/expand** toggle (chevron button). All sections start expanded;
+  collapse state is per-session and resets on page reload.
+- The **source type label** and an **aggregate line count** for that section.
+- A **select-all / select-none** checkbox. The checkbox shows an indeterminate
+  (mixed) state when only some of the section's services are selected. Clicking it
+  selects all when any are unselected, or deselects all when all are selected.
+
+Within a section, services are sorted by line count (descending).
+
+A service that produces logs under more than one source type appears in **each
+relevant section** — once under `docker` and once under `systemd`, for example —
+each entry showing the count for that source type only.
 
 ### Selecting services
 
-Click a service row to filter results to that service. The selected service
-appears as a chip above the search box; click its **×** to deselect it.
+Click a service row to filter results to that service **under its source type**.
+Selecting the `docker` entry for a service named `nginx` filters to its docker
+logs only; its `systemd` logs (if any) are unaffected unless that entry is also
+selected.
+
+The selected identity appears as a chip above the search box (showing
+`type:service`); click its **×** to deselect it.
 
 You can select multiple services. The selections are OR'd together, then AND'd
 with whatever your current search or LogsQL query matches. For example, selecting
-`home-assistant` and `pi-hole` shows lines from either source, restricted to your
-current search term.
+the `docker` entry for `home-assistant` and the `cron` entry for `hmrun` shows
+lines from either identity, restricted to your current search term.
 
 The service filter works in **both plain search mode and advanced LogsQL mode**.
 It wraps on top of whatever your query produces and never modifies the text you
@@ -123,8 +155,9 @@ search text or which services are already selected — the sidebar always shows 
 exists in the window. This is intentional: it is a picker of available sources,
 not a live result count.
 
-If more than 100 distinct services exist in the window, only the top 100 by count
-are listed and a **Showing top results** notice appears below the list.
+If more than 100 distinct service+source-type combinations exist in the window,
+only the top 100 by count are listed and a **Showing top results** notice appears
+below the list.
 
 ### Mobile
 
@@ -143,7 +176,7 @@ any view shareable and bookmarkable.
 | `logsql` | Advanced-mode LogsQL expression (URL-encoded). |
 | `since` | Active preset, e.g. `since=24h` |
 | `start` / `end` | Custom range bounds as ISO timestamps |
-| `services` | Comma-separated selected service names, e.g. `services=home-assistant,pi-hole` |
+| `services` | Comma-separated selected identities in `<source_type>:<service>` form, e.g. `services=docker:nginx,cron:hmrun` |
 
 `q` and `logsql` are mutually exclusive. A URL containing `logsql` opens the
 explorer directly in advanced mode.
@@ -155,7 +188,7 @@ Examples:
 /logs?logsql=service%3Afoo&since=24h
 /logs?logsql=service%3Ahome-assistant%20AND%20severity%3Aerror%20%7C%20stats%20count()&since=1h
 /logs?start=2026-05-30T00:00:00Z&end=2026-05-31T00:00:00Z
-/logs?q=error&since=6h&services=home-assistant,pi-hole
+/logs?q=error&since=6h&services=docker:home-assistant,docker:pi-hole
 /logs
 ```
 

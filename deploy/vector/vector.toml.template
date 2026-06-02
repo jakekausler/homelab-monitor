@@ -179,9 +179,35 @@ condition = '''
 .message != null && .message != "" && .SYSLOG_IDENTIFIER != "hmrun"
 '''
 
-[transforms.redact_main]
+# source_type is a DELIBERATELY low-cardinality (~4: docker/cron/systemd/unknown)
+# field intended to become a VictoriaLogs STREAM field — unlike run_id /
+# cron_fingerprint (see the hmrun comment below) which are deliberately NOT
+# stream fields. No VL sink config change is needed: VL infers stream fields.
+[transforms.source_type_classify]
 type = "remap"
 inputs = ["drop_noise"]
+source = '''
+# STAGE-004-012A: tag every VL-bound line with a low-cardinality source_type
+# discriminator for the identity-qualified stream picker. PRECEDENCE MATTERS:
+# cron is checked BEFORE the bare _SYSTEMD_UNIT systemd check, because cron runs
+# under a systemd unit (cron.service/crond.service) and must classify as "cron",
+# not "systemd". docker is the highest-precedence marker (.label/.image only
+# exist on docker_logs events). No regex needed (pure field/equality checks) →
+# no Rust-regex lookaround concern.
+if exists(.label) || exists(.image) {
+  .source_type = "docker"
+} else if .SYSLOG_IDENTIFIER == "CRON" || .SYSLOG_IDENTIFIER == "crond" || includes(["cron.service", "crond.service"], ._SYSTEMD_UNIT) {
+  .source_type = "cron"
+} else if exists(._SYSTEMD_UNIT) {
+  .source_type = "systemd"
+} else {
+  .source_type = "unknown"
+}
+'''
+
+[transforms.redact_main]
+type = "remap"
+inputs = ["source_type_classify"]
 source = '''
 ${VECTOR_REDACT_TRANSFORMS}'''
 
@@ -349,6 +375,7 @@ source = '''
 # host; revisit if hmrun ingestion ever spans multiple hosts.
 .host = get_hostname!()
 .service = "hmrun"
+.source_type = "cron"
 if !exists(.severity) || is_null(.severity) {
   .severity = .PRIORITY || "info"
 }

@@ -60,19 +60,35 @@ _services_cache = ServicesCache()
 
 
 def _compose_services_expr(expr: str, services_csv: str | None) -> str:
-    """AND a `(service:"a" OR service:"b" …)` clause onto the user's expr.
+    """AND an identity-qualified `(service:… AND source_type:…)` clause onto expr.
 
-    The user's `expr` is wrapped in parens and passed through VERBATIM — never
-    parsed or mutated. Each service value is escaped via the canonical
-    `logsql_quote_phrase`. Empty/absent `services_csv` returns `expr` unchanged.
+    STAGE-004-012A: `services_csv` is a CSV of `<source_type>:<service>` entries
+    (e.g. ``docker:nginx,cron:hmrun``). Each entry is split on the FIRST ``:`` —
+    the service name may itself contain ``:`` but source_type never does. Each
+    half is escaped via the canonical ``logsql_quote_phrase``. Identities are
+    OR'd; the OR-group is AND'd with the user's expr (passed through VERBATIM,
+    wrapped in parens). Empty/absent/all-malformed `services_csv` returns `expr`
+    unchanged (byte-identical). Malformed entries (no ``:``, empty source_type or
+    empty service) are skipped.
     """
     if services_csv is None:
         return expr
-    services = [s for s in (part.strip() for part in services_csv.split(",")) if s]
-    if not services:
+    entries = [s for s in (part.strip() for part in services_csv.split(",")) if s]
+    clauses: list[str] = []
+    for entry in entries:
+        source_type, sep, service = entry.partition(":")
+        if not sep or not source_type or not service:
+            continue  # malformed: no colon, or empty half
+        svc_q = logsql_quote_phrase(service)
+        st_q = logsql_quote_phrase(source_type)
+        clauses.append(f"service:{svc_q} AND source_type:{st_q}")
+        if len(clauses) >= _SERVICES_MAX_LIMIT:
+            break
+    if not clauses:
         return expr
-    services = services[:_SERVICES_MAX_LIMIT]
-    or_clause = " OR ".join(f"service:{logsql_quote_phrase(s)}" for s in services)
+    if len(clauses) == 1:
+        return f"({clauses[0]}) AND ({expr})"
+    or_clause = " OR ".join(f"({c})" for c in clauses)
     return f"({or_clause}) AND ({expr})"
 
 
@@ -83,7 +99,7 @@ async def logs_query(  # noqa: PLR0913
     end: str = Query(..., description="ISO-8601 UTC end time"),
     limit: int = Query(_DEFAULT_LIMIT, ge=1, le=_MAX_LIMIT),
     cursor: str | None = Query(None, description="Opaque pagination cursor"),
-    services: str | None = Query(None, description="CSV of service values to AND-filter"),
+    services: str | None = Query(None, description="CSV of <source_type>:<service> identities"),
     _user: User = Depends(require_session()),  # noqa: B008
     vl_url: str = Depends(get_vl_url),
     http_client: httpx.AsyncClient = Depends(get_http_client),  # noqa: B008

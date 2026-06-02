@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useNavigate, useSearch } from '@tanstack/react-router'
 
+import { identitiesToServicesCsv, type ServiceIdentity } from '@/api/logs'
 import { LogsExplorerBody } from './LogsExplorerBody'
 import {
   ALL_PRESETS,
@@ -47,8 +48,10 @@ export function LogsExplorerPage() {
   const start = typeof search.start === 'string' ? search.start : undefined
   const end = typeof search.end === 'string' ? search.end : undefined
 
-  // Read the `services` URL param (array form, set by router validateSearch):
-  const servicesParam = Array.isArray(search.services) ? search.services : undefined
+  // Read the `services` URL param (parsed as ServiceIdentity[], set by router validateSearch):
+  const servicesParam: ServiceIdentity[] | undefined = Array.isArray(search.services)
+    ? search.services
+    : undefined
 
   // Three independent committed values + one live value per mode. Toggling modes
   // preserves BOTH texts; only the ACTIVE mode's committed value drives the
@@ -59,7 +62,9 @@ export function LogsExplorerPage() {
   const [committedLogsQl, setCommittedLogsQl] = useState<string>(logsql ?? '')
   const [liveLogsQl, setLiveLogsQl] = useState<string>(logsql ?? '')
   const [range, setRange] = useState<TimeRangeValue>(() => initialRange(since, start, end))
-  const [selectedServices, setSelectedServices] = useState<string[]>(servicesParam ?? [])
+  const [selectedIdentities, setSelectedIdentities] = useState<ServiceIdentity[]>(
+    servicesParam ?? [],
+  )
 
   // Build the URL search object by OMITTING absent keys (exactOptionalPropertyTypes:
   // never write `key: undefined`). Advanced → write `logsql`, omit `q`. Plain →
@@ -69,7 +74,7 @@ export function LogsExplorerPage() {
     plain: string,
     lql: string,
     r: TimeRangeValue,
-    svcs: string[],
+    ids: ServiceIdentity[],
   ): void => {
     const next: {
       q?: string
@@ -77,7 +82,7 @@ export function LogsExplorerPage() {
       since?: string
       start?: string
       end?: string
-      services?: string[]
+      services?: string
     } = {}
     if (advanced) {
       if (lql.length > 0) next.logsql = lql
@@ -90,17 +95,21 @@ export function LogsExplorerPage() {
       if (r.start !== undefined) next.start = toIsoZ(r.start)
       if (r.end !== undefined) next.end = toIsoZ(r.end)
     }
-    if (svcs.length > 0) next.services = svcs
-    void navigate({ to: '/logs', search: next })
+    // `services` is serialized as the locked CSV `<source_type>:<service>` URL format
+    // (D-012A-URL); parseServicesParam (router.tsx) parses it back to ServiceIdentity[]
+    // on read. The cast at the navigate call below bridges this CSV-string write value
+    // to validateSearch's ServiceIdentity[] return type.
+    if (ids.length > 0) next.services = identitiesToServicesCsv(ids)
+    void navigate({ to: '/logs', search: next as unknown as { services?: ServiceIdentity[] } })
   }
 
   const handleSubmitSearch = (): void => {
     if (advancedMode) {
       setCommittedLogsQl(liveLogsQl)
-      writeUrl(true, committedPlainText, liveLogsQl, range, selectedServices)
+      writeUrl(true, committedPlainText, liveLogsQl, range, selectedIdentities)
     } else {
       setCommittedPlainText(livePlainText)
-      writeUrl(false, livePlainText, committedLogsQl, range, selectedServices)
+      writeUrl(false, livePlainText, committedLogsQl, range, selectedIdentities)
     }
   }
 
@@ -110,29 +119,52 @@ export function LogsExplorerPage() {
     if (advancedMode) {
       setLiveLogsQl('')
       setCommittedLogsQl('')
-      writeUrl(true, committedPlainText, '', range, selectedServices)
+      writeUrl(true, committedPlainText, '', range, selectedIdentities)
     } else {
       setLivePlainText('')
       setCommittedPlainText('')
-      writeUrl(false, '', committedLogsQl, range, selectedServices)
+      writeUrl(false, '', committedLogsQl, range, selectedIdentities)
     }
   }
 
   const handleRangeChange = (next: TimeRangeValue): void => {
     setRange(next)
-    writeUrl(advancedMode, committedPlainText, committedLogsQl, next, selectedServices)
+    writeUrl(advancedMode, committedPlainText, committedLogsQl, next, selectedIdentities)
   }
 
   const handleToggleAdvanced = (nextAdvanced: boolean): void => {
     setAdvancedMode(nextAdvanced)
     // Rewrite the URL to reflect the NEW active mode's COMMITTED value. Both
     // texts are preserved in state across the toggle.
-    writeUrl(nextAdvanced, committedPlainText, committedLogsQl, range, selectedServices)
+    writeUrl(nextAdvanced, committedPlainText, committedLogsQl, range, selectedIdentities)
   }
 
-  const handleToggleService = (service: string): void => {
-    setSelectedServices((prev) => {
-      const next = prev.includes(service) ? prev.filter((s) => s !== service) : [...prev, service]
+  const sameIdentity = (a: ServiceIdentity, b: ServiceIdentity): boolean =>
+    a.service === b.service && a.source_type === b.source_type
+
+  const handleToggleIdentity = (identity: ServiceIdentity): void => {
+    setSelectedIdentities((prev) => {
+      const exists = prev.some((i) => sameIdentity(i, identity))
+      const next = exists ? prev.filter((i) => !sameIdentity(i, identity)) : [...prev, identity]
+      writeUrl(advancedMode, committedPlainText, committedLogsQl, range, next)
+      return next
+    })
+  }
+
+  const handleSelectIdentities = (identities: ServiceIdentity[]): void => {
+    setSelectedIdentities((prev) => {
+      const next = [...prev]
+      for (const id of identities) {
+        if (!next.some((i) => sameIdentity(i, id))) next.push(id)
+      }
+      writeUrl(advancedMode, committedPlainText, committedLogsQl, range, next)
+      return next
+    })
+  }
+
+  const handleDeselectIdentities = (identities: ServiceIdentity[]): void => {
+    setSelectedIdentities((prev) => {
+      const next = prev.filter((i) => !identities.some((id) => sameIdentity(id, i)))
       writeUrl(advancedMode, committedPlainText, committedLogsQl, range, next)
       return next
     })
@@ -147,14 +179,16 @@ export function LogsExplorerPage() {
         committedLogsQl={committedLogsQl}
         liveLogsQl={liveLogsQl}
         range={range}
-        selectedServices={selectedServices}
+        selectedIdentities={selectedIdentities}
         onLivePlainTextChange={setLivePlainText}
         onLiveLogsQlChange={setLiveLogsQl}
         onToggleAdvanced={handleToggleAdvanced}
         onSubmitSearch={handleSubmitSearch}
         onClearSearch={handleClearSearch}
         onRangeChange={handleRangeChange}
-        onToggleService={handleToggleService}
+        onToggleIdentity={handleToggleIdentity}
+        onSelectIdentities={handleSelectIdentities}
+        onDeselectIdentities={handleDeselectIdentities}
       />
     </div>
   )

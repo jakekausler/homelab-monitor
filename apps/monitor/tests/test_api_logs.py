@@ -379,8 +379,8 @@ async def test_services_happy_path(
     """Happy path: VL returns services; endpoint parses and sorts."""
     monkeypatch.setenv("HOMELAB_MONITOR_VL_URL", "http://vl-test:9428")
     ndjson = (
-        '{"_stream_id":"","_msg":"","_time":"","service":"nginx","count":"10"}\n'
-        '{"_stream_id":"","_msg":"","_time":"","service":"ssh","count":"3"}\n'
+        '{"_stream_id":"","_msg":"","_time":"","service":"nginx","source_type":"docker","count":"10"}\n'
+        '{"_stream_id":"","_msg":"","_time":"","service":"ssh","source_type":"systemd","count":"3"}\n'
     )
     # Register permissive mock for lifespan startup request to VictoriaMetrics
     httpx_mock.add_response(
@@ -405,8 +405,10 @@ async def test_services_happy_path(
     body = resp.json()
     assert len(body["services"]) == 2  # noqa: PLR2004
     assert body["services"][0]["service"] == "nginx"
+    assert body["services"][0]["source_type"] == "docker"
     assert body["services"][0]["count"] == 10  # noqa: PLR2004
     assert body["services"][1]["service"] == "ssh"
+    assert body["services"][1]["source_type"] == "systemd"
     assert body["services"][1]["count"] == 3  # noqa: PLR2004
     assert body["truncated"] is False
 
@@ -420,8 +422,8 @@ async def test_services_truncated(
     """When services exceed limit, truncated is True and only top N returned."""
     monkeypatch.setenv("HOMELAB_MONITOR_VL_URL", "http://vl-test:9428")
     ndjson = (
-        '{"_stream_id":"","_msg":"","_time":"","service":"nginx","count":"10"}\n'
-        '{"_stream_id":"","_msg":"","_time":"","service":"ssh","count":"3"}\n'
+        '{"_stream_id":"","_msg":"","_time":"","service":"nginx","source_type":"docker","count":"10"}\n'
+        '{"_stream_id":"","_msg":"","_time":"","service":"ssh","source_type":"systemd","count":"3"}\n'
     )
     # Register permissive mock for lifespan startup request to VictoriaMetrics
     httpx_mock.add_response(
@@ -448,6 +450,121 @@ async def test_services_truncated(
     assert len(body["services"]) == 1
     assert body["services"][0]["service"] == "nginx"
     assert body["truncated"] is True
+
+
+@pytest.mark.asyncio
+async def test_services_per_identity_same_name_two_source_types(
+    authenticated_client: AsyncClient,
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Same service name under two source_types yields TWO rows (not collapsed)."""
+    monkeypatch.setenv("HOMELAB_MONITOR_VL_URL", "http://vl-test:9428")
+    ndjson = (
+        '{"_stream_id":"","_msg":"","_time":"","service":"nginx","source_type":"docker","count":"10"}\n'
+        '{"_stream_id":"","_msg":"","_time":"","service":"nginx","source_type":"systemd","count":"4"}\n'
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(r"http://victoriametrics:8428/.*"),
+        json={"data": {"resultType": "vector", "result": []}},
+        is_optional=True,
+    )
+    httpx_mock.add_response(
+        url=re.compile(r"http://vl-test:9428/select/logsql/query.*"),
+        method="GET",
+        text=ndjson,
+    )
+    resp = await authenticated_client.get(
+        "/api/logs/services",
+        params={
+            "start": "2026-05-07T06:00:00Z",
+            "end": "2026-05-07T07:00:00Z",
+        },
+    )
+    assert resp.status_code == 200  # noqa: PLR2004
+    body = resp.json()
+    assert len(body["services"]) == 2  # noqa: PLR2004
+    # Both should have service == "nginx"
+    assert body["services"][0]["service"] == "nginx"
+    assert body["services"][1]["service"] == "nginx"
+    # Sorted DESC by count: docker (10) before systemd (4)
+    assert body["services"][0]["source_type"] == "docker"
+    assert body["services"][0]["count"] == 10  # noqa: PLR2004
+    assert body["services"][1]["source_type"] == "systemd"
+    assert body["services"][1]["count"] == 4  # noqa: PLR2004
+
+
+@pytest.mark.asyncio
+async def test_services_missing_source_type_grouped_as_unknown(
+    authenticated_client: AsyncClient,
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A row with no source_type field is grouped as 'unknown'."""
+    monkeypatch.setenv("HOMELAB_MONITOR_VL_URL", "http://vl-test:9428")
+    ndjson = '{"_stream_id":"","_msg":"","_time":"","service":"legacy","count":"5"}\n'
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(r"http://victoriametrics:8428/.*"),
+        json={"data": {"resultType": "vector", "result": []}},
+        is_optional=True,
+    )
+    httpx_mock.add_response(
+        url=re.compile(r"http://vl-test:9428/select/logsql/query.*"),
+        method="GET",
+        text=ndjson,
+    )
+    resp = await authenticated_client.get(
+        "/api/logs/services",
+        params={
+            "start": "2026-05-07T08:00:00Z",
+            "end": "2026-05-07T09:00:00Z",
+        },
+    )
+    assert resp.status_code == 200  # noqa: PLR2004
+    body = resp.json()
+    assert len(body["services"]) == 1
+    assert body["services"][0]["service"] == "legacy"
+    assert body["services"][0]["source_type"] == "unknown"
+    assert body["services"][0]["count"] == 5  # noqa: PLR2004
+
+
+@pytest.mark.asyncio
+async def test_services_empty_source_type_grouped_as_unknown(
+    authenticated_client: AsyncClient,
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A row with empty source_type field is grouped as 'unknown'."""
+    monkeypatch.setenv("HOMELAB_MONITOR_VL_URL", "http://vl-test:9428")
+    ndjson = (
+        '{"_stream_id":"","_msg":"","_time":"","service":"legacy","source_type":"","count":"5"}\n'
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(r"http://victoriametrics:8428/.*"),
+        json={"data": {"resultType": "vector", "result": []}},
+        is_optional=True,
+    )
+    httpx_mock.add_response(
+        url=re.compile(r"http://vl-test:9428/select/logsql/query.*"),
+        method="GET",
+        text=ndjson,
+    )
+    resp = await authenticated_client.get(
+        "/api/logs/services",
+        params={
+            "start": "2026-05-07T10:00:00Z",
+            "end": "2026-05-07T11:00:00Z",
+        },
+    )
+    assert resp.status_code == 200  # noqa: PLR2004
+    body = resp.json()
+    assert len(body["services"]) == 1
+    assert body["services"][0]["service"] == "legacy"
+    assert body["services"][0]["source_type"] == "unknown"
+    assert body["services"][0]["count"] == 5  # noqa: PLR2004
 
 
 @pytest.mark.asyncio
@@ -532,9 +649,9 @@ async def test_services_skips_rows_missing_service_or_count(
     """Rows missing service or count fields are silently skipped."""
     monkeypatch.setenv("HOMELAB_MONITOR_VL_URL", "http://vl-test:9428")
     ndjson = (
-        '{"_stream_id":"","_msg":"","_time":"","service":"","count":"5"}\n'
-        '{"_stream_id":"","_msg":"","_time":"","service":"nginx","count":"10"}\n'
-        '{"_stream_id":"","_msg":"","_time":"","service":"ssh"}\n'
+        '{"_stream_id":"","_msg":"","_time":"","service":"","source_type":"docker","count":"5"}\n'
+        '{"_stream_id":"","_msg":"","_time":"","service":"nginx","source_type":"docker","count":"10"}\n'
+        '{"_stream_id":"","_msg":"","_time":"","service":"ssh","source_type":"systemd"}\n'
     )
     httpx_mock.add_response(
         method="GET",
@@ -569,8 +686,8 @@ async def test_services_skips_rows_with_non_integer_count(
     """Rows with non-integer count are silently skipped (ValueError branch)."""
     monkeypatch.setenv("HOMELAB_MONITOR_VL_URL", "http://vl-test:9428")
     ndjson = (
-        '{"_stream_id":"","_msg":"","_time":"","service":"broken","count":"abc"}\n'
-        '{"_stream_id":"","_msg":"","_time":"","service":"nginx","count":"7"}\n'
+        '{"_stream_id":"","_msg":"","_time":"","service":"broken","source_type":"docker","count":"abc"}\n'
+        '{"_stream_id":"","_msg":"","_time":"","service":"nginx","source_type":"docker","count":"7"}\n'
     )
     httpx_mock.add_response(
         method="GET",
@@ -610,7 +727,10 @@ async def test_services_cache_hit(
     )
 
     monkeypatch.setenv("HOMELAB_MONITOR_VL_URL", "http://vl-test:9428")
-    ndjson = '{"_stream_id":"","_msg":"","_time":"","service":"nginx","count":"10"}\n'
+    ndjson = (
+        '{"_stream_id":"","_msg":"","_time":"",'
+        '"service":"nginx","source_type":"docker","count":"10"}\n'
+    )
     # Register permissive mock for lifespan startup request to VictoriaMetrics
     httpx_mock.add_response(
         method="GET",
@@ -672,7 +792,7 @@ async def test_query_with_services_composes_filter(
             "expr": "*",
             "start": "2026-05-07T00:00:00Z",
             "end": "2026-05-07T01:00:00Z",
-            "services": "home-assistant",
+            "services": "docker:home-assistant",
         },
     )
     assert resp.status_code == 200  # noqa: PLR2004
@@ -682,6 +802,7 @@ async def test_query_with_services_composes_filter(
     vl_request = next(r for r in requests if "logsql/query" in r.url.path)
     query_param = vl_request.url.params["query"]
     assert 'service:"home-assistant"' in query_param
+    assert 'source_type:"docker"' in query_param
     assert "AND" in query_param
 
 

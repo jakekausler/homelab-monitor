@@ -6,6 +6,19 @@ import type { Schema } from './types'
 type LogsQueryResponse = Schema<'LogsQueryResponse'>
 type LogsServicesResponse = Schema<'LogsServicesResponse'>
 
+/**
+ * STAGE-004-012A — a selected stream picker identity. The identity is the PAIR
+ * (service, source_type); the same service name may be selectable under multiple
+ * source_types. Serialized to the URL/query CSV as `<source_type>:<service>`.
+ * Kept serializable for STAGE-015 persistence.
+ */
+export type ServiceIdentity = { service: string; source_type: string }
+
+/** Serialize identities to the backend `services` CSV: `type:service,type:service`. */
+export function identitiesToServicesCsv(identities: ServiceIdentity[]): string {
+  return identities.map((i) => `${i.source_type}:${i.service}`).join(',')
+}
+
 export const logsQueryKeys = {
   query: (expr: string, start: string, end: string, services: string) =>
     ['logs', 'query', expr, start, end, services] as const,
@@ -15,9 +28,9 @@ export const logsQueryKeys = {
 
 /**
  * STAGE-004-007 / -012 — generic LogsQL query with A1 cursor pagination.
- * `services` is a CSV of selected service values; the BACKEND composes the
- * (service:…) AND (expr) filter. Included in the query key so changing the
- * selection refetches.
+ * `services` is a CSV of <source_type>:<service> entries (e.g. `docker:nginx,cron:hmrun`);
+ * the BACKEND parses and composes the identity-qualified filter. Included in the query key
+ * so changing the selection refetches.
  */
 export function useLogsQuery(expr: string, start: string, end: string, services = '') {
   return useInfiniteQuery({

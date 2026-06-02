@@ -2488,7 +2488,7 @@
       },
       "LogsServicesResponse": {
         "additionalProperties": false,
-        "description": "Response for GET /api/logs/services.\n\n`services` is sorted DESC by count. `truncated` is True when the number of\ndistinct services exceeded the requested `limit` (only the top `limit` are\nreturned).",
+        "description": "Response for GET /api/logs/services.\n\n`services` is sorted DESC by count over (service, source_type) identities.\n`truncated` is True when the number of distinct identities exceeded the\nrequested `limit` (only the top `limit` are returned).",
         "properties": {
           "services": {
             "items": {
@@ -3145,7 +3145,7 @@
       },
       "ServiceCount": {
         "additionalProperties": false,
-        "description": "One distinct `service` value + its line count over the query window.",
+        "description": "One distinct (service, source_type) identity + its line count over the window.\n\nSTAGE-004-012A: identity is the PAIR (service, source_type). The same service\nname may appear under multiple source_types (e.g. a name that is both a docker\ncontainer and a systemd unit) \u2192 ONE ServiceCount per (service, source_type) pair.",
         "properties": {
           "count": {
             "title": "Count",
@@ -3154,10 +3154,15 @@
           "service": {
             "title": "Service",
             "type": "string"
+          },
+          "source_type": {
+            "title": "Source Type",
+            "type": "string"
           }
         },
         "required": [
           "service",
+          "source_type",
           "count"
         ],
         "title": "ServiceCount",
@@ -6190,7 +6195,7 @@
             }
           },
           {
-            "description": "CSV of service values to AND-filter",
+            "description": "CSV of <source_type>:<service> identities",
             "in": "query",
             "name": "services",
             "required": false,
@@ -6203,7 +6208,7 @@
                   "type": "null"
                 }
               ],
-              "description": "CSV of service values to AND-filter",
+              "description": "CSV of <source_type>:<service> identities",
               "title": "Services"
             }
           }

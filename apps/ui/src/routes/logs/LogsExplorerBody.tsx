@@ -2,7 +2,12 @@ import { useMemo, useState } from 'react'
 import { RefreshCw, X } from 'lucide-react'
 
 import { ApiError } from '@/api/client'
-import { useLogsQuery, useLogsServicesQuery } from '@/api/logs'
+import {
+  identitiesToServicesCsv,
+  useLogsQuery,
+  useLogsServicesQuery,
+  type ServiceIdentity,
+} from '@/api/logs'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { AdvancedToggle } from '@/components/logs/AdvancedToggle'
@@ -40,8 +45,8 @@ interface LogsExplorerBodyProps {
   liveLogsQl: string
   /** Committed time range (mirrors the URL). */
   range: TimeRangeValue
-  /** Selected service values (AND'd server-side). */
-  selectedServices: string[]
+  /** Selected service identities (AND'd server-side by source_type:service). */
+  selectedIdentities: ServiceIdentity[]
   /** Update the live plain-text input (no query/URL change). */
   onLivePlainTextChange: (next: string) => void
   /** Update the live LogsQL editor text (no query/URL change). */
@@ -54,8 +59,12 @@ interface LogsExplorerBodyProps {
   onClearSearch: () => void
   /** Range picker change → Page writes URL (since OR start/end). */
   onRangeChange: (next: TimeRangeValue) => void
-  /** Toggle a service in/out of the selection (row click + chip ×). */
-  onToggleService: (service: string) => void
+  /** Toggle an identity in/out of the selection (row click + chip ×). */
+  onToggleIdentity: (identity: ServiceIdentity) => void
+  /** Bulk add identities to the selection. */
+  onSelectIdentities: (identities: ServiceIdentity[]) => void
+  /** Bulk remove identities from the selection. */
+  onDeselectIdentities: (identities: ServiceIdentity[]) => void
 }
 
 export function LogsExplorerBody({
@@ -65,14 +74,16 @@ export function LogsExplorerBody({
   committedLogsQl,
   liveLogsQl,
   range,
-  selectedServices,
+  selectedIdentities,
   onLivePlainTextChange,
   onLiveLogsQlChange,
   onToggleAdvanced,
   onSubmitSearch,
   onClearSearch,
   onRangeChange,
-  onToggleService,
+  onToggleIdentity,
+  onSelectIdentities,
+  onDeselectIdentities,
 }: LogsExplorerBodyProps) {
   const [wrap, setWrap] = useState(false)
   // STAGE-004-009 timezone wiring (mirrors the Docker viewer).
@@ -115,7 +126,7 @@ export function LogsExplorerBody({
   // resolves to '*'), and startIso/endIso are always non-empty ISO strings. Do
   // NOT add a redundant empty-guard — useLogsQuery's `enabled` is effectively
   // always true for this consumer by design.
-  const servicesCsv = selectedServices.join(',')
+  const servicesCsv = identitiesToServicesCsv(selectedIdentities)
   const logs = useLogsQuery(expr, startIso, endIso, servicesCsv)
 
   // Services query — depends on window ONLY, window-only refetch.
@@ -149,21 +160,22 @@ export function LogsExplorerBody({
 
   const header = (
     <>
-      {selectedServices.length > 0 && (
+      {selectedIdentities.length > 0 && (
         <div data-testid="selected-services" className="flex flex-wrap items-center gap-2">
-          {selectedServices.map((svc) => (
+          {selectedIdentities.map((i) => (
             <span
-              key={svc}
+              key={`${i.source_type}:${i.service}`}
               data-testid="service-chip"
-              data-service={svc}
+              data-service={i.service}
+              data-source-type={i.source_type}
               className="inline-flex items-center gap-1 rounded-full border border-border bg-accent px-2 py-0.5 text-xs"
             >
-              {svc}
+              {i.source_type}:{i.service}
               <button
                 type="button"
-                aria-label={`Remove ${svc}`}
+                aria-label={`Remove ${i.source_type}:${i.service}`}
                 data-testid="service-chip-remove"
-                onClick={() => onToggleService(svc)}
+                onClick={() => onToggleIdentity(i)}
                 className="text-muted-foreground hover:text-foreground"
               >
                 <X className="size-3" />
@@ -301,8 +313,10 @@ export function LogsExplorerBody({
     <StreamPickerSidebar
       services={servicesData?.services ?? []}
       truncated={servicesData?.truncated ?? false}
-      selectedServices={selectedServices}
-      onToggleService={onToggleService}
+      selectedIdentities={selectedIdentities}
+      onToggleIdentity={onToggleIdentity}
+      onSelectIdentities={onSelectIdentities}
+      onDeselectIdentities={onDeselectIdentities}
       isLoading={servicesQuery.isLoading}
       isError={servicesQuery.isError}
     />

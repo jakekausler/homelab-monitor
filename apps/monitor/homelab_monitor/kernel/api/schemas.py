@@ -257,19 +257,25 @@ class LogsStreamsResponse(BaseModel):
 
 
 class ServiceCount(BaseModel):
-    """One distinct `service` value + its line count over the query window."""
+    """One distinct (service, source_type) identity + its line count over the window.
+
+    STAGE-004-012A: identity is the PAIR (service, source_type). The same service
+    name may appear under multiple source_types (e.g. a name that is both a docker
+    container and a systemd unit) → ONE ServiceCount per (service, source_type) pair.
+    """
 
     model_config = ConfigDict(extra="forbid")
     service: str
+    source_type: str
     count: int
 
 
 class LogsServicesResponse(BaseModel):
     """Response for GET /api/logs/services.
 
-    `services` is sorted DESC by count. `truncated` is True when the number of
-    distinct services exceeded the requested `limit` (only the top `limit` are
-    returned).
+    `services` is sorted DESC by count over (service, source_type) identities.
+    `truncated` is True when the number of distinct identities exceeded the
+    requested `limit` (only the top `limit` are returned).
     """
 
     model_config = ConfigDict(extra="forbid")

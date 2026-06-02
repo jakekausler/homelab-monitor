@@ -95,12 +95,54 @@ const metricsRoute = createRoute({
   component: MetricsPage,
 })
 
+/**
+ * STAGE-004-012A — parse the `services` URL param (CSV of `<source_type>:<service>`
+ * entries) into ServiceIdentity[]. Splits each entry on the FIRST ':'. Drops
+ * malformed/empty entries. Absent param → undefined (so the key is omitted).
+ */
+export function parseServicesParam(
+  raw: unknown,
+): { source_type: string; service: string }[] | undefined {
+  // If it's already an array of objects, return as-is (TanStack Router caches the result)
+  if (
+    Array.isArray(raw) &&
+    raw.length > 0 &&
+    typeof raw[0] === 'object' &&
+    raw[0] !== null &&
+    'source_type' in raw[0] &&
+    'service' in raw[0]
+  ) {
+    return raw as { source_type: string; service: string }[]
+  }
+
+  const csv =
+    typeof raw === 'string'
+      ? raw
+      : Array.isArray(raw)
+        ? (raw as unknown[]).filter((s): s is string => typeof s === 'string').join(',')
+        : undefined
+  if (csv === undefined) return undefined
+  const out: { source_type: string; service: string }[] = []
+  for (const part of csv.split(',')) {
+    const entry = part.trim()
+    if (entry.length === 0) continue
+    const idx = entry.indexOf(':')
+    if (idx <= 0) continue // no colon, or empty source_type
+    const source_type = entry.slice(0, idx)
+    const service = entry.slice(idx + 1)
+    if (service.length === 0) continue // empty service
+    out.push({ source_type, service })
+  }
+  return out.length > 0 ? out : undefined
+}
+
 const logsRoute = createRoute({
   getParentRoute: () => protectedLayoutRoute,
   path: '/logs',
   component: LogsExplorerPage,
   // STAGE-004-010 — URL is the source of truth. `start`+`end` (ISO, custom) take
   // precedence over `since` (preset token); `q` is the plain-text search term.
+  // STAGE-004-012A — `services` is now a CSV of `<source_type>:<service>` identities.
   validateSearch: (
     search: Record<string, unknown>,
   ): {
@@ -109,19 +151,14 @@ const logsRoute = createRoute({
     since?: string | undefined
     start?: string | undefined
     end?: string | undefined
-    services?: string[] | undefined
+    services?: { source_type: string; service: string }[] | undefined
   } => ({
     q: typeof search.q === 'string' ? search.q : undefined,
     logsql: typeof search.logsql === 'string' ? search.logsql : undefined,
     since: typeof search.since === 'string' ? search.since : undefined,
     start: typeof search.start === 'string' ? search.start : undefined,
     end: typeof search.end === 'string' ? search.end : undefined,
-    services:
-      typeof search.services === 'string'
-        ? search.services.split(',').filter((s) => s.length > 0)
-        : Array.isArray(search.services)
-          ? (search.services as unknown[]).filter((s): s is string => typeof s === 'string')
-          : undefined,
+    services: parseServicesParam(search.services),
   }),
 })
 
