@@ -31,9 +31,12 @@ function openPanel() {
 }
 
 describe('TimeRangeControl (mobile/dialog path)', () => {
-  it('shows the current preset label on the trigger', () => {
+  it('shows the current preset label on the trigger as title/aria-label', () => {
     render(<TimeRangeControl value={PRESET_VALUE} onChange={vi.fn()} />)
-    expect(screen.getByTestId('time-range-trigger')).toHaveTextContent('Last 15m')
+    // The trigger is now icon-only; the label is in the title attribute and aria-label.
+    const trigger = screen.getByTestId('time-range-trigger')
+    expect(trigger).toHaveAttribute('title', 'Last 15m')
+    expect(trigger).toHaveAttribute('aria-label', 'Time range: Last 15m')
   })
 
   it('selecting a preset emits a preset value and closes', () => {

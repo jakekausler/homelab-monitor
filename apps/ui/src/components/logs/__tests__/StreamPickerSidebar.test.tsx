@@ -1,10 +1,18 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import { TooltipProvider } from '@/components/ui/tooltip'
 import { StreamPickerSidebar } from '@/components/logs/StreamPickerSidebar'
 import type { Schema } from '@/api/types'
+import type { ReactNode } from 'react'
+import React from 'react'
 
 afterEach(cleanup)
+
+// StreamPickerSidebar uses <Tooltip> which requires TooltipProvider in the tree.
+function renderWithProvider(ui: ReactNode) {
+  return render(React.createElement(TooltipProvider, null, ui))
+}
 
 type ServiceCount = Schema<'ServiceCount'>
 
@@ -19,7 +27,7 @@ describe('StreamPickerSidebar', () => {
   ]
 
   it('groups into per-source_type sections', () => {
-    render(
+    renderWithProvider(
       <StreamPickerSidebar
         services={mockServices}
         truncated={false}
@@ -36,7 +44,7 @@ describe('StreamPickerSidebar', () => {
   })
 
   it('section order is docker, cron, systemd, unknown-last', () => {
-    render(
+    renderWithProvider(
       <StreamPickerSidebar
         services={mockServices}
         truncated={false}
@@ -54,7 +62,7 @@ describe('StreamPickerSidebar', () => {
   })
 
   it('same service name appears in two sections', () => {
-    render(
+    renderWithProvider(
       <StreamPickerSidebar
         services={mockServices}
         truncated={false}
@@ -75,7 +83,7 @@ describe('StreamPickerSidebar', () => {
   })
 
   it('rows within a section are sorted by count desc', () => {
-    render(
+    renderWithProvider(
       <StreamPickerSidebar
         services={mockServices}
         truncated={false}
@@ -96,7 +104,7 @@ describe('StreamPickerSidebar', () => {
 
   it('clicking a row toggles that identity', () => {
     const onToggle = vi.fn()
-    render(
+    renderWithProvider(
       <StreamPickerSidebar
         services={mockServices}
         truncated={false}
@@ -122,7 +130,7 @@ describe('StreamPickerSidebar', () => {
   })
 
   it('collapse toggle hides section rows', () => {
-    render(
+    renderWithProvider(
       <StreamPickerSidebar
         services={mockServices}
         truncated={false}
@@ -157,7 +165,7 @@ describe('StreamPickerSidebar', () => {
 
   it('select-all unions listed identities', () => {
     const onSelectIdentities = vi.fn()
-    render(
+    renderWithProvider(
       <StreamPickerSidebar
         services={mockServices}
         truncated={false}
@@ -182,7 +190,7 @@ describe('StreamPickerSidebar', () => {
 
   it('select-none removes listed identities', () => {
     const onDeselectIdentities = vi.fn()
-    render(
+    renderWithProvider(
       <StreamPickerSidebar
         services={mockServices}
         truncated={false}
@@ -209,7 +217,7 @@ describe('StreamPickerSidebar', () => {
   })
 
   it('indeterminate when some selected', () => {
-    render(
+    renderWithProvider(
       <StreamPickerSidebar
         services={mockServices}
         truncated={false}
@@ -227,7 +235,7 @@ describe('StreamPickerSidebar', () => {
   })
 
   it('selected row shows aria-pressed and bg-accent', () => {
-    render(
+    renderWithProvider(
       <StreamPickerSidebar
         services={mockServices}
         truncated={false}
@@ -251,7 +259,7 @@ describe('StreamPickerSidebar', () => {
 
   it('truncated banner renders', () => {
     const onShowMore = vi.fn()
-    render(
+    renderWithProvider(
       <StreamPickerSidebar
         services={mockServices}
         truncated={true}
@@ -270,7 +278,7 @@ describe('StreamPickerSidebar', () => {
   })
 
   it('shows loading state', () => {
-    render(
+    renderWithProvider(
       <StreamPickerSidebar
         services={[]}
         truncated={false}
@@ -287,7 +295,7 @@ describe('StreamPickerSidebar', () => {
   })
 
   it('shows error state', () => {
-    render(
+    renderWithProvider(
       <StreamPickerSidebar
         services={[]}
         truncated={false}
@@ -303,7 +311,7 @@ describe('StreamPickerSidebar', () => {
   })
 
   it('shows empty state when no services and not loading/error', () => {
-    render(
+    renderWithProvider(
       <StreamPickerSidebar
         services={[]}
         truncated={false}

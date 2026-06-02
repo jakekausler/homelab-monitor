@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ChevronDown } from 'lucide-react'
+import { Clock } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import {
@@ -10,6 +10,7 @@ import {
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { TimezoneToggle } from '@/components/logs/TimezoneToggle'
 import { useMediaQuery } from '@/lib/useMediaQuery'
 import {
   ALL_PRESETS,
@@ -31,6 +32,10 @@ export interface TimeRangeControlProps {
   max?: Date | undefined
   /** Which presets to show; default all 6. */
   presets?: readonly PresetToken[]
+  /** When provided, renders a UTC/local timestamp toggle inside the panel. */
+  utcChecked?: boolean
+  /** Flip the UTC/local preference (called by the in-panel toggle). */
+  onToggleUtc?: () => void
 }
 
 function labelForValue(value: TimeRangeValue): string {
@@ -53,6 +58,8 @@ export function TimeRangeControl({
   min,
   max,
   presets = ALL_PRESETS,
+  utcChecked,
+  onToggleUtc,
 }: TimeRangeControlProps) {
   const isDesktop = useMediaQuery('(min-width: 640px)')
   const [open, setOpen] = useState(false)
@@ -186,20 +193,32 @@ export function TimeRangeControl({
           </div>
         </div>
       )}
+      {onToggleUtc !== undefined && (
+        <div className="border-t border-border pt-2">
+          <TimezoneToggle
+            checked={utcChecked ?? false}
+            onChange={onToggleUtc}
+            id="logs-tz-toggle"
+          />
+        </div>
+      )}
     </div>
   )
 
   const trigger = (
     <Button
+      type="button"
       size="sm"
-      variant="outline"
+      variant="ghost"
+      className="h-8 w-8 p-0"
       data-testid="time-range-trigger"
+      aria-label={`Time range: ${labelForValue(value)}`}
+      title={labelForValue(value)}
       onClick={() => {
         if (!isDesktop) handleOpenChange(true)
       }}
     >
-      {labelForValue(value)}
-      <ChevronDown className="ml-1 size-4" />
+      <Clock />
     </Button>
   )
 

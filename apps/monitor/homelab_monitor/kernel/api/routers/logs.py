@@ -2,31 +2,43 @@
 
 from __future__ import annotations
 
-from typing import cast
+from typing import Annotated, cast
 
 import httpx
 import structlog
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, status
 from structlog.stdlib import BoundLogger
 
 from homelab_monitor.kernel.api.dependencies import (
     get_http_client,
     get_log_stream_state,
+    get_repo,
     get_vl_url,
     require_session,
 )
-from homelab_monitor.kernel.api.errors import HttpProblem
+from homelab_monitor.kernel.api.errors import ConflictProblem, HttpProblem, NotFoundProblem
 from homelab_monitor.kernel.api.schemas import (
     LogsQueryResponse,
     LogsServicesResponse,
     LogsStreamsResponse,
+    SavedQueriesListResponse,
+    SavedQueryResponse,
+    SavedServiceIdentity,
+    SaveQueryCreateRequest,
+    SaveQueryRenameRequest,
 )
 from homelab_monitor.kernel.auth.models import User
 from homelab_monitor.kernel.config import load_vl_query_limits
+from homelab_monitor.kernel.db.repository import SqliteRepository
 from homelab_monitor.kernel.logs.models import from_victorialogs_line
 from homelab_monitor.kernel.logs.pagination import (
     InvalidCursorError,
     paginate_older,
+)
+from homelab_monitor.kernel.logs.saved_queries_repo import (
+    DuplicateNameError,
+    SavedQueriesRepository,
+    SavedQueryRow,
 )
 from homelab_monitor.kernel.logs.services import (
     ServicesCache,
@@ -220,3 +232,133 @@ async def logs_streams(
     """
     # Snapshot the dict to avoid race with collector mid-iteration.
     return LogsStreamsResponse(streams=list(dict(state).values()))
+
+
+# DI helper for saved queries repository
+def _get_saved_queries_repo(
+    repo: Annotated[SqliteRepository, Depends(get_repo)],
+) -> SavedQueriesRepository:
+    return SavedQueriesRepository(repo)
+
+
+def _row_to_response(row: SavedQueryRow) -> SavedQueryResponse:
+    return SavedQueryResponse(
+        id=row.id,
+        name=row.name,
+        logs_ql=row.logs_ql,
+        selected_services=[
+            SavedServiceIdentity(service=s["service"], source_type=s["source_type"])
+            for s in row.selected_services
+        ],
+        since_preset=row.since_preset,
+        range_start_iso=row.range_start_iso,
+        range_end_iso=row.range_end_iso,
+        advanced_mode=row.advanced_mode,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+    )
+
+
+@router.get("/logs/saved-queries", response_model=SavedQueriesListResponse)
+async def list_saved_queries(
+    _user: Annotated[User, Depends(require_session())],
+    repo: Annotated[SavedQueriesRepository, Depends(_get_saved_queries_repo)],
+) -> SavedQueriesListResponse:
+    """List all saved queries, sorted by name. Auth: session required (GET, no CSRF)."""
+    rows = await repo.list_sorted()
+    return SavedQueriesListResponse(saved_queries=[_row_to_response(r) for r in rows])
+
+
+@router.post(
+    "/logs/saved-queries",
+    response_model=SavedQueryResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_saved_query(
+    body: SaveQueryCreateRequest,
+    _user: Annotated[User, Depends(require_session())],
+    repo: Annotated[SavedQueriesRepository, Depends(_get_saved_queries_repo)],
+) -> SavedQueryResponse:
+    """Create a saved query. 201 on success, 409 on duplicate name.
+
+    Auth: session required; CSRF enforced (POST) by require_session().
+    """
+    try:
+        row = await repo.create(
+            name=body.name,
+            logs_ql=body.logs_ql,
+            selected_services=[s.model_dump() for s in body.selected_services],
+            since_preset=body.since_preset,
+            range_start_iso=body.range_start_iso,
+            range_end_iso=body.range_end_iso,
+            advanced_mode=body.advanced_mode,
+        )
+    except DuplicateNameError as exc:
+        raise ConflictProblem(message=f"saved query name already exists: {body.name}") from exc
+    return _row_to_response(row)
+
+
+@router.patch("/logs/saved-queries/{query_id}", response_model=SavedQueryResponse)
+async def rename_saved_query(
+    query_id: int,
+    body: SaveQueryRenameRequest,
+    _user: Annotated[User, Depends(require_session())],
+    repo: Annotated[SavedQueriesRepository, Depends(_get_saved_queries_repo)],
+) -> SavedQueryResponse:
+    """Rename a saved query. 200 on success, 404 if absent, 409 on duplicate name.
+
+    Auth: session required; CSRF enforced (PATCH).
+    """
+    try:
+        row = await repo.rename(query_id=query_id, new_name=body.name)
+    except DuplicateNameError as exc:
+        raise ConflictProblem(message=f"saved query name already exists: {body.name}") from exc
+    if row is None:
+        raise NotFoundProblem(message=f"saved query not found: {query_id}")
+    return _row_to_response(row)
+
+
+@router.put("/logs/saved-queries/{query_id}", response_model=SavedQueryResponse)
+async def update_saved_query(
+    query_id: int,
+    body: SaveQueryCreateRequest,
+    _user: Annotated[User, Depends(require_session())],
+    repo: Annotated[SavedQueriesRepository, Depends(_get_saved_queries_repo)],
+) -> SavedQueryResponse:
+    """Overwrite a saved query's PAYLOAD (full replace), keeping its name.
+
+    The request body is SaveQueryCreateRequest for schema reuse, but ``body.name``
+    is INTENTIONALLY IGNORED — the saved query keeps the name stored on the
+    existing row. Only logs_ql / selected_services / range / advanced_mode are
+    written. The body's range-invariant validation (exactly one of since_preset
+    OR custom range) still applies.
+
+    200 on success, 404 if absent. Auth: session required; CSRF enforced (PUT).
+    """
+    row = await repo.update(
+        query_id=query_id,
+        logs_ql=body.logs_ql,
+        selected_services=[s.model_dump() for s in body.selected_services],
+        since_preset=body.since_preset,
+        range_start_iso=body.range_start_iso,
+        range_end_iso=body.range_end_iso,
+        advanced_mode=body.advanced_mode,
+    )
+    if row is None:
+        raise NotFoundProblem(message=f"saved query not found: {query_id}")
+    return _row_to_response(row)
+
+
+@router.delete(
+    "/logs/saved-queries/{query_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_saved_query(
+    query_id: int,
+    _user: Annotated[User, Depends(require_session())],
+    repo: Annotated[SavedQueriesRepository, Depends(_get_saved_queries_repo)],
+) -> None:
+    """Delete a saved query. 204 on success, 404 if absent. CSRF enforced (DELETE)."""
+    deleted = await repo.delete(query_id)
+    if not deleted:
+        raise NotFoundProblem(message=f"saved query not found: {query_id}")

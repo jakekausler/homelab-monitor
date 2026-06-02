@@ -2,10 +2,17 @@ import { useState } from 'react'
 import { useNavigate, useSearch } from '@tanstack/react-router'
 
 import { identitiesToServicesCsv, type ServiceIdentity } from '@/api/logs'
+import {
+  type SavedQuery,
+  type SaveQueryCreateRequest,
+  useUpdateSavedLogQuery,
+} from '@/api/savedLogQueries'
 import { LogsExplorerBody } from './LogsExplorerBody'
+import { SaveQueryModal } from './SaveQueryModal'
 import {
   ALL_PRESETS,
   parseIso,
+  resolveCustomWindow,
   toIsoZ,
   type PresetToken,
   type TimeRangeValue,
@@ -65,6 +72,11 @@ export function LogsExplorerPage() {
   const [selectedIdentities, setSelectedIdentities] = useState<ServiceIdentity[]>(
     servicesParam ?? [],
   )
+
+  // Modal state for saving a query
+  const [saveOpen, setSaveOpen] = useState(false)
+
+  const updateMut = useUpdateSavedLogQuery()
 
   // Build the URL search object by OMITTING absent keys (exactOptionalPropertyTypes:
   // never write `key: undefined`). Advanced → write `logsql`, omit `q`. Plain →
@@ -170,6 +182,82 @@ export function LogsExplorerPage() {
     })
   }
 
+  const buildSavePayload = (name: string): SaveQueryCreateRequest => {
+    // logs_ql carries the active-mode committed expression. In advanced mode this
+    // is the raw LogsQL; in plain mode we save the plain text verbatim into logs_ql
+    // and rely on advanced_mode=false to tell load() to put it back in the plain box.
+    const logsQl = advancedMode ? committedLogsQl : committedPlainText
+    const base = {
+      name,
+      logs_ql: logsQl,
+      selected_services: selectedIdentities.map((i) => ({
+        service: i.service,
+        source_type: i.source_type,
+      })),
+      advanced_mode: advancedMode,
+    }
+    if (range.kind === 'preset') {
+      return { ...base, since_preset: range.token }
+    }
+    // custom: resolve open bounds to concrete ISO so the saved query is reproducible.
+    // Use the SAME resolution the body uses (resolveCustomWindow) against a fresh now.
+    const now = new Date()
+    const win = resolveCustomWindow(
+      { start: range.start, end: range.end },
+      { now, maxSpanDays: 30 },
+    )
+    return { ...base, range_start_iso: toIsoZ(win.start), range_end_iso: toIsoZ(win.end) }
+  }
+
+  const handleUpdateSavedQuery = (query: SavedQuery): void => {
+    // Overwrite the saved row's payload with the CURRENT Explorer state.
+    // buildSavePayload uses the current committed mode/text/range/identities.
+    // name is carried for schema completeness but the backend ignores it on PUT.
+    const body = buildSavePayload(query.name)
+    updateMut.mutate({ id: query.id, body })
+  }
+
+  const handleLoadSavedQuery = (saved: SavedQuery): void => {
+    const nextAdvanced = saved.advanced_mode
+    // A saved query carries ONE expression (in logs_ql, belonging to its active
+    // mode). Clear the OTHER mode's buffer so toggling modes after load doesn't
+    // surface the PREVIOUS query's stale text.
+    const nextPlain = nextAdvanced ? '' : saved.logs_ql
+    const nextLogsQl = nextAdvanced ? saved.logs_ql : ''
+
+    // Reconstruct range: preset OR custom (from ISO strings).
+    let nextRange: TimeRangeValue
+    if (saved.since_preset != null && isPresetToken(saved.since_preset)) {
+      nextRange = { kind: 'preset', token: saved.since_preset }
+    } else if (saved.range_start_iso != null && saved.range_end_iso != null) {
+      const s = parseIso(saved.range_start_iso)
+      const e = parseIso(saved.range_end_iso)
+      nextRange = {
+        kind: 'custom',
+        ...(s !== null ? { start: s } : {}),
+        ...(e !== null ? { end: e } : {}),
+      }
+    } else {
+      nextRange = { kind: 'preset', token: DEFAULT_PRESET }
+    }
+
+    const nextIds: ServiceIdentity[] = saved.selected_services.map((s) => ({
+      service: s.service,
+      source_type: s.source_type,
+    }))
+
+    // Force mode + commit all state, then write the URL (deep-linkable) using the
+    // SAME writeUrl path the manual handlers use.
+    setAdvancedMode(nextAdvanced)
+    setCommittedPlainText(nextPlain)
+    setLivePlainText(nextPlain)
+    setCommittedLogsQl(nextLogsQl)
+    setLiveLogsQl(nextLogsQl)
+    setRange(nextRange)
+    setSelectedIdentities(nextIds)
+    writeUrl(nextAdvanced, nextPlain, nextLogsQl, nextRange, nextIds)
+  }
+
   return (
     <div className="space-y-4">
       <LogsExplorerBody
@@ -189,7 +277,11 @@ export function LogsExplorerPage() {
         onToggleIdentity={handleToggleIdentity}
         onSelectIdentities={handleSelectIdentities}
         onDeselectIdentities={handleDeselectIdentities}
+        onOpenSave={() => setSaveOpen(true)}
+        onLoadSavedQuery={handleLoadSavedQuery}
+        onUpdateSavedQuery={handleUpdateSavedQuery}
       />
+      <SaveQueryModal open={saveOpen} onOpenChange={setSaveOpen} buildPayload={buildSavePayload} />
     </div>
   )
 }

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from homelab_monitor.kernel.alerts.types import AlertOutcome, AlertStatus, Severity
 
@@ -34,6 +34,11 @@ __all__ = [
     "MetricsSnapshotResponse",
     "OutcomeView",
     "RetryResponse",
+    "SaveQueryCreateRequest",
+    "SaveQueryRenameRequest",
+    "SavedQueriesListResponse",
+    "SavedQueryResponse",
+    "SavedServiceIdentity",
     "ServiceCount",
     "VMRangeData",
     "VMRangeResult",
@@ -281,3 +286,74 @@ class LogsServicesResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
     services: list[ServiceCount]
     truncated: bool
+
+
+class SavedServiceIdentity(BaseModel):
+    """One saved (service, source_type) identity. Mirrors UI ServiceIdentity."""
+
+    model_config = ConfigDict(extra="forbid")
+    service: str
+    source_type: str
+
+
+class SavedQueryResponse(BaseModel):
+    """One saved query row (response for GET list items / POST / PATCH)."""
+
+    model_config = ConfigDict(extra="forbid")
+    id: int
+    name: str
+    logs_ql: str
+    selected_services: list[SavedServiceIdentity]
+    since_preset: str | None = None
+    range_start_iso: str | None = None
+    range_end_iso: str | None = None
+    advanced_mode: bool
+    created_at: str
+    updated_at: str
+
+
+class SavedQueriesListResponse(BaseModel):
+    """Response for GET /api/logs/saved-queries (sorted by name)."""
+
+    model_config = ConfigDict(extra="forbid")
+    saved_queries: list[SavedQueryResponse]
+
+
+class SaveQueryCreateRequest(BaseModel):
+    """Body for POST /api/logs/saved-queries.
+
+    Invariant: either since_preset is set, OR both range_start_iso and
+    range_end_iso are set. Validated by a model validator.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, max_length=200)
+    logs_ql: str = Field(max_length=4096)
+    selected_services: list[SavedServiceIdentity] = Field(default_factory=lambda: [])
+    since_preset: str | None = None
+    range_start_iso: str | None = None
+    range_end_iso: str | None = None
+    advanced_mode: bool = False
+
+    @model_validator(mode="after")
+    def _check_range_invariant(self) -> SaveQueryCreateRequest:
+        has_partial_custom = (self.range_start_iso is None) != (self.range_end_iso is None)
+        if has_partial_custom:
+            msg = "range_start_iso and range_end_iso must both be set or both be null"
+            raise ValueError(msg)
+        has_preset = self.since_preset is not None
+        has_custom = self.range_start_iso is not None and self.range_end_iso is not None
+        if has_preset == has_custom:  # both set OR neither set → invalid
+            msg = (
+                "exactly one of since_preset OR (range_start_iso AND range_end_iso) "
+                "must be provided"
+            )
+            raise ValueError(msg)
+        return self
+
+
+class SaveQueryRenameRequest(BaseModel):
+    """Body for PATCH /api/logs/saved-queries/{id}."""
+
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, max_length=200)

@@ -293,13 +293,13 @@ describe('LogsExplorerPage', () => {
   it('toggling Advanced on shows the LogsQL editor; toggling off restores the plain input', async () => {
     renderRoute()
     await screen.findByTestId('logs-search-input')
-    // Flip Advanced on.
-    const toggleCheckbox = screen.getByTestId('logs-advanced-toggle').querySelector('input')!
-    fireEvent.click(toggleCheckbox)
+    // Flip Advanced on — the toggle is now a button (icon-only), not a checkbox wrapper.
+    const toggleBtn = screen.getByTestId('logs-advanced-toggle')
+    fireEvent.click(toggleBtn)
     expect(await screen.findByTestId('logsql-editor-textarea')).toBeInTheDocument()
     expect(screen.queryByTestId('logs-search-input')).toBeNull()
     // Flip Advanced off.
-    fireEvent.click(toggleCheckbox)
+    fireEvent.click(toggleBtn)
     expect(await screen.findByTestId('logs-search-input')).toBeInTheDocument()
     expect(screen.queryByTestId('logsql-editor-textarea')).toBeNull()
   })
@@ -308,17 +308,17 @@ describe('LogsExplorerPage', () => {
     renderRoute()
     const plainInput = await screen.findByTestId<HTMLInputElement>('logs-search-input')
     fireEvent.change(plainInput, { target: { value: 'plain-term' } })
-    // Switch to advanced, type LogsQL.
-    const toggleCheckbox = screen.getByTestId('logs-advanced-toggle').querySelector('input')!
-    fireEvent.click(toggleCheckbox)
+    // Switch to advanced, type LogsQL. Toggle is now a button (icon-only).
+    const toggleBtn = screen.getByTestId('logs-advanced-toggle')
+    fireEvent.click(toggleBtn)
     const editor = await screen.findByTestId<HTMLTextAreaElement>('logsql-editor-textarea')
     fireEvent.change(editor, { target: { value: 'service:home-assistant' } })
     // Back to plain — the plain text is still there.
-    fireEvent.click(toggleCheckbox)
+    fireEvent.click(toggleBtn)
     const plainAgain = await screen.findByTestId<HTMLInputElement>('logs-search-input')
     expect(plainAgain.value).toBe('plain-term')
     // Back to advanced — the LogsQL text is still there.
-    fireEvent.click(toggleCheckbox)
+    fireEvent.click(toggleBtn)
     const editorAgain = await screen.findByTestId<HTMLTextAreaElement>('logsql-editor-textarea')
     expect(editorAgain.value).toBe('service:home-assistant')
   })
@@ -326,8 +326,8 @@ describe('LogsExplorerPage', () => {
   it('advanced mode sends the committed LogsQL as expr RAW (not translated)', async () => {
     renderRoute()
     await screen.findByTestId('logs-search-input')
-    const toggleCheckbox = screen.getByTestId('logs-advanced-toggle').querySelector('input')!
-    fireEvent.click(toggleCheckbox)
+    const toggleBtn = screen.getByTestId('logs-advanced-toggle')
+    fireEvent.click(toggleBtn)
     const editor = await screen.findByTestId('logsql-editor-textarea')
     fireEvent.change(editor, {
       target: { value: 'service:home-assistant AND severity:error' },
@@ -353,8 +353,8 @@ describe('LogsExplorerPage', () => {
     renderRoute()
     await screen.findByTestId('logs-search-input')
     vi.mocked(useLogsQuery).mockClear()
-    const toggleCheckbox = screen.getByTestId('logs-advanced-toggle').querySelector('input')!
-    fireEvent.click(toggleCheckbox)
+    const toggleBtn = screen.getByTestId('logs-advanced-toggle')
+    fireEvent.click(toggleBtn)
     await screen.findByTestId('logsql-editor-textarea')
     const calls = vi.mocked(useLogsQuery).mock.calls
     expect(calls.some(([expr]) => expr === '*')).toBe(true)
@@ -364,17 +364,21 @@ describe('LogsExplorerPage', () => {
     vi.mocked(useMediaQuery).mockReturnValue(false)
     renderRoute()
     await screen.findByTestId('logs-search-input')
-    const rows = screen.getAllByTestId('stream-picker-row')
+    // Sidebar is CLOSED by default — open it via the filter toggle button.
+    fireEvent.click(screen.getByTestId('logs-filter-toggle'))
+    const rows = await screen.findAllByTestId('stream-picker-row')
     expect(rows).toHaveLength(2)
     expect(rows[0]).toHaveAttribute('data-service', 'home-assistant')
-    expect(screen.getByText('1,204')).toBeInTheDocument()
+    expect(screen.getByText('1.2k')).toBeInTheDocument()
   })
 
   it('clicking a row selects and writes URL with services param', async () => {
     vi.mocked(useMediaQuery).mockReturnValue(false)
     renderRoute()
     await screen.findByTestId('logs-search-input')
-    const rows = screen.getAllByTestId('stream-picker-row')
+    // Sidebar is closed by default — open via filter toggle.
+    fireEvent.click(screen.getByTestId('logs-filter-toggle'))
+    const rows = await screen.findAllByTestId('stream-picker-row')
     fireEvent.click(rows[0]!)
     // Chip should appear with identity format
     expect(await screen.findByTestId('service-chip')).toHaveAttribute(
@@ -428,18 +432,20 @@ describe('LogsExplorerPage', () => {
   })
 
   it('shows truncated banner when services are truncated', async () => {
-    mockServicesQuery({ data: { services: [{ service: 'a', count: 1 }], truncated: true } })
+    mockServicesQuery({
+      data: { services: [{ service: 'a', source_type: 'docker', count: 1 }], truncated: true },
+    })
     vi.mocked(useMediaQuery).mockReturnValue(false)
     renderRoute()
     await screen.findByTestId('logs-search-input')
-    expect(screen.getByTestId('stream-picker-truncated')).toBeInTheDocument()
+    // Sidebar is closed by default — open via filter toggle.
+    fireEvent.click(screen.getByTestId('logs-filter-toggle'))
+    expect(await screen.findByTestId('stream-picker-truncated')).toBeInTheDocument()
   })
 
   it('mobile drawer toggle (mobile path)', async () => {
     // Override useMediaQuery per-test to explicitly set mobile mode
-    // The default module mock returns true, which means isMobile=true, so we're in mobile path
     vi.mocked(useMediaQuery).mockImplementation((query) => {
-      // Return true for the LogsExplorerBody's mobile detection query
       if (query === '(max-width: 767px)') return true
       return true
     })
@@ -447,12 +453,12 @@ describe('LogsExplorerPage', () => {
     await screen.findByTestId('logs-search-input')
     // Mobile drawer is hidden by default
     expect(screen.queryByTestId('stream-picker')).not.toBeInTheDocument()
-    // Toggle button should be present
-    const toggle = screen.getByTestId('stream-picker-toggle')
+    // Filter toggle button (renamed from stream-picker-toggle) should be present
+    const toggle = screen.getByTestId('logs-filter-toggle')
     expect(toggle).toBeInTheDocument()
-    // Click to open — Dialog mounts in a portal, so use findBy (async)
+    // Click to open — Sheet mounts in a portal, so use findBy (async)
     fireEvent.click(toggle)
-    // Assert the dialog is present by checking the StreamPickerSidebar root
+    // Assert the drawer is present by checking the StreamPickerSidebar root
     expect(await screen.findByTestId('stream-picker')).toBeInTheDocument()
   })
 })

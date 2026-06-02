@@ -24,6 +24,7 @@ from homelab_monitor.kernel.cron.repository import CronRepo
 from homelab_monitor.kernel.cron.run_repository import CronRunRepository
 from homelab_monitor.kernel.db.engine import get_engine
 from homelab_monitor.kernel.db.repository import SqliteRepository
+from homelab_monitor.kernel.logs.saved_queries_repo import SavedQueriesRepository
 from homelab_monitor.plugins.discoverers.cron_discoverer import resolve_hostname
 
 # Run mix specification — total = 60.
@@ -132,6 +133,17 @@ def add_subparser(
     )
     p_seed_containers.set_defaults(func=_handle)
 
+    p_seed_sq = sub.add_parser(
+        "seed-saved-queries",
+        help="DEV-ONLY: insert 3 deterministic log_saved_queries rows for Refinement.",
+    )
+    p_seed_sq.add_argument(
+        "--clear",
+        action="store_true",
+        help="Delete the 3 seed rows (by name) and exit.",
+    )
+    p_seed_sq.set_defaults(func=_handle)
+
     dev.set_defaults(func=_handle)
 
 
@@ -150,8 +162,10 @@ def _handle(args: argparse.Namespace) -> int:
                 vm_url=args.vm_url,
             )
         )
+    if sub == "seed-saved-queries":
+        return asyncio.run(_cmd_seed_saved_queries(clear=bool(args.clear)))
     print(
-        "usage: hm dev {seed-cron-runs,clear-cron-runs,seed-container-metrics}",
+        "usage: hm dev {seed-cron-runs,clear-cron-runs,seed-container-metrics,seed-saved-queries}",
         file=sys.stderr,
     )
     return 2
@@ -472,4 +486,60 @@ async def _clear_synthetic_series(client: httpx.AsyncClient, vm_url: str) -> int
         )
         return 1
     print(f"cleared all synthetic series ({_SYNTH_LABEL_KEY}={_SYNTH_LABEL_VAL}) via {url}")
+    return 0
+
+
+async def _cmd_seed_saved_queries(*, clear: bool) -> int:
+    engine = get_engine()
+    repo = SqliteRepository(engine)
+    sq = SavedQueriesRepository(repo)
+
+    seed_names = [
+        "nginx errors (last hour)",
+        "auth failures (custom range)",
+        "infra services overview",
+    ]
+    # Idempotent: remove any existing rows with these names first.
+    async with repo.transaction() as conn:
+        for nm in seed_names:
+            await conn.execute(text("DELETE FROM log_saved_queries WHERE name = :n"), {"n": nm})
+    if clear:
+        print(f"cleared {len(seed_names)} seed saved queries")
+        return 0
+
+    # 1. Plain mode + preset (nginx errors, since=1h)
+    await sq.create(
+        name=seed_names[0],
+        logs_ql="error",
+        selected_services=[{"service": "nginx", "source_type": "docker"}],
+        since_preset="1h",
+        range_start_iso=None,
+        range_end_iso=None,
+        advanced_mode=False,
+    )
+    # 2. Advanced LogsQL + custom start/end range
+    await sq.create(
+        name=seed_names[1],
+        logs_ql='_msg:"authentication failure"',
+        selected_services=[],
+        since_preset=None,
+        range_start_iso="2026-05-01T00:00:00.000Z",
+        range_end_iso="2026-05-02T00:00:00.000Z",
+        advanced_mode=True,
+    )
+    # 3. Plain mode + multi-service selection
+    await sq.create(
+        name=seed_names[2],
+        logs_ql="",
+        selected_services=[
+            {"service": "grafana", "source_type": "docker"},
+            {"service": "victorialogs", "source_type": "docker"},
+            {"service": "alertmanager", "source_type": "docker"},
+        ],
+        since_preset="6h",
+        range_start_iso=None,
+        range_end_iso=None,
+        advanced_mode=False,
+    )
+    print("seeded 3 saved queries")
     return 0

@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { RefreshCw, X } from 'lucide-react'
+import { Filter, RefreshCw, Save, Search, X } from 'lucide-react'
 
 import { ApiError } from '@/api/client'
 import {
@@ -8,16 +8,18 @@ import {
   useLogsServicesQuery,
   type ServiceIdentity,
 } from '@/api/logs'
+import { type SavedQuery } from '@/api/savedLogQueries'
 import { Button } from '@/components/ui/button'
-import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
-import { AdvancedToggle } from '@/components/logs/AdvancedToggle'
+import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet'
+import { AdvancedToggle, WrapIconToggle } from '@/components/logs/AdvancedToggle'
 import { LogViewer } from '@/components/logs/LogViewer'
 import { LogsQlEditor } from '@/components/logs/LogsQlEditor'
 import { StreamPickerSidebar } from '@/components/logs/StreamPickerSidebar'
+import { SavedQueriesPanel } from './SavedQueriesPanel'
 import { TimeRangeControl } from '@/components/logs/TimeRangeControl'
-import { TimezoneToggle } from '@/components/logs/TimezoneToggle'
-import { WrapToggle } from '@/components/logs/WrapToggle'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { translateSearchToLogsQl } from '@/lib/logsQlTranslate'
+import { cn } from '@/lib/utils'
 import { useMediaQuery } from '@/lib/useMediaQuery'
 import { useTimezonePreference } from '@/lib/useTimezonePreference'
 import {
@@ -65,6 +67,12 @@ interface LogsExplorerBodyProps {
   onSelectIdentities: (identities: ServiceIdentity[]) => void
   /** Bulk remove identities from the selection. */
   onDeselectIdentities: (identities: ServiceIdentity[]) => void
+  /** Open the save-query modal (page owns the modal + payload builder). */
+  onOpenSave: () => void
+  /** Load a saved query into the Explorer (page reconstructs state). */
+  onLoadSavedQuery: (saved: SavedQuery) => void
+  /** Overwrite a saved query's payload with the current Explorer state. */
+  onUpdateSavedQuery: (saved: SavedQuery) => void
 }
 
 export function LogsExplorerBody({
@@ -84,6 +92,9 @@ export function LogsExplorerBody({
   onToggleIdentity,
   onSelectIdentities,
   onDeselectIdentities,
+  onOpenSave,
+  onLoadSavedQuery,
+  onUpdateSavedQuery,
 }: LogsExplorerBodyProps) {
   const [wrap, setWrap] = useState(false)
   // STAGE-004-009 timezone wiring (mirrors the Docker viewer).
@@ -91,6 +102,8 @@ export function LogsExplorerBody({
   // Bumping this re-resolves the window against a fresh "now" (Refresh / live-tail
   // groundwork) WITHOUT churning the query key on every render.
   const [refreshNonce, setRefreshNonce] = useState(0)
+  // Sidebar tab state: show Services or Saved queries
+  const [sidebarTab, setSidebarTab] = useState<'services' | 'saved'>('services')
 
   // Active mode decides the expr: advanced sends the COMMITTED raw LogsQL
   // verbatim (empty → match-all '*' to keep the always-enabled invariant);
@@ -133,9 +146,12 @@ export function LogsExplorerBody({
   const servicesQuery = useLogsServicesQuery(startIso, endIso)
   const servicesData = servicesQuery.data
 
-  // Mobile detection + drawer state.
+  // Mobile detection + sidebar open state.
   const isMobile = useMediaQuery('(max-width: 767px)')
-  const [pickerOpen, setPickerOpen] = useState(false)
+  // Sidebar (filters/services + saved) is CLOSED by default on both breakpoints.
+  // The Filter button toggles it: desktop pushes an inline <aside>; mobile opens
+  // a left drawer (Sheet).
+  const [sidebarOpen, setSidebarOpen] = useState(false)
 
   const handleRefresh = (): void => {
     setRefreshNonce((n) => n + 1)
@@ -184,80 +200,141 @@ export function LogsExplorerBody({
           ))}
         </div>
       )}
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <form
-          className="flex flex-1 items-center gap-2"
-          onSubmit={(e) => {
-            e.preventDefault()
-            onSubmitSearch()
-          }}
-        >
-          {advancedMode ? (
-            <LogsQlEditor
-              value={liveLogsQl}
-              onChange={onLiveLogsQlChange}
-              onSubmit={onSubmitSearch}
-              placeholder="Enter LogsQL…"
-              ariaLabel="LogsQL query"
-              className="w-full max-w-md"
-            />
-          ) : (
-            <input
-              type="text"
-              data-testid="logs-search-input"
-              aria-label="Search logs"
-              className="flex h-9 w-full max-w-md rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-              placeholder="Search logs (plain text)…"
-              value={livePlainText}
-              onChange={(e) => {
-                onLivePlainTextChange(e.target.value)
-              }}
-            />
-          )}
-          {(advancedMode
-            ? liveLogsQl.length > 0 || committedLogsQl.length > 0
-            : livePlainText.length > 0 || committedPlainText.length > 0) && (
+
+      {/* Row B — search line */}
+      <form
+        className="flex min-w-0 flex-wrap items-center gap-2"
+        onSubmit={(e) => {
+          e.preventDefault()
+          onSubmitSearch()
+        }}
+      >
+        {advancedMode ? (
+          <LogsQlEditor
+            value={liveLogsQl}
+            onChange={onLiveLogsQlChange}
+            onSubmit={onSubmitSearch}
+            placeholder="Enter LogsQL…"
+            ariaLabel="LogsQL query"
+            className="min-w-0 flex-1"
+          />
+        ) : (
+          <input
+            type="text"
+            data-testid="logs-search-input"
+            aria-label="Search logs"
+            className="flex h-9 min-w-0 flex-1 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            placeholder="Search logs (plain text)…"
+            value={livePlainText}
+            onChange={(e) => {
+              onLivePlainTextChange(e.target.value)
+            }}
+          />
+        )}
+        {(advancedMode
+          ? liveLogsQl.length > 0 || committedLogsQl.length > 0
+          : livePlainText.length > 0 || committedPlainText.length > 0) && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                className="h-8 w-8 p-0"
+                data-testid="logs-search-clear"
+                aria-label="Clear search"
+                onClick={onClearSearch}
+              >
+                <X />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Clear search</TooltipContent>
+          </Tooltip>
+        )}
+        <AdvancedToggle checked={advancedMode} onChange={onToggleAdvanced} />
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              type="submit"
+              size="sm"
+              className="h-8 w-8 p-0"
+              data-testid="logs-search-submit"
+              aria-label="Search"
+            >
+              <Search />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Search</TooltipContent>
+        </Tooltip>
+      </form>
+
+      {/* Row C — button row */}
+      <div className="flex flex-wrap items-center gap-2">
+        <Tooltip>
+          <TooltipTrigger asChild>
             <Button
               type="button"
               size="sm"
-              variant="ghost"
-              data-testid="logs-search-clear"
-              aria-label="Clear search"
-              onClick={onClearSearch}
+              variant="outline"
+              className="h-8 w-8 p-0"
+              onClick={handleRefresh}
+              disabled={logs.isFetching}
+              data-testid="logs-refresh"
+              aria-label="Refresh"
             >
-              <X className="size-4" />
+              <RefreshCw className={cn(logs.isFetching && 'animate-spin')} />
             </Button>
-          )}
-          <Button type="submit" size="sm" data-testid="logs-search-submit">
-            Search
-          </Button>
-        </form>
-        <div className="flex items-center gap-2">
-          <AdvancedToggle checked={advancedMode} onChange={onToggleAdvanced} id="logs-advanced" />
-          <WrapToggle checked={wrap} onChange={setWrap} id="logs-wrap" />
-          <TimezoneToggle
-            checked={timezone === 'utc'}
-            onChange={toggleTimezone}
-            id="logs-tz-toggle"
-          />
-          <TimeRangeControl
-            mode="full"
-            value={range}
-            onChange={onRangeChange}
-            presets={ALL_PRESETS}
-          />
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={handleRefresh}
-            disabled={logs.isFetching}
-            data-testid="logs-refresh"
-          >
-            <RefreshCw className="mr-1 size-4" />
-            {logs.isFetching ? 'Refreshing…' : 'Refresh'}
-          </Button>
-        </div>
+          </TooltipTrigger>
+          <TooltipContent>Refresh</TooltipContent>
+        </Tooltip>
+
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              type="button"
+              size="sm"
+              variant={sidebarOpen ? 'secondary' : 'outline'}
+              className="h-8 w-8 p-0"
+              onClick={() => setSidebarOpen((o) => !o)}
+              data-testid="logs-filter-toggle"
+              aria-label="Filters"
+              aria-pressed={sidebarOpen}
+            >
+              <Filter />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Filters</TooltipContent>
+        </Tooltip>
+
+        <TimeRangeControl
+          mode="full"
+          value={range}
+          onChange={onRangeChange}
+          presets={ALL_PRESETS}
+          utcChecked={timezone === 'utc'}
+          onToggleUtc={toggleTimezone}
+        />
+
+        <WrapIconToggle checked={wrap} onChange={setWrap} />
+
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="h-8 w-8 p-0"
+              data-testid="logs-save-query"
+              aria-label="Save query"
+              onClick={onOpenSave}
+            >
+              <Save />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Save query</TooltipContent>
+        </Tooltip>
       </div>
+
       {isGenericApiError && (
         <p role="alert" className="text-sm text-red-600">
           Failed to load logs: {logs.error?.message}
@@ -310,34 +387,54 @@ export function LogsExplorerBody({
   }
 
   const sidebar = (
-    <StreamPickerSidebar
-      services={servicesData?.services ?? []}
-      truncated={servicesData?.truncated ?? false}
-      selectedIdentities={selectedIdentities}
-      onToggleIdentity={onToggleIdentity}
-      onSelectIdentities={onSelectIdentities}
-      onDeselectIdentities={onDeselectIdentities}
-      isLoading={servicesQuery.isLoading}
-      isError={servicesQuery.isError}
-    />
+    <div className="space-y-2">
+      <div className="flex gap-1 overflow-x-auto" data-testid="logs-sidebar-tabs" role="tablist">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={sidebarTab === 'services'}
+          data-testid="logs-sidebar-tab-services"
+          className={cn('rounded px-2 py-1 text-xs', sidebarTab === 'services' && 'bg-accent')}
+          onClick={() => setSidebarTab('services')}
+        >
+          Services
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={sidebarTab === 'saved'}
+          data-testid="logs-sidebar-tab-saved"
+          className={cn('rounded px-2 py-1 text-xs', sidebarTab === 'saved' && 'bg-accent')}
+          onClick={() => setSidebarTab('saved')}
+        >
+          Saved
+        </button>
+      </div>
+      <div role="tabpanel">
+        {sidebarTab === 'services' ? (
+          <StreamPickerSidebar
+            services={servicesData?.services ?? []}
+            truncated={servicesData?.truncated ?? false}
+            selectedIdentities={selectedIdentities}
+            onToggleIdentity={onToggleIdentity}
+            onSelectIdentities={onSelectIdentities}
+            onDeselectIdentities={onDeselectIdentities}
+            isLoading={servicesQuery.isLoading}
+            isError={servicesQuery.isError}
+          />
+        ) : (
+          <SavedQueriesPanel onLoad={onLoadSavedQuery} onUpdate={onUpdateSavedQuery} />
+        )}
+      </div>
+    </div>
   )
 
   return (
     <div className="flex gap-4">
-      {!isMobile && <aside className="hidden w-56 shrink-0 md:block">{sidebar}</aside>}
+      {/* Desktop push-layout sidebar: rendered only when open. */}
+      {!isMobile && sidebarOpen && <aside className="w-56 shrink-0">{sidebar}</aside>}
+
       <div className="min-w-0 flex-1">
-        {isMobile && (
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            data-testid="stream-picker-toggle"
-            onClick={() => setPickerOpen(true)}
-            className="mb-2"
-          >
-            Services
-          </Button>
-        )}
         <LogViewer
           useLogs={useLogs}
           headerSlot={header}
@@ -347,13 +444,15 @@ export function LogsExplorerBody({
           timezone={timezone}
         />
       </div>
+
+      {/* Mobile: full-screen left drawer, headerless (sr-only title for a11y). */}
       {isMobile && (
-        <Dialog open={pickerOpen} onOpenChange={setPickerOpen}>
-          <DialogContent className="max-w-xs">
-            <DialogTitle>Services</DialogTitle>
+        <Sheet open={sidebarOpen} onOpenChange={setSidebarOpen}>
+          <SheetContent aria-describedby={undefined}>
+            <SheetTitle className="sr-only">Filters</SheetTitle>
             {sidebar}
-          </DialogContent>
-        </Dialog>
+          </SheetContent>
+        </Sheet>
       )}
     </div>
   )

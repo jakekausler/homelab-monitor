@@ -51,6 +51,7 @@ EXPECTED_TABLES = {
     "docker_build_hashes",
     "image_update_state",
     "compose_actions",
+    "log_saved_queries",
 }
 
 

@@ -3143,6 +3143,210 @@
         "title": "RunLogResponse",
         "type": "object"
       },
+      "SaveQueryCreateRequest": {
+        "additionalProperties": false,
+        "description": "Body for POST /api/logs/saved-queries.\n\nInvariant: either since_preset is set, OR both range_start_iso and\nrange_end_iso are set. Validated by a model validator.",
+        "properties": {
+          "advanced_mode": {
+            "default": false,
+            "title": "Advanced Mode",
+            "type": "boolean"
+          },
+          "logs_ql": {
+            "maxLength": 4096,
+            "title": "Logs Ql",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "range_end_iso": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Range End Iso"
+          },
+          "range_start_iso": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Range Start Iso"
+          },
+          "selected_services": {
+            "items": {
+              "$ref": "#/components/schemas/SavedServiceIdentity"
+            },
+            "title": "Selected Services",
+            "type": "array"
+          },
+          "since_preset": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Since Preset"
+          }
+        },
+        "required": [
+          "name",
+          "logs_ql"
+        ],
+        "title": "SaveQueryCreateRequest",
+        "type": "object"
+      },
+      "SaveQueryRenameRequest": {
+        "additionalProperties": false,
+        "description": "Body for PATCH /api/logs/saved-queries/{id}.",
+        "properties": {
+          "name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "SaveQueryRenameRequest",
+        "type": "object"
+      },
+      "SavedQueriesListResponse": {
+        "additionalProperties": false,
+        "description": "Response for GET /api/logs/saved-queries (sorted by name).",
+        "properties": {
+          "saved_queries": {
+            "items": {
+              "$ref": "#/components/schemas/SavedQueryResponse"
+            },
+            "title": "Saved Queries",
+            "type": "array"
+          }
+        },
+        "required": [
+          "saved_queries"
+        ],
+        "title": "SavedQueriesListResponse",
+        "type": "object"
+      },
+      "SavedQueryResponse": {
+        "additionalProperties": false,
+        "description": "One saved query row (response for GET list items / POST / PATCH).",
+        "properties": {
+          "advanced_mode": {
+            "title": "Advanced Mode",
+            "type": "boolean"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "logs_ql": {
+            "title": "Logs Ql",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "range_end_iso": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Range End Iso"
+          },
+          "range_start_iso": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Range Start Iso"
+          },
+          "selected_services": {
+            "items": {
+              "$ref": "#/components/schemas/SavedServiceIdentity"
+            },
+            "title": "Selected Services",
+            "type": "array"
+          },
+          "since_preset": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Since Preset"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "logs_ql",
+          "selected_services",
+          "advanced_mode",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "SavedQueryResponse",
+        "type": "object"
+      },
+      "SavedServiceIdentity": {
+        "additionalProperties": false,
+        "description": "One saved (service, source_type) identity. Mirrors UI ServiceIdentity.",
+        "properties": {
+          "service": {
+            "title": "Service",
+            "type": "string"
+          },
+          "source_type": {
+            "title": "Source Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "service",
+          "source_type"
+        ],
+        "title": "SavedServiceIdentity",
+        "type": "object"
+      },
       "ServiceCount": {
         "additionalProperties": false,
         "description": "One distinct (service, source_type) identity + its line count over the window.\n\nSTAGE-004-012A: identity is the PAIR (service, source_type). The same service\nname may appear under multiple source_types (e.g. a name that is both a docker\ncontainer and a systemd unit) \u2192 ONE ServiceCount per (service, source_type) pair.",
@@ -6236,6 +6440,191 @@
           }
         },
         "summary": "Logs Query"
+      }
+    },
+    "/api/logs/saved-queries": {
+      "get": {
+        "description": "List all saved queries, sorted by name. Auth: session required (GET, no CSRF).",
+        "operationId": "list_saved_queries_api_logs_saved_queries_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedQueriesListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Saved Queries"
+      },
+      "post": {
+        "description": "Create a saved query. 201 on success, 409 on duplicate name.\n\nAuth: session required; CSRF enforced (POST) by require_session().",
+        "operationId": "create_saved_query_api_logs_saved_queries_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaveQueryCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedQueryResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Saved Query"
+      }
+    },
+    "/api/logs/saved-queries/{query_id}": {
+      "delete": {
+        "description": "Delete a saved query. 204 on success, 404 if absent. CSRF enforced (DELETE).",
+        "operationId": "delete_saved_query_api_logs_saved_queries__query_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "query_id",
+            "required": true,
+            "schema": {
+              "title": "Query Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Saved Query"
+      },
+      "patch": {
+        "description": "Rename a saved query. 200 on success, 404 if absent, 409 on duplicate name.\n\nAuth: session required; CSRF enforced (PATCH).",
+        "operationId": "rename_saved_query_api_logs_saved_queries__query_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "query_id",
+            "required": true,
+            "schema": {
+              "title": "Query Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaveQueryRenameRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedQueryResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Rename Saved Query"
+      },
+      "put": {
+        "description": "Overwrite a saved query's PAYLOAD (full replace), keeping its name.\n\nThe request body is SaveQueryCreateRequest for schema reuse, but ``body.name``\nis INTENTIONALLY IGNORED \u2014 the saved query keeps the name stored on the\nexisting row. Only logs_ql / selected_services / range / advanced_mode are\nwritten. The body's range-invariant validation (exactly one of since_preset\nOR custom range) still applies.\n\n200 on success, 404 if absent. Auth: session required; CSRF enforced (PUT).",
+        "operationId": "update_saved_query_api_logs_saved_queries__query_id__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "query_id",
+            "required": true,
+            "schema": {
+              "title": "Query Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaveQueryCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedQueryResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Saved Query"
       }
     },
     "/api/logs/services": {

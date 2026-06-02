@@ -2,8 +2,10 @@ import { useState } from 'react'
 import { ChevronDown, ChevronRight } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
+import { formatCompactCount } from '@/lib/formatCount'
 import type { Schema } from '@/api/types'
 import type { ServiceIdentity } from '@/api/logs'
+import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
 
 type ServiceCount = Schema<'ServiceCount'>
 
@@ -22,10 +24,6 @@ interface StreamPickerSidebarProps {
   isLoading: boolean
   isError?: boolean
   onShowMore?: () => void
-}
-
-function formatCount(n: number): string {
-  return n.toLocaleString()
 }
 
 const FIXED_SECTION_ORDER = ['docker', 'cron', 'systemd'] as const
@@ -180,7 +178,7 @@ export function StreamPickerSidebar({
 
                 {/* Section label + count */}
                 <span className="flex-1 text-xs font-medium uppercase text-muted-foreground">
-                  {section.sourceType} ({formatCount(section.totalCount)})
+                  {section.sourceType} ({formatCompactCount(section.totalCount)})
                 </span>
 
                 {/* Select-all/none tri-state checkbox */}
@@ -226,25 +224,29 @@ export function StreamPickerSidebar({
                   }
                   const isSelected = selectedSet.has(keyOf(identity))
                   return (
-                    <button
-                      key={`${r.source_type}:${r.service}`}
-                      type="button"
-                      data-testid="stream-picker-row"
-                      data-service={r.service}
-                      data-source-type={r.source_type}
-                      aria-pressed={isSelected}
-                      aria-label={`${r.service}, ${formatCount(r.count)} lines`}
-                      onClick={() => onToggleIdentity(identity)}
-                      className={cn(
-                        'flex items-center justify-between gap-3 rounded-md px-2 py-1.5 text-left text-sm text-foreground hover:bg-accent hover:text-accent-foreground',
-                        isSelected && 'bg-accent text-accent-foreground',
-                      )}
-                    >
-                      <span className="truncate">{r.service}</span>
-                      <span className="shrink-0 tabular-nums text-xs text-muted-foreground">
-                        {formatCount(r.count)}
-                      </span>
-                    </button>
+                    <Tooltip key={`${r.source_type}:${r.service}`}>
+                      <TooltipTrigger asChild>
+                        <button
+                          type="button"
+                          data-testid="stream-picker-row"
+                          data-service={r.service}
+                          data-source-type={r.source_type}
+                          aria-pressed={isSelected}
+                          aria-label={`${r.service}, ${formatCompactCount(r.count)} lines`}
+                          onClick={() => onToggleIdentity(identity)}
+                          className={cn(
+                            'flex min-w-0 w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-foreground hover:bg-accent hover:text-accent-foreground',
+                            isSelected && 'bg-accent text-accent-foreground',
+                          )}
+                        >
+                          <span className="w-10 shrink-0 text-right tabular-nums text-xs text-muted-foreground">
+                            {formatCompactCount(r.count)}
+                          </span>
+                          <span className="min-w-0 flex-1 truncate">{r.service}</span>
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent side="right">{r.service}</TooltipContent>
+                    </Tooltip>
                   )
                 })}
             </div>
