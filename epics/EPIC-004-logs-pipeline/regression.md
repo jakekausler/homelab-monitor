@@ -125,3 +125,11 @@
 - "On mobile (≤767px), the sidebar is an overlay drawer toggled by a button; selected-service chips still show above the search box."
 - "Backend GET /api/logs/services?start&end&limit returns {services:[{service,count}], truncated} sorted desc; rejects bad ISO / inverted / >30d / far-future windows; 30s cache."
 - "Service values containing special chars (double-quote, backslash) filter correctly via the /api/logs/query `services` param (logsql_quote_phrase escaping) with no 500."
+
+## STAGE-004-012A — Service source_type field + grouped/collapsible stream picker
+
+- Vector ingest sets `source_type` on every log line: docker container logs → 'docker', systemd/journald units (with `_SYSTEMD_UNIT`) → 'systemd', cron (SYSLOG_IDENTIFIER CRON/crond or cron.service, plus hmrun) → 'cron', else 'unknown'. Cron is checked BEFORE systemd (raw cron.service journald lines classify as cron, not systemd).
+- GET /api/logs/services returns one ServiceCount per (service, source_type) IDENTITY — a service name present under two source_types appears as two rows, each with its own count + source_type; sorted desc.
+- The /api/logs/query `services` filter is identity-qualified: `services=<source_type>:<service>` ANDs source_type with service `(service:"x" AND source_type:"docker")`, OR'd across selections. Filtering docker:svc excludes systemd:svc lines of the same name. Special chars in either half are quoted via logsql_quote_phrase.
+- The Logs Explorer stream-picker sidebar groups services into COLLAPSIBLE SECTIONS by source_type (order: docker, cron, systemd, others, unknown-last), each with a collapse toggle + per-section select-all/none (tri-state). A service under two types shows in both sections. Selection writes identity-qualified `&services=type:service` to the URL.
+- SUPERSEDES STAGE-004-012: the `&services=` URL param changed from bare-name CSV (`a,b`) to identity-qualified CSV (`docker:nginx,cron:hmrun`). 012's bare-name `&services=a,b` regression expectation is replaced by the identity-qualified format.
