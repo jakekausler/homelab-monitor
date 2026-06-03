@@ -4,8 +4,9 @@ import userEvent from '@testing-library/user-event'
 import { FieldInspectorPanel } from '../FieldInspectorPanel'
 import type { LogLine } from '../types'
 
+const copyFn = vi.fn()
 vi.mock('@/lib/useCopyToClipboard', () => ({
-  useCopyToClipboard: () => vi.fn(),
+  useCopyToClipboard: () => copyFn,
 }))
 
 describe('FieldInspectorPanel', () => {
@@ -26,6 +27,7 @@ describe('FieldInspectorPanel', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    copyFn.mockClear()
   })
 
   afterEach(() => {
@@ -479,5 +481,125 @@ describe('FieldInspectorPanel', () => {
     expect(screen.getByTestId('field-row-bool_field')).toHaveTextContent('true')
     expect(screen.getByTestId('field-row-number_field')).toHaveTextContent('42')
     expect(screen.getByTestId('field-row-object_field')).toHaveTextContent('[object Object]')
+  })
+
+  describe('JSON message tree rendering', () => {
+    it('renders JSON object message as tree and suppresses matching bag rows', () => {
+      const jsonObjLine: LogLine = {
+        ...mockLine,
+        message: JSON.stringify({ collector: 'docker', event: 'started' }),
+        fields: {
+          source_type: 'docker',
+          collector: 'docker',
+          event: 'started',
+          other: 'keep',
+        },
+      }
+
+      render(<FieldInspectorPanel line={jsonObjLine} onClose={() => {}} />)
+
+      // Message row renders with tree
+      expect(screen.getByTestId('field-row-message')).toBeInTheDocument()
+      expect(screen.getByTestId('json-message-tree')).toBeInTheDocument()
+      expect(screen.getByTestId('json-node-root')).toBeInTheDocument()
+
+      // Matching bag rows are suppressed
+      expect(screen.queryByTestId('field-row-collector')).not.toBeInTheDocument()
+      expect(screen.queryByTestId('field-row-event')).not.toBeInTheDocument()
+
+      // Non-matching bag rows remain
+      expect(screen.getByTestId('field-row-other')).toBeInTheDocument()
+      expect(screen.getByTestId('field-row-source_type')).toBeInTheDocument()
+    })
+
+    it('tree-mode message row has no add-to-filter, has tree Copy', () => {
+      const jsonObjLine: LogLine = {
+        ...mockLine,
+        message: JSON.stringify({ key: 'value' }),
+        fields: mockLine.fields,
+      }
+
+      const onAddMsgFilterMock = vi.fn()
+      render(
+        <FieldInspectorPanel
+          line={jsonObjLine}
+          onClose={() => {}}
+          onAddMsgFilter={onAddMsgFilterMock}
+        />,
+      )
+
+      // Tree-mode message row: no flat-text copy or add-filter
+      expect(screen.queryByTestId('field-copy-message')).not.toBeInTheDocument()
+      expect(screen.queryByTestId('field-add-filter-message')).not.toBeInTheDocument()
+
+      // Tree owns its own copy button
+      expect(screen.getByTestId('json-message-copy')).toBeInTheDocument()
+    })
+
+    it('non-JSON message renders flat text with copy and add-to-filter', () => {
+      // mockLine has message: 'Request received' (non-JSON)
+      const onAddMsgFilterMock = vi.fn()
+      render(
+        <FieldInspectorPanel
+          line={mockLine}
+          onClose={() => {}}
+          onAddMsgFilter={onAddMsgFilterMock}
+        />,
+      )
+
+      // Flat text rendering: copy button present, add-filter button present (no tree)
+      expect(screen.getByTestId('field-row-message')).toBeInTheDocument()
+      expect(screen.queryByTestId('json-node-root')).not.toBeInTheDocument()
+      expect(screen.getByTestId('field-copy-message')).toBeInTheDocument()
+      expect(screen.getByTestId('field-add-filter-message')).toBeInTheDocument()
+    })
+
+    it('core rows are never suppressed even if message keys collide', () => {
+      // Message has top-level keys that collide with CORE field names
+      const jsonObjLine: LogLine = {
+        ...mockLine,
+        message: JSON.stringify({ host: 'msg-host', service: 'msg-service' }),
+        fields: {
+          source_type: 'docker',
+          host: 'bag-host', // bag field with same name as core field
+        },
+      }
+
+      render(<FieldInspectorPanel line={jsonObjLine} onClose={() => {}} />)
+
+      // Tree renders
+      expect(screen.getByTestId('json-message-tree')).toBeInTheDocument()
+
+      // Core rows are ALWAYS present (suppression only filters bagRows)
+      // host and service are core fields, never suppressed
+      expect(screen.getByTestId('field-row-host')).toBeInTheDocument()
+      expect(screen.getByTestId('field-row-service')).toBeInTheDocument()
+    })
+
+    it('JSON array message renders tree and suppresses nothing', () => {
+      // Arrays have no string keys to suppress
+      const jsonArrLine: LogLine = {
+        ...mockLine,
+        message: JSON.stringify([1, 2, 3]),
+        fields: {
+          source_type: 'docker',
+          '0': 'collide', // numeric-string key in bag; arrays suppress nothing
+          '1': 'also',
+          other: 'keep',
+        },
+      }
+
+      render(<FieldInspectorPanel line={jsonArrLine} onClose={() => {}} />)
+
+      // Tree renders
+      expect(screen.getByTestId('json-message-tree')).toBeInTheDocument()
+      expect(screen.getByTestId('json-node-root[0]')).toBeInTheDocument()
+      expect(screen.getByTestId('json-node-root[1]')).toBeInTheDocument()
+
+      // Arrays suppress nothing: numeric-string bag keys still render
+      expect(screen.getByTestId('field-row-0')).toBeInTheDocument()
+      expect(screen.getByTestId('field-row-1')).toBeInTheDocument()
+      expect(screen.getByTestId('field-row-other')).toBeInTheDocument()
+    })
   })
 })

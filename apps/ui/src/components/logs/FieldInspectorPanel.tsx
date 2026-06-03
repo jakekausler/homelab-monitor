@@ -2,6 +2,8 @@ import { Copy, Plus, X } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { useCopyToClipboard } from '@/lib/useCopyToClipboard'
+import { detectJsonMessage, jsonTopLevelKeys } from './jsonMessage'
+import { JsonMessageTree } from './JsonMessageTree'
 import type { LogLine } from './types'
 
 interface FieldInspectorPanelProps {
@@ -48,6 +50,15 @@ export function FieldInspectorPanel({
 }: FieldInspectorPanelProps) {
   const copy = useCopyToClipboard()
 
+  const messageDetection = detectJsonMessage(line.message)
+  // Suppress bag rows that duplicate the JSON message's top-level OBJECT keys.
+  // Arrays and text messages → empty set (no suppression). Core rows are NEVER
+  // suppressed.
+  const suppressedKeys =
+    messageDetection.kind === 'tree'
+      ? new Set(jsonTopLevelKeys(messageDetection.value))
+      : new Set<string>()
+
   const coreRows: FieldRow[] = [
     toRow('timestamp', line.timestamp),
     toRow('severity', line.severity),
@@ -57,7 +68,9 @@ export function FieldInspectorPanel({
     toRow('message', line.message),
   ].filter((r) => r.present)
   // Bag entries, alphabetical by key. Absent (null/undefined) entries omitted.
+  // Suppress keys that match the JSON message's top-level keys.
   const bagRows: FieldRow[] = Object.keys(line.fields)
+    .filter((k) => !suppressedKeys.has(k))
     .sort((a, b) => a.localeCompare(b))
     .map((k) => toRow(k, line.fields[k]))
     .filter((r) => r.present)
@@ -108,6 +121,26 @@ export function FieldInspectorPanel({
   }
 
   const renderRow = (row: FieldRow) => {
+    // Tree mode: the message row renders the recursive JSON tree instead of flat
+    // text. No add-to-filter (inspection-only); the tree owns its Copy button.
+    if (row.name === 'message' && messageDetection.kind === 'tree') {
+      return (
+        <div
+          key={row.name}
+          data-testid="field-row-message"
+          className="flex items-start gap-2 border-b border-border/60 py-1.5 last:border-b-0"
+        >
+          <span
+            className="w-24 shrink-0 truncate font-mono text-xs text-muted-foreground"
+            title="message"
+          >
+            message
+          </span>
+          <JsonMessageTree value={messageDetection.value} />
+        </div>
+      )
+    }
+
     const onAdd = addHandlerFor(row)
     return (
       <div
