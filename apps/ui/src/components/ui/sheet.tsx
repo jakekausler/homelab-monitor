@@ -23,21 +23,31 @@ export const SheetOverlay = React.forwardRef<
 ))
 SheetOverlay.displayName = 'SheetOverlay'
 
+type SheetContentProps = React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content> & {
+  /** Which edge the drawer anchors to. Default 'left' (preserves the Logs
+   *  Explorer Filter sidebar). 'right' anchors + slides from the right edge. */
+  side?: 'left' | 'right'
+}
+
 /**
- * Left-anchored, full-height drawer. Full width up to a max so it reads as a
- * full-screen panel on phones but doesn't sprawl on a wide viewport. Only used
- * on mobile in the Logs Explorer (the desktop sidebar is an inline <aside>).
+ * Full-height drawer anchored to left or right edge. Full width up to a max so
+ * it reads as a full-screen panel on phones but doesn't sprawl on a wide
+ * viewport. Default 'left' for the mobile Filter sidebar; 'right' for the
+ * Field Inspector drawer (STAGE-004-016).
  */
 export const SheetContent = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Content>,
-  React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content>
->(({ className, children, ...props }, ref) => (
+  SheetContentProps
+>(({ className, children, side = 'left', ...props }, ref) => (
   <SheetPortal>
     <SheetOverlay />
     <DialogPrimitive.Content
       ref={ref}
       className={cn(
-        'fixed inset-y-0 left-0 z-50 flex h-full w-full max-w-sm flex-col overflow-y-auto border-r border-border bg-background p-4 shadow-lg duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:slide-out-to-left data-[state=open]:slide-in-from-left',
+        'fixed inset-y-0 z-50 flex h-full w-full max-w-sm flex-col overflow-y-auto bg-background p-4 shadow-lg duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out',
+        side === 'left'
+          ? 'left-0 border-r border-border data-[state=closed]:slide-out-to-left data-[state=open]:slide-in-from-left'
+          : 'right-0 border-l border-border data-[state=closed]:slide-out-to-right data-[state=open]:slide-in-from-right',
         className,
       )}
       {...props}

@@ -12,6 +12,7 @@ import { type SavedQuery } from '@/api/savedLogQueries'
 import { Button } from '@/components/ui/button'
 import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet'
 import { AdvancedToggle, WrapIconToggle } from '@/components/logs/AdvancedToggle'
+import { FieldInspectorPanel } from '@/components/logs/FieldInspectorPanel'
 import { LogViewer } from '@/components/logs/LogViewer'
 import { LogsQlEditor } from '@/components/logs/LogsQlEditor'
 import { StreamPickerSidebar } from '@/components/logs/StreamPickerSidebar'
@@ -23,7 +24,7 @@ import { translateSearchToLogsQl } from '@/lib/logsQlTranslate'
 import { cn } from '@/lib/utils'
 import { useMediaQuery } from '@/lib/useMediaQuery'
 import { useTimezonePreference } from '@/lib/useTimezonePreference'
-import { patchExplorerState, SCROLL_CONTAINER_ATTR } from '@/lib/explorerState'
+import { patchExplorerState, LOG_SCROLL_CONTAINER_ATTR } from '@/lib/explorerState'
 import type { HistoryEntry } from '@/lib/queryHistory'
 import {
   ALL_PRESETS,
@@ -32,7 +33,7 @@ import {
   toIsoZ,
   type TimeRangeValue,
 } from '@/lib/timeRange'
-import type { LogViewerStatus, UseLogsResult } from '@/components/logs/types'
+import type { LogLine, LogViewerStatus, UseLogsResult } from '@/components/logs/types'
 
 const EMPTY_COPY = 'No matches in the selected range. Try a wider time range or a different query.'
 const UNAVAILABLE_COPY = 'Logs backend (VictoriaLogs) is unavailable. Check service health.'
@@ -66,6 +67,9 @@ interface LogsExplorerBodyProps {
   onRangeChange: (next: TimeRangeValue) => void
   /** Toggle an identity in/out of the selection (row click + chip ×). */
   onToggleIdentity: (identity: ServiceIdentity) => void
+  /** STAGE-004-016 fix: add an identity to the selection (additive only, no
+   *  toggle-remove). Used by the inspector's + button. */
+  onAddIdentity: (identity: ServiceIdentity) => void
   /** Bulk add identities to the selection. */
   onSelectIdentities: (identities: ServiceIdentity[]) => void
   /** Bulk remove identities from the selection. */
@@ -82,6 +86,9 @@ interface LogsExplorerBodyProps {
    *  skip restore (URL took precedence, no persisted state, or fresh visit).
    *  STAGE-004-015. */
   restoreScrollTarget?: number | null
+  /** STAGE-004-016: append a plain-text substring to the committed search
+   *  (routes through writeUrl). Page provides; enables add-to-filter. */
+  onAddMsgFilter: (value: string) => void
 }
 
 export function LogsExplorerBody({
@@ -99,6 +106,7 @@ export function LogsExplorerBody({
   onClearSearch,
   onRangeChange,
   onToggleIdentity,
+  onAddIdentity,
   onSelectIdentities,
   onDeselectIdentities,
   onOpenSave,
@@ -106,6 +114,7 @@ export function LogsExplorerBody({
   onUpdateSavedQuery,
   onLoadHistoryEntry,
   restoreScrollTarget,
+  onAddMsgFilter,
 }: LogsExplorerBodyProps) {
   const [wrap, setWrap] = useState(false)
   // STAGE-004-009 timezone wiring (mirrors the Docker viewer).
@@ -115,6 +124,10 @@ export function LogsExplorerBody({
   const [refreshNonce, setRefreshNonce] = useState(0)
   // Sidebar tab state: show Services, Saved queries, or History
   const [sidebarTab, setSidebarTab] = useState<'services' | 'saved' | 'history'>('services')
+  // STAGE-004-016 fix: single source of truth for row selection.
+  // Holds both the key (for highlight) and the line (for the inspector panel).
+  // Clearing this closes the panel AND removes the row highlight atomically.
+  const [selection, setSelection] = useState<{ key: string; line: LogLine } | null>(null)
 
   // Active mode decides the expr: advanced sends the COMMITTED raw LogsQL
   // verbatim (empty → match-all '*' to keep the always-enabled invariant);
@@ -164,18 +177,38 @@ export function LogsExplorerBody({
   // a left drawer (Sheet).
   const [sidebarOpen, setSidebarOpen] = useState(false)
 
-  // STAGE-004-015 — scroll persistence. The vertical scroll container is the
-  // AppShell <main data-app-scroll-container> (the Explorer's <pre> only scrolls
-  // horizontally), so we resolve and track THAT element's scrollTop.
+  // STAGE-004-016 fix: Escape closes the desktop inspector. Mobile Sheet
+  // handles Escape natively (Radix); this covers the desktop <aside> path.
+  // Clears the single-source selection (key + line) so the highlight also clears.
+  useEffect(() => {
+    if (selection === null || isMobile) return
+    const handleKeyDown = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') {
+        setSelection(null)
+      }
+    }
+    document.addEventListener('keydown', handleKeyDown)
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [selection, isMobile])
+
+  // STAGE-004-015 — scroll persistence. RE-POINTED: the vertical scroll container
+  // is now the Explorer's internal results region (LogViewer's
+  // data-log-scroll-container), NOT the page-level <main> (which no longer scrolls
+  // on this route — the panels scroll internally). We resolve and track THAT
+  // element's scrollTop.
   const scrollSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   // True until we've restored the persisted scroll once. Initialized from the
   // Page-resolved target so URL-precedence (target == null) means "never restore".
   const pendingRestoreRef = useRef<boolean>(restoreScrollTarget != null && restoreScrollTarget > 0)
 
-  // Resolve the app's main scroll container. Returns null in SSR/jsdom-without-DOM.
+  // Resolve the Logs Explorer's internal results scroll container (inside
+  // LogViewer). Returns null in SSR/jsdom-without-DOM, and during the brief
+  // window before the results region mounts. STAGE-015 (re-pointed from <main>).
   const getScrollContainer = (): HTMLElement | null => {
     if (typeof document === 'undefined') return null
-    return document.querySelector<HTMLElement>(`[${SCROLL_CONTAINER_ATTR}]`)
+    return document.querySelector<HTMLElement>(`[${LOG_SCROLL_CONTAINER_ATTR}]`)
   }
 
   // Debounced (200ms) scroll-save. Reads the main scroll container's scrollTop,
@@ -458,9 +491,32 @@ export function LogsExplorerBody({
     }
   }
 
+  // STAGE-004-016 add-to-filter adapters. service → add identity (additive only).
+  // msg → append substring to the search.
+  const handleAddServiceFilter = (service: string, sourceType: string): void => {
+    onAddIdentity({ service, source_type: sourceType })
+  }
+  const handleAddMsgFilter = (value: string): void => {
+    onAddMsgFilter(value)
+  }
+
+  const inspector =
+    selection !== null ? (
+      <FieldInspectorPanel
+        line={selection.line}
+        onClose={() => setSelection(null)}
+        onAddServiceFilter={handleAddServiceFilter}
+        onAddMsgFilter={handleAddMsgFilter}
+      />
+    ) : null
+
   const sidebar = (
-    <div className="space-y-2">
-      <div className="flex gap-1 overflow-x-auto" data-testid="logs-sidebar-tabs" role="tablist">
+    <div className="flex h-full min-h-0 flex-col gap-2">
+      <div
+        className="flex shrink-0 gap-1 overflow-x-auto"
+        data-testid="logs-sidebar-tabs"
+        role="tablist"
+      >
         <button
           type="button"
           role="tab"
@@ -492,7 +548,7 @@ export function LogsExplorerBody({
           Recent
         </button>
       </div>
-      <div role="tabpanel">
+      <div role="tabpanel" className="min-h-0 flex-1 overflow-y-auto">
         {sidebarTab === 'services' ? (
           <StreamPickerSidebar
             services={servicesData?.services ?? []}
@@ -514,11 +570,13 @@ export function LogsExplorerBody({
   )
 
   return (
-    <div className="flex gap-4">
+    <div className="flex h-full min-h-0 gap-4">
       {/* Desktop push-layout sidebar: rendered only when open. */}
-      {!isMobile && sidebarOpen && <aside className="w-56 shrink-0">{sidebar}</aside>}
+      {!isMobile && sidebarOpen && (
+        <aside className="flex h-full min-h-0 w-56 shrink-0 flex-col">{sidebar}</aside>
+      )}
 
-      <div className="min-w-0 flex-1">
+      <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
         <LogViewer
           useLogs={useLogs}
           headerSlot={header}
@@ -526,8 +584,21 @@ export function LogsExplorerBody({
           unavailableCopy={UNAVAILABLE_COPY}
           wrap={wrap}
           timezone={timezone}
+          fieldInspectorEnabled
+          fillHeight
+          selectedKey={selection?.key ?? null}
+          onLineSelected={(line, key) => {
+            setSelection(line !== null && key !== null ? { key, line } : null)
+          }}
         />
       </div>
+
+      {/* STAGE-004-016: desktop inspector — right-side push aside. */}
+      {!isMobile && inspector !== null && (
+        <aside className="h-full min-h-0 w-80 shrink-0" data-testid="field-inspector-aside">
+          {inspector}
+        </aside>
+      )}
 
       {/* Mobile: full-screen left drawer, headerless (sr-only title for a11y). */}
       {isMobile && (
@@ -535,6 +606,21 @@ export function LogsExplorerBody({
           <SheetContent aria-describedby={undefined}>
             <SheetTitle className="sr-only">Filters</SheetTitle>
             {sidebar}
+          </SheetContent>
+        </Sheet>
+      )}
+
+      {/* STAGE-004-016: mobile inspector — right-side drawer. */}
+      {isMobile && (
+        <Sheet
+          open={selection !== null}
+          onOpenChange={(open) => {
+            if (!open) setSelection(null)
+          }}
+        >
+          <SheetContent side="right" aria-describedby={undefined}>
+            <SheetTitle className="sr-only">Field inspector</SheetTitle>
+            {inspector}
           </SheetContent>
         </Sheet>
       )}

@@ -6,6 +6,11 @@ export const STORAGE_KEY = 'homelab-monitor:logs-explorer-state'
 /** Data attribute name for the app's main scroll container (AppShell <main>). */
 export const SCROLL_CONTAINER_ATTR = 'data-app-scroll-container'
 
+/** Data attribute name for the Logs Explorer's internal results scroll container
+ *  (the vertically-scrolling region inside LogViewer). STAGE-015 scroll save/restore
+ *  targets THIS element on the Explorer route, not the page-level <main>. */
+export const LOG_SCROLL_CONTAINER_ATTR = 'data-log-scroll-container'
+
 /** Seven days in milliseconds. Persisted state older than this is discarded on load. */
 export const EXPLORER_STATE_TTL_MS = 7 * 24 * 60 * 60 * 1000
 

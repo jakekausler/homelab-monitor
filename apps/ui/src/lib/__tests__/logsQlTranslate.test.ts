@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { translateSearchToLogsQl } from '../logsQlTranslate'
+import { msgFilterClause, translateSearchToLogsQl } from '../logsQlTranslate'
 
 describe('translateSearchToLogsQl', () => {
   it('empty string → match-all', () => {
@@ -31,5 +31,27 @@ describe('translateSearchToLogsQl', () => {
     // Input:  \"   (one backslash, one quote)
     // Expect: _msg:"\\\""  →  backslash becomes \\, quote becomes \"
     expect(translateSearchToLogsQl('\\"')).toBe('_msg:"\\\\\\""')
+  })
+})
+
+describe('msgFilterClause', () => {
+  it('empty string → null', () => {
+    expect(msgFilterClause('')).toBeNull()
+  })
+
+  it('whitespace-only → null', () => {
+    expect(msgFilterClause('   ')).toBeNull()
+  })
+
+  it('plain value → _msg clause', () => {
+    expect(msgFilterClause('host-1')).toBe('_msg:"host-1"')
+  })
+
+  it('escapes embedded double-quote', () => {
+    expect(msgFilterClause('say "hi"')).toBe('_msg:"say \\"hi\\""')
+  })
+
+  it('escapes embedded backslash', () => {
+    expect(msgFilterClause('a\\b')).toBe('_msg:"a\\\\b"')
   })
 })

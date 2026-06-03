@@ -1,5 +1,6 @@
 import { cleanup, render, screen } from '@testing-library/react'
-import { afterEach, describe, expect, it } from 'vitest'
+import userEvent from '@testing-library/user-event'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { LogLineList } from '@/components/logs/LogLineList'
 import { severityTintClass } from '@/components/logs/severity'
@@ -93,6 +94,25 @@ describe('LogLineList', () => {
     const body = screen.getByTestId('x')
     expect(body.querySelector('.text-red-500')).not.toBeInTheDocument()
     expect(body.querySelector('.text-yellow-500')).not.toBeInTheDocument()
+  })
+
+  it('Enter key activates a clickable row (calls onLineClick)', async () => {
+    const onLineClick = vi.fn()
+    render(<LogLineList lines={[line('key-test')]} testId="x" onLineClick={onLineClick} />)
+    const row = screen.getByRole('button')
+    row.focus()
+    await userEvent.keyboard('{Enter}')
+    expect(onLineClick).toHaveBeenCalledTimes(1)
+    expect(onLineClick.mock.calls[0]?.[0]).toMatchObject({ message: 'key-test' })
+  })
+
+  it('Space key activates a clickable row (calls onLineClick)', async () => {
+    const onLineClick = vi.fn()
+    render(<LogLineList lines={[line('space-test')]} testId="x" onLineClick={onLineClick} />)
+    const row = screen.getByRole('button')
+    row.focus()
+    await userEvent.keyboard(' ')
+    expect(onLineClick).toHaveBeenCalledTimes(1)
   })
 
   describe('severityTintClass', () => {

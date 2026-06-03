@@ -100,10 +100,7 @@ export function SavedQueriesPanel({ onLoad, onUpdate }: SavedQueriesPanelProps) 
   }
 
   return (
-    <div
-      className="space-y-2 overflow-y-auto max-h-96 border rounded-md p-2"
-      data-testid="saved-queries-panel"
-    >
+    <div className="space-y-2 p-2" data-testid="saved-queries-panel">
       {queries.map((query) => (
         <div
           key={query.id}

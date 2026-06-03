@@ -1,5 +1,6 @@
 import { cleanup, render, screen } from '@testing-library/react'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import userEvent from '@testing-library/user-event'
 
 import { ApiError } from '@/api/client'
 import { LogViewer } from '@/components/logs/LogViewer'
@@ -279,5 +280,208 @@ describe('LogViewer', () => {
     )
 
     expect(screen.getByTestId('hdr')).toBeInTheDocument()
+  })
+
+  it('STAGE-004-016: without fieldInspectorEnabled, rows are not clickable', () => {
+    render(
+      <LogViewer
+        useLogs={makeUseLogs({
+          logStatus: 'available',
+          lines: [line('INFO a'), line('INFO b')],
+        })}
+        fieldInspectorEnabled={false}
+      />,
+    )
+
+    // No button roles on log rows when inspector disabled
+    const buttons = screen.queryAllByRole('button')
+    // Should only have load-older button if present, but with no pagination in this test: empty or only other buttons
+    const logRowButtons = buttons.filter((b) => {
+      const aria = b.getAttribute('aria-label')
+      return aria?.includes('log') || aria?.includes('row')
+    })
+    expect(logRowButtons).toHaveLength(0)
+  })
+
+  it('STAGE-004-016: with fieldInspectorEnabled, clicking a row calls onInspectLine with the line', async () => {
+    const onInspectLineMock = vi.fn()
+    const testLine = line('Test message')
+    render(
+      <LogViewer
+        useLogs={makeUseLogs({
+          logStatus: 'available',
+          lines: [testLine],
+        })}
+        fieldInspectorEnabled
+        onInspectLine={onInspectLineMock}
+      />,
+    )
+
+    const body = screen.getByTestId('logs-body')
+    const firstRow = body.querySelector('[role="button"]')
+    expect(firstRow).toBeInTheDocument()
+
+    if (firstRow instanceof Element) {
+      await userEvent.click(firstRow)
+
+      expect(onInspectLineMock).toHaveBeenCalledTimes(1)
+      expect(onInspectLineMock).toHaveBeenCalledWith(testLine)
+    }
+  })
+
+  it('STAGE-004-016: clicking the selected row again deselects and calls onInspectLine(null)', async () => {
+    const onInspectLineMock = vi.fn()
+    const testLine = line('Test message')
+    render(
+      <LogViewer
+        useLogs={makeUseLogs({
+          logStatus: 'available',
+          lines: [testLine],
+        })}
+        fieldInspectorEnabled
+        onInspectLine={onInspectLineMock}
+      />,
+    )
+
+    const body = screen.getByTestId('logs-body')
+    const firstRow = body.querySelector('[role="button"]')
+
+    if (firstRow instanceof Element) {
+      await userEvent.click(firstRow)
+      expect(onInspectLineMock).toHaveBeenCalledWith(testLine)
+
+      await userEvent.click(firstRow)
+      expect(onInspectLineMock).toHaveBeenLastCalledWith(null)
+    }
+  })
+
+  it('STAGE-004-016: clicking different rows swaps selection', async () => {
+    const onInspectLineMock = vi.fn()
+    const line1 = line('Message 1')
+    const line2 = line('Message 2')
+    render(
+      <LogViewer
+        useLogs={makeUseLogs({
+          logStatus: 'available',
+          lines: [line1, line2],
+        })}
+        fieldInspectorEnabled
+        onInspectLine={onInspectLineMock}
+      />,
+    )
+
+    const body = screen.getByTestId('logs-body')
+    const rows = body.querySelectorAll('[role="button"]')
+    expect(rows).toHaveLength(2)
+
+    const row0 = rows[0]
+    if (row0) {
+      await userEvent.click(row0)
+      expect(onInspectLineMock).toHaveBeenLastCalledWith(line1)
+    }
+
+    const row1 = rows[1]
+    if (row1) {
+      await userEvent.click(row1)
+      expect(onInspectLineMock).toHaveBeenLastCalledWith(line2)
+    }
+  })
+
+  it('STAGE-004-016: selected row has data-testid="log-row-selected"', async () => {
+    const testLine = line('Test message')
+    render(
+      <LogViewer
+        useLogs={makeUseLogs({
+          logStatus: 'available',
+          lines: [testLine],
+        })}
+        fieldInspectorEnabled
+      />,
+    )
+
+    const body = screen.getByTestId('logs-body')
+    let selectedRow = screen.queryByTestId('log-row-selected')
+    expect(selectedRow).not.toBeInTheDocument()
+
+    const firstRow = body.querySelector('[role="button"]')
+    await userEvent.click(firstRow!)
+
+    selectedRow = screen.getByTestId('log-row-selected')
+    expect(selectedRow).toBeInTheDocument()
+  })
+
+  it('STAGE-004-016 fix: controlled selectedKey — highlight follows parent, not internal state', () => {
+    // When selectedKey prop is provided, LogViewer defers to it for highlight.
+    const onInspectLineMock = vi.fn()
+    const testLine = line('Controlled row')
+    const { rerender } = render(
+      <LogViewer
+        useLogs={makeUseLogs({ logStatus: 'available', lines: [testLine] })}
+        fieldInspectorEnabled
+        onInspectLine={onInspectLineMock}
+        selectedKey={null}
+      />,
+    )
+    // Initially null → no selected row.
+    expect(screen.queryByTestId('log-row-selected')).not.toBeInTheDocument()
+
+    // Simulate parent passing the key after a click.
+    const body = screen.getByTestId('logs-body')
+    const row = body.querySelector('[role="button"]')
+    expect(row).toBeInTheDocument()
+    // Derive key from data-testid after click: after rerender with key it should show selected.
+    // (We inject the key directly since it's timestamp-index based.)
+    const key = '2026-05-21T14:30:00Z-0'
+    rerender(
+      <LogViewer
+        useLogs={makeUseLogs({ logStatus: 'available', lines: [testLine] })}
+        fieldInspectorEnabled
+        onInspectLine={onInspectLineMock}
+        selectedKey={key}
+      />,
+    )
+    expect(screen.getByTestId('log-row-selected')).toBeInTheDocument()
+
+    // Parent clears key → highlight gone.
+    rerender(
+      <LogViewer
+        useLogs={makeUseLogs({ logStatus: 'available', lines: [testLine] })}
+        fieldInspectorEnabled
+        onInspectLine={onInspectLineMock}
+        selectedKey={null}
+      />,
+    )
+    expect(screen.queryByTestId('log-row-selected')).not.toBeInTheDocument()
+  })
+
+  it('STAGE-004-016 fix: after close (selectedKey=null), single click reopens (onLineSelected called)', async () => {
+    // Regression test for two-click-reopen bug.
+    // When parent controls selectedKey and resets it to null on close,
+    // the next click on the same row should fire onLineSelected(line, key) — not null.
+    const onLineSelectedMock = vi.fn()
+    const testLine = line('Reopen test')
+    render(
+      <LogViewer
+        useLogs={makeUseLogs({ logStatus: 'available', lines: [testLine] })}
+        fieldInspectorEnabled
+        onLineSelected={onLineSelectedMock}
+        selectedKey={null}
+      />,
+    )
+    const body = screen.getByTestId('logs-body')
+    const row = body.querySelector('[role="button"]')
+    expect(row).toBeInTheDocument()
+
+    // First click → open.
+    await userEvent.click(row!)
+    expect(onLineSelectedMock).toHaveBeenCalledTimes(1)
+    expect(onLineSelectedMock.mock.calls[0]?.[0]).toEqual(testLine)
+
+    // Parent reset selectedKey to null (simulated by prop; no rerender needed
+    // since component is controlled and selectedKey is still null here).
+    // Second click → should open again (not close), because selectedKey===null !== key.
+    await userEvent.click(row!)
+    expect(onLineSelectedMock).toHaveBeenCalledTimes(2)
+    expect(onLineSelectedMock.mock.calls[1]?.[0]).toEqual(testLine)
   })
 })

@@ -84,7 +84,7 @@ export function StreamPickerSidebar({
   return (
     <div
       data-testid="stream-picker"
-      className="flex w-full flex-col gap-1 overflow-y-auto"
+      className="flex w-full flex-col gap-1"
       role="group"
       aria-label="Filter by service"
     >

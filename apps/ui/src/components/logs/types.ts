@@ -41,4 +41,23 @@ export interface LogViewerProps {
   timezone?: 'local' | 'utc'
   /** Soft-wrap long log lines. Default false. */
   wrap?: boolean
+  /** STAGE-004-016: opt-in field inspector. When true, log rows become
+   *  clickable and selection is emitted via onInspectLine. Default false. */
+  fieldInspectorEnabled?: boolean
+  /** STAGE-004-016: notified with the inspected line (or null when closed/
+   *  deselected). The parent renders the panel. */
+  onInspectLine?: (line: LogLine | null) => void
+  /** STAGE-004-016 fix: controlled selected key. When provided (non-undefined),
+   *  LogViewer uses this for highlight instead of internal state. The parent
+   *  is then the single owner of selection and must clear it on close. */
+  selectedKey?: string | null
+  /** STAGE-004-016 fix: like onInspectLine but also receives the row key so
+   *  the parent can track selection as a single { key, line } unit. When
+   *  provided, supersedes onInspectLine. */
+  onLineSelected?: (line: LogLine | null, key: string | null) => void
+  /** STAGE-004-016 refinement: when true, LogViewer fills its parent's height
+   *  and scrolls its results region internally (header slot stays static). The
+   *  results region gets data-log-scroll-container for STAGE-015 scroll targeting.
+   *  Default false → legacy page-level scrolling (Docker/cron viewers unchanged). */
+  fillHeight?: boolean
 }

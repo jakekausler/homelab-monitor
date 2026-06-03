@@ -14,6 +14,7 @@ import {
   resolveInitialExplorerState,
   type ExplorerSeed,
 } from '@/lib/explorerState'
+import { msgFilterClause, translateSearchToLogsQl } from '@/lib/logsQlTranslate'
 import { LogsExplorerBody } from './LogsExplorerBody'
 import { SaveQueryModal } from './SaveQueryModal'
 import {
@@ -161,6 +162,37 @@ export function LogsExplorerPage() {
     }
   }
 
+  // STAGE-004-016 fix — append a discrete _msg:"…" clause to the LogsQL query.
+  // Each add-to-filter call produces its own independent substring constraint,
+  // ANDed with any existing query (LogsQL space-separates phrases as AND).
+  // Switches to advanced mode so clauses are composed as real LogsQL, not as a
+  // single contiguous phrase. If a plain-text search is active, it is first
+  // translated into a _msg:"…" clause before appending the new one.
+  // Routes through writeUrl → STAGE-015 persistence + history both fire.
+  const appendMsgFilter = (value: string): void => {
+    const clause = msgFilterClause(value)
+    if (clause === null) return
+
+    // Determine the current LogsQL base to append to.
+    let base: string
+    if (advancedMode) {
+      // Already in advanced mode: use committed LogsQL verbatim.
+      base = committedLogsQl.trim()
+    } else {
+      // Plain mode: translate current plain text to a _msg clause (or '' if empty).
+      const plainClause =
+        committedPlainText.trim().length > 0 ? translateSearchToLogsQl(committedPlainText) : ''
+      base = plainClause
+    }
+
+    const nextLogsQl = base.length > 0 ? `${base} ${clause}` : clause
+
+    setAdvancedMode(true)
+    setCommittedLogsQl(nextLogsQl)
+    setLiveLogsQl(nextLogsQl)
+    writeUrl(true, committedPlainText, nextLogsQl, range, selectedIdentities)
+  }
+
   const handleRangeChange = (next: TimeRangeValue): void => {
     setRange(next)
     writeUrl(advancedMode, committedPlainText, committedLogsQl, next, selectedIdentities)
@@ -180,6 +212,18 @@ export function LogsExplorerPage() {
     setSelectedIdentities((prev) => {
       const exists = prev.some((i) => sameIdentity(i, identity))
       const next = exists ? prev.filter((i) => !sameIdentity(i, identity)) : [...prev, identity]
+      writeUrl(advancedMode, committedPlainText, committedLogsQl, range, next)
+      return next
+    })
+  }
+
+  // STAGE-004-016 fix: additive-only identity add (used by the inspector + button).
+  // No-ops if the identity is already selected. Keeps the chip × (via
+  // onToggleIdentity) as the only removal path.
+  const handleAddIdentity = (identity: ServiceIdentity): void => {
+    setSelectedIdentities((prev) => {
+      if (prev.some((i) => sameIdentity(i, identity))) return prev
+      const next = [...prev, identity]
       writeUrl(advancedMode, committedPlainText, committedLogsQl, range, next)
       return next
     })
@@ -304,7 +348,7 @@ export function LogsExplorerPage() {
   }
 
   return (
-    <div className="space-y-4">
+    <div className="flex h-full min-h-0 flex-col">
       <LogsExplorerBody
         advancedMode={advancedMode}
         committedPlainText={committedPlainText}
@@ -320,6 +364,7 @@ export function LogsExplorerPage() {
         onClearSearch={handleClearSearch}
         onRangeChange={handleRangeChange}
         onToggleIdentity={handleToggleIdentity}
+        onAddIdentity={handleAddIdentity}
         onSelectIdentities={handleSelectIdentities}
         onDeselectIdentities={handleDeselectIdentities}
         onOpenSave={() => setSaveOpen(true)}
@@ -327,6 +372,7 @@ export function LogsExplorerPage() {
         onUpdateSavedQuery={handleUpdateSavedQuery}
         onLoadHistoryEntry={handleLoadHistoryEntry}
         restoreScrollTarget={seed.restoreScrollTarget}
+        onAddMsgFilter={appendMsgFilter}
       />
       <SaveQueryModal open={saveOpen} onOpenChange={setSaveOpen} buildPayload={buildSavePayload} />
     </div>
