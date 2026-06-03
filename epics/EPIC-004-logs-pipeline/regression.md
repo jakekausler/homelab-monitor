@@ -156,6 +156,24 @@
 - Mobile: scroll-restore + state-restore work on the narrow/mobile layout (same shared scroll container).
 - (Look-ahead) STAGE-004-018B (configurable columns → variable row heights) may invalidate the pixel scrollTop → future line-anchor restore. STAGE-004-024 (live tail auto-scroll) must suppress scroll restore while tailing.
 
+## STAGE-004-016A — LogsQL structured field filters (Add-to-filter uses structured operators)
+
+- **Field inspector Add-to-filter behavior per field type:**
+  - `host` field: clicking "Add to filter" composes a structured LogsQL clause `host:"<value>"` into the advanced-mode query; results refilter to lines matching that host.
+  - `severity` field: clicking "Add to filter" composes `severity:"<value>"` (e.g. `severity:"error"`).
+  - `fields`-bag entries (e.g., `compose_service`): clicking "Add to filter" composes `<key>:"<value>"` for the bag key.
+  - `stream` field: clicking "Add to filter" composes `_msg:"<value>"` substring (stream is NOT a directly queryable VictoriaLogs field; it maps from builtin `_stream_id`).
+  - `message` field: clicking "Add to filter" composes `_msg:"<substring>"` (substring is the correct semantic for free-text message).
+  - `service` field: clicking "Add to filter" toggles the existing identity-chip mechanism (unchanged from STAGE-016).
+  - `timestamp` field: Copy button only; no Add-to-filter.
+
+- **Multiple field filters AND together:** applying `host:"x"` then `severity:"y"` composes both into the LogsQL expr as `host:"x" severity:"y"` (space-separated AND clauses); results filter to lines matching both conditions.
+
+- **LogsQL advanced editor — SINGLE-LINE enforcement:**
+  - Pressing Enter executes the search and inserts NO newline and NO space into the editor.
+  - Repeated Enter does NOT cause oscillation (no newline appears/deletes cycle).
+  - Multi-line paste into the LogsQL editor is blocked (inserts nothing).
+
 ## STAGE-004-016 — Field inspector (click a line → side panel with parsed fields)
 
 - **Field inspector interaction:** Click any log line in the Explorer → right-side panel opens showing that line's fields. Click the same line again OR click the panel × → closes. Click a different line → panel swaps contents (no close/reopen flicker). Inspected line is highlighted.
