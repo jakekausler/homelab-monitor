@@ -2,11 +2,11 @@
 
 ## Status: In Progress
 
-## Stages Counter: 19 / 50 Complete
+## Stages Counter: 20 / 50 Complete
 
-## Current Stage: STAGE-004-016B
+## Current Stage: STAGE-004-017
 
-## Current Phase: STAGE-004-016B Design (Not Started)
+## Current Phase: STAGE-004-017 Design (Not Started)
 
 ## Overview
 
@@ -94,7 +94,7 @@ Stages MUST be implemented in order. No parallelization. Each stage lands a sing
 | STAGE-004-015 | State persistence | Last query / range / scroll position across navigation. Design ✅ Build ✅ Refinement ✅ Finalize ✅ |
 | STAGE-004-016 | Field inspector | Click a line → side panel with parsed fields + copy + add-to-filter. Design ✅ Build ✅ Refinement ✅ Finalize ✅ |
 | STAGE-004-016A | LogsQL structured field filters | Add-to-filter uses structured operators (host:"value", severity:"error") for non-message fields instead of `_msg` substring. Design ✅ Build ✅ Refinement ✅ Finalize ✅ |
-| STAGE-004-016B | JSON message drill-down in field inspector | Recursive collapsible tree for JSON messages; suppress duplicate flat-key sibling rows. |
+| STAGE-004-016B | JSON message drill-down in field inspector | Recursive collapsible tree for JSON messages; suppress duplicate flat-key sibling rows. Design ✅ Build ✅ Refinement ✅ Finalize ✅ |
 | STAGE-004-017 | Generic nested-field extraction at ingest | Vector flattens JSONL nested objects into dotted-path top-level fields (with `json.` prefix); depth + count caps. |
 | STAGE-004-018 | Filter-scope-aware field discovery | "Available fields" panel shows only fields present in current scope (sample-based, cached). |
 | STAGE-004-018A | LogsQL editor autocomplete + field suggestions | In-editor code completion in advanced mode; LogsQL keywords + field names + sample values from scope-aware discovery (STAGE-004-018). Inserted (user request) — autocomplete deferred from STAGE-004-011. |
