@@ -2,11 +2,11 @@
 
 ## Status: In Progress
 
-## Stages Counter: 16 / 48 Complete
+## Stages Counter: 17 / 48 Complete
 
-## Current Stage: STAGE-004-015
+## Current Stage: STAGE-004-016
 
-## Current Phase: STAGE-004-015 Design (Not Started)
+## Current Phase: STAGE-004-016 Design (Not Started)
 
 ## Overview
 
@@ -91,7 +91,7 @@ Stages MUST be implemented in order. No parallelization. Each stage lands a sing
 | STAGE-004-012A | Service source_type field + grouped/collapsible stream picker | Explicit `source_type` label at Vector ingest (docker/systemd/cron/unknown); refactor stream picker into collapsible per-type sections with select-all/none. Inserted (user request) — builds on STAGE-004-012. | ✅ Complete |
 | STAGE-004-013 | Saved queries | SQLite-backed; named queries restore full Explorer state. Design ✅ Build ✅ Refinement ✅ Finalize ✅ |
 | STAGE-004-014 | Query history | Last 20 executed queries (localStorage v1; SQLite later if cross-device needed). Design ✅ Build ✅ Refinement ✅ Finalize ✅ |
-| STAGE-004-015 | State persistence | Last query / range / scroll position across navigation. |
+| STAGE-004-015 | State persistence | Last query / range / scroll position across navigation. Design ✅ Build ✅ Refinement ✅ Finalize ✅ |
 | STAGE-004-016 | Field inspector | Click a line → side panel with parsed fields + copy + add-to-filter. |
 | STAGE-004-017 | Generic nested-field extraction at ingest | Vector flattens JSONL nested objects into dotted-path top-level fields (with `json.` prefix); depth + count caps. |
 | STAGE-004-018 | Filter-scope-aware field discovery | "Available fields" panel shows only fields present in current scope (sample-based, cached). |

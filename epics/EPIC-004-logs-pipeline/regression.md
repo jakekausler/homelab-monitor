@@ -144,3 +144,14 @@
 - Reload the page → history persists (localStorage key `homelab-monitor:logs-query-history`).
 - Recent and Saved tabs are independent (history entries don't appear in Saved, and vice versa).
 - (Known churn note) Recording is at the writeUrl choke-point, so identity-toggle churn into history is expected v1 behavior; a skip-identity-toggles predicate is the planned mitigation if it becomes annoying.
+
+## STAGE-004-015 — Explorer state persistence (last query / range / scroll position)
+
+- Run a search (query + services + range + mode), navigate away to another route, navigate back to /logs → query/services/range/mode all restored.
+- Run a query with many lines, scroll down substantially, navigate away + back → results pane scrolls back to roughly the saved position (NOT top). [Real-browser only — jsdom cannot test this. The scroll container is AppShell's <main data-app-scroll-container>, NOT the results <pre>.]
+- Deep-link with URL params (e.g. /logs?q=error&since=1h) while persisted state exists → URL wins (URL's query shown, persisted ignored). ALL-OR-NOTHING precedence.
+- Reload the page (F5) with a query + scroll set → state + scroll survive (localStorage key 'homelab-monitor:logs-explorer-state').
+- Fresh profile / cleared localStorage + no URL params → default empty Explorer state.
+- TTL: persisted state older than 7 days → treated as absent → default empty (loadExplorerState returns null when last_visited_at is >7d old).
+- Mobile: scroll-restore + state-restore work on the narrow/mobile layout (same shared <main> scroll container).
+- (Look-ahead) STAGE-004-018B (configurable columns → variable row heights) may invalidate the pixel scrollTop → future line-anchor restore. STAGE-004-024 (live tail auto-scroll) must suppress scroll restore while tailing.
