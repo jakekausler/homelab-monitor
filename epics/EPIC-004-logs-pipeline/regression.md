@@ -133,3 +133,14 @@
 - The /api/logs/query `services` filter is identity-qualified: `services=<source_type>:<service>` ANDs source_type with service `(service:"x" AND source_type:"docker")`, OR'd across selections. Filtering docker:svc excludes systemd:svc lines of the same name. Special chars in either half are quoted via logsql_quote_phrase.
 - The Logs Explorer stream-picker sidebar groups services into COLLAPSIBLE SECTIONS by source_type (order: docker, cron, systemd, others, unknown-last), each with a collapse toggle + per-section select-all/none (tri-state). A service under two types shows in both sections. Selection writes identity-qualified `&services=type:service` to the URL.
 - SUPERSEDES STAGE-004-012: the `&services=` URL param changed from bare-name CSV (`a,b`) to identity-qualified CSV (`docker:nginx,cron:hmrun`). 012's bare-name `&services=a,b` regression expectation is replaced by the identity-qualified format.
+
+## STAGE-004-014 — Query history (last 20 executed queries)
+
+- Run several distinct Explorer searches; open Filter sidebar → "Recent" tab → entries appear most-recent-first with relative timestamp + query preview.
+- Run the same query twice consecutively → no duplicate row (consecutive dedupe; top entry timestamp updates).
+- Run 20+ distinct queries → list caps at 20, oldest roll off.
+- Click a Recent entry → restores query text/services/range/mode into the Explorer and re-runs (deep-state restore).
+- "Clear history" empties the list → empty state "No recent queries yet. Run a search to populate." shows.
+- Reload the page → history persists (localStorage key `homelab-monitor:logs-query-history`).
+- Recent and Saved tabs are independent (history entries don't appear in Saved, and vice versa).
+- (Known churn note) Recording is at the writeUrl choke-point, so identity-toggle churn into history is expected v1 behavior; a skip-identity-toggles predicate is the planned mitigation if it becomes annoying.
