@@ -89,6 +89,10 @@ interface LogsExplorerBodyProps {
   /** STAGE-004-016: append a plain-text substring to the committed search
    *  (routes through writeUrl). Page provides; enables add-to-filter. */
   onAddMsgFilter: (value: string) => void
+  /** STAGE-004-016A: append a structured field:"value" clause to the committed
+   *  LogsQL query (routes through writeUrl). Page provides; enables add-to-filter
+   *  for host/severity/bag fields. */
+  onAddFieldFilter?: (field: string, value: string) => void
 }
 
 export function LogsExplorerBody({
@@ -115,6 +119,7 @@ export function LogsExplorerBody({
   onLoadHistoryEntry,
   restoreScrollTarget,
   onAddMsgFilter,
+  onAddFieldFilter,
 }: LogsExplorerBodyProps) {
   const [wrap, setWrap] = useState(false)
   // STAGE-004-009 timezone wiring (mirrors the Docker viewer).
@@ -499,6 +504,9 @@ export function LogsExplorerBody({
   const handleAddMsgFilter = (value: string): void => {
     onAddMsgFilter(value)
   }
+  const handleAddFieldFilter = (field: string, value: string): void => {
+    onAddFieldFilter?.(field, value)
+  }
 
   const inspector =
     selection !== null ? (
@@ -507,6 +515,7 @@ export function LogsExplorerBody({
         onClose={() => setSelection(null)}
         onAddServiceFilter={handleAddServiceFilter}
         onAddMsgFilter={handleAddMsgFilter}
+        onAddFieldFilter={handleAddFieldFilter}
       />
     ) : null
 

@@ -1,9 +1,11 @@
 import { useEffect, useRef } from 'react'
 import { defaultKeymap } from '@codemirror/commands'
-import { EditorState } from '@codemirror/state'
+import { EditorState, Prec } from '@codemirror/state'
+import type { Transaction, TransactionSpec } from '@codemirror/state'
 import { EditorView, keymap, placeholder as cmPlaceholder } from '@codemirror/view'
 
 import { logsQlExtensions } from './logsQlLanguage'
+import { sanitizeSingleLineInsert } from './logsQlEditorUtils'
 
 interface LogsQlEditorImplProps {
   value: string
@@ -61,10 +63,29 @@ export default function LogsQlEditorImpl({
       },
     ])
 
+    // Bulletproof single-line enforcement: atomically REJECT any transaction that
+    // would make the doc multi-line (Enter via defaultKeymap, multi-line paste,
+    // IME commit, OS "insert line break", or any extension-dispatched change).
+    //
+    // We return [] (drop the whole transaction) rather than rewriting `changes`.
+    // Rewriting `changes` while passing the original `selection` verbatim yields an
+    // inconsistent (changes, selection) pair: TransactionSpec.selection offsets must
+    // refer to the doc AFTER the transaction, but the original selection assumed the
+    // newline WAS inserted (cursor at +1). With a shortened/empty rewrite the cursor
+    // then points past the doc, and CodeMirror's reconciliation oscillates on repeat
+    // Enter (newline appears -> deletes -> nothing, cycling). Blocking the whole
+    // transaction rejects changes AND selection together, so no mismatch is possible.
+    // The submit keymap already handles Enter->submit; this filter is the backstop.
+    const singleLineFilter = EditorState.transactionFilter.of(
+      (tr: Transaction): TransactionSpec | readonly TransactionSpec[] =>
+        tr.docChanged && tr.newDoc.lines > 1 ? [] : tr,
+    )
+
     const state = EditorState.create({
       doc: value,
       extensions: [
-        submitKeymap, // BEFORE defaultKeymap so plain Enter submits, not newline
+        singleLineFilter,
+        Prec.high(submitKeymap), // Enter→submit before defaultKeymap's insertNewlineAndIndent
         keymap.of(defaultKeymap),
         EditorView.lineWrapping,
         ...(placeholder !== undefined ? [cmPlaceholder(placeholder)] : []),
@@ -127,8 +148,10 @@ export default function LogsQlEditorImpl({
     const view = viewRef.current
     if (view === null) return
     const current = view.state.doc.toString()
-    if (current !== value) {
-      view.dispatch({ changes: { from: 0, to: current.length, insert: value } })
+    // Strip newlines from incoming controlled value — the editor is single-line.
+    const nextValue = sanitizeSingleLineInsert(value)
+    if (current !== nextValue) {
+      view.dispatch({ changes: { from: 0, to: current.length, insert: nextValue } })
     }
   }, [value])
 

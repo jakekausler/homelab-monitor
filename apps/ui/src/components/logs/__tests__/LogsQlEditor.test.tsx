@@ -10,6 +10,7 @@ vi.mock('@/lib/useMediaQuery', () => ({
 }))
 
 import { LogsQlEditor } from '@/components/logs/LogsQlEditor'
+import { sanitizeSingleLineInsert } from '@/components/logs/logsQlEditorUtils'
 
 afterEach(cleanup)
 
@@ -59,6 +60,13 @@ describe('LogsQlEditor (textarea fallback path)', () => {
     expect(onSubmit).toHaveBeenCalledTimes(1)
   })
 
+  it('calls preventDefault on plain Enter so the textarea inserts no newline', () => {
+    renderEditor({ value: 'service:foo' })
+    const ta = screen.getByTestId<HTMLTextAreaElement>('logsql-editor-textarea')
+    const prevented = !fireEvent.keyDown(ta, { key: 'Enter', shiftKey: false })
+    expect(prevented).toBe(true)
+  })
+
   it('does NOT submit on Shift+Enter', () => {
     const { onSubmit } = renderEditor({ value: 'service:foo' })
     const ta = screen.getByTestId('logsql-editor-textarea')
@@ -70,5 +78,24 @@ describe('LogsQlEditor (textarea fallback path)', () => {
     renderEditor({ value: 'host:nas AND severity:error' })
     const ta = screen.getByTestId<HTMLTextAreaElement>('logsql-editor-textarea')
     expect(ta.value).toBe('host:nas AND severity:error')
+  })
+})
+
+describe('sanitizeSingleLineInsert', () => {
+  it('drops a bare newline (Enter inserts nothing)', () => {
+    expect(sanitizeSingleLineInsert('\n')).toBe('')
+  })
+  it('drops CRLF and multiple newlines', () => {
+    expect(sanitizeSingleLineInsert('\r\n')).toBe('')
+    expect(sanitizeSingleLineInsert('\n\n')).toBe('')
+  })
+  it('collapses newlines among content (multi-line paste) to a space', () => {
+    expect(sanitizeSingleLineInsert('foo\nbar')).toBe('foo bar')
+  })
+  it('leaves newline-free text unchanged', () => {
+    expect(sanitizeSingleLineInsert('foo bar')).toBe('foo bar')
+  })
+  it('preserves trailing content with a collapsed space', () => {
+    expect(sanitizeSingleLineInsert('foo\n')).toBe('foo ')
   })
 })

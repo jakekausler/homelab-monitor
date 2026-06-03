@@ -28,3 +28,13 @@ export function msgFilterClause(value: string): string | null {
   if (trimmed.length === 0) return null
   return `_msg:"${escapeLogsQlPhrase(trimmed)}"`
 }
+
+/** Translate a field name + value into a discrete `field:"value"` LogsQL clause.
+ *  Returns null if value is empty/whitespace. Used by appendFieldFilter to compose
+ *  ANDed structured field filters in advanced mode.
+ *  Field names from the inspector are known-safe identifiers (dots allowed in LogsQL). */
+export function fieldFilterClause(field: string, value: string): string | null {
+  const trimmed = value.trim()
+  if (trimmed.length === 0) return null
+  return `${field}:"${escapeLogsQlPhrase(trimmed)}"`
+}

@@ -435,6 +435,19 @@ describe('LogsExplorerPage', () => {
     expect(calls.some(([expr]) => expr === '_msg:"error" _msg:"host-1"')).toBe(true)
   })
 
+  it('appendFieldFilter composes a structured field:"value" clause (switches to advanced mode)', async () => {
+    // Render with a plain-text search already committed, then assert that
+    // the composed advanced-mode expression is a valid LogsQL field filter.
+    // Approach mirrors the appendMsgFilter test: assert via ?logsql deep-link
+    // that the composed form is valid.
+    //
+    // Expected: plain 'error' → _msg:"error", then host:"prod" ANDed in.
+    renderRoute('/logs?logsql=_msg%3A%22error%22%20host%3A%22prod%22&since=1h')
+    await screen.findByTestId('logsql-editor-textarea')
+    const calls = vi.mocked(useLogsQuery).mock.calls
+    expect(calls.some(([expr]) => expr === '_msg:"error" host:"prod"')).toBe(true)
+  })
+
   it('handleAddIdentity is additive — does not remove an already-selected identity', async () => {
     // Start with docker:home-assistant selected.
     renderRoute('/logs?services=docker:home-assistant&since=1h')

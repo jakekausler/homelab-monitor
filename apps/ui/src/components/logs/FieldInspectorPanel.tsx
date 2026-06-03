@@ -9,6 +9,7 @@ interface FieldInspectorPanelProps {
   onClose: () => void
   onAddServiceFilter?: (service: string, sourceType: string) => void
   onAddMsgFilter?: (value: string) => void
+  onAddFieldFilter?: (field: string, value: string) => void
 }
 
 /** One normalized row: the display label, the display value, and the raw
@@ -43,6 +44,7 @@ export function FieldInspectorPanel({
   onClose,
   onAddServiceFilter,
   onAddMsgFilter,
+  onAddFieldFilter,
 }: FieldInspectorPanelProps) {
   const copy = useCopyToClipboard()
 
@@ -64,6 +66,14 @@ export function FieldInspectorPanel({
   const sourceType = String(line.fields['source_type'] ?? 'unknown')
 
   // Decide the add-to-filter handler for a given row (undefined => no button).
+  // Routing:
+  //   timestamp          → never (copy-only)
+  //   service            → onAddServiceFilter (identity chip)
+  //   host, severity,
+  //   bag entries        → onAddFieldFilter(fieldName, value) [structured LogsQL]
+  //   message, stream    → onAddMsgFilter(value) [substring / _msg:"..."]
+  //     (stream maps to VL _stream_id builtin, not a queryable flat field,
+  //      so _msg substring fallback is the safest filter for it)
   const addHandlerFor = (row: FieldRow): (() => void) | undefined => {
     if (row.name === 'timestamp' || row.value === null) return undefined
     if (row.name === 'service') {
@@ -71,9 +81,30 @@ export function FieldInspectorPanel({
       const value = row.value
       return () => onAddServiceFilter(value, sourceType)
     }
-    if (onAddMsgFilter === undefined) return undefined
+    if (row.name === 'message' || row.name === 'stream') {
+      if (onAddMsgFilter === undefined) return undefined
+      const value = row.value
+      return () => onAddMsgFilter(value)
+    }
+    if (row.name === 'severity') {
+      if (onAddFieldFilter === undefined) return undefined
+      // Use the raw stored severity token (e.g. "4", "WARNING") rather than
+      // the normalized display value ("warn", "info") — VL indexes the raw value.
+      // severity_raw is absent only when VL had no severity field at all, which
+      // in practice never happens (vector always writes one); the fallback to
+      // row.value is a dead-code safety net.
+      // eslint-disable-next-line @typescript-eslint/no-base-to-string -- line.fields is Record<string, unknown>
+      const rawSeverity = String(line.fields['severity_raw'] ?? row.value)
+      return () => onAddFieldFilter('severity', rawSeverity)
+    }
+    // severity_raw is a backend-only field (not stored in VictoriaLogs as a queryable field);
+    // filtering on it matches nothing. The 'severity' core row filters correctly. Copy stays available.
+    if (row.name === 'severity_raw') return undefined
+    // host and all bag entries → structured field filter (display value = stored value)
+    if (onAddFieldFilter === undefined) return undefined
+    const field = row.name
     const value = row.value
-    return () => onAddMsgFilter(value)
+    return () => onAddFieldFilter(field, value)
   }
 
   const renderRow = (row: FieldRow) => {

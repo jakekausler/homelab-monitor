@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { msgFilterClause, translateSearchToLogsQl } from '../logsQlTranslate'
+import { fieldFilterClause, msgFilterClause, translateSearchToLogsQl } from '../logsQlTranslate'
 
 describe('translateSearchToLogsQl', () => {
   it('empty string → match-all', () => {
@@ -53,5 +53,35 @@ describe('msgFilterClause', () => {
 
   it('escapes embedded backslash', () => {
     expect(msgFilterClause('a\\b')).toBe('_msg:"a\\\\b"')
+  })
+})
+
+describe('fieldFilterClause', () => {
+  it('empty string → null', () => {
+    expect(fieldFilterClause('host', '')).toBeNull()
+  })
+
+  it('whitespace-only → null', () => {
+    expect(fieldFilterClause('host', '   ')).toBeNull()
+  })
+
+  it('composes field:"value" clause', () => {
+    expect(fieldFilterClause('host', 'prod')).toBe('host:"prod"')
+  })
+
+  it('escapes embedded double-quote in value', () => {
+    expect(fieldFilterClause('host', 'say "hi"')).toBe('host:"say \\"hi\\""')
+  })
+
+  it('escapes embedded backslash in value', () => {
+    expect(fieldFilterClause('host', 'a\\b')).toBe('host:"a\\\\b"')
+  })
+
+  it('handles dotted field name (bag key with dot)', () => {
+    expect(fieldFilterClause('label.app', 'nginx')).toBe('label.app:"nginx"')
+  })
+
+  it('uses field name verbatim (no field-name escaping)', () => {
+    expect(fieldFilterClause('severity', 'error')).toBe('severity:"error"')
   })
 })

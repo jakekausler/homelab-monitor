@@ -14,7 +14,7 @@ import {
   resolveInitialExplorerState,
   type ExplorerSeed,
 } from '@/lib/explorerState'
-import { msgFilterClause, translateSearchToLogsQl } from '@/lib/logsQlTranslate'
+import { fieldFilterClause, msgFilterClause, translateSearchToLogsQl } from '@/lib/logsQlTranslate'
 import { LogsExplorerBody } from './LogsExplorerBody'
 import { SaveQueryModal } from './SaveQueryModal'
 import {
@@ -180,6 +180,31 @@ export function LogsExplorerPage() {
       base = committedLogsQl.trim()
     } else {
       // Plain mode: translate current plain text to a _msg clause (or '' if empty).
+      const plainClause =
+        committedPlainText.trim().length > 0 ? translateSearchToLogsQl(committedPlainText) : ''
+      base = plainClause
+    }
+
+    const nextLogsQl = base.length > 0 ? `${base} ${clause}` : clause
+
+    setAdvancedMode(true)
+    setCommittedLogsQl(nextLogsQl)
+    setLiveLogsQl(nextLogsQl)
+    writeUrl(true, committedPlainText, nextLogsQl, range, selectedIdentities)
+  }
+
+  // STAGE-004-016A — append a structured field:"value" clause to the LogsQL query.
+  // Mirrors appendMsgFilter but uses fieldFilterClause(field, value) instead of
+  // msgFilterClause(value). Same advanced-mode switch + plain-text translation +
+  // writeUrl routing.
+  const appendFieldFilter = (field: string, value: string): void => {
+    const clause = fieldFilterClause(field, value)
+    if (clause === null) return
+
+    let base: string
+    if (advancedMode) {
+      base = committedLogsQl.trim()
+    } else {
       const plainClause =
         committedPlainText.trim().length > 0 ? translateSearchToLogsQl(committedPlainText) : ''
       base = plainClause
@@ -373,6 +398,7 @@ export function LogsExplorerPage() {
         onLoadHistoryEntry={handleLoadHistoryEntry}
         restoreScrollTarget={seed.restoreScrollTarget}
         onAddMsgFilter={appendMsgFilter}
+        onAddFieldFilter={appendFieldFilter}
       />
       <SaveQueryModal open={saveOpen} onOpenChange={setSaveOpen} buildPayload={buildSavePayload} />
     </div>

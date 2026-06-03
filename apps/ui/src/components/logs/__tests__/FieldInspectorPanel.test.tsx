@@ -11,13 +11,14 @@ vi.mock('@/lib/useCopyToClipboard', () => ({
 describe('FieldInspectorPanel', () => {
   const mockLine: LogLine = {
     timestamp: '2024-01-15T10:30:45.123Z',
-    severity: 'INFO',
+    severity: 'info',
     service: 'nginx',
     host: 'host-1',
     stream: 'stdout',
     message: 'Request received',
     fields: {
       source_type: 'docker',
+      severity_raw: 'INFO',
       zeta: 'z',
       alpha: 'a',
     },
@@ -59,8 +60,9 @@ describe('FieldInspectorPanel', () => {
     const bagRows = fieldRows.slice(6)
 
     expect(bagRows[0]).toHaveAttribute('data-testid', 'field-row-alpha')
-    expect(bagRows[1]).toHaveAttribute('data-testid', 'field-row-source_type')
-    expect(bagRows[2]).toHaveAttribute('data-testid', 'field-row-zeta')
+    expect(bagRows[1]).toHaveAttribute('data-testid', 'field-row-severity_raw')
+    expect(bagRows[2]).toHaveAttribute('data-testid', 'field-row-source_type')
+    expect(bagRows[3]).toHaveAttribute('data-testid', 'field-row-zeta')
   })
 
   it('calls onClose when close button clicked', async () => {
@@ -100,12 +102,14 @@ describe('FieldInspectorPanel', () => {
   it('renders add-to-filter buttons for non-timestamp fields when callbacks present', () => {
     const onAddServiceFilterMock = vi.fn()
     const onAddMsgFilterMock = vi.fn()
+    const onAddFieldFilterMock = vi.fn()
     render(
       <FieldInspectorPanel
         line={mockLine}
         onClose={() => {}}
         onAddServiceFilter={onAddServiceFilterMock}
         onAddMsgFilter={onAddMsgFilterMock}
+        onAddFieldFilter={onAddFieldFilterMock}
       />,
     )
 
@@ -115,6 +119,11 @@ describe('FieldInspectorPanel', () => {
     expect(screen.getByTestId('field-add-filter-stream')).toBeInTheDocument()
     expect(screen.getByTestId('field-add-filter-message')).toBeInTheDocument()
     expect(screen.getByTestId('field-add-filter-alpha')).toBeInTheDocument()
+    // severity_raw is a backend-only field not queryable in VictoriaLogs; add-filter button is suppressed
+    // but the row and copy button still render
+    expect(screen.queryByTestId('field-add-filter-severity_raw')).not.toBeInTheDocument()
+    expect(screen.getByTestId('field-row-severity_raw')).toBeInTheDocument()
+    expect(screen.getByTestId('field-copy-severity_raw')).toBeInTheDocument()
   })
 
   it('does not render add-filter buttons when callbacks absent', () => {
@@ -123,6 +132,24 @@ describe('FieldInspectorPanel', () => {
     expect(screen.queryByTestId('field-add-filter-severity')).not.toBeInTheDocument()
     expect(screen.queryByTestId('field-add-filter-service')).not.toBeInTheDocument()
     expect(screen.queryByTestId('field-add-filter-host')).not.toBeInTheDocument()
+  })
+
+  it('hides host add-filter button when onAddFieldFilter absent (even if onAddMsgFilter present)', () => {
+    const onAddMsgFilterMock = vi.fn()
+    render(
+      <FieldInspectorPanel
+        line={mockLine}
+        onClose={() => {}}
+        onAddMsgFilter={onAddMsgFilterMock}
+      />,
+    )
+
+    // host/severity route to onAddFieldFilter — absent → no button
+    expect(screen.queryByTestId('field-add-filter-host')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('field-add-filter-severity')).not.toBeInTheDocument()
+    // message/stream still route to onAddMsgFilter — present → button shown
+    expect(screen.getByTestId('field-add-filter-message')).toBeInTheDocument()
+    expect(screen.getByTestId('field-add-filter-stream')).toBeInTheDocument()
   })
 
   it('calls onAddServiceFilter with service and source_type when service add button clicked', async () => {
@@ -144,23 +171,159 @@ describe('FieldInspectorPanel', () => {
     expect(onAddMsgFilterMock).not.toHaveBeenCalled()
   })
 
-  it('calls onAddMsgFilter for non-service fields when add button clicked', async () => {
+  it('calls onAddFieldFilter for host row when add button clicked', async () => {
     const onAddServiceFilterMock = vi.fn()
     const onAddMsgFilterMock = vi.fn()
+    const onAddFieldFilterMock = vi.fn()
     render(
       <FieldInspectorPanel
         line={mockLine}
         onClose={() => {}}
         onAddServiceFilter={onAddServiceFilterMock}
         onAddMsgFilter={onAddMsgFilterMock}
+        onAddFieldFilter={onAddFieldFilterMock}
       />,
     )
 
     const hostAddButton = screen.getByTestId('field-add-filter-host')
     await userEvent.click(hostAddButton)
 
-    expect(onAddMsgFilterMock).toHaveBeenCalledWith('host-1')
+    expect(onAddFieldFilterMock).toHaveBeenCalledWith('host', 'host-1')
+    expect(onAddMsgFilterMock).not.toHaveBeenCalled()
     expect(onAddServiceFilterMock).not.toHaveBeenCalled()
+  })
+
+  it('calls onAddMsgFilter for message row when add button clicked', async () => {
+    const onAddServiceFilterMock = vi.fn()
+    const onAddMsgFilterMock = vi.fn()
+    const onAddFieldFilterMock = vi.fn()
+    render(
+      <FieldInspectorPanel
+        line={mockLine}
+        onClose={() => {}}
+        onAddServiceFilter={onAddServiceFilterMock}
+        onAddMsgFilter={onAddMsgFilterMock}
+        onAddFieldFilter={onAddFieldFilterMock}
+      />,
+    )
+
+    const msgAddButton = screen.getByTestId('field-add-filter-message')
+    await userEvent.click(msgAddButton)
+
+    expect(onAddMsgFilterMock).toHaveBeenCalledWith('Request received')
+    expect(onAddFieldFilterMock).not.toHaveBeenCalled()
+    expect(onAddServiceFilterMock).not.toHaveBeenCalled()
+  })
+
+  it('calls onAddMsgFilter for stream row when add button clicked (stream maps to VL _stream_id, not queryable flat field)', async () => {
+    const onAddMsgFilterMock = vi.fn()
+    const onAddFieldFilterMock = vi.fn()
+    render(
+      <FieldInspectorPanel
+        line={mockLine}
+        onClose={() => {}}
+        onAddMsgFilter={onAddMsgFilterMock}
+        onAddFieldFilter={onAddFieldFilterMock}
+      />,
+    )
+
+    const streamAddButton = screen.getByTestId('field-add-filter-stream')
+    await userEvent.click(streamAddButton)
+
+    expect(onAddMsgFilterMock).toHaveBeenCalledWith('stdout')
+    expect(onAddFieldFilterMock).not.toHaveBeenCalled()
+  })
+
+  it('calls onAddFieldFilter for severity row with raw stored value (not normalized display)', async () => {
+    const onAddMsgFilterMock = vi.fn()
+    const onAddFieldFilterMock = vi.fn()
+    render(
+      <FieldInspectorPanel
+        line={mockLine}
+        onClose={() => {}}
+        onAddMsgFilter={onAddMsgFilterMock}
+        onAddFieldFilter={onAddFieldFilterMock}
+      />,
+    )
+
+    const sevAddButton = screen.getByTestId('field-add-filter-severity')
+    await userEvent.click(sevAddButton)
+
+    // mockLine.severity is 'info' (normalized display) but fields['severity_raw']
+    // is 'INFO' — the filter must use the raw value because VL indexed 'INFO'.
+    expect(onAddFieldFilterMock).toHaveBeenCalledWith('severity', 'INFO')
+    expect(onAddMsgFilterMock).not.toHaveBeenCalled()
+  })
+
+  it('calls onAddFieldFilter for severity row with numeric raw value when severity_raw is a syslog numeric', async () => {
+    // Simulate a journald line: VL stored severity "4" (numeric PRIORITY),
+    // normalized display is "warn". The filter must use "4" — that is what VL indexed.
+    const journaldLine: LogLine = {
+      ...mockLine,
+      severity: 'warn',
+      fields: {
+        ...mockLine.fields,
+        severity_raw: '4',
+      },
+    }
+    const onAddFieldFilterMock = vi.fn()
+    render(
+      <FieldInspectorPanel
+        line={journaldLine}
+        onClose={() => {}}
+        onAddFieldFilter={onAddFieldFilterMock}
+      />,
+    )
+
+    const sevAddButton = screen.getByTestId('field-add-filter-severity')
+    await userEvent.click(sevAddButton)
+
+    expect(onAddFieldFilterMock).toHaveBeenCalledWith('severity', '4')
+  })
+
+  it('calls onAddFieldFilter for severity row with display value when severity_raw is absent (fallback)', async () => {
+    // Defensive: if a line somehow arrives without severity_raw in fields,
+    // the filter falls back to the normalized display value.
+    const lineNoRaw: LogLine = {
+      ...mockLine,
+      severity: 'error',
+      fields: {
+        source_type: 'docker',
+        // no severity_raw
+      },
+    }
+    const onAddFieldFilterMock = vi.fn()
+    render(
+      <FieldInspectorPanel
+        line={lineNoRaw}
+        onClose={() => {}}
+        onAddFieldFilter={onAddFieldFilterMock}
+      />,
+    )
+
+    const sevAddButton = screen.getByTestId('field-add-filter-severity')
+    await userEvent.click(sevAddButton)
+
+    expect(onAddFieldFilterMock).toHaveBeenCalledWith('severity', 'error')
+  })
+
+  it('calls onAddFieldFilter for bag entry rows when add button clicked', async () => {
+    const onAddMsgFilterMock = vi.fn()
+    const onAddFieldFilterMock = vi.fn()
+    render(
+      <FieldInspectorPanel
+        line={mockLine}
+        onClose={() => {}}
+        onAddMsgFilter={onAddMsgFilterMock}
+        onAddFieldFilter={onAddFieldFilterMock}
+      />,
+    )
+
+    const alphaAddButton = screen.getByTestId('field-add-filter-alpha')
+    await userEvent.click(alphaAddButton)
+
+    expect(onAddFieldFilterMock).toHaveBeenCalledWith('alpha', 'a')
+    expect(onAddMsgFilterMock).not.toHaveBeenCalled()
   })
 
   it('omits rows for null core field values', () => {
