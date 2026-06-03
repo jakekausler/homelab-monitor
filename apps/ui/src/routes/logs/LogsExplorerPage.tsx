@@ -7,6 +7,7 @@ import {
   type SaveQueryCreateRequest,
   useUpdateSavedLogQuery,
 } from '@/api/savedLogQueries'
+import { recordQuery, type HistoryEntry } from '@/lib/queryHistory'
 import { LogsExplorerBody } from './LogsExplorerBody'
 import { SaveQueryModal } from './SaveQueryModal'
 import {
@@ -78,6 +79,32 @@ export function LogsExplorerPage() {
 
   const updateMut = useUpdateSavedLogQuery()
 
+  // Build a HistoryEntry from the values writeUrl is about to commit (NOT from
+  // state — state may not have updated yet when writeUrl runs). Mirrors
+  // serializeCurrentExplorerState's range logic against the passed-in range.
+  const buildHistoryEntry = (
+    advanced: boolean,
+    plain: string,
+    lql: string,
+    r: TimeRangeValue,
+    ids: ServiceIdentity[],
+  ): HistoryEntry => {
+    const logsQl = advanced ? lql : plain
+    const base = {
+      id: crypto.randomUUID(),
+      timestamp: Date.now(),
+      logs_ql: logsQl,
+      selected_services: ids.map((i) => ({ service: i.service, source_type: i.source_type })),
+      advanced_mode: advanced,
+    }
+    if (r.kind === 'preset') {
+      return { ...base, since_preset: r.token }
+    }
+    const now = new Date()
+    const win = resolveCustomWindow({ start: r.start, end: r.end }, { now, maxSpanDays: 30 })
+    return { ...base, range_start_iso: toIsoZ(win.start), range_end_iso: toIsoZ(win.end) }
+  }
+
   // Build the URL search object by OMITTING absent keys (exactOptionalPropertyTypes:
   // never write `key: undefined`). Advanced → write `logsql`, omit `q`. Plain →
   // write `q`, omit `logsql`. Empty active text → omit that key entirely.
@@ -113,6 +140,7 @@ export function LogsExplorerPage() {
     // to validateSearch's ServiceIdentity[] return type.
     if (ids.length > 0) next.services = identitiesToServicesCsv(ids)
     void navigate({ to: '/logs', search: next as unknown as { services?: ServiceIdentity[] } })
+    recordQuery(buildHistoryEntry(advanced, plain, lql, r, ids))
   }
 
   const handleSubmitSearch = (): void => {
@@ -182,13 +210,11 @@ export function LogsExplorerPage() {
     })
   }
 
-  const buildSavePayload = (name: string): SaveQueryCreateRequest => {
-    // logs_ql carries the active-mode committed expression. In advanced mode this
-    // is the raw LogsQL; in plain mode we save the plain text verbatim into logs_ql
-    // and rely on advanced_mode=false to tell load() to put it back in the plain box.
+  // The name-less common payload shared by buildSavePayload and history recording.
+  // Mirrors the existing buildSavePayload range logic EXACTLY.
+  const serializeCurrentExplorerState = (): Omit<SaveQueryCreateRequest, 'name'> => {
     const logsQl = advancedMode ? committedLogsQl : committedPlainText
     const base = {
-      name,
       logs_ql: logsQl,
       selected_services: selectedIdentities.map((i) => ({
         service: i.service,
@@ -199,14 +225,16 @@ export function LogsExplorerPage() {
     if (range.kind === 'preset') {
       return { ...base, since_preset: range.token }
     }
-    // custom: resolve open bounds to concrete ISO so the saved query is reproducible.
-    // Use the SAME resolution the body uses (resolveCustomWindow) against a fresh now.
     const now = new Date()
     const win = resolveCustomWindow(
       { start: range.start, end: range.end },
       { now, maxSpanDays: 30 },
     )
     return { ...base, range_start_iso: toIsoZ(win.start), range_end_iso: toIsoZ(win.end) }
+  }
+
+  const buildSavePayload = (name: string): SaveQueryCreateRequest => {
+    return { name, ...serializeCurrentExplorerState() }
   }
 
   const handleUpdateSavedQuery = (query: SavedQuery): void => {
@@ -217,21 +245,28 @@ export function LogsExplorerPage() {
     updateMut.mutate({ id: query.id, body })
   }
 
-  const handleLoadSavedQuery = (saved: SavedQuery): void => {
-    const nextAdvanced = saved.advanced_mode
-    // A saved query carries ONE expression (in logs_ql, belonging to its active
-    // mode). Clear the OTHER mode's buffer so toggling modes after load doesn't
-    // surface the PREVIOUS query's stale text.
-    const nextPlain = nextAdvanced ? '' : saved.logs_ql
-    const nextLogsQl = nextAdvanced ? saved.logs_ql : ''
+  // The field subset both SavedQuery and HistoryEntry satisfy for load/reconstruct.
+  type LoadablePayload = Pick<
+    SaveQueryCreateRequest,
+    | 'advanced_mode'
+    | 'logs_ql'
+    | 'selected_services'
+    | 'since_preset'
+    | 'range_start_iso'
+    | 'range_end_iso'
+  >
 
-    // Reconstruct range: preset OR custom (from ISO strings).
+  const reconstructFromPayload = (p: LoadablePayload): void => {
+    const nextAdvanced = p.advanced_mode
+    const nextPlain = nextAdvanced ? '' : p.logs_ql
+    const nextLogsQl = nextAdvanced ? p.logs_ql : ''
+
     let nextRange: TimeRangeValue
-    if (saved.since_preset != null && isPresetToken(saved.since_preset)) {
-      nextRange = { kind: 'preset', token: saved.since_preset }
-    } else if (saved.range_start_iso != null && saved.range_end_iso != null) {
-      const s = parseIso(saved.range_start_iso)
-      const e = parseIso(saved.range_end_iso)
+    if (p.since_preset != null && isPresetToken(p.since_preset)) {
+      nextRange = { kind: 'preset', token: p.since_preset }
+    } else if (p.range_start_iso != null && p.range_end_iso != null) {
+      const s = parseIso(p.range_start_iso)
+      const e = parseIso(p.range_end_iso)
       nextRange = {
         kind: 'custom',
         ...(s !== null ? { start: s } : {}),
@@ -241,13 +276,11 @@ export function LogsExplorerPage() {
       nextRange = { kind: 'preset', token: DEFAULT_PRESET }
     }
 
-    const nextIds: ServiceIdentity[] = saved.selected_services.map((s) => ({
+    const nextIds: ServiceIdentity[] = (p.selected_services ?? []).map((s) => ({
       service: s.service,
       source_type: s.source_type,
     }))
 
-    // Force mode + commit all state, then write the URL (deep-linkable) using the
-    // SAME writeUrl path the manual handlers use.
     setAdvancedMode(nextAdvanced)
     setCommittedPlainText(nextPlain)
     setLivePlainText(nextPlain)
@@ -256,6 +289,14 @@ export function LogsExplorerPage() {
     setRange(nextRange)
     setSelectedIdentities(nextIds)
     writeUrl(nextAdvanced, nextPlain, nextLogsQl, nextRange, nextIds)
+  }
+
+  const handleLoadSavedQuery = (saved: SavedQuery): void => {
+    reconstructFromPayload(saved)
+  }
+
+  const handleLoadHistoryEntry = (entry: HistoryEntry): void => {
+    reconstructFromPayload(entry)
   }
 
   return (
@@ -280,6 +321,7 @@ export function LogsExplorerPage() {
         onOpenSave={() => setSaveOpen(true)}
         onLoadSavedQuery={handleLoadSavedQuery}
         onUpdateSavedQuery={handleUpdateSavedQuery}
+        onLoadHistoryEntry={handleLoadHistoryEntry}
       />
       <SaveQueryModal open={saveOpen} onOpenChange={setSaveOpen} buildPayload={buildSavePayload} />
     </div>

@@ -19,6 +19,7 @@ import type { Schema } from '@/api/types'
 afterEach(cleanup)
 afterEach(() => {
   localStorage.removeItem('homelab-monitor:timezone')
+  localStorage.removeItem('homelab-monitor:logs-query-history')
 })
 
 // Mock the data hook so the route renders without network. We capture the

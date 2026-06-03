@@ -16,12 +16,14 @@ import { LogViewer } from '@/components/logs/LogViewer'
 import { LogsQlEditor } from '@/components/logs/LogsQlEditor'
 import { StreamPickerSidebar } from '@/components/logs/StreamPickerSidebar'
 import { SavedQueriesPanel } from './SavedQueriesPanel'
+import { QueryHistoryPanel } from './QueryHistoryPanel'
 import { TimeRangeControl } from '@/components/logs/TimeRangeControl'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { translateSearchToLogsQl } from '@/lib/logsQlTranslate'
 import { cn } from '@/lib/utils'
 import { useMediaQuery } from '@/lib/useMediaQuery'
 import { useTimezonePreference } from '@/lib/useTimezonePreference'
+import type { HistoryEntry } from '@/lib/queryHistory'
 import {
   ALL_PRESETS,
   resolveCustomWindow,
@@ -73,6 +75,8 @@ interface LogsExplorerBodyProps {
   onLoadSavedQuery: (saved: SavedQuery) => void
   /** Overwrite a saved query's payload with the current Explorer state. */
   onUpdateSavedQuery: (saved: SavedQuery) => void
+  /** Load a recent (history) query into the Explorer (page reconstructs state). */
+  onLoadHistoryEntry: (entry: HistoryEntry) => void
 }
 
 export function LogsExplorerBody({
@@ -95,6 +99,7 @@ export function LogsExplorerBody({
   onOpenSave,
   onLoadSavedQuery,
   onUpdateSavedQuery,
+  onLoadHistoryEntry,
 }: LogsExplorerBodyProps) {
   const [wrap, setWrap] = useState(false)
   // STAGE-004-009 timezone wiring (mirrors the Docker viewer).
@@ -102,8 +107,8 @@ export function LogsExplorerBody({
   // Bumping this re-resolves the window against a fresh "now" (Refresh / live-tail
   // groundwork) WITHOUT churning the query key on every render.
   const [refreshNonce, setRefreshNonce] = useState(0)
-  // Sidebar tab state: show Services or Saved queries
-  const [sidebarTab, setSidebarTab] = useState<'services' | 'saved'>('services')
+  // Sidebar tab state: show Services, Saved queries, or History
+  const [sidebarTab, setSidebarTab] = useState<'services' | 'saved' | 'history'>('services')
 
   // Active mode decides the expr: advanced sends the COMMITTED raw LogsQL
   // verbatim (empty → match-all '*' to keep the always-enabled invariant);
@@ -409,6 +414,16 @@ export function LogsExplorerBody({
         >
           Saved
         </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={sidebarTab === 'history'}
+          data-testid="logs-sidebar-tab-history"
+          className={cn('rounded px-2 py-1 text-xs', sidebarTab === 'history' && 'bg-accent')}
+          onClick={() => setSidebarTab('history')}
+        >
+          Recent
+        </button>
       </div>
       <div role="tabpanel">
         {sidebarTab === 'services' ? (
@@ -422,8 +437,10 @@ export function LogsExplorerBody({
             isLoading={servicesQuery.isLoading}
             isError={servicesQuery.isError}
           />
-        ) : (
+        ) : sidebarTab === 'saved' ? (
           <SavedQueriesPanel onLoad={onLoadSavedQuery} onUpdate={onUpdateSavedQuery} />
+        ) : (
+          <QueryHistoryPanel onLoad={onLoadHistoryEntry} />
         )}
       </div>
     </div>
