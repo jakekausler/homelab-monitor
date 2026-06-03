@@ -4,6 +4,7 @@ import { X } from 'lucide-react'
 
 import { SidebarNav } from '@/components/SidebarNav'
 import { TopBar } from '@/components/TopBar'
+import { SCROLL_CONTAINER_ATTR } from '@/lib/explorerState'
 
 const THEME_STORAGE_KEY = 'homelab-monitor:theme'
 type Theme = 'dark' | 'light'
@@ -126,7 +127,7 @@ export function AppShell() {
           onToggleMobile={toggleMobile}
           onToggleTheme={toggleTheme}
         />
-        <main className="flex-1 overflow-auto p-6">
+        <main className="flex-1 overflow-auto p-6" {...{ [SCROLL_CONTAINER_ATTR]: '' }}>
           <Outlet />
         </main>
       </div>

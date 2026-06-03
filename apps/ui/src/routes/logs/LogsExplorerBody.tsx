@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Filter, RefreshCw, Save, Search, X } from 'lucide-react'
 
 import { ApiError } from '@/api/client'
@@ -23,6 +23,7 @@ import { translateSearchToLogsQl } from '@/lib/logsQlTranslate'
 import { cn } from '@/lib/utils'
 import { useMediaQuery } from '@/lib/useMediaQuery'
 import { useTimezonePreference } from '@/lib/useTimezonePreference'
+import { patchExplorerState, SCROLL_CONTAINER_ATTR } from '@/lib/explorerState'
 import type { HistoryEntry } from '@/lib/queryHistory'
 import {
   ALL_PRESETS,
@@ -77,6 +78,10 @@ interface LogsExplorerBodyProps {
   onUpdateSavedQuery: (saved: SavedQuery) => void
   /** Load a recent (history) query into the Explorer (page reconstructs state). */
   onLoadHistoryEntry: (entry: HistoryEntry) => void
+  /** The persisted scrollTop to restore once results render, or null/undefined to
+   *  skip restore (URL took precedence, no persisted state, or fresh visit).
+   *  STAGE-004-015. */
+  restoreScrollTarget?: number | null
 }
 
 export function LogsExplorerBody({
@@ -100,6 +105,7 @@ export function LogsExplorerBody({
   onLoadSavedQuery,
   onUpdateSavedQuery,
   onLoadHistoryEntry,
+  restoreScrollTarget,
 }: LogsExplorerBodyProps) {
   const [wrap, setWrap] = useState(false)
   // STAGE-004-009 timezone wiring (mirrors the Docker viewer).
@@ -158,6 +164,46 @@ export function LogsExplorerBody({
   // a left drawer (Sheet).
   const [sidebarOpen, setSidebarOpen] = useState(false)
 
+  // STAGE-004-015 — scroll persistence. The vertical scroll container is the
+  // AppShell <main data-app-scroll-container> (the Explorer's <pre> only scrolls
+  // horizontally), so we resolve and track THAT element's scrollTop.
+  const scrollSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // True until we've restored the persisted scroll once. Initialized from the
+  // Page-resolved target so URL-precedence (target == null) means "never restore".
+  const pendingRestoreRef = useRef<boolean>(restoreScrollTarget != null && restoreScrollTarget > 0)
+
+  // Resolve the app's main scroll container. Returns null in SSR/jsdom-without-DOM.
+  const getScrollContainer = (): HTMLElement | null => {
+    if (typeof document === 'undefined') return null
+    return document.querySelector<HTMLElement>(`[${SCROLL_CONTAINER_ATTR}]`)
+  }
+
+  // Debounced (200ms) scroll-save. Reads the main scroll container's scrollTop,
+  // patches scroll_position only. patchExplorerState's read-modify-write preserves
+  // the query fields.
+  const handleScroll = (): void => {
+    const el = getScrollContainer()
+    if (el === null) return
+    const top = el.scrollTop
+    if (scrollSaveTimer.current !== null) clearTimeout(scrollSaveTimer.current)
+    scrollSaveTimer.current = setTimeout(() => {
+      patchExplorerState({ scroll_position: top })
+    }, 200)
+  }
+
+  // Attach the scroll listener to the app's main scroll container; clean up the
+  // listener + any pending debounce on unmount.
+  useEffect(() => {
+    const el = getScrollContainer()
+    el?.addEventListener('scroll', handleScroll, { passive: true })
+    return () => {
+      el?.removeEventListener('scroll', handleScroll)
+      if (scrollSaveTimer.current !== null) clearTimeout(scrollSaveTimer.current)
+    }
+
+    // (handleScroll is stable; we intentionally attach once on mount)
+  }, [])
+
   const handleRefresh = (): void => {
     setRefreshNonce((n) => n + 1)
     void logs.refetch()
@@ -178,6 +224,27 @@ export function LogsExplorerBody({
     .reverse()
     .flatMap((p) => p.lines)
   const hasData = logs.data !== undefined
+
+  // Restore persisted scroll ONCE, after results render (flatLines populated) so
+  // the container is tall enough to scroll. Gated by restoreScrollTarget (null when
+  // URL took precedence / no persisted state). After restoring, only saving happens.
+  // STAGE-004-018B: variable row heights (configurable columns) may invalidate this
+  // pixel offset — a future line-anchor restore would be more robust.
+  // STAGE-004-024: live-tail auto-scroll will conflict — that stage must suppress
+  // this restore while tailing.
+  useLayoutEffect(() => {
+    const el = getScrollContainer()
+    if (
+      pendingRestoreRef.current &&
+      restoreScrollTarget != null &&
+      restoreScrollTarget > 0 &&
+      flatLines.length > 0 &&
+      el !== null
+    ) {
+      el.scrollTo({ top: restoreScrollTarget })
+      pendingRestoreRef.current = false
+    }
+  }, [flatLines.length, restoreScrollTarget])
 
   const header = (
     <>

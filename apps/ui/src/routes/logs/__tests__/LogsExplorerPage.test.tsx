@@ -20,6 +20,7 @@ afterEach(cleanup)
 afterEach(() => {
   localStorage.removeItem('homelab-monitor:timezone')
   localStorage.removeItem('homelab-monitor:logs-query-history')
+  localStorage.removeItem('homelab-monitor:logs-explorer-state')
 })
 
 // Mock the data hook so the route renders without network. We capture the

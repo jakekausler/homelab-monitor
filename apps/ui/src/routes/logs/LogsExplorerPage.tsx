@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useNavigate, useSearch } from '@tanstack/react-router'
 
 import { identitiesToServicesCsv, type ServiceIdentity } from '@/api/logs'
@@ -8,6 +8,12 @@ import {
   useUpdateSavedLogQuery,
 } from '@/api/savedLogQueries'
 import { recordQuery, type HistoryEntry } from '@/lib/queryHistory'
+import {
+  loadExplorerState,
+  patchExplorerState,
+  resolveInitialExplorerState,
+  type ExplorerSeed,
+} from '@/lib/explorerState'
 import { LogsExplorerBody } from './LogsExplorerBody'
 import { SaveQueryModal } from './SaveQueryModal'
 import {
@@ -25,27 +31,6 @@ function isPresetToken(s: string): s is PresetToken {
   return (ALL_PRESETS as readonly string[]).includes(s)
 }
 
-/** Derive the initial committed TimeRangeValue from URL bounds. */
-function initialRange(
-  since: string | undefined,
-  start: string | undefined,
-  end: string | undefined,
-): TimeRangeValue {
-  const customStart = start !== undefined ? parseIso(start) : null
-  const customEnd = end !== undefined ? parseIso(end) : null
-  if (customStart !== null || customEnd !== null) {
-    return {
-      kind: 'custom',
-      start: customStart ?? undefined,
-      end: customEnd ?? undefined,
-    }
-  }
-  if (since !== undefined && isPresetToken(since)) {
-    return { kind: 'preset', token: since }
-  }
-  return { kind: 'preset', token: DEFAULT_PRESET }
-}
-
 export function LogsExplorerPage() {
   const search = useSearch({ strict: false })
   const navigate = useNavigate()
@@ -61,17 +46,26 @@ export function LogsExplorerPage() {
     ? search.services
     : undefined
 
+  // Compute the initial seed ONCE: URL precedence over persisted (TTL-checked).
+  // Lazy initializer → evaluated a single time at mount.
+  const [seed] = useState<ExplorerSeed>(() =>
+    resolveInitialExplorerState(
+      { q, logsql, since, start, end, services: servicesParam },
+      loadExplorerState(),
+    ),
+  )
+
   // Three independent committed values + one live value per mode. Toggling modes
   // preserves BOTH texts; only the ACTIVE mode's committed value drives the
-  // query and the URL. Seeded once from the URL: `logsql` present → advanced.
-  const [advancedMode, setAdvancedMode] = useState<boolean>(logsql !== undefined)
-  const [committedPlainText, setCommittedPlainText] = useState<string>(q ?? '')
-  const [livePlainText, setLivePlainText] = useState<string>(q ?? '')
-  const [committedLogsQl, setCommittedLogsQl] = useState<string>(logsql ?? '')
-  const [liveLogsQl, setLiveLogsQl] = useState<string>(logsql ?? '')
-  const [range, setRange] = useState<TimeRangeValue>(() => initialRange(since, start, end))
+  // query and the URL. Seeded from the resolved seed.
+  const [advancedMode, setAdvancedMode] = useState<boolean>(seed.advancedMode)
+  const [committedPlainText, setCommittedPlainText] = useState<string>(seed.plainText)
+  const [livePlainText, setLivePlainText] = useState<string>(seed.plainText)
+  const [committedLogsQl, setCommittedLogsQl] = useState<string>(seed.logsQl)
+  const [liveLogsQl, setLiveLogsQl] = useState<string>(seed.logsQl)
+  const [range, setRange] = useState<TimeRangeValue>(seed.range)
   const [selectedIdentities, setSelectedIdentities] = useState<ServiceIdentity[]>(
-    servicesParam ?? [],
+    seed.selectedIdentities,
   )
 
   // Modal state for saving a query
@@ -212,7 +206,7 @@ export function LogsExplorerPage() {
 
   // The name-less common payload shared by buildSavePayload and history recording.
   // Mirrors the existing buildSavePayload range logic EXACTLY.
-  const serializeCurrentExplorerState = (): Omit<SaveQueryCreateRequest, 'name'> => {
+  const serializeCurrentExplorerState = useCallback((): Omit<SaveQueryCreateRequest, 'name'> => {
     const logsQl = advancedMode ? committedLogsQl : committedPlainText
     const base = {
       logs_ql: logsQl,
@@ -231,7 +225,17 @@ export function LogsExplorerPage() {
       { now, maxSpanDays: 30 },
     )
     return { ...base, range_start_iso: toIsoZ(win.start), range_end_iso: toIsoZ(win.end) }
-  }
+  }, [advancedMode, committedLogsQl, committedPlainText, selectedIdentities, range])
+
+  // Persist the committed query state on every change (executed query, mode
+  // toggle, range change, services change). Mirrors serializeCurrentExplorerState's
+  // range branching. Does NOT write scroll_position — the Body owns that; the
+  // read-modify-write merge in patchExplorerState preserves it. Fires once on
+  // mount too (re-saving the seeded values, harmless).
+  useEffect(() => {
+    const state = serializeCurrentExplorerState()
+    patchExplorerState(state)
+  }, [serializeCurrentExplorerState])
 
   const buildSavePayload = (name: string): SaveQueryCreateRequest => {
     return { name, ...serializeCurrentExplorerState() }
@@ -322,6 +326,7 @@ export function LogsExplorerPage() {
         onLoadSavedQuery={handleLoadSavedQuery}
         onUpdateSavedQuery={handleUpdateSavedQuery}
         onLoadHistoryEntry={handleLoadHistoryEntry}
+        restoreScrollTarget={seed.restoreScrollTarget}
       />
       <SaveQueryModal open={saveOpen} onOpenChange={setSaveOpen} buildPayload={buildSavePayload} />
     </div>
