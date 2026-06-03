@@ -2,11 +2,11 @@
 
 ## Status: In Progress
 
-## Stages Counter: 17 / 48 Complete
+## Stages Counter: 18 / 50 Complete
 
-## Current Stage: STAGE-004-016
+## Current Stage: STAGE-004-016A
 
-## Current Phase: STAGE-004-016 Design (Not Started)
+## Current Phase: STAGE-004-016A Design (Not Started)
 
 ## Overview
 
@@ -14,7 +14,7 @@ Mature the logs pipeline beyond the bootstrap delivered in EPIC-001. This epic d
 
 After this epic, the logs pipeline is production-quality: redacted, capped, observable, queryable, anomaly-aware, and drives user-authored alerts. The deferred-from-STAGE-003-011 cursor pagination + custom datetime range picker land naturally as part of the foundation wave.
 
-**Brainstorming reference:** 2026-05-28 brainstorming session locked the 44-stage decomposition. Each stage file in this directory carries the locked D-* decisions inherited from that session.
+**Brainstorming reference:** 2026-05-28 brainstorming session locked the initial 44-stage decomposition; 2 additional stages (STAGE-004-016A and STAGE-004-016B) were added post-brainstorm (2026-06-03). Each stage file in this directory carries the locked D-* decisions inherited from that session.
 
 ## Source documents (read before starting any stage)
 
@@ -92,7 +92,9 @@ Stages MUST be implemented in order. No parallelization. Each stage lands a sing
 | STAGE-004-013 | Saved queries | SQLite-backed; named queries restore full Explorer state. Design ✅ Build ✅ Refinement ✅ Finalize ✅ |
 | STAGE-004-014 | Query history | Last 20 executed queries (localStorage v1; SQLite later if cross-device needed). Design ✅ Build ✅ Refinement ✅ Finalize ✅ |
 | STAGE-004-015 | State persistence | Last query / range / scroll position across navigation. Design ✅ Build ✅ Refinement ✅ Finalize ✅ |
-| STAGE-004-016 | Field inspector | Click a line → side panel with parsed fields + copy + add-to-filter. |
+| STAGE-004-016 | Field inspector | Click a line → side panel with parsed fields + copy + add-to-filter. Design ✅ Build ✅ Refinement ✅ Finalize ✅ |
+| STAGE-004-016A | LogsQL structured field filters | Add-to-filter uses structured operators (host:"value", severity:"error") for non-message fields instead of `_msg` substring. |
+| STAGE-004-016B | JSON message drill-down in field inspector | Recursive collapsible tree for JSON messages; suppress duplicate flat-key sibling rows. |
 | STAGE-004-017 | Generic nested-field extraction at ingest | Vector flattens JSONL nested objects into dotted-path top-level fields (with `json.` prefix); depth + count caps. |
 | STAGE-004-018 | Filter-scope-aware field discovery | "Available fields" panel shows only fields present in current scope (sample-based, cached). |
 | STAGE-004-018A | LogsQL editor autocomplete + field suggestions | In-editor code completion in advanced mode; LogsQL keywords + field names + sample values from scope-aware discovery (STAGE-004-018). Inserted (user request) — autocomplete deferred from STAGE-004-011. |
@@ -201,7 +203,7 @@ Same as EPIC-001 plus:
 - **drain3 reference**: paper "Drain: An Online Log Parsing Approach with Fixed Depth Tree" (He et al.). IBM's `drain3` library is locked.
 - **Redaction policy** lives in `homelab-monitor.yaml` under `logs.redact:`. Default v1 patterns ship with the public release; host-specific patterns (Synology API tokens, UDM bearer tokens) added via EPIC-007 and EPIC-008 in their own stages.
 - **Anomaly category labels** are designed for future Claude-integration auto-suggestion: when that epic ships, every log-anomaly alert is already tagged with `anomaly_kind` and a deep-link to the catalog/Explorer for Claude to reason about.
-- **44 stages is intentionally fine-grained.** Each stage is sized to land in one session. The brainstorming session 2026-05-28 explicitly decided "small slices, ship one feature per stage" over fewer larger stages.
+- **50 stages is intentionally fine-grained.** Each stage is sized to land in one session. The brainstorming session 2026-05-28 explicitly decided "small slices, ship one feature per stage" over fewer larger stages. Two additional stages (STAGE-004-016A and STAGE-004-016B) were inserted post-brainstorm to address structured field filters and JSON message drill-down.
 
 ## Brainstorming session record
 

@@ -148,10 +148,26 @@
 ## STAGE-004-015 — Explorer state persistence (last query / range / scroll position)
 
 - Run a search (query + services + range + mode), navigate away to another route, navigate back to /logs → query/services/range/mode all restored.
-- Run a query with many lines, scroll down substantially, navigate away + back → results pane scrolls back to roughly the saved position (NOT top). [Real-browser only — jsdom cannot test this. The scroll container is AppShell's <main data-app-scroll-container>, NOT the results <pre>.]
+- Run a query with many lines, scroll down substantially, navigate away + back → results pane scrolls back to roughly the saved position (NOT top). [Real-browser only — jsdom cannot test this. The scroll container is `data-log-scroll-container` within LogsExplorerBody, NOT the page-level <main>.]
 - Deep-link with URL params (e.g. /logs?q=error&since=1h) while persisted state exists → URL wins (URL's query shown, persisted ignored). ALL-OR-NOTHING precedence.
 - Reload the page (F5) with a query + scroll set → state + scroll survive (localStorage key 'homelab-monitor:logs-explorer-state').
 - Fresh profile / cleared localStorage + no URL params → default empty Explorer state.
 - TTL: persisted state older than 7 days → treated as absent → default empty (loadExplorerState returns null when last_visited_at is >7d old).
-- Mobile: scroll-restore + state-restore work on the narrow/mobile layout (same shared <main> scroll container).
+- Mobile: scroll-restore + state-restore work on the narrow/mobile layout (same shared scroll container).
 - (Look-ahead) STAGE-004-018B (configurable columns → variable row heights) may invalidate the pixel scrollTop → future line-anchor restore. STAGE-004-024 (live tail auto-scroll) must suppress scroll restore while tailing.
+
+## STAGE-004-016 — Field inspector (click a line → side panel with parsed fields)
+
+- **Field inspector interaction:** Click any log line in the Explorer → right-side panel opens showing that line's fields. Click the same line again OR click the panel × → closes. Click a different line → panel swaps contents (no close/reopen flicker). Inspected line is highlighted.
+- **Field inspector opt-in:** Feature enabled in Explorer via `<LogViewer fieldInspectorEnabled={true} />`. Docker and Cron log viewers do NOT show click-to-inspect affordances (no behavior change for those viewers; LogViewer receives no onLineClick/isSelected when not opted in).
+- **Empty-string / whitespace-only / null / undefined field values omitted:** Field inspector rows render only for fields with non-empty values. Omit rows where `raw == null || (typeof raw === 'string' && raw.trim() === '')`. Zero, false, and non-empty-string values remain visible (tested with all canonical severity values, 0-valued metrics, false booleans).
+- **Copy button:** Click Copy on any field value → copies that value to clipboard + toast "Copied" (or "Copy failed" on navigator.clipboard absence). Works for all field types (strings, booleans, numbers, 0, false).
+- **Add-to-filter buttons:**
+  - On `service` field: adds an identity chip, handles toggle via existing selectedIdentities state + onToggleIdentity callback.
+  - On `host`, `severity`, `stream`, `message`, and any `fields[*]` dict entry: appends `_msg:"<value>"` to the current query via appendMsgFilter helper; routes through writeUrl(false, …) so it respects persistence + history.
+  - On `timestamp` field: Copy button only (no add-to-filter).
+- **Desktop layout (>767px):** Right `<aside>` inline push, mirroring the left Filter sidebar; LogsExplorerBody flex row reflows when panel opens/closes. Scroll persistence targets `data-log-scroll-container` (STAGE-015 re-pointed).
+- **Mobile layout (≤767px):** Right-side Sheet overlay; selected line highlighted in the background logs.
+- **Independent scroll containers:** Filter / Logs / Inspector panels each scroll independently to viewport bottom (new `data-log-scroll-container` wrapping LogViewer's results pre). App header + each panel header (filter tabs row, logs control bar, inspector header with line details + ×) stay static while content scrolls. Enabled via opt-in `fillHeight` prop on LogViewer (default false; non-opted viewers [Docker, Cron] keep page-level scroll).
+- **Regression: Docker container log viewer + Cron run log viewer:** Both still render through shared `<LogViewer>` primitive; still scroll at page level (LogViewer's `fillHeight` not opted in). Click-to-inspect not wired (onLineClick/isSelected not passed). No visual or behavior change from STAGE-004-003.
+- **Line selection state:** Line identity = `${line.timestamp}-${index}` (timestamp + message alone not unique; index disambiguates within current render). Selection may drift/clear on "Load older" — acceptable for a transient selection.
