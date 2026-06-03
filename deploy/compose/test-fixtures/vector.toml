@@ -30,9 +30,54 @@ source = '''
 .severity = "info"
 '''
 
+# STAGE-004-017: mirror the production parse_json -> docker_enrich -> json_flatten
+# chain so the integration rig exercises nested-JSON flattening. Caps are HARD-CODED
+# here (the fixture is mounted directly, NOT rendered by render.py).
+[transforms.parse_json]
+type = "remap"
+inputs = ["add_labels"]
+source = '''
+parsed, err = parse_json(.message)
+if err == null && is_object(parsed) {
+  trusted_host = .host
+  trusted_service = .service
+  trusted_severity = .severity
+  . = merge(., parsed) ?? .
+  .host = trusted_host
+  .service = trusted_service
+  .severity = trusted_severity
+}
+'''
+
+[transforms.json_flatten]
+type = "remap"
+inputs = ["parse_json"]
+source = '''
+parsed, perr = parse_json(.message)
+if perr == null && is_object(parsed) {
+  flat = flatten(object!(parsed))
+  count = 0
+  truncated = false
+  for_each(flat) -> |k, v| {
+    segs = length(split(k, "."))
+    if segs <= 8 {
+      if count >= 100 {
+        truncated = true
+      } else {
+        . = set!(., ["json." + k], v)
+        count = count + 1
+      }
+    }
+  }
+  if truncated {
+    . = set!(., ["json._truncated"], true)
+  }
+}
+'''
+
 [sinks.vl]
 type = "http"
-inputs = ["add_labels"]
+inputs = ["json_flatten"]
 uri = "http://victorialogs:9428/insert/jsonline?_msg_field=message&_time_field=timestamp&_stream_fields=host,service"
 encoding.codec = "json"
 framing.method = "newline_delimited"

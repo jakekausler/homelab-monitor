@@ -141,9 +141,47 @@ if exists(.image) {
 }
 '''
 
-[transforms.docker_severity_extract]
+[transforms.json_flatten]
 type = "remap"
 inputs = ["docker_enrich"]
+source = '''
+# STAGE-004-017: generic nested-field extraction.
+# Re-parse the ORIGINAL JSON payload from .message (parse_json earlier merged only
+# top-level keys into root; nested objects were left inside .message). flatten()
+# collapses nested OBJECTS into dotted-path keys (default separator "."). Every
+# extracted key is prefixed "json." so core/promoted fields are NEVER touched:
+# host, service, severity, timestamp, message, source_type, container_name, image,
+# label, compose_*, image_*, run_id, etc. all live OUTSIDE the json. namespace.
+# No regex is used here (no Rust-regex lookaround concern).
+#
+# Caps (substituted by render.py to bare integer literals):
+#   depth  = ${HOMELAB_MONITOR_LOG_JSON_MAX_DEPTH}  (approximate: dotted-segment count)
+#   fields = ${HOMELAB_MONITOR_LOG_JSON_MAX_FIELDS} (hard cap; sets .json._truncated)
+parsed, perr = parse_json(.message)
+if perr == null && is_object(parsed) {
+  flat = flatten(object!(parsed))
+  count = 0
+  truncated = false
+  for_each(flat) -> |k, v| {
+    segs = length(split(k, "."))
+    if segs <= ${HOMELAB_MONITOR_LOG_JSON_MAX_DEPTH} {
+      if count >= ${HOMELAB_MONITOR_LOG_JSON_MAX_FIELDS} {
+        truncated = true
+      } else {
+        . = set!(., ["json." + k], v)
+        count = count + 1
+      }
+    }
+  }
+  if truncated {
+    . = set!(., ["json._truncated"], true)
+  }
+}
+'''
+
+[transforms.docker_severity_extract]
+type = "remap"
+inputs = ["json_flatten"]
 source = '''
 # Extract canonical severity from docker log message text. Only acts on docker
 # lines still at the add_labels default ("info"); journald lines (whose .severity

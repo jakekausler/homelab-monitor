@@ -29,7 +29,7 @@ def _query_logs(rig: Rig, marker: str) -> list[dict[str, Any]]:
     """Poll /api/logs/query for lines containing `marker`; return matching entries."""
     now = datetime.now(UTC)
     start = (now - timedelta(minutes=1)).isoformat()
-    end = (now + timedelta(minutes=1)).isoformat()
+    end = now.isoformat()
     resp = rig.get(
         "/api/logs/query",
         params={"expr": f'"{marker}"', "start": start, "end": end, "limit": "50"},

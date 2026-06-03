@@ -47,6 +47,8 @@ def _render_template(docker_exclude: str = "[]") -> str:
     text = text.replace("${VECTOR_REDACT_TRANSFORMS}", build_redact_vrl(pats))
     text = text.replace("${VECTOR_REDACT_STRIP_MARKERS}", build_redact_strip_markers(pats))
     text = text.replace("${VECTOR_REDACT_METRICS}", build_redact_metric_entries(pats))
+    text = text.replace("${HOMELAB_MONITOR_LOG_JSON_MAX_DEPTH}", "8")
+    text = text.replace("${HOMELAB_MONITOR_LOG_JSON_MAX_FIELDS}", "100")
     return text
 
 
@@ -535,12 +537,12 @@ def test_docker_severity_extract_transform_present(parsed_config: dict[str, Any]
     )
 
 
-def test_docker_severity_extract_inputs_is_docker_enrich(parsed_config: dict[str, Any]) -> None:
-    """docker_severity_extract must read from docker_enrich."""
+def test_docker_severity_extract_inputs_is_json_flatten(parsed_config: dict[str, Any]) -> None:
+    """docker_severity_extract must now read from json_flatten (STAGE-004-017 rewire)."""
     transforms = parsed_config.get("transforms", {})
     inputs = transforms.get("docker_severity_extract", {}).get("inputs", [])
-    assert inputs == ["docker_enrich"], (
-        f"docker_severity_extract.inputs must be ['docker_enrich'], got {inputs}"
+    assert inputs == ["json_flatten"], (
+        f"docker_severity_extract.inputs must be ['json_flatten'], got {inputs}"
     )
 
 
@@ -884,6 +886,134 @@ def test_hmrun_shaped_sets_source_type_cron(parsed_config: dict[str, Any]) -> No
     """hmrun_shaped must set .source_type = "cron"."""
     source = _hmrun_shaped_source(parsed_config)
     assert '.source_type = "cron"' in source, 'hmrun_shaped must set .source_type = "cron"'
+
+
+# ---------------------------------------------------------------------------
+# STAGE-004-017: json_flatten nested-field extraction transform
+# ---------------------------------------------------------------------------
+
+
+def _json_flatten_source(parsed_config: dict[str, Any]) -> str:
+    return parsed_config.get("transforms", {}).get("json_flatten", {}).get("source", "")
+
+
+def test_json_flatten_transform_present(parsed_config: dict[str, Any]) -> None:
+    """[transforms.json_flatten] table must exist with type = remap."""
+    transforms = parsed_config.get("transforms", {})
+    assert "json_flatten" in transforms, (
+        f"json_flatten missing from transforms; keys: {list(transforms.keys())}"
+    )
+    assert transforms["json_flatten"].get("type") == "remap", (
+        "json_flatten must be a remap transform"
+    )
+
+
+def test_json_flatten_inputs_is_docker_enrich(parsed_config: dict[str, Any]) -> None:
+    """json_flatten must read from docker_enrich (inserted after docker_enrich)."""
+    transforms = parsed_config.get("transforms", {})
+    inputs = transforms.get("json_flatten", {}).get("inputs", [])
+    assert inputs == ["docker_enrich"], (
+        f"json_flatten.inputs must be ['docker_enrich'], got {inputs}"
+    )
+
+
+def test_json_flatten_source_calls_flatten(parsed_config: dict[str, Any]) -> None:
+    """json_flatten VRL must re-parse .message and call flatten()."""
+    source = _json_flatten_source(parsed_config)
+    assert "parse_json(.message)" in source, "json_flatten must re-parse .message"
+    assert "flatten(" in source, "json_flatten must call flatten()"
+
+
+def test_json_flatten_source_prefixes_json_namespace(parsed_config: dict[str, Any]) -> None:
+    """Every extracted key must be written under the json. namespace."""
+    source = _json_flatten_source(parsed_config)
+    assert '"json." + k' in source, "json_flatten must prefix extracted keys with 'json.'"
+
+
+def test_json_flatten_source_has_substituted_caps(parsed_config: dict[str, Any]) -> None:
+    """Cap placeholders must be substituted to the bare integer literals 8 and 100."""
+    source = _json_flatten_source(parsed_config)
+    assert "${HOMELAB_MONITOR_LOG_JSON_MAX_DEPTH}" not in source, (
+        "depth placeholder left unsubstituted in json_flatten source"
+    )
+    assert "${HOMELAB_MONITOR_LOG_JSON_MAX_FIELDS}" not in source, (
+        "fields placeholder left unsubstituted in json_flatten source"
+    )
+    assert "<= 8" in source, "depth cap (8) not substituted into json_flatten source"
+    assert ">= 100" in source, "field cap (100) not substituted into json_flatten source"
+
+
+def test_json_flatten_source_sets_truncated_flag(parsed_config: dict[str, Any]) -> None:
+    """Exceeding the field cap must set the json._truncated marker."""
+    source = _json_flatten_source(parsed_config)
+    assert "json._truncated" in source, (
+        "json_flatten must set json._truncated when the field cap is exceeded"
+    )
+
+
+def test_json_flatten_source_has_no_lookarounds(parsed_config: dict[str, Any]) -> None:
+    """json_flatten VRL source must not use regex lookarounds (Rust regex crate)."""
+    _assert_no_lookarounds(_json_flatten_source(parsed_config))
+
+
+def test_json_flatten_does_not_touch_core_fields(parsed_config: dict[str, Any]) -> None:
+    """json_flatten must only assign under the json. namespace — never core fields.
+
+    Catches a regression where the transform writes to .host/.severity/etc.
+    Assignment targets are `. = set!(., [...], ...)` array-path writes; the ONLY
+    literal field-name root used is "json.". A bare `.host =` / `.severity =` etc.
+    must NOT appear.
+    """
+    source = _json_flatten_source(parsed_config)
+    for core in (".host =", ".service =", ".severity =", ".timestamp =", ".message ="):
+        assert core not in source, (
+            f"json_flatten must not assign core field {core!r}; it only writes json.* keys"
+        )
+
+
+def test_json_flatten_fixture_vrl_matches_template() -> None:
+    """The test-fixture vector.toml json_flatten VRL must match the production template.
+
+    The template source contains explanatory comments; the fixture omits them.
+    We strip comment lines (# ...) and normalize whitespace before comparing so
+    the guard focuses on the load-bearing VRL logic.  A future edit to the
+    production VRL that is not mirrored in the fixture will cause this test to
+    fail with a clear diff message.
+
+    Runs under make verify (no rig required).
+    """
+    repo_root = Path(__file__).resolve().parents[3]
+    fixture_path = repo_root / "deploy" / "compose" / "test-fixtures" / "vector.toml"
+    fixture_cfg = tomllib.loads(fixture_path.read_text(encoding="utf-8"))
+    fixture_source: str = fixture_cfg["transforms"]["json_flatten"]["source"]
+
+    # _render_template() substitutes the two cap placeholders to 8 / 100.
+    rendered = _render_template()
+    template_cfg = tomllib.loads(rendered)
+    template_source: str = template_cfg["transforms"]["json_flatten"]["source"]
+
+    def _strip_comments_and_normalize(s: str) -> str:
+        """Remove VRL comment lines and collapse blank lines / leading whitespace."""
+        lines: list[str] = []
+        for line in s.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("#") or stripped == "":
+                continue
+            lines.append(stripped)
+        return "\n".join(lines)
+
+    fixture_normalized = _strip_comments_and_normalize(fixture_source)
+    template_normalized = _strip_comments_and_normalize(template_source)
+
+    assert fixture_normalized == template_normalized, (
+        "json_flatten VRL logic has drifted between the production template "
+        "(deploy/vector/vector.toml.template) and the test fixture "
+        "(deploy/compose/test-fixtures/vector.toml).\n"
+        "Update the fixture to match the template (or vice versa) to keep "
+        "integration tests exercising the correct logic.\n\n"
+        f"--- fixture (normalized) ---\n{fixture_normalized}\n\n"
+        f"--- template (normalized) ---\n{template_normalized}"
+    )
 
 
 @pytest.mark.slow

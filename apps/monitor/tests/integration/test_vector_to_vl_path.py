@@ -37,7 +37,7 @@ def test_log_line_via_noisy_logger_reaches_logs_query() -> None:
         while time.time() < deadline:
             now = datetime.now(UTC)
             start = (now - timedelta(minutes=1)).isoformat()
-            end = (now + timedelta(minutes=1)).isoformat()
+            end = now.isoformat()
             resp = rig.get(
                 "/api/logs/query",
                 params={"expr": f'"{marker}"', "start": start, "end": end, "limit": "50"},

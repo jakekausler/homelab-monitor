@@ -153,6 +153,28 @@ def test_render_config_multiple_containers_excluded(tmp_path: Path) -> None:
     assert 'exclude_containers = ["a", "b"]' in out.read_text()
 
 
+def test_render_config_substitutes_json_cap_placeholders(tmp_path: Path) -> None:
+    """Both json-cap placeholders are replaced with the context's integer strings."""
+    template_content = (
+        "depth = ${HOMELAB_MONITOR_LOG_JSON_MAX_DEPTH}\n"
+        "fields = ${HOMELAB_MONITOR_LOG_JSON_MAX_FIELDS}\n"
+    )
+    tmpl = _write_template(tmp_path, template_content)
+    out = tmp_path / "vector.toml"
+    ctx = VectorRenderContext(
+        cron_events_token="t",
+        docker_exclude_csv="",
+        json_max_depth="8",
+        json_max_fields="100",
+    )
+    render_config(template_path=tmpl, output_path=out, context=ctx, log=_make_log())
+    rendered = out.read_text()
+    assert "depth = 8" in rendered
+    assert "fields = 100" in rendered
+    assert "${HOMELAB_MONITOR_LOG_JSON_MAX_DEPTH}" not in rendered
+    assert "${HOMELAB_MONITOR_LOG_JSON_MAX_FIELDS}" not in rendered
+
+
 def test_render_config_atomic_write(tmp_path: Path) -> None:
     """Output file exists after render_config (atomic write succeeded)."""
     tmpl = _write_template(
@@ -232,6 +254,8 @@ async def test_render_on_boot_reads_vector_docker_exclude_from_env(
         redact_vrl=mock.ANY,
         redact_strip_markers=mock.ANY,
         redact_metrics=mock.ANY,
+        json_max_depth="8",
+        json_max_fields="100",
     )
 
 
@@ -272,6 +296,8 @@ async def test_render_on_boot_default_env_uses_empty_csv(
         redact_vrl=mock.ANY,
         redact_strip_markers=mock.ANY,
         redact_metrics=mock.ANY,
+        json_max_depth="8",
+        json_max_fields="100",
     )
 
 
@@ -313,3 +339,65 @@ async def test_render_on_boot_swallows_redact_config_error(
     assert result == "tok-fallback"
     ctx_spy.assert_called_once()
     assert out.exists()
+
+
+@pytest.mark.asyncio
+async def test_render_on_boot_rejects_non_integer_json_depth(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A non-integer HOMELAB_MONITOR_LOG_JSON_MAX_DEPTH fails fast at boot."""
+    monkeypatch.delenv("VECTOR_DOCKER_EXCLUDE", raising=False)
+    monkeypatch.setenv("HOMELAB_MONITOR_LOG_JSON_MAX_DEPTH", "notanint")
+
+    tmpl = _write_template(tmp_path, '"${CRON_EVENTS_INGEST_TOKEN}" ${VECTOR_DOCKER_EXCLUDE}')
+    out = tmp_path / "vector.toml"
+
+    with (
+        mock.patch(
+            "homelab_monitor.kernel.cron.render.ensure_cron_events_token",
+            return_value="tok",
+        ),
+        pytest.raises(ValueError),
+    ):
+        await render_on_boot(
+            auth_repo=mock.AsyncMock(),
+            secrets_repo=mock.AsyncMock(),
+            template_path=tmpl,
+            output_path=out,
+            log=_make_log(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_render_on_boot_json_caps_default_when_env_unset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When the json-cap env vars are unset, the context defaults to '8'/'100'."""
+    monkeypatch.delenv("VECTOR_DOCKER_EXCLUDE", raising=False)
+    monkeypatch.delenv("HOMELAB_MONITOR_LOG_JSON_MAX_DEPTH", raising=False)
+    monkeypatch.delenv("HOMELAB_MONITOR_LOG_JSON_MAX_FIELDS", raising=False)
+
+    tmpl = _write_template(tmp_path, '"${CRON_EVENTS_INGEST_TOKEN}" ${VECTOR_DOCKER_EXCLUDE}')
+    out = tmp_path / "vector.toml"
+
+    with (
+        mock.patch(
+            "homelab_monitor.kernel.cron.render.ensure_cron_events_token",
+            return_value="tok",
+        ),
+        mock.patch(
+            "homelab_monitor.kernel.cron.render.VectorRenderContext",
+            wraps=VectorRenderContext,
+        ) as ctx_spy,
+    ):
+        await render_on_boot(
+            auth_repo=mock.AsyncMock(),
+            secrets_repo=mock.AsyncMock(),
+            template_path=tmpl,
+            output_path=out,
+            log=_make_log(),
+        )
+
+    _, kwargs = ctx_spy.call_args
+    assert kwargs["json_max_depth"] == "8"
+    assert kwargs["json_max_fields"] == "100"

@@ -60,6 +60,12 @@ class VectorRenderContext:
         redact_metrics: The generated [[transforms.redaction_metric.metrics]]
             TOML entries (from ``build_redact_metric_entries``). Substituted
             into ``${VECTOR_REDACT_METRICS}``.
+        json_max_depth: Approximate dotted-segment depth cap for json_flatten.
+            Substituted as a bare integer into
+            ``${HOMELAB_MONITOR_LOG_JSON_MAX_DEPTH}``.
+        json_max_fields: Hard field cap for json_flatten (sets ``.json._truncated``
+            when exceeded). Substituted as a bare integer into
+            ``${HOMELAB_MONITOR_LOG_JSON_MAX_FIELDS}``.
     """
 
     cron_events_token: str
@@ -67,6 +73,8 @@ class VectorRenderContext:
     redact_vrl: str = ""
     redact_strip_markers: str = ""
     redact_metrics: str = ""
+    json_max_depth: str = "8"
+    json_max_fields: str = "100"
 
 
 def _escape_regex_for_vrl_raw_string(pattern: str) -> str:
@@ -207,6 +215,8 @@ def render_config(
       BOTH redact_main and redact_hmrun)
     - ``${VECTOR_REDACT_STRIP_MARKERS}`` → context.redact_strip_markers (generated del body)
     - ``${VECTOR_REDACT_METRICS}`` → context.redact_metrics (generated metric entries)
+    - ``${HOMELAB_MONITOR_LOG_JSON_MAX_DEPTH}`` → context.json_max_depth (bare integer)
+    - ``${HOMELAB_MONITOR_LOG_JSON_MAX_FIELDS}`` → context.json_max_fields (bare integer)
 
     Atomic write: writes to a sibling ``.tmp`` file and ``os.replace``s the
     result so a concurrently-starting Vector never reads a partial file.
@@ -236,6 +246,8 @@ def render_config(
         "${VECTOR_REDACT_TRANSFORMS}": context.redact_vrl,
         "${VECTOR_REDACT_STRIP_MARKERS}": context.redact_strip_markers,
         "${VECTOR_REDACT_METRICS}": context.redact_metrics,
+        "${HOMELAB_MONITOR_LOG_JSON_MAX_DEPTH}": context.json_max_depth,
+        "${HOMELAB_MONITOR_LOG_JSON_MAX_FIELDS}": context.json_max_fields,
     }
     rendered = template
     for placeholder, value in substitutions.items():
@@ -333,12 +345,20 @@ async def render_on_boot(
     redact_vrl = build_redact_vrl(redact_patterns)
     redact_strip_markers = build_redact_strip_markers(redact_patterns)
     redact_metrics = build_redact_metric_entries(redact_patterns)
+    # Coerce via int(...) so a non-integer env value fails fast at boot rather than
+    # rendering a literal "${...}"-or-garbage into the VRL (which would crash-loop
+    # Vector with an opaque parse error). The coerced int is re-stringified for
+    # substitution (the placeholder renders as a bare integer literal in VRL).
+    json_max_depth = str(int(os.environ.get("HOMELAB_MONITOR_LOG_JSON_MAX_DEPTH", "8")))
+    json_max_fields = str(int(os.environ.get("HOMELAB_MONITOR_LOG_JSON_MAX_FIELDS", "100")))
     context = VectorRenderContext(
         cron_events_token=token,
         docker_exclude_csv=docker_exclude_csv,
         redact_vrl=redact_vrl,
         redact_strip_markers=redact_strip_markers,
         redact_metrics=redact_metrics,
+        json_max_depth=json_max_depth,
+        json_max_fields=json_max_fields,
     )
     try:
         render_config(
