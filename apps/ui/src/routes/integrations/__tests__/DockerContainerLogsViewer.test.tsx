@@ -1,6 +1,15 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import {
+  Outlet,
+  RouterProvider,
+  createMemoryHistory,
+  createRootRoute,
+  createRoute,
+  createRouter,
+} from '@tanstack/react-router'
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import * as React from 'react'
 
 import { ApiError } from '@/api/client'
 import { DockerContainerLogsViewerBody } from '@/routes/integrations/DockerContainerLogsViewerBody'
@@ -30,6 +39,30 @@ import { useContainerLogs, useListContainers } from '@/api/docker'
 
 const NAME = 'homeassistant'
 
+function withRouter(node: React.ReactNode) {
+  const rootRoute = createRootRoute({ component: () => <Outlet /> })
+  const indexRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/',
+    component: () => <>{node}</>,
+  })
+  const logsRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/logs',
+    component: () => <div>logs</div>,
+    validateSearch: (search: Record<string, unknown>) => ({
+      logsql: typeof search.logsql === 'string' ? search.logsql : undefined,
+      since: typeof search.since === 'string' ? search.since : undefined,
+      start: typeof search.start === 'string' ? search.start : undefined,
+      end: typeof search.end === 'string' ? search.end : undefined,
+    }),
+  })
+  return createRouter({
+    routeTree: rootRoute.addChildren([indexRoute, logsRoute]),
+    history: createMemoryHistory({ initialEntries: ['/'] }),
+  })
+}
+
 function makeData(
   overrides: Partial<{
     log_status: 'available' | 'no_lines' | 'container_unknown' | 'vl_unavailable'
@@ -50,12 +83,15 @@ function makeData(
 
 function renderBody() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  const router = withRouter(
+    <DockerContainerLogsViewerBody containerName={NAME} since="15m" onRangeChange={vi.fn()} />,
+  )
   return {
     qc,
     ...render(
       <QueryClientProvider client={qc}>
         <TooltipProvider>
-          <DockerContainerLogsViewerBody containerName={NAME} since="15m" onRangeChange={vi.fn()} />
+          <RouterProvider router={router} />
         </TooltipProvider>
       </QueryClientProvider>,
     ),
@@ -191,10 +227,14 @@ describe('DockerContainerLogsViewerBody', () => {
     render(
       <QueryClientProvider client={qc}>
         <TooltipProvider>
-          <DockerContainerLogsViewerBody
-            containerName={NAME}
-            since="15m"
-            onRangeChange={onRangeChange}
+          <RouterProvider
+            router={withRouter(
+              <DockerContainerLogsViewerBody
+                containerName={NAME}
+                since="15m"
+                onRangeChange={onRangeChange}
+              />,
+            )}
           />
         </TooltipProvider>
       </QueryClientProvider>,
@@ -223,18 +263,18 @@ describe('DockerContainerLogsViewerBody', () => {
     expect(invalidateSpy).toHaveBeenCalled()
   })
 
-  it('renders status badge from useListContainers cache', () => {
+  it('renders status badge from useListContainers cache', async () => {
     renderBody()
     // Container name should be rendered
-    expect(screen.getByText(NAME)).toBeInTheDocument()
+    expect(await screen.findByText(NAME)).toBeInTheDocument()
     // StatusBadge will render the 'Running' status text
     expect(screen.getByText('Running')).toBeInTheDocument()
   })
 
-  it('falls back to name-only if container not in list cache', () => {
+  it('falls back to name-only if container not in list cache', async () => {
     vi.mocked(useListContainers).mockReturnValue({ data: { containers: [] } } as never)
     renderBody()
-    expect(screen.getByText(NAME)).toBeInTheDocument()
+    expect(await screen.findByText(NAME)).toBeInTheDocument()
     // No StatusBadge rendered → no 'Running' status text
     expect(screen.queryByText('Running')).not.toBeInTheDocument()
   })
@@ -352,10 +392,14 @@ describe('DockerContainerLogsViewerBody', () => {
     render(
       <QueryClientProvider client={qc}>
         <TooltipProvider>
-          <DockerContainerLogsViewerBody
-            containerName={NAME}
-            start={startIso}
-            onRangeChange={vi.fn()}
+          <RouterProvider
+            router={withRouter(
+              <DockerContainerLogsViewerBody
+                containerName={NAME}
+                start={startIso}
+                onRangeChange={vi.fn()}
+              />,
+            )}
           />
         </TooltipProvider>
       </QueryClientProvider>,
@@ -392,10 +436,14 @@ describe('DockerContainerLogsViewerBody', () => {
     render(
       <QueryClientProvider client={qc}>
         <TooltipProvider>
-          <DockerContainerLogsViewerBody
-            containerName={NAME}
-            start={startIso}
-            onRangeChange={vi.fn()}
+          <RouterProvider
+            router={withRouter(
+              <DockerContainerLogsViewerBody
+                containerName={NAME}
+                start={startIso}
+                onRangeChange={vi.fn()}
+              />,
+            )}
           />
         </TooltipProvider>
       </QueryClientProvider>,
@@ -412,5 +460,17 @@ describe('DockerContainerLogsViewerBody', () => {
     expect(range.start).toBe(startIso)
     expect(typeof range.end).toBe('string')
     expect(range.end.length).toBeGreaterThan(0)
+  })
+
+  it('renders an Open in Explorer link scoped to the container', async () => {
+    renderBody()
+    const el = await screen.findByTestId('open-in-explorer')
+    const anchor = el.closest('a')
+    expect(anchor).not.toBeNull()
+    const href = anchor!.getAttribute('href') ?? ''
+    const params = new URLSearchParams(href.split('?')[1])
+    expect(params.get('logsql')).toBe(`service:"${NAME}"`)
+    // since='15m' is the viewer's preset → carried into the link.
+    expect(params.get('since')).toBe('15m')
   })
 })

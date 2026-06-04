@@ -15,6 +15,8 @@ import { LogViewer } from '@/components/logs/LogViewer'
 import { TimeRangeControl } from '@/components/logs/TimeRangeControl'
 import { TimezoneToggle } from '@/components/logs/TimezoneToggle'
 import { WrapToggle } from '@/components/logs/WrapToggle'
+import { OpenInExplorerButton } from '@/components/logs/OpenInExplorerButton'
+import { fieldFilterClause } from '@/lib/logsQlTranslate'
 import { formatLogTimestampParts } from '@/lib/relativeTime'
 import { useTimezonePreference } from '@/lib/useTimezonePreference'
 import {
@@ -148,6 +150,17 @@ export function DockerContainerLogsViewerBody({
   const lastTs =
     lastTimestamp !== undefined ? formatLogTimestampParts(lastTimestamp, { timezone }) : null
 
+  // STAGE-004-021 — props for the "Open in Explorer" deep-link. Mirror the
+  // viewer's current range: preset → sincePreset; custom → the raw (possibly
+  // open) URL bounds as Dates. customStart/customEnd are Date | null here, so
+  // convert null → undefined for the helper (which expects Date | undefined).
+  const explorerRange = hasCustom
+    ? {
+        ...(customStart !== null ? { rangeStart: customStart } : {}),
+        ...(customEnd !== null ? { rangeEnd: customEnd } : {}),
+      }
+    : { sincePreset: presetToken }
+
   const header = (
     <>
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -165,6 +178,10 @@ export function DockerContainerLogsViewerBody({
           )}
         </div>
         <div className="flex items-center gap-2">
+          <OpenInExplorerButton
+            logsQl={fieldFilterClause('service', containerName)!}
+            {...explorerRange}
+          />
           <WrapToggle checked={wrap} onChange={setWrap} id="docker-wrap" />
           <TimezoneToggle
             checked={timezone === 'utc'}

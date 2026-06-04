@@ -55,3 +55,43 @@ function HostRelatedLogs({ host }: { host: string }) {
 If your surface needs a structurally different shell (e.g. the cron run viewer
 renders loading/error inside a sticky metadata header), compose `LogLineList`
 and `LogBanner` directly instead of `LogViewer`.
+
+## Deep-linking to the Explorer
+
+`OpenInExplorerButton` SPA-navigates (TanStack `<Link>`, no full reload) to the
+`/logs` Explorer with pre-filled filters and time range. It wraps the pure
+helper `buildExplorerUrl` (`@/lib/explorerLink`), which mirrors the Explorer's
+own URL serialization (`LogsExplorerPage.writeUrl`).
+
+Use it on any surface that shows a scoped slice of logs (a container, a cron
+run, and — in EPIC-005/006/007/008 — HA / Pi-hole / Synology / Unifi detail
+pages) to let the user jump to the full Explorer pre-scoped to that slice.
+
+The button takes the same options as the helper: `logsQl` (advanced LogsQL,
+wins over `plainText`), `plainText`, `selectedServices` (pre-formatted
+`source_type:service` strings), and a time range — either `sincePreset` (a
+preset token, wins over the explicit range) or `rangeStart`/`rangeEnd` Dates
+(start without end is allowed = open-ended).
+
+### Docker container log viewer
+
+```tsx
+// Use fieldFilterClause from @/lib/logsQlTranslate for safe escaping:
+<OpenInExplorerButton
+  logsQl={fieldFilterClause('service', containerName)!}
+  sincePreset="15m" // or rangeStart/rangeEnd in custom mode
+/>
+```
+
+### Cron run log viewer
+
+```tsx
+// Use fieldFilterClause from @/lib/logsQlTranslate for safe escaping:
+<OpenInExplorerButton
+  logsQl={`${fieldFilterClause('cron_fingerprint', fingerprint)!} AND ${fieldFilterClause('run_id', runId)!}`}
+  rangeStart={new Date(runMin.getTime() - 1000)}
+  rangeEnd={new Date(runMax.getTime() + 1000)}
+/>
+```
+
+Future inventory detail pages reuse this same component and helper.

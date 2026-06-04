@@ -11,10 +11,12 @@ import { LogViewer } from '@/components/logs/LogViewer'
 import { TimeRangeControl } from '@/components/logs/TimeRangeControl'
 import { TimezoneToggle } from '@/components/logs/TimezoneToggle'
 import { WrapToggle } from '@/components/logs/WrapToggle'
+import { OpenInExplorerButton } from '@/components/logs/OpenInExplorerButton'
 import { RunStateBadge } from '@/components/crons/badges'
 import { formatDuration } from '@/lib/relativeTime'
 import { useTimezonePreference } from '@/lib/useTimezonePreference'
-import { parseIso, toIsoZ, type TimeRangeValue } from '@/lib/timeRange'
+import { fieldFilterClause } from '@/lib/logsQlTranslate'
+import { parseIso, toIsoZ, type PresetToken, type TimeRangeValue } from '@/lib/timeRange'
 import type { UseLogsResult } from '@/components/logs/types'
 
 const RUN_ID_DISPLAY_PREFIX = 12
@@ -100,6 +102,34 @@ export function CronRunLogViewerPage() {
     }
   }
 
+  // STAGE-004-021 — props for the "Open in Explorer" deep-link. LogsQL targets
+  // this exact run; the time range follows the locked precedence:
+  //   1. user-narrowed (either search.start OR search.end present) → that range
+  //      (single-sided narrow: open bound stays open in the Explorer link)
+  //   2. full run window (runMin AND runMax) → padded ±1s
+  //   3. loading/empty (no runMin) → fall back to the 1h preset
+  // selStart/selEnd are Date | null (parsed from the URL); runMin/runMax are
+  // Date | undefined (both derive from the same log-line array, so they are
+  // either both defined or both undefined — a runMin-only state cannot arise).
+  // Build the props with spread-conditionals so no key is ever explicitly set
+  // to undefined (exactOptionalPropertyTypes).
+  const explorerTimeProps: {
+    sincePreset?: PresetToken
+    rangeStart?: Date
+    rangeEnd?: Date
+  } =
+    selStart !== null || selEnd !== null
+      ? {
+          ...(selStart !== null ? { rangeStart: selStart } : {}),
+          ...(selEnd !== null ? { rangeEnd: selEnd } : {}),
+        }
+      : runMin !== undefined && runMax !== undefined
+        ? {
+            rangeStart: new Date(runMin.getTime() - 1000),
+            rangeEnd: new Date(runMax.getTime() + 1000),
+          }
+        : { sincePreset: '1h' }
+
   const header = (
     <>
       <Link
@@ -129,6 +159,10 @@ export function CronRunLogViewerPage() {
               isRefreshing={log.isFetching}
             />
             <div className="flex items-center gap-2">
+              <OpenInExplorerButton
+                logsQl={`${fieldFilterClause('cron_fingerprint', fingerprint)!} AND ${fieldFilterClause('run_id', runId)!}`}
+                {...explorerTimeProps}
+              />
               {runMin !== undefined && runMax !== undefined && (
                 <TimeRangeControl
                   value={rangeValue}

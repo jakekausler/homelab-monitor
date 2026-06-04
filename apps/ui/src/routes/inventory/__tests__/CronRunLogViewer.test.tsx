@@ -653,4 +653,135 @@ describe('CronRunLogViewerPage', () => {
     // 'after-start' is after selStart and <= runMax → included.
     expect(text).toContain('after-start')
   })
+
+  it('renders an Open in Explorer link scoped to the run with a padded window', async () => {
+    vi.mocked(useCronRunLog).mockReturnValue({
+      isLoading: false,
+      isFetching: false,
+      error: null,
+      data: {
+        pages: [
+          makeLogData({
+            log_status: 'available',
+            lines: [
+              { timestamp: '2026-05-01T12:00:00Z', message: 'first' },
+              { timestamp: '2026-05-01T12:00:30Z', message: 'last' },
+            ],
+          }),
+        ],
+        pageParams: [undefined],
+      },
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
+    } as unknown as ReturnType<typeof useCronRunLog>)
+    renderWithRouter()
+    const el = await screen.findByTestId('open-in-explorer')
+    const anchor = el.closest('a')
+    expect(anchor).not.toBeNull()
+    const href = anchor!.getAttribute('href') ?? ''
+    const params = new URLSearchParams(href.split('?')[1])
+    expect(params.get('logsql')).toBe(`cron_fingerprint:"${FP}" AND run_id:"${RUN_ID}"`)
+    // runMin=12:00:00 → start padded −1s; runMax=12:00:30 → end padded +1s.
+    expect(params.get('start')).toBe('2026-05-01T11:59:59.000Z')
+    expect(params.get('end')).toBe('2026-05-01T12:00:31.000Z')
+  })
+
+  it('single-sided narrow: start-only URL → Explorer link has start param but no end', async () => {
+    const startIso = '2026-05-01T12:00:05Z'
+    vi.mocked(useCronRunLog).mockReturnValue({
+      isLoading: false,
+      isFetching: false,
+      error: null,
+      data: {
+        pages: [
+          makeLogData({
+            log_status: 'available',
+            lines: [
+              { timestamp: '2026-05-01T12:00:00Z', message: 'first' },
+              { timestamp: '2026-05-01T12:00:30Z', message: 'last' },
+            ],
+          }),
+        ],
+        pageParams: [undefined],
+      },
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
+    } as unknown as ReturnType<typeof useCronRunLog>)
+
+    renderWithRouter(`/inventory/crons/${FP}/runs/${RUN_ID}?start=${encodeURIComponent(startIso)}`)
+    const el = await screen.findByTestId('open-in-explorer')
+    const anchor = el.closest('a')
+    expect(anchor).not.toBeNull()
+    const href = anchor!.getAttribute('href') ?? ''
+    const params = new URLSearchParams(href.split('?')[1])
+    // start param reflects selStart directly (no padding, not a padded run window).
+    // toIsoZ (= toISOString) re-serializes with explicit .000 milliseconds.
+    expect(params.get('start')).toBe('2026-05-01T12:00:05.000Z')
+    // end param must be absent — single-sided narrow has no upper bound.
+    expect(params.get('end')).toBeNull()
+  })
+
+  it('single-sided narrow: end-only URL → Explorer link has end param but no start', async () => {
+    const endIso = '2026-05-01T12:00:25Z'
+    vi.mocked(useCronRunLog).mockReturnValue({
+      isLoading: false,
+      isFetching: false,
+      error: null,
+      data: {
+        pages: [
+          makeLogData({
+            log_status: 'available',
+            lines: [
+              { timestamp: '2026-05-01T12:00:00Z', message: 'first' },
+              { timestamp: '2026-05-01T12:00:30Z', message: 'last' },
+            ],
+          }),
+        ],
+        pageParams: [undefined],
+      },
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
+    } as unknown as ReturnType<typeof useCronRunLog>)
+
+    renderWithRouter(`/inventory/crons/${FP}/runs/${RUN_ID}?end=${encodeURIComponent(endIso)}`)
+    const el = await screen.findByTestId('open-in-explorer')
+    const anchor = el.closest('a')
+    expect(anchor).not.toBeNull()
+    const href = anchor!.getAttribute('href') ?? ''
+    const params = new URLSearchParams(href.split('?')[1])
+    // end param reflects selEnd directly.
+    // toIsoZ (= toISOString) re-serializes with explicit .000 milliseconds.
+    expect(params.get('end')).toBe('2026-05-01T12:00:25.000Z')
+    // start param must be absent — single-sided narrow has no lower bound.
+    expect(params.get('start')).toBeNull()
+  })
+
+  it('1h-preset fallback: zero log lines → Explorer link uses since=1h', async () => {
+    vi.mocked(useCronRunLog).mockReturnValue({
+      isLoading: false,
+      isFetching: false,
+      error: null,
+      data: {
+        pages: [makeLogData({ log_status: 'available', lines: [] })],
+        pageParams: [undefined],
+      },
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
+    } as unknown as ReturnType<typeof useCronRunLog>)
+
+    renderWithRouter()
+    const el = await screen.findByTestId('open-in-explorer')
+    const anchor = el.closest('a')
+    expect(anchor).not.toBeNull()
+    const href = anchor!.getAttribute('href') ?? ''
+    const params = new URLSearchParams(href.split('?')[1])
+    // No lines → runMin/runMax undefined → fallback to since=1h.
+    expect(params.get('since')).toBe('1h')
+    expect(params.get('start')).toBeNull()
+    expect(params.get('end')).toBeNull()
+  })
 })
