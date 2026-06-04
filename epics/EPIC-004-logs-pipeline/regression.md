@@ -215,3 +215,12 @@
 - "One-click injection: clicking a sample-value chip adds a `field:\"value\"` filter via appendFieldFilter and refreshes results."
 - "Type-hint inference (`infer_type_hint`): numeric/bool/object/array/string/mixed/unknown — keep the unit table green (incl. `['true','5']` → mixed, empty → unknown)."
 - "Prod-render smoke (manual, on UI change): `rm -rf apps/ui/dist && make dev-prod`, confirm served bundle hash changed + contains `data-testid=\"fields-discovery\"`; `GET /api/logs/fields` 200 with real data. Tear down `make dev-down`."
+
+## STAGE-004-019 — Histogram of line counts (stacked-by-severity bar chart above results)
+
+- "Histogram density: in the Logs Explorer, a stacked-by-severity bar chart appears above results (red=error+, yellow=warn, gray=info); buckets scale with range; `make verify` must keep `HistogramChart.test.tsx` + `test_logs_histogram.py` + `test_api_logs_histogram.py` green."
+- "Endpoint: `GET /api/logs/histogram?expr=&start=&end=&services=&buckets=` returns `{buckets:[{start_ts,counts_by_severity:{error,warn,info},total}], bucket_duration_ms}`; exactly N start-aligned buckets (re-binned from VL's epoch-aligned `/hits` timestamps); coarse severity via the public `normalize_severity`; 30s cache; buckets clamp 1..500 → 422; 502 on VL error."
+- "VL `/hits` field-grouping (MANDATORY — mocks can't prove it): `make integration` → `test_histogram_hits.py` must PASS, confirming real VL v0.30.0 `/select/logsql/hits?field=severity` returns per-severity grouped series. If this breaks (VL upgrade changes `/hits` behavior), the histogram loses its severity stack."
+- "Click-to-narrow: clicking a bar narrows the range to `[bucket.start_ts, +bucket_duration_ms)` and refreshes results (via writeUrl)."
+- "Bucket math: `compute_step_ms`/`assign_bucket` keep the unit table green (ts==start→bucket 0, ts==end→last bucket, epoch-aligned VL timestamps re-binned, span-not-divisible). `end` is INCLUSIVE in VL v0.30.0."
+- "Prod-render smoke (manual, on UI change): `rm -rf apps/ui/dist && make dev-prod`, confirm served bundle contains `data-testid=\"histogram-chart\"`; `GET /api/logs/histogram` 200 with per-severity buckets. Tear down `make dev-down`."
