@@ -18,6 +18,7 @@ from homelab_monitor.kernel.api.dependencies import (
 )
 from homelab_monitor.kernel.api.errors import ConflictProblem, HttpProblem, NotFoundProblem
 from homelab_monitor.kernel.api.schemas import (
+    LogsFieldsResponse,
     LogsQueryResponse,
     LogsServicesResponse,
     LogsStreamsResponse,
@@ -30,6 +31,10 @@ from homelab_monitor.kernel.api.schemas import (
 from homelab_monitor.kernel.auth.models import User
 from homelab_monitor.kernel.config import load_vl_query_limits
 from homelab_monitor.kernel.db.repository import SqliteRepository
+from homelab_monitor.kernel.logs.fields import (
+    FieldsCache,
+    fetch_fields,
+)
 from homelab_monitor.kernel.logs.models import from_victorialogs_line
 from homelab_monitor.kernel.logs.pagination import (
     InvalidCursorError,
@@ -65,10 +70,18 @@ _SERVICES_DEFAULT_LIMIT = 100
 _SERVICES_MIN_LIMIT = 1
 _SERVICES_MAX_LIMIT = 1000
 
+_FIELDS_DEFAULT_SAMPLE = 200
+_FIELDS_MIN_SAMPLE = 1
+_FIELDS_MAX_SAMPLE = 2000
+
 # Process-wide 30s TTL cache keyed on (start, end, limit). Module-scoped so it
 # survives across requests within a worker. Clock injectable only in tests via
 # the module-level rebind (see test).
 _services_cache = ServicesCache()
+
+# Process-wide 30s TTL cache for /logs/fields, keyed on
+# (sha256(effective_expr), start, end, sample_n). Module-scoped; rebind in tests.
+_fields_cache = FieldsCache()
 
 
 def _compose_services_expr(expr: str, services_csv: str | None) -> str:
@@ -218,6 +231,71 @@ async def logs_services(
         ) from exc
 
     _services_cache.put(key, response)
+    return response
+
+
+@router.get("/logs/fields", response_model=LogsFieldsResponse)
+async def logs_fields(  # noqa: PLR0913
+    expr: str = Query(..., description="LogsQL expression"),
+    start: str = Query(..., description="ISO-8601 UTC start time"),
+    end: str = Query(..., description="ISO-8601 UTC end time"),
+    # Out-of-range sample_n is REJECTED with 422 (FastAPI Query ge/le validation),
+    # not clamped. Valid range: [1, 2000].
+    sample_n: int = Query(_FIELDS_DEFAULT_SAMPLE, ge=_FIELDS_MIN_SAMPLE, le=_FIELDS_MAX_SAMPLE),
+    services: str | None = Query(None, description="CSV of <source_type>:<service> identities"),
+    _user: User = Depends(require_session()),  # noqa: B008
+    vl_url: str = Depends(get_vl_url),
+    http_client: httpx.AsyncClient = Depends(get_http_client),  # noqa: B008
+) -> LogsFieldsResponse:
+    """Discover fields present in the current query scope (STAGE-004-018).
+
+    Hybrid: VL ``field_names`` (authoritative names + exact coverage) + a bounded
+    most-recent ``query`` sample (values + type hints). Same scope-composition +
+    window-validation as /api/logs/query. Maps VictoriaLogsClientError → 502
+    ``upstream_unavailable``.
+
+    Auth: cookie session required. CSRF NOT enforced on GET.
+    """
+    log: BoundLogger = cast(
+        BoundLogger,
+        structlog.get_logger().bind(component="logs_fields"),
+    )
+
+    if len(expr) > _MAX_EXPR_LEN:
+        raise HttpProblem(
+            status_code=400,
+            code="invalid_expr",
+            message="expression too long",
+        )
+
+    parse_and_validate_window(start, end)
+
+    effective_expr = _compose_services_expr(expr, services)
+
+    key = FieldsCache.make_key(expr=effective_expr, start=start, end=end, sample_n=sample_n)
+    cached = _fields_cache.get(key)
+    if cached is not None:
+        return cached
+
+    base_limits = load_vl_query_limits()
+    client = VictoriaLogsClient(vl_url=vl_url, http_client=http_client, limits=base_limits)
+    try:
+        response = await fetch_fields(
+            client=client,
+            expr=effective_expr,
+            start=start,
+            end=end,
+            sample_n=sample_n,
+        )
+    except VictoriaLogsClientError as exc:
+        log.warning("logs_fields.upstream_error", error=str(exc))
+        raise HttpProblem(
+            status_code=502,
+            code="upstream_unavailable",
+            message="victorialogs field discovery failed",
+        ) from exc
+
+    _fields_cache.put(key, response)
     return response
 
 

@@ -615,3 +615,138 @@ async def test_query_max_bytes_exact_boundary(httpx_mock: HTTPXMock) -> None:
 
     assert len(result_short.lines) == n_lines - 1
     assert result_short.truncated is True
+
+
+# ---------------------------------------------------------------------------
+# field_names (STAGE-004-018)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_field_names_parses_values(httpx_mock: HTTPXMock) -> None:
+    """field_names parses {"values":[{value,hits}]} into (name, hits) pairs."""
+    httpx_mock.add_response(
+        method="GET",
+        json={"values": [{"value": "_msg", "hits": 100}, {"value": "level", "hits": 87}]},
+    )
+    async with httpx.AsyncClient() as http:
+        client = _make_client(http)
+        pairs = await client.field_names(
+            expr="*", start="2026-05-19T00:00:00+00:00", end="2026-05-19T01:00:00+00:00"
+        )
+    assert pairs == [("_msg", 100), ("level", 87)]
+
+
+@pytest.mark.asyncio
+async def test_field_names_sends_request_to_field_names_path(httpx_mock: HTTPXMock) -> None:
+    """The GET hits /select/logsql/field_names with query/start/end params."""
+    httpx_mock.add_response(method="GET", json={"values": []})
+    async with httpx.AsyncClient() as http:
+        client = _make_client(http)
+        await client.field_names(
+            expr="service:nginx",
+            start="2026-05-19T00:00:00+00:00",
+            end="2026-05-19T01:00:00+00:00",
+        )
+    req = httpx_mock.get_requests()[0]
+    assert req.url.path == "/select/logsql/field_names"
+    assert req.url.params["query"] == "service:nginx"
+    assert req.url.params["start"] == "2026-05-19T00:00:00+00:00"
+    assert req.url.params["end"] == "2026-05-19T01:00:00+00:00"
+
+
+@pytest.mark.asyncio
+async def test_field_names_skips_malformed_rows(httpx_mock: HTTPXMock) -> None:
+    """Rows missing value, with non-string value, or non-int hits are skipped."""
+    httpx_mock.add_response(
+        method="GET",
+        json={
+            "values": [
+                {"value": "ok", "hits": 5},
+                {"hits": 3},  # missing value
+                {"value": 42, "hits": 1},  # non-string value
+                {"value": "bad", "hits": "abc"},  # non-int hits
+                [1, 2],  # non-dict row
+            ]
+        },
+    )
+    async with httpx.AsyncClient() as http:
+        client = _make_client(http)
+        pairs = await client.field_names(
+            expr="*", start="2026-05-19T00:00:00+00:00", end="2026-05-19T01:00:00+00:00"
+        )
+    assert pairs == [("ok", 5)]
+
+
+@pytest.mark.asyncio
+async def test_field_names_non_object_body_returns_empty(httpx_mock: HTTPXMock) -> None:
+    """A JSON array (non-object) top level returns []."""
+    httpx_mock.add_response(method="GET", text="[1,2,3]")
+    async with httpx.AsyncClient() as http:
+        client = _make_client(http)
+        pairs = await client.field_names(
+            expr="*", start="2026-05-19T00:00:00+00:00", end="2026-05-19T01:00:00+00:00"
+        )
+    assert pairs == []
+
+
+@pytest.mark.asyncio
+async def test_field_names_unparseable_body_returns_empty(httpx_mock: HTTPXMock) -> None:
+    """Non-JSON body returns []."""
+    httpx_mock.add_response(method="GET", text="not-json")
+    async with httpx.AsyncClient() as http:
+        client = _make_client(http)
+        pairs = await client.field_names(
+            expr="*", start="2026-05-19T00:00:00+00:00", end="2026-05-19T01:00:00+00:00"
+        )
+    assert pairs == []
+
+
+@pytest.mark.asyncio
+async def test_field_names_missing_values_key_returns_empty(httpx_mock: HTTPXMock) -> None:
+    """Object without a list `values` key returns []."""
+    httpx_mock.add_response(method="GET", json={"other": 1})
+    async with httpx.AsyncClient() as http:
+        client = _make_client(http)
+        pairs = await client.field_names(
+            expr="*", start="2026-05-19T00:00:00+00:00", end="2026-05-19T01:00:00+00:00"
+        )
+    assert pairs == []
+
+
+@pytest.mark.asyncio
+async def test_field_names_raises_on_non_200(httpx_mock: HTTPXMock) -> None:
+    """Non-200 raises VictoriaLogsClientError; body excluded, status included."""
+    httpx_mock.add_response(method="GET", status_code=500, text="secret body")
+    async with httpx.AsyncClient() as http:
+        client = _make_client(http)
+        with pytest.raises(VictoriaLogsClientError) as exc_info:
+            await client.field_names(
+                expr="*", start="2026-05-19T00:00:00+00:00", end="2026-05-19T01:00:00+00:00"
+            )
+    assert "secret body" not in str(exc_info.value)
+    assert "500" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_field_names_raises_on_timeout(httpx_mock: HTTPXMock) -> None:
+    """Timeout raises VictoriaLogsClientError."""
+    httpx_mock.add_exception(httpx.TimeoutException("timed out"))
+    async with httpx.AsyncClient() as http:
+        client = _make_client(http)
+        with pytest.raises(VictoriaLogsClientError):
+            await client.field_names(
+                expr="*", start="2026-05-19T00:00:00+00:00", end="2026-05-19T01:00:00+00:00"
+            )
+
+
+@pytest.mark.asyncio
+async def test_field_names_raises_on_connect_error(httpx_mock: HTTPXMock) -> None:
+    """Transport error raises VictoriaLogsClientError."""
+    httpx_mock.add_exception(httpx.ConnectError("refused"))
+    async with httpx.AsyncClient() as http:
+        client = _make_client(http)
+        with pytest.raises(VictoriaLogsClientError):
+            await client.field_names(
+                expr="*", start="2026-05-19T00:00:00+00:00", end="2026-05-19T01:00:00+00:00"
+            )

@@ -1778,6 +1778,45 @@
         "title": "DockerSuggestionRow",
         "type": "object"
       },
+      "FieldDescriptor": {
+        "additionalProperties": false,
+        "description": "One discovered field in the current query scope (STAGE-004-018).\n\n`name` is the dotted field path (e.g. ``json.context.user_id``). `coverage`\nis the EXACT fraction of matching lines that carry this field, derived from\nVictoriaLogs ``field_names`` hit counts (field hits / total ``_msg`` hits).\n`sample_values` are up to K distinct stringified values seen in the bounded\nmost-recent sample (first-seen order); a rare field with accurate coverage\nbut no value in the sample yields an empty list + ``type_hint=\"unknown\"``.",
+        "properties": {
+          "coverage": {
+            "description": "Exact fraction (0..1) of matching lines carrying this field",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Coverage",
+            "type": "number"
+          },
+          "name": {
+            "description": "Dotted field path, e.g. json.context.user_id",
+            "title": "Name",
+            "type": "string"
+          },
+          "sample_values": {
+            "description": "Up to K distinct example values seen in the sample (first-seen order)",
+            "items": {
+              "type": "string"
+            },
+            "title": "Sample Values",
+            "type": "array"
+          },
+          "type_hint": {
+            "description": "numeric | bool | string | object | array | mixed | unknown",
+            "title": "Type Hint",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "sample_values",
+          "coverage",
+          "type_hint"
+        ],
+        "title": "FieldDescriptor",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -2450,6 +2489,34 @@
           "user"
         ],
         "title": "LoginResponse",
+        "type": "object"
+      },
+      "LogsFieldsResponse": {
+        "additionalProperties": false,
+        "description": "Response for GET /api/logs/fields (STAGE-004-018).\n\n`fields` is sorted DESC by coverage, tie-broken by name ASC. `sampled_lines`\nis the actual number of lines the value/type sample was drawn from.\n`truncated` is True when the sample hit the requested cap (more lines existed\nthan were sampled).",
+        "properties": {
+          "fields": {
+            "items": {
+              "$ref": "#/components/schemas/FieldDescriptor"
+            },
+            "title": "Fields",
+            "type": "array"
+          },
+          "sampled_lines": {
+            "title": "Sampled Lines",
+            "type": "integer"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "fields",
+          "sampled_lines",
+          "truncated"
+        ],
+        "title": "LogsFieldsResponse",
         "type": "object"
       },
       "LogsQueryResponse": {
@@ -6328,6 +6395,100 @@
         "tags": [
           "internal"
         ]
+      }
+    },
+    "/api/logs/fields": {
+      "get": {
+        "description": "Discover fields present in the current query scope (STAGE-004-018).\n\nHybrid: VL ``field_names`` (authoritative names + exact coverage) + a bounded\nmost-recent ``query`` sample (values + type hints). Same scope-composition +\nwindow-validation as /api/logs/query. Maps VictoriaLogsClientError \u2192 502\n``upstream_unavailable``.\n\nAuth: cookie session required. CSRF NOT enforced on GET.",
+        "operationId": "logs_fields_api_logs_fields_get",
+        "parameters": [
+          {
+            "description": "LogsQL expression",
+            "in": "query",
+            "name": "expr",
+            "required": true,
+            "schema": {
+              "description": "LogsQL expression",
+              "title": "Expr",
+              "type": "string"
+            }
+          },
+          {
+            "description": "ISO-8601 UTC start time",
+            "in": "query",
+            "name": "start",
+            "required": true,
+            "schema": {
+              "description": "ISO-8601 UTC start time",
+              "title": "Start",
+              "type": "string"
+            }
+          },
+          {
+            "description": "ISO-8601 UTC end time",
+            "in": "query",
+            "name": "end",
+            "required": true,
+            "schema": {
+              "description": "ISO-8601 UTC end time",
+              "title": "End",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sample_n",
+            "required": false,
+            "schema": {
+              "default": 200,
+              "maximum": 2000,
+              "minimum": 1,
+              "title": "Sample N",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "CSV of <source_type>:<service> identities",
+            "in": "query",
+            "name": "services",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "CSV of <source_type>:<service> identities",
+              "title": "Services"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogsFieldsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Logs Fields"
       }
     },
     "/api/logs/query": {

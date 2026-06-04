@@ -161,6 +161,84 @@ class VictoriaLogsClient:
 
         return self._parse_ndjson(resp.text)
 
+    async def field_names(
+        self,
+        *,
+        expr: str,
+        start: str,
+        end: str,
+    ) -> list[tuple[str, int]]:
+        """Return (field_name, hits) pairs matching `expr` over [start, end].
+
+        Calls VictoriaLogs ``/select/logsql/field_names``, which returns a JSON
+        object ``{"values": [{"value": "<field>", "hits": <int>}, ...]}`` — the
+        authoritative complete field-name list with per-field hit counts. The
+        ``_msg`` entry's hits equals the total number of matching lines (every
+        line has ``_msg``), so callers can derive exact per-field coverage.
+
+        Unlike ``query()`` this is NOT a bounded NDJSON stream — the response is
+        a single small JSON object (one row per distinct field), so no
+        max_lines/max_bytes cap applies. Same error contract as ``query()``:
+        raises VictoriaLogsClientError on transport error, timeout, or non-200.
+        Malformed / non-conforming rows are skipped silently.
+        """
+        params = {"query": expr, "start": start, "end": end}
+        try:
+            resp = await self._http_client.get(
+                f"{self._vl_url}/select/logsql/field_names",
+                params=params,
+                timeout=self._limits.timeout_seconds,
+            )
+        except (httpx.TimeoutException, httpx.RequestError) as exc:
+            self._log.warning("victorialogs_client.field_names_error", error=str(exc))
+            msg = f"victorialogs field_names failed: {exc}"
+            raise VictoriaLogsClientError(msg) from exc
+
+        if resp.status_code != _HTTP_OK:
+            self._log.warning("victorialogs_client.field_names_status", status=resp.status_code)
+            # SECURITY: do not relay resp.text (may carry cross-query excerpts).
+            msg = f"victorialogs field_names returned status {resp.status_code}"
+            raise VictoriaLogsClientError(msg)
+
+        return self._parse_field_names(resp.text)
+
+    @staticmethod
+    def _parse_field_names(body: str) -> list[tuple[str, int]]:
+        """Parse the field_names JSON object into (name, hits) pairs.
+
+        Tolerant: a malformed body, a non-object top level, a missing/non-list
+        ``values`` key, or any individual row that is not a dict with a string
+        ``value`` + integer-coercible ``hits`` is skipped. Returns [] on a
+        wholly-unparseable body rather than raising — an empty field set is a
+        valid (if degenerate) scope result.
+        """
+        try:
+            obj_raw: object = json.loads(body)
+        except ValueError:
+            return []
+        if not isinstance(obj_raw, dict):
+            return []
+        obj = cast(dict[str, Any], obj_raw)
+        values_raw = obj.get("values")
+        if not isinstance(values_raw, list):
+            return []
+        values = cast(list[Any], values_raw)
+        out: list[tuple[str, int]] = []
+        for row_raw in values:
+            if not isinstance(row_raw, dict):
+                continue
+            row = cast(dict[str, Any], row_raw)
+            name = row.get("value")
+            hits_raw = row.get("hits")
+            if not isinstance(name, str):
+                continue
+            try:
+                hits = int(hits_raw)  # type: ignore[arg-type]
+            except (TypeError, ValueError):
+                continue
+            out.append((name, hits))
+        return out
+
     def with_limits(self, limits: VlQueryLimits) -> VictoriaLogsClient:
         """Return a new client sharing this client's URL + http client but with
         different bounded limits. Used by the A1 paginator to set the per-page

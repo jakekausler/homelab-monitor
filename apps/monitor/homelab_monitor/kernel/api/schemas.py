@@ -23,8 +23,10 @@ __all__ = [
     "DismissResponse",
     "ErrorEnvelope",
     "ErrorPayload",
+    "FieldDescriptor",
     "HealthzResponse",
     "IngestResponse",
+    "LogsFieldsResponse",
     "LogsQueryResponse",
     "LogsServicesResponse",
     "LogsStreamSummary",
@@ -285,6 +287,45 @@ class LogsServicesResponse(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     services: list[ServiceCount]
+    truncated: bool
+
+
+class FieldDescriptor(BaseModel):
+    """One discovered field in the current query scope (STAGE-004-018).
+
+    `name` is the dotted field path (e.g. ``json.context.user_id``). `coverage`
+    is the EXACT fraction of matching lines that carry this field, derived from
+    VictoriaLogs ``field_names`` hit counts (field hits / total ``_msg`` hits).
+    `sample_values` are up to K distinct stringified values seen in the bounded
+    most-recent sample (first-seen order); a rare field with accurate coverage
+    but no value in the sample yields an empty list + ``type_hint="unknown"``.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(description="Dotted field path, e.g. json.context.user_id")
+    sample_values: list[str] = Field(
+        description="Up to K distinct example values seen in the sample (first-seen order)"
+    )
+    coverage: float = Field(
+        ge=0.0,
+        le=1.0,
+        description="Exact fraction (0..1) of matching lines carrying this field",
+    )
+    type_hint: str = Field(description="numeric | bool | string | object | array | mixed | unknown")
+
+
+class LogsFieldsResponse(BaseModel):
+    """Response for GET /api/logs/fields (STAGE-004-018).
+
+    `fields` is sorted DESC by coverage, tie-broken by name ASC. `sampled_lines`
+    is the actual number of lines the value/type sample was drawn from.
+    `truncated` is True when the sample hit the requested cap (more lines existed
+    than were sampled).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    fields: list[FieldDescriptor]
+    sampled_lines: int
     truncated: bool
 
 

@@ -18,6 +18,7 @@ import { LogsQlEditor } from '@/components/logs/LogsQlEditor'
 import { StreamPickerSidebar } from '@/components/logs/StreamPickerSidebar'
 import { SavedQueriesPanel } from './SavedQueriesPanel'
 import { QueryHistoryPanel } from './QueryHistoryPanel'
+import { FieldsDiscoveryPanel } from './FieldsDiscoveryPanel'
 import { TimeRangeControl } from '@/components/logs/TimeRangeControl'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { translateSearchToLogsQl } from '@/lib/logsQlTranslate'
@@ -127,8 +128,10 @@ export function LogsExplorerBody({
   // Bumping this re-resolves the window against a fresh "now" (Refresh / live-tail
   // groundwork) WITHOUT churning the query key on every render.
   const [refreshNonce, setRefreshNonce] = useState(0)
-  // Sidebar tab state: show Services, Saved queries, or History
-  const [sidebarTab, setSidebarTab] = useState<'services' | 'saved' | 'history'>('services')
+  // Sidebar tab state: show Services, Saved queries, History, or Fields
+  const [sidebarTab, setSidebarTab] = useState<'services' | 'saved' | 'history' | 'fields'>(
+    'services',
+  )
   // STAGE-004-016 fix: single source of truth for row selection.
   // Holds both the key (for highlight) and the line (for the inspector panel).
   // Clearing this closes the panel AND removes the row highlight atomically.
@@ -556,6 +559,16 @@ export function LogsExplorerBody({
         >
           Recent
         </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={sidebarTab === 'fields'}
+          data-testid="logs-sidebar-tab-fields"
+          className={cn('rounded px-2 py-1 text-xs', sidebarTab === 'fields' && 'bg-accent')}
+          onClick={() => setSidebarTab('fields')}
+        >
+          Fields
+        </button>
       </div>
       <div role="tabpanel" className="min-h-0 flex-1 overflow-y-auto">
         {sidebarTab === 'services' ? (
@@ -571,8 +584,16 @@ export function LogsExplorerBody({
           />
         ) : sidebarTab === 'saved' ? (
           <SavedQueriesPanel onLoad={onLoadSavedQuery} onUpdate={onUpdateSavedQuery} />
-        ) : (
+        ) : sidebarTab === 'history' ? (
           <QueryHistoryPanel onLoad={onLoadHistoryEntry} />
+        ) : (
+          <FieldsDiscoveryPanel
+            expr={expr}
+            start={startIso}
+            end={endIso}
+            services={servicesCsv}
+            onAddFieldFilter={handleAddFieldFilter}
+          />
         )}
       </div>
     </div>

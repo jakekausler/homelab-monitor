@@ -5,6 +5,7 @@ import type { Schema } from './types'
 
 type LogsQueryResponse = Schema<'LogsQueryResponse'>
 type LogsServicesResponse = Schema<'LogsServicesResponse'>
+type LogsFieldsResponse = Schema<'LogsFieldsResponse'>
 
 /**
  * STAGE-004-012A — a selected stream picker identity. The identity is the PAIR
@@ -24,6 +25,8 @@ export const logsQueryKeys = {
     ['logs', 'query', expr, start, end, services] as const,
   services: (start: string, end: string, limit: number) =>
     ['logs', 'services', start, end, limit] as const,
+  fields: (expr: string, start: string, end: string, services: string, sample: number) =>
+    ['logs', 'fields', expr, start, end, services, sample] as const,
 }
 
 /**
@@ -74,6 +77,43 @@ export function useLogsServicesQuery(start: string, end: string, limit = SERVICE
     },
     // Guarded for reusability: callers may pass empty start/end before a range is resolved.
     enabled: start.length > 0 && end.length > 0,
+    staleTime: 30_000,
+    retry: false,
+  })
+}
+
+/**
+ * STAGE-004-018 — discover fields present in the current scope. Mirrors
+ * useLogsServicesQuery: typed apiClient.GET, 30s staleTime (matches backend
+ * cache TTL), enabled only when a window is resolved. `services` is the CSV
+ * `<source_type>:<service>` form (same as useLogsQuery); the backend composes it.
+ */
+const FIELDS_DEFAULT_SAMPLE = 200
+
+export function useLogsFieldsQuery(
+  expr: string,
+  start: string,
+  end: string,
+  services = '',
+  sample = FIELDS_DEFAULT_SAMPLE,
+) {
+  return useQuery({
+    queryKey: logsQueryKeys.fields(expr, start, end, services, sample),
+    queryFn: async () => {
+      const result = await apiClient.GET('/api/logs/fields', {
+        params: {
+          query: {
+            expr,
+            start,
+            end,
+            sample_n: sample,
+            ...(services.length > 0 ? { services } : {}),
+          },
+        },
+      })
+      return unwrap<LogsFieldsResponse>(result)
+    },
+    enabled: expr.length > 0 && start.length > 0 && end.length > 0,
     staleTime: 30_000,
     retry: false,
   })
