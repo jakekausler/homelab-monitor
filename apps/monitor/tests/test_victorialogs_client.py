@@ -973,3 +973,107 @@ async def test_hits_raises_on_connect_error(httpx_mock: HTTPXMock) -> None:
                 end="2026-05-19T01:00:00+00:00",
                 step="1m",
             )
+
+
+# ---------------------------------------------------------------------------
+# stream_query (STAGE-004-020)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_stream_query_skips_blank_lines(httpx_mock: HTTPXMock) -> None:
+    """Blank lines in the streaming NDJSON body are skipped (line 231 coverage).
+
+    Mirrors test_query_skips_blank_lines but calls stream_query directly so the
+    `continue` branch in that method is exercised.
+    """
+    good_line = _ndjson_line(msg="kept", ts="2026-05-19T00:00:00+00:00")
+    httpx_mock.add_response(method="GET", text=f"\n{good_line}\n\n")
+
+    async with httpx.AsyncClient() as http:
+        client = _make_client(http)
+        results = [
+            line
+            async for line in client.stream_query(
+                expr="*",
+                start="2026-05-19T00:00:00+00:00",
+                end="2026-05-19T01:00:00+00:00",
+                limit=100,
+            )
+        ]
+
+    assert len(results) == 1
+    assert results[0].message == "kept"
+
+
+@pytest.mark.asyncio
+async def test_stream_query_skips_malformed_json_lines(httpx_mock: HTTPXMock) -> None:
+    """Malformed NDJSON lines returned by _parse_one as None are silently skipped
+    (branch 233->227 coverage: `if parsed is not None` evaluates False).
+
+    Mirrors test_query_skips_malformed_json_lines but calls stream_query directly.
+    """
+    good_line = _ndjson_line(msg="ok", ts="2026-05-19T00:00:00+00:00")
+    httpx_mock.add_response(method="GET", text=f"not-json\n{good_line}\n")
+
+    async with httpx.AsyncClient() as http:
+        client = _make_client(http)
+        results = [
+            line
+            async for line in client.stream_query(
+                expr="*",
+                start="2026-05-19T00:00:00+00:00",
+                end="2026-05-19T01:00:00+00:00",
+                limit=100,
+            )
+        ]
+
+    assert len(results) == 1
+    assert results[0].message == "ok"
+
+
+@pytest.mark.asyncio
+async def test_stream_query_raises_on_transport_error(httpx_mock: HTTPXMock) -> None:
+    """Transport error during stream_query raises VictoriaLogsClientError.
+
+    pytest_httpx cannot inject a true mid-stream (post-200 headers) failure;
+    the exception fires at the request level.  This test pins that the
+    except (TimeoutException, RequestError) block in stream_query maps any
+    httpx transport failure to VictoriaLogsClientError.
+    """
+    httpx_mock.add_exception(httpx.ConnectError("refused"))
+
+    async with httpx.AsyncClient() as http:
+        client = _make_client(http)
+        with pytest.raises(VictoriaLogsClientError):
+            async for _ in client.stream_query(
+                expr="*",
+                start="2026-05-19T00:00:00+00:00",
+                end="2026-05-19T01:00:00+00:00",
+                limit=100,
+            ):
+                pass  # pragma: no cover
+
+
+@pytest.mark.asyncio
+async def test_stream_query_sends_limit_param(httpx_mock: HTTPXMock) -> None:
+    """stream_query sends the requested limit verbatim as the VL `limit` param."""
+    httpx_mock.add_response(method="GET", text="")
+
+    async with httpx.AsyncClient() as http:
+        client = _make_client(http)
+        results = [
+            line
+            async for line in client.stream_query(
+                expr="*",
+                start="2026-05-19T00:00:00+00:00",
+                end="2026-05-19T01:00:00+00:00",
+                limit=77,
+            )
+        ]
+
+    assert results == []
+    requests = httpx_mock.get_requests()
+    assert len(requests) == 1
+    sent_limit = requests[0].url.params["limit"]
+    assert sent_limit == "77"

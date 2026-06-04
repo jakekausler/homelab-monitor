@@ -12,6 +12,7 @@ The kernel API router logs.py already delegates /logs/query to it.
 from __future__ import annotations
 
 import json
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any, cast
 
@@ -178,6 +179,64 @@ class VictoriaLogsClient:
             raise VictoriaLogsClientError(msg)
 
         return self._parse_ndjson(resp.text)
+
+    async def stream_query(
+        self,
+        *,
+        expr: str,
+        start: str,
+        end: str,
+        limit: int,
+    ) -> AsyncIterator[VlLogLine]:
+        """Stream up to ``limit`` matching lines over [start, end] one at a time.
+
+        Unlike ``query()`` this does NOT buffer the whole NDJSON body. It opens a
+        streaming HTTP request to VictoriaLogs ``/select/logsql/query`` and yields
+        each parsed ``VlLogLine`` as the line arrives, stopping after ``limit``
+        non-empty parseable lines. Malformed NDJSON lines are skipped (mirrors
+        ``_parse_ndjson``). O(1) memory: only one line is held at a time.
+
+        ``limit`` is passed to VL verbatim as the HTTP ``limit`` cap; we ALSO
+        enforce it locally so a VL that ignores/overshoots the cap can never make
+        us emit more than ``limit`` lines (cap-enforcement test depends on this).
+
+        Raises VictoriaLogsClientError on transport error, timeout, or non-200 —
+        the non-200 check happens AFTER the stream context is entered but BEFORE
+        any line is yielded, so callers can map it to a 502 pre-flight.
+        """
+        params = {
+            "query": expr,
+            "start": start,
+            "end": end,
+            "limit": str(limit),
+        }
+        url = f"{self._vl_url}/select/logsql/query"
+        try:
+            async with self._http_client.stream(
+                "GET",
+                url,
+                params=params,
+                timeout=self._limits.timeout_seconds,
+            ) as resp:
+                if resp.status_code != _HTTP_OK:
+                    self._log.warning("victorialogs_client.stream_status", status=resp.status_code)
+                    # SECURITY: do not relay body (may carry cross-query excerpts).
+                    msg = f"victorialogs returned status {resp.status_code}"
+                    raise VictoriaLogsClientError(msg)
+                emitted = 0
+                async for raw_line in resp.aiter_lines():
+                    if emitted >= limit:
+                        break
+                    if not raw_line.strip():
+                        continue
+                    parsed = self._parse_one(raw_line)
+                    if parsed is not None:
+                        emitted += 1
+                        yield parsed
+        except (httpx.TimeoutException, httpx.RequestError) as exc:
+            self._log.warning("victorialogs_client.stream_error", error=str(exc))
+            msg = f"victorialogs stream failed: {exc}"
+            raise VictoriaLogsClientError(msg) from exc
 
     async def field_names(
         self,

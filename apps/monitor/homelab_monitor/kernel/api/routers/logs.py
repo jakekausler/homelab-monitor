@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
-from typing import Annotated, cast
+from collections.abc import AsyncGenerator, AsyncIterator
+from datetime import UTC, datetime
+from typing import Annotated, Literal, cast
 
 import httpx
 import structlog
 from fastapi import APIRouter, Depends, Query, status
+from starlette.responses import StreamingResponse
 from structlog.stdlib import BoundLogger
 
 from homelab_monitor.kernel.api.dependencies import (
@@ -32,6 +35,7 @@ from homelab_monitor.kernel.api.schemas import (
 from homelab_monitor.kernel.auth.models import User
 from homelab_monitor.kernel.config import load_vl_query_limits
 from homelab_monitor.kernel.db.repository import SqliteRepository
+from homelab_monitor.kernel.logs.export import stream_export
 from homelab_monitor.kernel.logs.fields import (
     FieldsCache,
     fetch_fields,
@@ -40,7 +44,7 @@ from homelab_monitor.kernel.logs.histogram import (
     HistogramCache,
     fetch_histogram,
 )
-from homelab_monitor.kernel.logs.models import from_victorialogs_line
+from homelab_monitor.kernel.logs.models import LogLine, from_victorialogs_line
 from homelab_monitor.kernel.logs.pagination import (
     InvalidCursorError,
     paginate_older,
@@ -82,6 +86,10 @@ _FIELDS_MAX_SAMPLE = 2000
 _HISTOGRAM_DEFAULT_BUCKETS = 60
 _HISTOGRAM_MIN_BUCKETS = 1
 _HISTOGRAM_MAX_BUCKETS = 500
+
+_EXPORT_DEFAULT_MAX = 10000
+_EXPORT_MIN_MAX = 1
+_EXPORT_MAX_MAX = 100000
 
 # Process-wide 30s TTL cache keyed on (start, end, limit). Module-scoped so it
 # survives across requests within a worker. Clock injectable only in tests via
@@ -198,6 +206,104 @@ async def logs_query(  # noqa: PLR0913
         lines=lines,
         next_cursor=page.next_cursor,
         has_more=page.has_more,
+    )
+
+
+@router.get(
+    "/logs/export",
+    responses={200: {"content": {"text/plain": {}, "application/json": {}}}},
+)
+async def logs_export(  # noqa: PLR0913
+    expr: str = Query(..., description="LogsQL expression"),
+    start: str = Query(..., description="ISO-8601 UTC start time"),
+    end: str = Query(..., description="ISO-8601 UTC end time"),
+    fmt: Literal["txt", "json"] = Query("txt", alias="format", description="Export format"),
+    # Out-of-range max is REJECTED with 422 (FastAPI ge/le), not clamped.
+    max: int = Query(_EXPORT_DEFAULT_MAX, ge=_EXPORT_MIN_MAX, le=_EXPORT_MAX_MAX),
+    services: str | None = Query(None, description="CSV of <source_type>:<service> identities"),
+    _user: User = Depends(require_session()),  # noqa: B008
+    vl_url: str = Depends(get_vl_url),
+    http_client: httpx.AsyncClient = Depends(get_http_client),  # noqa: B008
+) -> StreamingResponse:
+    """Stream matching log lines to the browser as a download (STAGE-004-020).
+
+    True streaming: opens a single VictoriaLogs streaming query and pipes lines
+    out one at a time (O(1) memory). ``format`` is "txt" (human-readable) or
+    "json" (a JSON array of LogLine objects). ``max`` caps the number of lines
+    (default 10000, range [1, 100000]).
+
+    A pre-flight pulls the FIRST line inside the handler so a VictoriaLogs error
+    surfaces as HTTP 502 ``upstream_unavailable`` BEFORE the 200 StreamingResponse
+    headers are committed (after headers are sent we can no longer change status).
+
+    Auth: cookie session required. CSRF NOT enforced on GET. Same window-validation
+    + scope-composition as /api/logs/query. Maps VictoriaLogsClientError -> 502.
+    """
+    log: BoundLogger = cast(
+        BoundLogger,
+        structlog.get_logger().bind(component="logs_export"),
+    )
+
+    if len(expr) > _MAX_EXPR_LEN:
+        raise HttpProblem(
+            status_code=400,
+            code="invalid_expr",
+            message="expression too long",
+        )
+
+    parse_and_validate_window(start, end)
+
+    effective_expr = _compose_services_expr(expr, services)
+
+    base_limits = load_vl_query_limits()
+    client = VictoriaLogsClient(vl_url=vl_url, http_client=http_client, limits=base_limits)
+
+    # Map VlLogLine -> LogLine lazily as lines arrive (keeps O(1) memory).
+    async def _mapped() -> AsyncGenerator[LogLine, None]:
+        async for vl_line in client.stream_query(
+            expr=effective_expr, start=start, end=end, limit=max
+        ):
+            yield from_victorialogs_line(vl_line)
+
+    source = _mapped()
+
+    # Pre-flight: pull the first line INSIDE the handler so a VL error becomes a
+    # 502 BEFORE we return the 200 StreamingResponse. A sentinel distinguishes
+    # "no lines" (valid empty result) from "first line present".
+    _SENTINEL = object()
+    try:
+        first: LogLine | object = await anext(source, _SENTINEL)
+    except VictoriaLogsClientError as exc:
+        await source.aclose()
+        log.warning("logs_export.upstream_error", error=str(exc))
+        raise HttpProblem(
+            status_code=502,
+            code="upstream_unavailable",
+            message="victorialogs export query failed",
+        ) from exc
+    except BaseException:
+        await source.aclose()
+        raise
+
+    # Re-chain the already-pulled first line in front of the remainder.
+    async def _chained() -> AsyncIterator[LogLine]:
+        if first is not _SENTINEL:
+            yield cast(LogLine, first)
+        async for line in source:
+            yield line
+
+    ext = "json" if fmt == "json" else "txt"
+    media_type = "application/json" if fmt == "json" else "text/plain; charset=utf-8"
+    filename = f"logs_{datetime.now(UTC).strftime('%Y-%m-%d_%H%M%S')}Z.{ext}"
+    headers = {
+        "Content-Disposition": f'attachment; filename="{filename}"',
+        "Cache-Control": "no-store",
+        "X-Accel-Buffering": "no",
+    }
+    return StreamingResponse(
+        stream_export(_chained(), fmt),
+        media_type=media_type,
+        headers=headers,
     )
 
 

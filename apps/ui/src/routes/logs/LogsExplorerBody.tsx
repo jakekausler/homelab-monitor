@@ -20,6 +20,7 @@ import { SavedQueriesPanel } from './SavedQueriesPanel'
 import { QueryHistoryPanel } from './QueryHistoryPanel'
 import { FieldsDiscoveryPanel } from './FieldsDiscoveryPanel'
 import { HistogramChart } from './HistogramChart'
+import { ExportButton } from './ExportButton'
 import { TimeRangeControl } from '@/components/logs/TimeRangeControl'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { translateSearchToLogsQl } from '@/lib/logsQlTranslate'
@@ -451,6 +452,8 @@ export function LogsExplorerBody({
           </TooltipTrigger>
           <TooltipContent>Save query</TooltipContent>
         </Tooltip>
+
+        <ExportButton expr={expr} startIso={startIso} endIso={endIso} servicesCsv={servicesCsv} />
       </div>
 
       {isGenericApiError && (

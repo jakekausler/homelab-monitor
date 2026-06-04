@@ -6451,6 +6451,115 @@
         ]
       }
     },
+    "/api/logs/export": {
+      "get": {
+        "description": "Stream matching log lines to the browser as a download (STAGE-004-020).\n\nTrue streaming: opens a single VictoriaLogs streaming query and pipes lines\nout one at a time (O(1) memory). ``format`` is \"txt\" (human-readable) or\n\"json\" (a JSON array of LogLine objects). ``max`` caps the number of lines\n(default 10000, range [1, 100000]).\n\nA pre-flight pulls the FIRST line inside the handler so a VictoriaLogs error\nsurfaces as HTTP 502 ``upstream_unavailable`` BEFORE the 200 StreamingResponse\nheaders are committed (after headers are sent we can no longer change status).\n\nAuth: cookie session required. CSRF NOT enforced on GET. Same window-validation\n+ scope-composition as /api/logs/query. Maps VictoriaLogsClientError -> 502.",
+        "operationId": "logs_export_api_logs_export_get",
+        "parameters": [
+          {
+            "description": "LogsQL expression",
+            "in": "query",
+            "name": "expr",
+            "required": true,
+            "schema": {
+              "description": "LogsQL expression",
+              "title": "Expr",
+              "type": "string"
+            }
+          },
+          {
+            "description": "ISO-8601 UTC start time",
+            "in": "query",
+            "name": "start",
+            "required": true,
+            "schema": {
+              "description": "ISO-8601 UTC start time",
+              "title": "Start",
+              "type": "string"
+            }
+          },
+          {
+            "description": "ISO-8601 UTC end time",
+            "in": "query",
+            "name": "end",
+            "required": true,
+            "schema": {
+              "description": "ISO-8601 UTC end time",
+              "title": "End",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Export format",
+            "in": "query",
+            "name": "format",
+            "required": false,
+            "schema": {
+              "default": "txt",
+              "description": "Export format",
+              "enum": [
+                "txt",
+                "json"
+              ],
+              "title": "Format",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "max",
+            "required": false,
+            "schema": {
+              "default": 10000,
+              "maximum": 100000,
+              "minimum": 1,
+              "title": "Max",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "CSV of <source_type>:<service> identities",
+            "in": "query",
+            "name": "services",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "CSV of <source_type>:<service> identities",
+              "title": "Services"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              },
+              "text/plain": {}
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Logs Export"
+      }
+    },
     "/api/logs/fields": {
       "get": {
         "description": "Discover fields present in the current query scope (STAGE-004-018).\n\nHybrid: VL ``field_names`` (authoritative names + exact coverage) + a bounded\nmost-recent ``query`` sample (values + type hints). Same scope-composition +\nwindow-validation as /api/logs/query. Maps VictoriaLogsClientError \u2192 502\n``upstream_unavailable``.\n\nAuth: cookie session required. CSRF NOT enforced on GET.",
