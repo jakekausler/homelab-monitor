@@ -207,3 +207,11 @@
 - "Render: `make verify` must show the new template structural tests green (transforms.json_flatten present, type=remap, inputs=[\"docker_enrich\"], docker_severity_extract.inputs=[\"json_flatten\"]) and render tests for the `${HOMELAB_MONITOR_LOG_JSON_MAX_DEPTH}`/`_MAX_FIELDS` substitutions (defaults 8/100)."
 - "Prod render (manual, on Vector/template change): `make dev-prod` → monitor logs `vector.render.success`, Vector container boots with no VRL compile error, rendered `/var/vector-config/vector.toml` `[transforms.json_flatten]` shows caps as integer literals; real container JSON shows `json.*` dotted fields in `/api/logs/query`. Tear down with `make dev-down`."
 - "Integration query window: integration tests must keep `end = now.isoformat()` (NOT future) or `/api/logs/query` returns 400 `range_in_future` (5s future-skew grace)."
+
+## STAGE-004-018 — Filter-scope-aware field discovery (Available fields panel, sample-based)
+
+- "Scope-aware field discovery: in the Logs Explorer, open the 'Fields' sidebar tab with a filter set (e.g. a service over 1h) → panel lists only fields in that scope, each with a coverage% badge, type hint, and sample-value chips. `make verify` must keep `FieldsDiscoveryPanel.test.tsx` + `test_logs_fields.py` + `test_api_logs_fields.py` green."
+- "Endpoint: `GET /api/logs/fields?expr=&start=&end=&services=&sample_n=` returns `{fields:[{name,sample_values,coverage,type_hint}], sampled_lines, truncated}`, coverage = field.hits/_msg.hits (exact), 2 fixed VL calls (field_names + bounded query), 30s cache, 502 on VL error, sample_n clamp 1..2000, builtins (_msg/_time/_stream_id) excluded."
+- "One-click injection: clicking a sample-value chip adds a `field:\"value\"` filter via appendFieldFilter and refreshes results."
+- "Type-hint inference (`infer_type_hint`): numeric/bool/object/array/string/mixed/unknown — keep the unit table green (incl. `['true','5']` → mixed, empty → unknown)."
+- "Prod-render smoke (manual, on UI change): `rm -rf apps/ui/dist && make dev-prod`, confirm served bundle hash changed + contains `data-testid=\"fields-discovery\"`; `GET /api/logs/fields` 200 with real data. Tear down `make dev-down`."
