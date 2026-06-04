@@ -17,6 +17,7 @@ from pytest_httpx import HTTPXMock
 from homelab_monitor.kernel.config import VlQueryLimits
 from homelab_monitor.kernel.cron.log_match import canonical_log_key
 from homelab_monitor.kernel.logs.victorialogs_client import (
+    HitsSeries,
     VictoriaLogsClient,
     VictoriaLogsClientError,
     build_amode_query,
@@ -749,4 +750,226 @@ async def test_field_names_raises_on_connect_error(httpx_mock: HTTPXMock) -> Non
         with pytest.raises(VictoriaLogsClientError):
             await client.field_names(
                 expr="*", start="2026-05-19T00:00:00+00:00", end="2026-05-19T01:00:00+00:00"
+            )
+
+
+# ---------------------------------------------------------------------------
+# hits (STAGE-004-019)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_hits_parses_per_severity_series(httpx_mock: HTTPXMock) -> None:
+    """hits parses {"hits":[{fields,timestamps,values}]} into HitsSeries list."""
+    httpx_mock.add_response(
+        method="GET",
+        json={
+            "hits": [
+                {
+                    "fields": {"severity": "error"},
+                    "timestamps": ["2026-05-19T00:00:00Z", "2026-05-19T00:01:00Z"],
+                    "values": [3, 5],
+                    "total": 8,
+                },
+                {
+                    "fields": {"severity": "info"},
+                    "timestamps": ["2026-05-19T00:00:00Z"],
+                    "values": [10],
+                    "total": 10,
+                },
+            ]
+        },
+    )
+    async with httpx.AsyncClient() as http:
+        client = _make_client(http)
+        series = await client.hits(
+            expr="*",
+            start="2026-05-19T00:00:00+00:00",
+            end="2026-05-19T01:00:00+00:00",
+            step="60000ms",
+        )
+    assert len(series) == 2  # noqa: PLR2004
+    assert series[0] == HitsSeries(
+        field_value="error",
+        timestamps=["2026-05-19T00:00:00Z", "2026-05-19T00:01:00Z"],
+        counts=[3, 5],
+    )
+    assert series[1].field_value == "info"
+    assert series[1].counts == [10]
+
+
+@pytest.mark.asyncio
+async def test_hits_sends_request_to_hits_path_with_field(httpx_mock: HTTPXMock) -> None:
+    """GET hits /select/logsql/hits with query/start/end/step/field params."""
+    httpx_mock.add_response(method="GET", json={"hits": []})
+    async with httpx.AsyncClient() as http:
+        client = _make_client(http)
+        await client.hits(
+            expr="service:nginx",
+            start="2026-05-19T00:00:00+00:00",
+            end="2026-05-19T01:00:00+00:00",
+            step="30000ms",
+            field="severity",
+        )
+    req = httpx_mock.get_requests()[0]
+    assert req.url.path == "/select/logsql/hits"
+    assert req.url.params["query"] == "service:nginx"
+    assert req.url.params["start"] == "2026-05-19T00:00:00+00:00"
+    assert req.url.params["end"] == "2026-05-19T01:00:00+00:00"
+    assert req.url.params["step"] == "30000ms"
+    assert req.url.params["field"] == "severity"
+
+
+@pytest.mark.asyncio
+async def test_hits_total_series_no_fields_key(httpx_mock: HTTPXMock) -> None:
+    """A fields:{} (un-grouped total) series yields field_value None."""
+    httpx_mock.add_response(
+        method="GET",
+        json={"hits": [{"fields": {}, "timestamps": ["2026-05-19T00:00:00Z"], "values": [7]}]},
+    )
+    async with httpx.AsyncClient() as http:
+        client = _make_client(http)
+        series = await client.hits(
+            expr="*", start="2026-05-19T00:00:00+00:00", end="2026-05-19T01:00:00+00:00", step="1m"
+        )
+    assert series[0].field_value is None
+    assert series[0].counts == [7]
+
+
+@pytest.mark.asyncio
+async def test_hits_skips_malformed_rows(httpx_mock: HTTPXMock) -> None:
+    """Rows missing timestamps/values lists, or non-dict rows, are skipped;
+    non-int values coerce to 0; mismatched-length lists zip to the shorter."""
+    httpx_mock.add_response(
+        method="GET",
+        json={
+            "hits": [
+                {"fields": {"severity": "warn"}, "timestamps": ["t1", "t2"], "values": ["bad", 4]},
+                {"fields": {"severity": "x"}, "values": [1]},  # no timestamps list
+                [1, 2, 3],  # non-dict row
+                {"fields": {"severity": "info"}, "timestamps": ["a", "b", "c"], "values": [9]},
+            ]
+        },
+    )
+    async with httpx.AsyncClient() as http:
+        client = _make_client(http)
+        series = await client.hits(
+            expr="*", start="2026-05-19T00:00:00+00:00", end="2026-05-19T01:00:00+00:00", step="1m"
+        )
+    # row 0 kept (count "bad"->0, 4 kept); row 1 skipped; row 2 skipped;
+    # row 3 kept (zip to shorter -> 1 pair).
+    assert len(series) == 2  # noqa: PLR2004
+    assert series[0].field_value == "warn"
+    assert series[0].counts == [0, 4]
+    assert series[1].field_value == "info"
+    assert series[1].timestamps == ["a"]
+    assert series[1].counts == [9]
+
+
+@pytest.mark.asyncio
+async def test_hits_skips_non_string_timestamps_and_non_dict_fields(
+    httpx_mock: HTTPXMock,
+) -> None:
+    """_parse_hits tolerates a non-dict 'fields' (field_value stays None) and skips
+    a non-string timestamp entry (continue), keeping the valid (ts, count) pair."""
+    httpx_mock.add_response(
+        method="GET",
+        json={
+            "hits": [
+                {
+                    "fields": ["not", "a", "dict"],
+                    "timestamps": [99999, "2026-05-19T00:00:00Z"],
+                    "values": [1, 2],
+                }
+            ]
+        },
+    )
+    async with httpx.AsyncClient() as http:
+        client = _make_client(http)
+        series = await client.hits(
+            expr="*",
+            start="2026-05-19T00:00:00+00:00",
+            end="2026-05-19T01:00:00+00:00",
+            step="1m",
+        )
+    assert len(series) == 1
+    assert series[0].field_value is None
+    assert series[0].timestamps == ["2026-05-19T00:00:00Z"]
+    assert series[0].counts == [2]
+
+
+@pytest.mark.asyncio
+async def test_hits_non_object_body_returns_empty(httpx_mock: HTTPXMock) -> None:
+    httpx_mock.add_response(method="GET", text="[1,2,3]")
+    async with httpx.AsyncClient() as http:
+        client = _make_client(http)
+        series = await client.hits(
+            expr="*", start="2026-05-19T00:00:00+00:00", end="2026-05-19T01:00:00+00:00", step="1m"
+        )
+    assert series == []
+
+
+@pytest.mark.asyncio
+async def test_hits_unparseable_body_returns_empty(httpx_mock: HTTPXMock) -> None:
+    httpx_mock.add_response(method="GET", text="not-json")
+    async with httpx.AsyncClient() as http:
+        client = _make_client(http)
+        series = await client.hits(
+            expr="*", start="2026-05-19T00:00:00+00:00", end="2026-05-19T01:00:00+00:00", step="1m"
+        )
+    assert series == []
+
+
+@pytest.mark.asyncio
+async def test_hits_missing_hits_key_returns_empty(httpx_mock: HTTPXMock) -> None:
+    httpx_mock.add_response(method="GET", json={"other": 1})
+    async with httpx.AsyncClient() as http:
+        client = _make_client(http)
+        series = await client.hits(
+            expr="*", start="2026-05-19T00:00:00+00:00", end="2026-05-19T01:00:00+00:00", step="1m"
+        )
+    assert series == []
+
+
+@pytest.mark.asyncio
+async def test_hits_raises_on_non_200(httpx_mock: HTTPXMock) -> None:
+    httpx_mock.add_response(method="GET", status_code=500, text="secret body")
+    async with httpx.AsyncClient() as http:
+        client = _make_client(http)
+        with pytest.raises(VictoriaLogsClientError) as exc_info:
+            await client.hits(
+                expr="*",
+                start="2026-05-19T00:00:00+00:00",
+                end="2026-05-19T01:00:00+00:00",
+                step="1m",
+            )
+    assert "secret body" not in str(exc_info.value)
+    assert "500" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_hits_raises_on_timeout(httpx_mock: HTTPXMock) -> None:
+    httpx_mock.add_exception(httpx.TimeoutException("timed out"))
+    async with httpx.AsyncClient() as http:
+        client = _make_client(http)
+        with pytest.raises(VictoriaLogsClientError):
+            await client.hits(
+                expr="*",
+                start="2026-05-19T00:00:00+00:00",
+                end="2026-05-19T01:00:00+00:00",
+                step="1m",
+            )
+
+
+@pytest.mark.asyncio
+async def test_hits_raises_on_connect_error(httpx_mock: HTTPXMock) -> None:
+    httpx_mock.add_exception(httpx.ConnectError("refused"))
+    async with httpx.AsyncClient() as http:
+        client = _make_client(http)
+        with pytest.raises(VictoriaLogsClientError):
+            await client.hits(
+                expr="*",
+                start="2026-05-19T00:00:00+00:00",
+                end="2026-05-19T01:00:00+00:00",
+                step="1m",
             )

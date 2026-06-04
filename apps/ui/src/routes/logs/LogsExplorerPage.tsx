@@ -223,6 +223,19 @@ export function LogsExplorerPage() {
     writeUrl(advancedMode, committedPlainText, committedLogsQl, next, selectedIdentities)
   }
 
+  // STAGE-004-019 — narrow the range to a clicked histogram bucket
+  // [startIso, endIso). Commits a CUSTOM absolute range via the same setRange +
+  // writeUrl choke-point as the range picker, so URL + persistence + history all
+  // fire. Bad ISO (shouldn't happen) is a no-op.
+  const handleNarrowRange = (startIso: string, endIso: string): void => {
+    const s = parseIso(startIso)
+    const e = parseIso(endIso)
+    if (s === null || e === null) return
+    const next: TimeRangeValue = { kind: 'custom', start: s, end: e }
+    setRange(next)
+    writeUrl(advancedMode, committedPlainText, committedLogsQl, next, selectedIdentities)
+  }
+
   const handleToggleAdvanced = (nextAdvanced: boolean): void => {
     setAdvancedMode(nextAdvanced)
     // Rewrite the URL to reflect the NEW active mode's COMMITTED value. Both
@@ -399,6 +412,7 @@ export function LogsExplorerPage() {
         restoreScrollTarget={seed.restoreScrollTarget}
         onAddMsgFilter={appendMsgFilter}
         onAddFieldFilter={appendFieldFilter}
+        onNarrowRange={handleNarrowRange}
       />
       <SaveQueryModal open={saveOpen} onOpenChange={setSaveOpen} buildPayload={buildSavePayload} />
     </div>

@@ -54,7 +54,7 @@ _CANONICAL_SEVERITIES: frozenset[str] = frozenset(
 )
 
 
-def _normalize_severity(raw: str | None) -> str | None:
+def normalize_severity(raw: str | None) -> str | None:
     """Normalize a raw severity token to the canonical lowercase set.
 
     Rules (D5):
@@ -113,7 +113,7 @@ def from_victorialogs_line(line: VlLogLine) -> LogLine:
     fields: dict[str, Any] = dict(line.fields)
 
     raw_severity = line.fields.get("severity")
-    severity = _normalize_severity(raw_severity)
+    severity = normalize_severity(raw_severity)
     if raw_severity is not None:
         fields["severity_raw"] = raw_severity
 
@@ -131,4 +131,4 @@ def from_victorialogs_line(line: VlLogLine) -> LogLine:
     )
 
 
-__all__ = ["LogLine", "from_victorialogs_line"]
+__all__ = ["LogLine", "from_victorialogs_line", "normalize_severity"]

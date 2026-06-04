@@ -25,8 +25,10 @@ __all__ = [
     "ErrorPayload",
     "FieldDescriptor",
     "HealthzResponse",
+    "HistogramBucket",
     "IngestResponse",
     "LogsFieldsResponse",
+    "LogsHistogramResponse",
     "LogsQueryResponse",
     "LogsServicesResponse",
     "LogsStreamSummary",
@@ -327,6 +329,37 @@ class LogsFieldsResponse(BaseModel):
     fields: list[FieldDescriptor]
     sampled_lines: int
     truncated: bool
+
+
+class HistogramBucket(BaseModel):
+    """One time-bucket in the logs density histogram (STAGE-004-019).
+
+    `start_ts` is the bucket-start ISO-8601 UTC timestamp — the click target the
+    frontend uses to narrow the range to [start_ts, start_ts + bucket_duration_ms).
+    `counts_by_severity` always carries all three coarse keys (error/warn/info),
+    zeros included, so the stacked chart has no gaps. `total` is their sum.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    start_ts: str = Field(description="Bucket-start ISO-8601 UTC timestamp (the click target)")
+    counts_by_severity: dict[str, int] = Field(
+        description="Coarse severity counts; always keys error/warn/info (zeros included)"
+    )
+    total: int = Field(description="Sum of counts_by_severity for this bucket")
+
+
+class LogsHistogramResponse(BaseModel):
+    """Response for GET /api/logs/histogram (STAGE-004-019).
+
+    `buckets` is time-ascending, the START-aligned buckets covering [start, end]
+    (may be buckets + 1 due to VL's inclusive end). `bucket_duration_ms` is the
+    bucket width; the frontend derives each bar's click window as
+    [start_ts, start_ts + bucket_duration_ms).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    buckets: list[HistogramBucket]
+    bucket_duration_ms: int
 
 
 class SavedServiceIdentity(BaseModel):

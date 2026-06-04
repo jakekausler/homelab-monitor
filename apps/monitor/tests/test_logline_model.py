@@ -1,6 +1,6 @@
 """Unit tests for the converged LogLine model + VictoriaLogs mapper.
 
-STAGE-004-002. Covers every branch of _normalize_severity and
+STAGE-004-002. Covers every branch of normalize_severity and
 from_victorialogs_line for the 100% kernel coverage gate.
 """
 
@@ -9,8 +9,8 @@ from __future__ import annotations
 import pytest
 
 from homelab_monitor.kernel.logs.models import (
-    _normalize_severity,  # pyright: ignore[reportPrivateUsage]  -- testing the helper's branch matrix directly
     from_victorialogs_line,
+    normalize_severity,
 )
 from homelab_monitor.kernel.logs.victorialogs_client import VlLogLine
 
@@ -24,7 +24,7 @@ def _vl(**fields: str) -> VlLogLine:
     )
 
 
-# ---------- _normalize_severity: numerics ----------
+# ---------- normalize_severity: numerics ----------
 
 
 @pytest.mark.parametrize(
@@ -41,10 +41,10 @@ def _vl(**fields: str) -> VlLogLine:
     ],
 )
 def test_normalize_syslog_numerics(raw: str, expected: str) -> None:
-    assert _normalize_severity(raw) == expected
+    assert normalize_severity(raw) == expected
 
 
-# ---------- _normalize_severity: aliases ----------
+# ---------- normalize_severity: aliases ----------
 
 
 @pytest.mark.parametrize(
@@ -58,10 +58,10 @@ def test_normalize_syslog_numerics(raw: str, expected: str) -> None:
     ],
 )
 def test_normalize_aliases(raw: str, expected: str) -> None:
-    assert _normalize_severity(raw) == expected
+    assert normalize_severity(raw) == expected
 
 
-# ---------- _normalize_severity: canonical passthrough ----------
+# ---------- normalize_severity: canonical passthrough ----------
 
 
 @pytest.mark.parametrize(
@@ -69,10 +69,10 @@ def test_normalize_aliases(raw: str, expected: str) -> None:
     ["debug", "info", "notice", "warn", "error", "critical", "alert", "emergency"],
 )
 def test_normalize_canonical_passthrough(canonical: str) -> None:
-    assert _normalize_severity(canonical) == canonical
+    assert normalize_severity(canonical) == canonical
 
 
-# ---------- _normalize_severity: case-insensitivity ----------
+# ---------- normalize_severity: case-insensitivity ----------
 
 
 @pytest.mark.parametrize(
@@ -85,26 +85,26 @@ def test_normalize_canonical_passthrough(canonical: str) -> None:
     ],
 )
 def test_normalize_mixed_case(raw: str, expected: str) -> None:
-    assert _normalize_severity(raw) == expected
+    assert normalize_severity(raw) == expected
 
 
-# ---------- _normalize_severity: edge cases ----------
+# ---------- normalize_severity: edge cases ----------
 
 
 def test_normalize_unknown_defaults_to_info() -> None:
-    assert _normalize_severity("weird") == "info"
+    assert normalize_severity("weird") == "info"
 
 
 def test_normalize_none_returns_none() -> None:
-    assert _normalize_severity(None) is None
+    assert normalize_severity(None) is None
 
 
 def test_normalize_empty_returns_none() -> None:
-    assert _normalize_severity("") is None
+    assert normalize_severity("") is None
 
 
 def test_normalize_whitespace_returns_none() -> None:
-    assert _normalize_severity("   ") is None
+    assert normalize_severity("   ") is None
 
 
 # ---------- from_victorialogs_line: severity promotion ----------

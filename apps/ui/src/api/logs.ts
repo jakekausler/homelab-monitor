@@ -6,6 +6,7 @@ import type { Schema } from './types'
 type LogsQueryResponse = Schema<'LogsQueryResponse'>
 type LogsServicesResponse = Schema<'LogsServicesResponse'>
 type LogsFieldsResponse = Schema<'LogsFieldsResponse'>
+type LogsHistogramResponse = Schema<'LogsHistogramResponse'>
 
 /**
  * STAGE-004-012A — a selected stream picker identity. The identity is the PAIR
@@ -27,6 +28,8 @@ export const logsQueryKeys = {
     ['logs', 'services', start, end, limit] as const,
   fields: (expr: string, start: string, end: string, services: string, sample: number) =>
     ['logs', 'fields', expr, start, end, services, sample] as const,
+  histogram: (expr: string, start: string, end: string, buckets: number, services: string) =>
+    ['logs', 'histogram', expr, start, end, buckets, services] as const,
 }
 
 /**
@@ -112,6 +115,43 @@ export function useLogsFieldsQuery(
         },
       })
       return unwrap<LogsFieldsResponse>(result)
+    },
+    enabled: expr.length > 0 && start.length > 0 && end.length > 0,
+    staleTime: 30_000,
+    retry: false,
+  })
+}
+
+/**
+ * STAGE-004-019 — severity-stacked log-density histogram for the current scope.
+ * Mirrors useLogsFieldsQuery: typed apiClient.GET, 30s staleTime (matches the
+ * backend cache TTL), enabled only when a window is resolved. `services` is the
+ * CSV `<source_type>:<service>` form; the backend composes it.
+ */
+const HISTOGRAM_DEFAULT_BUCKETS = 60
+
+export function useLogsHistogramQuery(
+  expr: string,
+  start: string,
+  end: string,
+  buckets = HISTOGRAM_DEFAULT_BUCKETS,
+  services = '',
+) {
+  return useQuery({
+    queryKey: logsQueryKeys.histogram(expr, start, end, buckets, services),
+    queryFn: async () => {
+      const result = await apiClient.GET('/api/logs/histogram', {
+        params: {
+          query: {
+            expr,
+            start,
+            end,
+            buckets,
+            ...(services.length > 0 ? { services } : {}),
+          },
+        },
+      })
+      return unwrap<LogsHistogramResponse>(result)
     },
     enabled: expr.length > 0 && start.length > 0 && end.length > 0,
     staleTime: 30_000,

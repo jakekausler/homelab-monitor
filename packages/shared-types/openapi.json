@@ -2010,6 +2010,37 @@
         "title": "HeartbeatStateOut",
         "type": "object"
       },
+      "HistogramBucket": {
+        "additionalProperties": false,
+        "description": "One time-bucket in the logs density histogram (STAGE-004-019).\n\n`start_ts` is the bucket-start ISO-8601 UTC timestamp \u2014 the click target the\nfrontend uses to narrow the range to [start_ts, start_ts + bucket_duration_ms).\n`counts_by_severity` always carries all three coarse keys (error/warn/info),\nzeros included, so the stacked chart has no gaps. `total` is their sum.",
+        "properties": {
+          "counts_by_severity": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "description": "Coarse severity counts; always keys error/warn/info (zeros included)",
+            "title": "Counts By Severity",
+            "type": "object"
+          },
+          "start_ts": {
+            "description": "Bucket-start ISO-8601 UTC timestamp (the click target)",
+            "title": "Start Ts",
+            "type": "string"
+          },
+          "total": {
+            "description": "Sum of counts_by_severity for this bucket",
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "start_ts",
+          "counts_by_severity",
+          "total"
+        ],
+        "title": "HistogramBucket",
+        "type": "object"
+      },
       "ImageUpdateDetail": {
         "properties": {
           "baseline_source_hash": {
@@ -2517,6 +2548,29 @@
           "truncated"
         ],
         "title": "LogsFieldsResponse",
+        "type": "object"
+      },
+      "LogsHistogramResponse": {
+        "additionalProperties": false,
+        "description": "Response for GET /api/logs/histogram (STAGE-004-019).\n\n`buckets` is time-ascending, the START-aligned buckets covering [start, end]\n(may be buckets + 1 due to VL's inclusive end). `bucket_duration_ms` is the\nbucket width; the frontend derives each bar's click window as\n[start_ts, start_ts + bucket_duration_ms).",
+        "properties": {
+          "bucket_duration_ms": {
+            "title": "Bucket Duration Ms",
+            "type": "integer"
+          },
+          "buckets": {
+            "items": {
+              "$ref": "#/components/schemas/HistogramBucket"
+            },
+            "title": "Buckets",
+            "type": "array"
+          }
+        },
+        "required": [
+          "buckets",
+          "bucket_duration_ms"
+        ],
+        "title": "LogsHistogramResponse",
         "type": "object"
       },
       "LogsQueryResponse": {
@@ -6489,6 +6543,100 @@
           }
         },
         "summary": "Logs Fields"
+      }
+    },
+    "/api/logs/histogram": {
+      "get": {
+        "description": "Severity-stacked log-density histogram over [start, end] (STAGE-004-019).\n\nONE VictoriaLogs ``/select/logsql/hits?field=severity`` call, re-binned onto\nSTART-aligned buckets + coarse-mapped to error/warn/info. Same scope-\ncomposition + window-validation as /api/logs/query. Maps\nVictoriaLogsClientError -> 502 ``upstream_unavailable``.\n\nAuth: cookie session required. CSRF NOT enforced on GET.",
+        "operationId": "logs_histogram_api_logs_histogram_get",
+        "parameters": [
+          {
+            "description": "LogsQL expression",
+            "in": "query",
+            "name": "expr",
+            "required": true,
+            "schema": {
+              "description": "LogsQL expression",
+              "title": "Expr",
+              "type": "string"
+            }
+          },
+          {
+            "description": "ISO-8601 UTC start time",
+            "in": "query",
+            "name": "start",
+            "required": true,
+            "schema": {
+              "description": "ISO-8601 UTC start time",
+              "title": "Start",
+              "type": "string"
+            }
+          },
+          {
+            "description": "ISO-8601 UTC end time",
+            "in": "query",
+            "name": "end",
+            "required": true,
+            "schema": {
+              "description": "ISO-8601 UTC end time",
+              "title": "End",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "buckets",
+            "required": false,
+            "schema": {
+              "default": 60,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Buckets",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "CSV of <source_type>:<service> identities",
+            "in": "query",
+            "name": "services",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "CSV of <source_type>:<service> identities",
+              "title": "Services"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogsHistogramResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Logs Histogram"
       }
     },
     "/api/logs/query": {

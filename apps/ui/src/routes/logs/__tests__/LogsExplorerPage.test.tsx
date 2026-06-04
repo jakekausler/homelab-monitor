@@ -28,6 +28,7 @@ afterEach(() => {
 vi.mock('@/api/logs', () => ({
   useLogsQuery: vi.fn(),
   useLogsServicesQuery: vi.fn(),
+  useLogsHistogramQuery: vi.fn(() => ({ data: undefined, isLoading: false, isError: false })),
   identitiesToServicesCsv: (identities: Array<{ source_type: string; service: string }>) =>
     identities.map((i) => `${i.source_type}:${i.service}`).join(','),
 }))

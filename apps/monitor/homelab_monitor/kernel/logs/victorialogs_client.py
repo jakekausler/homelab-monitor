@@ -56,6 +56,24 @@ class VlQueryResult:
     truncated: bool
 
 
+@dataclass(slots=True, frozen=True)
+class HitsSeries:
+    """One per-field-value time series from VictoriaLogs ``/select/logsql/hits``.
+
+    With ``field=severity``, VL returns ONE HitsSeries per distinct raw severity
+    token. ``timestamps`` are bucket-START times (ISO-8601 UTC), aligned to
+    VL's step/epoch grid — NOT to the caller's ``start`` — so callers re-bin
+    onto their own start-aligned buckets. ``counts`` is parallel to
+    ``timestamps`` (count of matching lines in each bucket). ``field_value`` is
+    the raw severity token for this series (None when VL emits a ``fields:{}``
+    total series, e.g. an un-grouped call).
+    """
+
+    field_value: str | None
+    timestamps: list[str]
+    counts: list[int]
+
+
 def build_amode_query(run_id: str) -> str:
     """LogsQL for an A-mode (wrapper) run: UUID-exact.
 
@@ -202,6 +220,59 @@ class VictoriaLogsClient:
 
         return self._parse_field_names(resp.text)
 
+    async def hits(
+        self,
+        *,
+        expr: str,
+        start: str,
+        end: str,
+        step: str,
+        field: str = "severity",
+    ) -> list[HitsSeries]:
+        """Per-bucket hit counts grouped by ``field`` over [start, end].
+
+        Calls VictoriaLogs ``/select/logsql/hits`` (landed v0.8.0;
+        ``field``-grouping on the HTTP endpoint landed v0.25.0). Returns one
+        HitsSeries per distinct value of ``field`` (default ``severity``). The
+        response is::
+
+            {"hits": [
+                {"fields": {"severity": "<raw>"},
+                 "timestamps": ["<ISO>", ...],
+                 "values": [<count>, ...],
+                 "total": N},
+                ...
+            ]}
+
+        ``step`` is a VL duration string (e.g. ``"60000ms"``); VL's bucket-start
+        timestamps are aligned to the step/epoch grid, NOT to ``start``, so the
+        caller re-bins. ``end`` is INCLUSIVE in v0.30.0.
+
+        Like ``field_names()`` this is a single small JSON object (NOT a bounded
+        NDJSON stream) — no max_lines/max_bytes cap applies. Same error contract:
+        raises VictoriaLogsClientError on transport error, timeout, or non-200.
+        Malformed / non-conforming rows are skipped silently.
+        """
+        params = {"query": expr, "start": start, "end": end, "step": step, "field": field}
+        try:
+            resp = await self._http_client.get(
+                f"{self._vl_url}/select/logsql/hits",
+                params=params,
+                timeout=self._limits.timeout_seconds,
+            )
+        except (httpx.TimeoutException, httpx.RequestError) as exc:
+            self._log.warning("victorialogs_client.hits_error", error=str(exc))
+            msg = f"victorialogs hits failed: {exc}"
+            raise VictoriaLogsClientError(msg) from exc
+
+        if resp.status_code != _HTTP_OK:
+            self._log.warning("victorialogs_client.hits_status", status=resp.status_code)
+            # SECURITY: do not relay resp.text (may carry cross-query excerpts).
+            msg = f"victorialogs hits returned status {resp.status_code}"
+            raise VictoriaLogsClientError(msg)
+
+        return self._parse_hits(resp.text, field=field)
+
     @staticmethod
     def _parse_field_names(body: str) -> list[tuple[str, int]]:
         """Parse the field_names JSON object into (name, hits) pairs.
@@ -237,6 +308,60 @@ class VictoriaLogsClient:
             except (TypeError, ValueError):
                 continue
             out.append((name, hits))
+        return out
+
+    @staticmethod
+    def _parse_hits(body: str, *, field: str) -> list[HitsSeries]:
+        """Parse the ``/hits`` JSON object into HitsSeries list.
+
+        Tolerant: a malformed body, a non-object top level, a missing/non-list
+        ``hits`` key, or any individual row that is not a dict yields a skip.
+        Within a row, ``timestamps``/``values`` must both be lists; they are
+        zipped to the SHORTER length (defensive against VL length mismatch).
+        A value that is not int-coercible is treated as 0. ``field_value`` is
+        read from ``row["fields"][field]`` when present and a string, else None.
+        Returns [] on a wholly-unparseable body rather than raising.
+        """
+        try:
+            obj_raw: object = json.loads(body)
+        except ValueError:
+            return []
+        if not isinstance(obj_raw, dict):
+            return []
+        obj = cast(dict[str, Any], obj_raw)
+        hits_raw = obj.get("hits")
+        if not isinstance(hits_raw, list):
+            return []
+        hits_list = cast(list[Any], hits_raw)
+        out: list[HitsSeries] = []
+        for row_raw in hits_list:
+            if not isinstance(row_raw, dict):
+                continue
+            row = cast(dict[str, Any], row_raw)
+            ts_raw = row.get("timestamps")
+            vals_raw = row.get("values")
+            if not isinstance(ts_raw, list) or not isinstance(vals_raw, list):
+                continue
+            ts_list = cast(list[Any], ts_raw)
+            vals_list = cast(list[Any], vals_raw)
+            field_value: str | None = None
+            fields_raw = row.get("fields")
+            if isinstance(fields_raw, dict):
+                fv = cast(dict[str, Any], fields_raw).get(field)
+                if isinstance(fv, str):
+                    field_value = fv
+            timestamps: list[str] = []
+            counts: list[int] = []
+            for ts_item, val_item in zip(ts_list, vals_list, strict=False):
+                if not isinstance(ts_item, str):
+                    continue
+                try:
+                    count = int(val_item)  # type: ignore[arg-type]
+                except (TypeError, ValueError):
+                    count = 0
+                timestamps.append(ts_item)
+                counts.append(count)
+            out.append(HitsSeries(field_value=field_value, timestamps=timestamps, counts=counts))
         return out
 
     def with_limits(self, limits: VlQueryLimits) -> VictoriaLogsClient:
@@ -291,6 +416,7 @@ class VictoriaLogsClient:
 
 
 __all__ = [
+    "HitsSeries",
     "VictoriaLogsClient",
     "VictoriaLogsClientError",
     "VlLogLine",

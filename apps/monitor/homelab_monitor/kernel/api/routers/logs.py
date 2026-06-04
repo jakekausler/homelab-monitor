@@ -19,6 +19,7 @@ from homelab_monitor.kernel.api.dependencies import (
 from homelab_monitor.kernel.api.errors import ConflictProblem, HttpProblem, NotFoundProblem
 from homelab_monitor.kernel.api.schemas import (
     LogsFieldsResponse,
+    LogsHistogramResponse,
     LogsQueryResponse,
     LogsServicesResponse,
     LogsStreamsResponse,
@@ -34,6 +35,10 @@ from homelab_monitor.kernel.db.repository import SqliteRepository
 from homelab_monitor.kernel.logs.fields import (
     FieldsCache,
     fetch_fields,
+)
+from homelab_monitor.kernel.logs.histogram import (
+    HistogramCache,
+    fetch_histogram,
 )
 from homelab_monitor.kernel.logs.models import from_victorialogs_line
 from homelab_monitor.kernel.logs.pagination import (
@@ -74,6 +79,10 @@ _FIELDS_DEFAULT_SAMPLE = 200
 _FIELDS_MIN_SAMPLE = 1
 _FIELDS_MAX_SAMPLE = 2000
 
+_HISTOGRAM_DEFAULT_BUCKETS = 60
+_HISTOGRAM_MIN_BUCKETS = 1
+_HISTOGRAM_MAX_BUCKETS = 500
+
 # Process-wide 30s TTL cache keyed on (start, end, limit). Module-scoped so it
 # survives across requests within a worker. Clock injectable only in tests via
 # the module-level rebind (see test).
@@ -82,6 +91,10 @@ _services_cache = ServicesCache()
 # Process-wide 30s TTL cache for /logs/fields, keyed on
 # (sha256(effective_expr), start, end, sample_n). Module-scoped; rebind in tests.
 _fields_cache = FieldsCache()
+
+# Process-wide 30s TTL cache for /logs/histogram, keyed on
+# (sha256(effective_expr), start, end, buckets). Module-scoped; rebind in tests.
+_histogram_cache = HistogramCache()
 
 
 def _compose_services_expr(expr: str, services_csv: str | None) -> str:
@@ -296,6 +309,72 @@ async def logs_fields(  # noqa: PLR0913
         ) from exc
 
     _fields_cache.put(key, response)
+    return response
+
+
+@router.get("/logs/histogram", response_model=LogsHistogramResponse)
+async def logs_histogram(  # noqa: PLR0913
+    expr: str = Query(..., description="LogsQL expression"),
+    start: str = Query(..., description="ISO-8601 UTC start time"),
+    end: str = Query(..., description="ISO-8601 UTC end time"),
+    # Out-of-range buckets is REJECTED with 422 (FastAPI ge/le), not clamped.
+    buckets: int = Query(
+        _HISTOGRAM_DEFAULT_BUCKETS, ge=_HISTOGRAM_MIN_BUCKETS, le=_HISTOGRAM_MAX_BUCKETS
+    ),
+    services: str | None = Query(None, description="CSV of <source_type>:<service> identities"),
+    _user: User = Depends(require_session()),  # noqa: B008
+    vl_url: str = Depends(get_vl_url),
+    http_client: httpx.AsyncClient = Depends(get_http_client),  # noqa: B008
+) -> LogsHistogramResponse:
+    """Severity-stacked log-density histogram over [start, end] (STAGE-004-019).
+
+    ONE VictoriaLogs ``/select/logsql/hits?field=severity`` call, re-binned onto
+    START-aligned buckets + coarse-mapped to error/warn/info. Same scope-
+    composition + window-validation as /api/logs/query. Maps
+    VictoriaLogsClientError -> 502 ``upstream_unavailable``.
+
+    Auth: cookie session required. CSRF NOT enforced on GET.
+    """
+    log: BoundLogger = cast(
+        BoundLogger,
+        structlog.get_logger().bind(component="logs_histogram"),
+    )
+
+    if len(expr) > _MAX_EXPR_LEN:
+        raise HttpProblem(
+            status_code=400,
+            code="invalid_expr",
+            message="expression too long",
+        )
+
+    parse_and_validate_window(start, end)
+
+    effective_expr = _compose_services_expr(expr, services)
+
+    key = HistogramCache.make_key(expr=effective_expr, start=start, end=end, buckets=buckets)
+    cached = _histogram_cache.get(key)
+    if cached is not None:
+        return cached
+
+    base_limits = load_vl_query_limits()
+    client = VictoriaLogsClient(vl_url=vl_url, http_client=http_client, limits=base_limits)
+    try:
+        response = await fetch_histogram(
+            client=client,
+            expr=effective_expr,
+            start=start,
+            end=end,
+            buckets=buckets,
+        )
+    except VictoriaLogsClientError as exc:
+        log.warning("logs_histogram.upstream_error", error=str(exc))
+        raise HttpProblem(
+            status_code=502,
+            code="upstream_unavailable",
+            message="victorialogs histogram query failed",
+        ) from exc
+
+    _histogram_cache.put(key, response)
     return response
 
 

@@ -19,6 +19,7 @@ import { StreamPickerSidebar } from '@/components/logs/StreamPickerSidebar'
 import { SavedQueriesPanel } from './SavedQueriesPanel'
 import { QueryHistoryPanel } from './QueryHistoryPanel'
 import { FieldsDiscoveryPanel } from './FieldsDiscoveryPanel'
+import { HistogramChart } from './HistogramChart'
 import { TimeRangeControl } from '@/components/logs/TimeRangeControl'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { translateSearchToLogsQl } from '@/lib/logsQlTranslate'
@@ -94,6 +95,9 @@ interface LogsExplorerBodyProps {
    *  LogsQL query (routes through writeUrl). Page provides; enables add-to-filter
    *  for host/severity/bag fields. */
   onAddFieldFilter?: (field: string, value: string) => void
+  /** STAGE-004-019: narrow the range to a clicked histogram bucket
+   *  [startIso, endIso). Page commits a custom absolute range via writeUrl. */
+  onNarrowRange: (startIso: string, endIso: string) => void
 }
 
 export function LogsExplorerBody({
@@ -121,6 +125,7 @@ export function LogsExplorerBody({
   restoreScrollTarget,
   onAddMsgFilter,
   onAddFieldFilter,
+  onNarrowRange,
 }: LogsExplorerBodyProps) {
   const [wrap, setWrap] = useState(false)
   // STAGE-004-009 timezone wiring (mirrors the Docker viewer).
@@ -607,6 +612,15 @@ export function LogsExplorerBody({
       )}
 
       <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
+        <div className="shrink-0 border-b border-border pb-1">
+          <HistogramChart
+            expr={expr}
+            start={startIso}
+            end={endIso}
+            services={servicesCsv}
+            onNarrowRange={onNarrowRange}
+          />
+        </div>
         <LogViewer
           useLogs={useLogs}
           headerSlot={header}
