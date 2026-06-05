@@ -1,6 +1,7 @@
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
 
 import { apiClient, unwrap } from './client'
+import type { LogLine } from '@/components/logs/types'
 import type { Schema } from './types'
 
 type LogsQueryResponse = Schema<'LogsQueryResponse'>
@@ -60,6 +61,32 @@ export function useLogsQuery(expr: string, start: string, end: string, services 
     enabled: expr.length > 0 && start.length > 0 && end.length > 0,
     retry: false,
   })
+}
+
+/**
+ * STAGE-004-024 — window-shift "Load newer" fetch. NO backend change:
+ * /api/logs/query returns the LATEST N lines in [start,end], so Load-newer is a
+ * one-shot query over [newestShownTimestamp, end]. Caller dedupes against the
+ * current buffer. Known limitation: if >page-size new lines accumulated since
+ * `start`, the oldest of that gap are skipped (converges via repeat / tail).
+ */
+export async function fetchNewerLogs(
+  expr: string,
+  start: string,
+  end: string,
+  services = '',
+): Promise<LogLine[]> {
+  const result = await apiClient.GET('/api/logs/query', {
+    params: {
+      query: {
+        expr,
+        start,
+        end,
+        ...(services.length > 0 ? { services } : {}),
+      },
+    },
+  })
+  return unwrap<LogsQueryResponse>(result).lines
 }
 
 /**

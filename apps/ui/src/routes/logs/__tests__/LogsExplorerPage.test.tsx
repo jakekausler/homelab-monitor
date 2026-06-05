@@ -25,12 +25,19 @@ afterEach(() => {
 
 // Mock the data hook so the route renders without network. We capture the
 // (expr, start, end) args to assert the plain-text → LogsQL translation.
-vi.mock('@/api/logs', () => ({
-  useLogsQuery: vi.fn(),
-  useLogsServicesQuery: vi.fn(),
-  useLogsHistogramQuery: vi.fn(() => ({ data: undefined, isLoading: false, isError: false })),
-  identitiesToServicesCsv: (identities: Array<{ source_type: string; service: string }>) =>
-    identities.map((i) => `${i.source_type}:${i.service}`).join(','),
+vi.mock('@/api/logs', async () => {
+  const actual = await vi.importActual('@/api/logs')
+  return {
+    ...actual,
+    useLogsQuery: vi.fn(),
+    useLogsServicesQuery: vi.fn(),
+    useLogsHistogramQuery: vi.fn(() => ({ data: undefined, isLoading: false, isError: false })),
+    fetchNewerLogs: vi.fn(),
+  }
+})
+
+vi.mock('@/lib/logsTail', () => ({
+  useLogsTail: vi.fn(),
 }))
 
 // Force the LogsQlEditor narrow-viewport textarea path. NOTE: LogsExplorerBody
@@ -44,13 +51,16 @@ vi.mock('@/lib/useMediaQuery', () => ({
   useMediaQuery: vi.fn(() => true),
 }))
 
-import { useLogsQuery, useLogsServicesQuery } from '@/api/logs'
+import { fetchNewerLogs, useLogsQuery, useLogsServicesQuery } from '@/api/logs'
 import { useMediaQuery } from '@/lib/useMediaQuery'
+import { useLogsTail } from '@/lib/logsTail'
 
 // Typed against the REAL generated schema so a contract change breaks this test
 // instead of passing against a stale hand-written shape.
 type LogLine = Schema<'LogLine'>
 type LogsQueryResponse = Schema<'LogsQueryResponse'>
+
+let tailOnLines: ((batch: LogLine[]) => void) | undefined
 
 function makePage(
   overrides: Partial<{ lines: LogLine[]; next_cursor: string | null; has_more: boolean }> = {},
@@ -60,6 +70,18 @@ function makePage(
     next_cursor: null,
     has_more: false,
     ...overrides,
+  }
+}
+
+function makeLine(message: string): LogLine {
+  return {
+    timestamp: '2026-06-05T12:00:00Z',
+    message,
+    stream: 'stdout',
+    severity: null,
+    host: null,
+    service: null,
+    fields: {},
   }
 }
 
@@ -174,9 +196,25 @@ describe('LogsExplorerPage', () => {
     } as unknown as ReturnType<typeof useLogsServicesQuery>)
   }
 
+  function mockTail(overrides: Record<string, unknown> = {}): void {
+    tailOnLines = undefined
+    vi.mocked(useLogsTail).mockImplementation((_expr, _services, opts) => {
+      tailOnLines = opts.onLines
+      return {
+        status: 'idle',
+        error: null,
+        reconnect: vi.fn(),
+        ...overrides,
+      } as unknown as ReturnType<typeof useLogsTail>
+    })
+  }
+
   beforeEach(() => {
     mockLogsQuery()
     mockServicesQuery()
+    mockTail()
+    tailOnLines = undefined
+    vi.mocked(fetchNewerLogs).mockResolvedValue([])
   })
 
   it('renders the search input, time-range control, and a log viewer region', async () => {
@@ -527,5 +565,140 @@ describe('LogsExplorerPage', () => {
     fireEvent.click(toggle)
     // Assert the drawer is present by checking the StreamPickerSidebar root
     expect(await screen.findByTestId('stream-picker')).toBeInTheDocument()
+  })
+
+  it('Live tail toggle goes green (aria-pressed) when active', async () => {
+    renderRoute()
+    const t = await screen.findByTestId('logs-tail-toggle')
+    expect(t.getAttribute('aria-pressed')).toBe('false')
+    fireEvent.click(t)
+    expect(t.getAttribute('aria-pressed')).toBe('true')
+    expect(t.className).toContain('emerald')
+  })
+
+  it('tail keeps historical lines and appends live lines below', async () => {
+    mockLogsQuery({
+      data: { pages: [makePage({ lines: [makeLine('hist-1')] })], pageParams: [undefined] },
+    })
+    mockTail({ status: 'open' })
+    renderRoute()
+    await screen.findByTestId('logs-search-input')
+    expect(screen.getByText('hist-1')).toBeInTheDocument()
+    fireEvent.click(screen.getByTestId('logs-tail-toggle'))
+    // Simulate tail event
+    if (tailOnLines) {
+      fireEvent.click(screen.getByTestId('logs-tail-toggle')) // toggle to arm the tail
+      const { act } = await import('@testing-library/react')
+      act(() => {
+        tailOnLines?.([makeLine('live-1')])
+      })
+    }
+    // Both hist-1 and live-1 should be visible
+    expect(screen.getByText('hist-1')).toBeInTheDocument()
+    expect(screen.getByText('live-1')).toBeInTheDocument()
+  })
+
+  it('Load newer button present when not tailing, hidden while tailing', async () => {
+    mockLogsQuery({
+      data: { pages: [makePage({ lines: [makeLine('x')] })], pageParams: [undefined] },
+    })
+    renderRoute()
+    await screen.findByTestId('logs-search-input')
+    expect(screen.getByTestId('load-newer')).toBeInTheDocument()
+    fireEvent.click(screen.getByTestId('logs-tail-toggle'))
+    expect(screen.queryByTestId('load-newer')).toBeNull()
+  })
+
+  it('Load older stops tail', async () => {
+    mockLogsQuery({
+      hasNextPage: true,
+      data: {
+        pages: [makePage({ lines: [makeLine('x')], has_more: true })],
+        pageParams: [undefined],
+      },
+    })
+    mockTail({ status: 'open' })
+    renderRoute()
+    await screen.findByTestId('logs-search-input')
+    fireEvent.click(screen.getByTestId('logs-tail-toggle'))
+    expect(screen.getByTestId('logs-tail-toggle').getAttribute('aria-pressed')).toBe('true')
+    fireEvent.click(screen.getByTestId('load-older'))
+    expect(screen.getByTestId('logs-tail-toggle').getAttribute('aria-pressed')).toBe('false')
+  })
+
+  it('Load newer calls fetchNewerLogs and appends', async () => {
+    mockLogsQuery({
+      data: { pages: [makePage({ lines: [makeLine('x')] })], pageParams: [undefined] },
+    })
+    vi.mocked(fetchNewerLogs).mockResolvedValue([makeLine('newer-1')])
+    renderRoute()
+    await screen.findByTestId('logs-search-input')
+    fireEvent.click(screen.getByTestId('load-newer'))
+    expect(await screen.findByText(/newer-1/)).toBeInTheDocument()
+    expect(vi.mocked(fetchNewerLogs)).toHaveBeenCalled()
+  })
+
+  it('on-stop pins a custom end', async () => {
+    const { router } = renderRoute()
+    await screen.findByTestId('logs-search-input')
+    fireEvent.click(screen.getByTestId('logs-tail-toggle'))
+    fireEvent.click(screen.getByTestId('logs-tail-toggle'))
+    // Assert the URL now has end= (custom range)
+    expect(router.state.location.search.end).toBeDefined()
+  })
+
+  it('Stop preserves both historical and live lines (frozen survives range settle)', async () => {
+    mockLogsQuery({
+      data: {
+        pages: [makePage({ lines: [makeLine('hist-line')] })],
+        pageParams: [undefined],
+      },
+    })
+    mockTail({ status: 'open' })
+    renderRoute()
+    await screen.findByTestId('logs-search-input')
+
+    // Historical line must be visible from the initial query.
+    expect(screen.getByText('hist-line')).toBeInTheDocument()
+
+    // Start tail.
+    fireEvent.click(screen.getByTestId('logs-tail-toggle'))
+    expect(screen.getByTestId('logs-tail-toggle').getAttribute('aria-pressed')).toBe('true')
+
+    // Emit a live line.
+    const { act } = await import('@testing-library/react')
+    act(() => {
+      tailOnLines?.([makeLine('live-line')])
+    })
+    expect(screen.getByText('live-line')).toBeInTheDocument()
+
+    // Stop tail — this triggers onRangeChange + setFrozen(true).
+    fireEvent.click(screen.getByTestId('logs-tail-toggle'))
+    expect(screen.getByTestId('logs-tail-toggle').getAttribute('aria-pressed')).toBe('false')
+
+    // Flush router/async state: range settles to custom.
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    // Both lines must still be in the document — frozen state must have survived
+    // the range-settle render. Before the C1 fix, the range-settle triggered
+    // setFrozen(false) → resetWindowed → both lines were lost.
+    expect(screen.getByText('hist-line')).toBeInTheDocument()
+    expect(screen.getByText('live-line')).toBeInTheDocument()
+  })
+
+  it('shows an alert when fetchNewerLogs rejects', async () => {
+    mockLogsQuery({
+      data: { pages: [makePage({ lines: [makeLine('x')] })], pageParams: [undefined] },
+    })
+    vi.mocked(fetchNewerLogs).mockRejectedValue(new Error('network timeout'))
+    renderRoute()
+    await screen.findByTestId('logs-search-input')
+
+    fireEvent.click(screen.getByTestId('load-newer'))
+
+    // The inline role="alert" chip (shared with tail errors) must show the message.
+    expect(await screen.findByRole('alert')).toHaveTextContent('network timeout')
   })
 })

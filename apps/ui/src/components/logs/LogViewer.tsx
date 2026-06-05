@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ChevronUp } from 'lucide-react'
+import { ChevronDown, ChevronUp } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { ErrorDisplay } from '@/components/ErrorDisplay'
@@ -36,6 +36,11 @@ export function LogViewer({
     hasMore,
     isLoadingOlder,
     loadOlder,
+    trimmedOlder,
+    trimmedNewer,
+    hasNewer,
+    isLoadingNewer,
+    loadNewer,
   } = useLogs()
 
   // When a controlled selectedKey is provided (non-undefined), the parent owns
@@ -108,6 +113,11 @@ export function LogViewer({
 
           {(logStatus === 'available' || logStatus === 'running') && (
             <div className="space-y-2">
+              {trimmedOlder === true && (
+                <LogBanner tone="amber" testId="trimmed-older-banner" role="status">
+                  Older lines removed — Load older to fetch more.
+                </LogBanner>
+              )}
               {loadOlder != null && hasMore === true && (
                 <LoadOlderButton onClick={loadOlder} isLoading={isLoadingOlder ?? false} />
               )}
@@ -130,6 +140,14 @@ export function LogViewer({
                 {...(fieldInspectorEnabled && { onLineClick: handleLineClick })}
                 selectedKey={fieldInspectorEnabled ? selectedKey : null}
               />
+              {loadNewer != null && hasNewer === true && (
+                <LoadNewerButton onClick={loadNewer} isLoading={isLoadingNewer ?? false} />
+              )}
+              {trimmedNewer === true && (
+                <LogBanner tone="amber" testId="trimmed-newer-banner" role="status">
+                  Newer lines removed — Load newer to fetch more.
+                </LogBanner>
+              )}
             </div>
           )}
         </div>
@@ -151,6 +169,24 @@ function LoadOlderButton({ onClick, isLoading }: { onClick: () => void; isLoadin
       >
         <ChevronUp className={isLoading ? 'mr-1 size-4 animate-spin' : 'mr-1 size-4'} />
         {isLoading ? 'Loading…' : 'Load older'}
+      </Button>
+    </div>
+  )
+}
+
+function LoadNewerButton({ onClick, isLoading }: { onClick: () => void; isLoading: boolean }) {
+  return (
+    <div className="flex justify-center">
+      <Button
+        size="sm"
+        variant="outline"
+        onClick={onClick}
+        disabled={isLoading}
+        aria-busy={isLoading}
+        data-testid="load-newer"
+      >
+        <ChevronDown className={isLoading ? 'mr-1 size-4 animate-spin' : 'mr-1 size-4'} />
+        {isLoading ? 'Loading…' : 'Load newer'}
       </Button>
     </div>
   )

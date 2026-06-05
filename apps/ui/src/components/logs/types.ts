@@ -30,6 +30,12 @@ export interface UseLogsResult {
   hasMore?: boolean | undefined
   isLoadingOlder?: boolean | undefined
   loadOlder?: (() => void) | undefined
+  /** STAGE-004-024: bidirectional windowed pager. */
+  trimmedOlder?: boolean | undefined
+  trimmedNewer?: boolean | undefined
+  hasNewer?: boolean | undefined
+  isLoadingNewer?: boolean | undefined
+  loadNewer?: (() => void) | undefined
 }
 
 export interface LogViewerProps {

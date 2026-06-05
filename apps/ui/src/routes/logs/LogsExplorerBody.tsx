@@ -1,8 +1,9 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { Filter, RefreshCw, Save, Search, X } from 'lucide-react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { Activity, Filter, RefreshCw, Save, Search, X } from 'lucide-react'
 
 import { ApiError } from '@/api/client'
 import {
+  fetchNewerLogs,
   identitiesToServicesCsv,
   useLogsQuery,
   useLogsServicesQuery,
@@ -28,6 +29,9 @@ import { cn } from '@/lib/utils'
 import { useMediaQuery } from '@/lib/useMediaQuery'
 import { useTimezonePreference } from '@/lib/useTimezonePreference'
 import { patchExplorerState, LOG_SCROLL_CONTAINER_ATTR } from '@/lib/explorerState'
+import { useWindowedLogs, RENDER_CAP } from '@/lib/useWindowedLogs'
+import { useLogsTail } from '@/lib/logsTail'
+import { parseIso } from '@/lib/timeRange'
 import type { HistoryEntry } from '@/lib/queryHistory'
 import {
   ALL_PRESETS,
@@ -143,6 +147,22 @@ export function LogsExplorerBody({
   // Clearing this closes the panel AND removes the row highlight atomically.
   const [selection, setSelection] = useState<{ key: string; line: LogLine } | null>(null)
 
+  // STAGE-004-024: live tail state + refs
+  const [isTailing, setIsTailing] = useState(false)
+  const [sticky, setSticky] = useState(true)
+  const [frozen, setFrozen] = useState(false)
+  const [isLoadingNewer, setIsLoadingNewer] = useState(false)
+  const [loadNewerError, setLoadNewerError] = useState<string | null>(null)
+  // Latest-value refs read inside the scroll listener (which captures stale state).
+  const isTailingRef = useRef(false)
+  const stickyRef = useRef(true)
+  // Windowed buffer + page/query-key diff tracking
+  const windowed = useWindowedLogs()
+  const prevPagesLenRef = useRef(0)
+  const prevQueryKeyRef = useRef<string>('')
+  const linesRef = useRef(windowed.state.lines)
+  const HEADROOM = 200
+
   // Active mode decides the expr: advanced sends the COMMITTED raw LogsQL
   // verbatim (empty → match-all '*' to keep the always-enabled invariant);
   // plain translates the committed text into _msg:"…".
@@ -180,6 +200,14 @@ export function LogsExplorerBody({
   const servicesCsv = identitiesToServicesCsv(selectedIdentities)
   const logs = useLogsQuery(expr, startIso, endIso, servicesCsv)
 
+  const handleTailLines = useCallback(
+    (batch: typeof windowed.state.lines) => {
+      windowed.appendNewer(batch)
+    },
+    [windowed],
+  )
+  const tail = useLogsTail(expr, servicesCsv, { enabled: isTailing, onLines: handleTailLines })
+
   // Services query — depends on window ONLY, window-only refetch.
   const servicesQuery = useLogsServicesQuery(startIso, endIso)
   const servicesData = servicesQuery.data
@@ -207,6 +235,17 @@ export function LogsExplorerBody({
     }
   }, [selection, isMobile])
 
+  // STAGE-004-024: keep refs in sync for stale-closure fix
+  useEffect(() => {
+    isTailingRef.current = isTailing
+  }, [isTailing])
+  useEffect(() => {
+    stickyRef.current = sticky
+  }, [sticky])
+  useLayoutEffect(() => {
+    linesRef.current = windowed.state.lines
+  }, [windowed.state.lines])
+
   // STAGE-004-015 — scroll persistence. RE-POINTED: the vertical scroll container
   // is now the Explorer's internal results region (LogViewer's
   // data-log-scroll-container), NOT the page-level <main> (which no longer scrolls
@@ -227,10 +266,16 @@ export function LogsExplorerBody({
 
   // Debounced (200ms) scroll-save. Reads the main scroll container's scrollTop,
   // patches scroll_position only. patchExplorerState's read-modify-write preserves
-  // the query fields.
+  // the query fields. While tailing, track sticky instead of saving.
   const handleScroll = (): void => {
     const el = getScrollContainer()
     if (el === null) return
+    // While tailing: track sticky (near-bottom) and SKIP the historical scroll-save.
+    if (isTailingRef.current) {
+      const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 100
+      setSticky(nearBottom)
+      return
+    }
     const top = el.scrollTop
     if (scrollSaveTimer.current !== null) clearTimeout(scrollSaveTimer.current)
     scrollSaveTimer.current = setTimeout(() => {
@@ -252,6 +297,7 @@ export function LogsExplorerBody({
   }, [])
 
   const handleRefresh = (): void => {
+    setFrozen(false)
     setRefreshNonce((n) => n + 1)
     void logs.refetch()
   }
@@ -266,13 +312,17 @@ export function LogsExplorerBody({
   // pages[0] is the NEWEST window; reverse so oldest renders first (mirrors the
   // Docker viewer). LogsQueryResponse has NO log_status/truncated fields, so we
   // derive logStatus below from line presence.
-  const flatLines = pages
-    .slice()
-    .reverse()
-    .flatMap((p) => p.lines)
+  const flatLines = useMemo(
+    () =>
+      pages
+        .slice()
+        .reverse()
+        .flatMap((p) => p.lines),
+    [pages],
+  )
   const hasData = logs.data !== undefined
 
-  // Restore persisted scroll ONCE, after results render (flatLines populated) so
+  // Restore persisted scroll ONCE, after results render (windowed buffer populated) so
   // the container is tall enough to scroll. Gated by restoreScrollTarget (null when
   // URL took precedence / no persisted state). After restoring, only saving happens.
   // STAGE-004-018B: variable row heights (configurable columns) may invalidate this
@@ -282,16 +332,75 @@ export function LogsExplorerBody({
   useLayoutEffect(() => {
     const el = getScrollContainer()
     if (
+      !isTailing &&
       pendingRestoreRef.current &&
       restoreScrollTarget != null &&
       restoreScrollTarget > 0 &&
-      flatLines.length > 0 &&
+      windowed.state.lines.length > 0 &&
       el !== null
     ) {
-      el.scrollTo({ top: restoreScrollTarget })
+      if (typeof el.scrollTo === 'function') el.scrollTo({ top: restoreScrollTarget })
       pendingRestoreRef.current = false
     }
-  }, [flatLines.length, restoreScrollTarget])
+  }, [windowed.state.lines.length, restoreScrollTarget, isTailing])
+
+  useEffect(() => {
+    if (isTailing) pendingRestoreRef.current = false
+  }, [isTailing])
+
+  // STAGE-004-024: historical query → buffer effect (NEW)
+  const { reset: resetWindowed, prependOlder } = windowed
+  useEffect(() => {
+    if (frozen) {
+      // If the key matches the seeded pinned key (the range settling after Stop),
+      // leave frozen. If a genuine user query action changed the key, un-freeze.
+      const queryKey = `${expr}|${startIso}|${endIso}|${servicesCsv}`
+      if (queryKey !== prevQueryKeyRef.current) {
+        setFrozen(false)
+      }
+      return
+    }
+    const queryKey = `${expr}|${startIso}|${endIso}|${servicesCsv}`
+    const keyChanged = queryKey !== prevQueryKeyRef.current
+    // Early-return guard: if neither the query key nor pages count changed since
+    // the last dispatch, there is no genuine data change — skip to prevent a
+    // dispatch-per-render when pages/flatLines refs churn without new data.
+    if (!keyChanged && pages.length === prevPagesLenRef.current) {
+      return
+    }
+    if (keyChanged || pages.length <= 1) {
+      resetWindowed(flatLines)
+      setLoadNewerError(null)
+      prevQueryKeyRef.current = queryKey
+      prevPagesLenRef.current = pages.length
+      return
+    }
+    if (pages.length > prevPagesLenRef.current) {
+      const lastPage = pages[pages.length - 1]
+      if (lastPage !== undefined) prependOlder(lastPage.lines)
+      prevPagesLenRef.current = pages.length
+    }
+  }, [
+    frozen,
+    expr,
+    startIso,
+    endIso,
+    servicesCsv,
+    pages,
+    flatLines,
+    resetWindowed,
+    prependOlder,
+    setLoadNewerError,
+  ])
+
+  // STAGE-004-024: sticky auto-scroll while tailing. Keyed on the live line count
+  // so each new batch scrolls to bottom when sticky. The `!isTailing` gate on the
+  // restore effect guarantees these two layout effects are mutually exclusive.
+  useLayoutEffect(() => {
+    if (!isTailing || !stickyRef.current) return
+    const el = getScrollContainer()
+    if (el !== null && typeof el.scrollTo === 'function') el.scrollTo({ top: el.scrollHeight })
+  }, [windowed.state.lines.length, isTailing])
 
   const header = (
     <>
@@ -397,7 +506,7 @@ export function LogsExplorerBody({
               variant="outline"
               className="h-8 w-8 p-0"
               onClick={handleRefresh}
-              disabled={logs.isFetching}
+              disabled={logs.isFetching || isTailing}
               data-testid="logs-refresh"
               aria-label="Refresh"
             >
@@ -425,14 +534,65 @@ export function LogsExplorerBody({
           <TooltipContent>Filters</TooltipContent>
         </Tooltip>
 
-        <TimeRangeControl
-          mode="full"
-          value={range}
-          onChange={onRangeChange}
-          presets={ALL_PRESETS}
-          utcChecked={timezone === 'utc'}
-          onToggleUtc={toggleTimezone}
-        />
+        <div
+          className={cn(isTailing && 'pointer-events-none opacity-50')}
+          aria-disabled={isTailing}
+        >
+          <TimeRangeControl
+            mode="full"
+            value={range}
+            onChange={onRangeChange}
+            presets={ALL_PRESETS}
+            utcChecked={timezone === 'utc'}
+            onToggleUtc={toggleTimezone}
+          />
+        </div>
+
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              type="button"
+              size="sm"
+              variant={isTailing ? 'default' : 'outline'}
+              className={cn(
+                'h-8 w-8 p-0',
+                isTailing && 'bg-emerald-600 hover:bg-emerald-700 text-white',
+              )}
+              onClick={() => {
+                if (isTailing) {
+                  // STOP: freeze on-screen lines, pin the custom end to the stop moment.
+                  // Seed prevQueryKeyRef with the key the memo will produce once the
+                  // range settles to the pinned custom window. resolveCustomWindow with
+                  // both start and end present returns them unchanged (now-independent),
+                  // so pinnedStartIso/pinnedEndIso are deterministic.
+                  setIsTailing(false)
+                  const stopMoment = new Date()
+                  const startDate = parseIso(startIso) ?? new Date(stopMoment.getTime() - 3_600_000)
+                  const pinnedStartIso = toIsoZ(startDate)
+                  const pinnedEndIso = toIsoZ(stopMoment)
+                  prevQueryKeyRef.current = `${expr}|${pinnedStartIso}|${pinnedEndIso}|${servicesCsv}`
+                  setFrozen(true)
+                  onRangeChange({ kind: 'custom', start: startDate, end: stopMoment })
+                } else {
+                  // START: trim front for headroom, go sticky, suppress historical restore.
+                  const { trimFrontTo } = windowed
+                  trimFrontTo(RENDER_CAP - HEADROOM)
+                  setSticky(true)
+                  stickyRef.current = true
+                  pendingRestoreRef.current = false
+                  setFrozen(false)
+                  setIsTailing(true)
+                }
+              }}
+              data-testid="logs-tail-toggle"
+              aria-label="Live tail"
+              aria-pressed={isTailing}
+            >
+              <Activity />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>{isTailing ? 'Stop live tail' : 'Live tail'}</TooltipContent>
+        </Tooltip>
 
         <WrapIconToggle checked={wrap} onChange={setWrap} />
 
@@ -461,8 +621,36 @@ export function LogsExplorerBody({
           Failed to load logs: {logs.error?.message}
         </p>
       )}
+      {(tail.status === 'error' && tail.error !== null) || loadNewerError !== null ? (
+        <p role="alert" className="text-sm text-red-600" data-testid="tail-error">
+          {tail.status === 'error' && tail.error !== null ? tail.error.message : loadNewerError}
+        </p>
+      ) : null}
     </>
   )
+
+  // STAGE-004-024: handleLoadNewer callback
+  const { appendNewer } = windowed
+  const handleLoadNewer = useCallback(() => {
+    if (isTailing || isLoadingNewer) return
+    const arr = linesRef.current
+    const last = arr.length > 0 ? arr[arr.length - 1] : undefined
+    const newestShown = last !== undefined ? last.timestamp : startIso
+    setIsLoadingNewer(true)
+    setLoadNewerError(null)
+    setFrozen(false)
+    void fetchNewerLogs(expr, newestShown, endIso, servicesCsv)
+      .then((batch) => {
+        appendNewer(batch)
+        setLoadNewerError(null)
+      })
+      .catch((err: unknown) => {
+        setLoadNewerError(err instanceof Error ? err.message : 'Failed to load newer lines')
+      })
+      .finally(() => {
+        setIsLoadingNewer(false)
+      })
+  }, [isTailing, isLoadingNewer, startIso, endIso, expr, servicesCsv, appendNewer])
 
   const useLogs = (): UseLogsResult => {
     if (isUnavailable) {
@@ -482,28 +670,27 @@ export function LogsExplorerBody({
         error: undefined,
       }
     }
-    // LogsQueryResponse carries NO log_status — derive it: data present with
-    // zero lines → 'no_lines'; data present with lines → 'available'; no data
-    // yet (still loading / not enabled) → undefined (LogViewer shows nothing
-    // until isLoading or a status resolves).
-    const status: LogViewerStatus | undefined = !hasData
-      ? undefined
-      : flatLines.length === 0
-        ? 'no_lines'
-        : 'available'
+    const lines = windowed.state.lines
+    const status: LogViewerStatus | undefined =
+      !hasData && lines.length === 0 ? undefined : lines.length === 0 ? 'no_lines' : 'available'
     return {
-      lines: flatLines,
-      isLoading: logs.isLoading,
+      lines,
+      isLoading: logs.isLoading && lines.length === 0,
       isError: false,
       error: undefined,
       logStatus: status,
-      // LogsQueryResponse has no `truncated` field — pagination (has_more →
-      // hasNextPage) is the only "more results" signal. Do NOT set truncated.
       hasMore: logs.hasNextPage,
       isLoadingOlder: logs.isFetchingNextPage,
       loadOlder: () => {
+        if (isTailing) setIsTailing(false)
+        setFrozen(false)
         void logs.fetchNextPage()
       },
+      trimmedOlder: windowed.state.trimmedOlder,
+      trimmedNewer: windowed.state.trimmedNewer,
+      hasNewer: !isTailing,
+      isLoadingNewer,
+      loadNewer: handleLoadNewer,
     }
   }
 
@@ -614,7 +801,7 @@ export function LogsExplorerBody({
         <aside className="flex h-full min-h-0 w-56 shrink-0 flex-col">{sidebar}</aside>
       )}
 
-      <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
+      <div className="relative flex h-full min-h-0 min-w-0 flex-1 flex-col">
         <div className="shrink-0 border-b border-border pb-1">
           <HistogramChart
             expr={expr}
@@ -624,6 +811,7 @@ export function LogsExplorerBody({
             onNarrowRange={onNarrowRange}
           />
         </div>
+
         <LogViewer
           useLogs={useLogs}
           headerSlot={header}
@@ -638,6 +826,26 @@ export function LogsExplorerBody({
             setSelection(line !== null && key !== null ? { key, line } : null)
           }}
         />
+
+        {isTailing && !sticky && (
+          <div className="pointer-events-none absolute inset-x-0 bottom-4 flex justify-center">
+            <Button
+              type="button"
+              size="sm"
+              variant="secondary"
+              className="pointer-events-auto shadow-md"
+              data-testid="tail-resume-autoscroll"
+              onClick={() => {
+                setSticky(true)
+                stickyRef.current = true
+                const el = getScrollContainer()
+                if (el !== null) el.scrollTo({ top: el.scrollHeight })
+              }}
+            >
+              Resume auto-scroll
+            </Button>
+          </div>
+        )}
       </div>
 
       {/* STAGE-004-016: desktop inspector — right-side push aside. */}
