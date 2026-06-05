@@ -182,6 +182,33 @@ class DependencyUnavailableProblem(HttpProblem):
         )
 
 
+class ServiceUnavailableProblem(HttpProblem):
+    """503 Service Unavailable with an optional Retry-After hint.
+
+    Distinct from DependencyUnavailableProblem (whose generic handler omits
+    Retry-After). Used by /api/logs/tail when the global tail-connection cap is
+    reached: ``details={"retry_after_seconds": 60}`` -> Retry-After: 60 header.
+    """
+
+    DEFAULT_STATUS = 503
+    DEFAULT_CODE = "service_unavailable"
+
+    def __init__(
+        self,
+        *,
+        message: str,
+        details: dict[str, Any] | None = None,
+        status_code: int | None = None,
+        code: str | None = None,
+    ) -> None:
+        super().__init__(
+            status_code=status_code if status_code is not None else self.DEFAULT_STATUS,
+            code=code if code is not None else self.DEFAULT_CODE,
+            message=message,
+            details=details,
+        )
+
+
 def envelope_response(
     status: int, code: str, message: str, details: dict[str, Any] | None = None
 ) -> JSONResponse:
@@ -196,6 +223,18 @@ async def _handle_too_many_requests(request: Request, exc: Exception) -> JSONRes
     assert isinstance(exc, TooManyRequestsProblem)
     response = envelope_response(exc.status_code, exc.code, exc.message, exc.details)
     # Extract retry_after_seconds from details if present
+    if exc.details:
+        retry_after = exc.details.get("retry_after_seconds")
+        if retry_after is not None:
+            response.headers["Retry-After"] = str(retry_after)
+    return response
+
+
+async def _handle_service_unavailable(request: Request, exc: Exception) -> JSONResponse:
+    """Handle ServiceUnavailableProblem with an optional Retry-After header."""
+    del request
+    assert isinstance(exc, ServiceUnavailableProblem)
+    response = envelope_response(exc.status_code, exc.code, exc.message, exc.details)
     if exc.details:
         retry_after = exc.details.get("retry_after_seconds")
         if retry_after is not None:
@@ -275,6 +314,7 @@ async def _handle_generic_exception(request: Request, exc: Exception) -> JSONRes
 def register_error_handlers(app: FastAPI) -> None:
     """Register all exception handlers on the FastAPI app."""
     app.add_exception_handler(TooManyRequestsProblem, _handle_too_many_requests)
+    app.add_exception_handler(ServiceUnavailableProblem, _handle_service_unavailable)
     app.add_exception_handler(HttpProblem, _handle_http_problem)
     app.add_exception_handler(ValidationError, _handle_validation_error)
     app.add_exception_handler(HTTPException, _handle_http_exception)

@@ -7222,6 +7222,64 @@
         "summary": "Logs Streams"
       }
     },
+    "/api/logs/tail": {
+      "get": {
+        "description": "Live-tail matching log lines as Server-Sent Events (STAGE-004-023).\n\nPolls VictoriaLogs ~1s and pushes NEW lines as `event: line` SSE events.\nEnforces a global connection cap (503 + Retry-After), per-second\nbackpressure (`event: dropped`), and a per-connection duration cap.\n\nStrict ordering: cap-check (503) -> LogsQL probe (422 bad / 502 VL-down) ->\n200 stream. The registry slot is acquired BEFORE the probe and released on\nprobe failure or in gen()'s finally (never both).\n\nAuth: cookie session required. CSRF NOT enforced on GET.",
+        "operationId": "logs_tail_api_logs_tail_get",
+        "parameters": [
+          {
+            "description": "LogsQL expression",
+            "in": "query",
+            "name": "expr",
+            "required": true,
+            "schema": {
+              "description": "LogsQL expression",
+              "title": "Expr",
+              "type": "string"
+            }
+          },
+          {
+            "description": "CSV of <source_type>:<service> identities",
+            "in": "query",
+            "name": "services",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "CSV of <source_type>:<service> identities",
+              "title": "Services"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Logs Tail"
+      }
+    },
     "/api/metrics/range": {
       "get": {
         "description": "Proxy a PromQL range query to VictoriaMetrics.\n\nAuth: cookie session required. CSRF NOT enforced on GET.\n\nOn any non-200 response from VM, on a transport error, or on a timeout,\nsurfaces as 502 ``upstream_unavailable`` so the frontend can fall back\nto its synthetic baseline.",

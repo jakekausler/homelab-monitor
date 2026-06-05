@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncGenerator, AsyncIterator
-from datetime import UTC, datetime
-from typing import Annotated, Literal, cast
+from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING, Annotated, Literal, cast
 
 import httpx
 import structlog
@@ -15,11 +16,18 @@ from structlog.stdlib import BoundLogger
 from homelab_monitor.kernel.api.dependencies import (
     get_http_client,
     get_log_stream_state,
+    get_metrics_writer,
     get_repo,
+    get_tail_registry,
     get_vl_url,
     require_session,
 )
-from homelab_monitor.kernel.api.errors import ConflictProblem, HttpProblem, NotFoundProblem
+from homelab_monitor.kernel.api.errors import (
+    ConflictProblem,
+    HttpProblem,
+    NotFoundProblem,
+    ServiceUnavailableProblem,
+)
 from homelab_monitor.kernel.api.schemas import (
     LogsFieldsResponse,
     LogsHistogramResponse,
@@ -33,8 +41,11 @@ from homelab_monitor.kernel.api.schemas import (
     SaveQueryRenameRequest,
 )
 from homelab_monitor.kernel.auth.models import User
-from homelab_monitor.kernel.config import load_vl_query_limits
+from homelab_monitor.kernel.config import load_tail_config, load_vl_query_limits
 from homelab_monitor.kernel.db.repository import SqliteRepository
+
+if TYPE_CHECKING:
+    from homelab_monitor.kernel.plugins.io import MetricsWriter
 from homelab_monitor.kernel.logs.export import stream_export
 from homelab_monitor.kernel.logs.fields import (
     FieldsCache,
@@ -57,6 +68,13 @@ from homelab_monitor.kernel.logs.saved_queries_repo import (
 from homelab_monitor.kernel.logs.services import (
     ServicesCache,
     fetch_services,
+)
+from homelab_monitor.kernel.logs.tail_service import (
+    DroppedEvent,
+    ErrorEvent,
+    LineEvent,
+    TailRegistry,
+    TailSession,
 )
 from homelab_monitor.kernel.logs.time_window import parse_and_validate_window
 from homelab_monitor.kernel.logs.victorialogs_client import (
@@ -90,6 +108,11 @@ _HISTOGRAM_MAX_BUCKETS = 500
 _EXPORT_DEFAULT_MAX = 10000
 _EXPORT_MIN_MAX = 1
 _EXPORT_MAX_MAX = 100000
+
+_TAIL_PROBE_WINDOW_S = 1  # the pre-flight probe queries [now-1s, now]
+_TAIL_RETRY_AFTER_S = 60  # Retry-After when the global cap is hit
+_HTTP_CLIENT_4XX_LO = 400
+_HTTP_CLIENT_4XX_HI = 500
 
 # Process-wide 30s TTL cache keyed on (start, end, limit). Module-scoped so it
 # survives across requests within a worker. Clock injectable only in tests via
@@ -305,6 +328,116 @@ async def logs_export(  # noqa: PLR0913
         media_type=media_type,
         headers=headers,
     )
+
+
+@router.get("/logs/tail")
+async def logs_tail(  # noqa: PLR0913
+    expr: str = Query(..., description="LogsQL expression"),
+    services: str | None = Query(None, description="CSV of <source_type>:<service> identities"),
+    _user: User = Depends(require_session()),  # noqa: B008
+    vl_url: str = Depends(get_vl_url),
+    http_client: httpx.AsyncClient = Depends(get_http_client),  # noqa: B008
+    registry: TailRegistry = Depends(get_tail_registry),  # noqa: B008
+    metrics_writer: MetricsWriter = Depends(get_metrics_writer),  # noqa: B008
+) -> StreamingResponse:
+    """Live-tail matching log lines as Server-Sent Events (STAGE-004-023).
+
+    Polls VictoriaLogs ~1s and pushes NEW lines as `event: line` SSE events.
+    Enforces a global connection cap (503 + Retry-After), per-second
+    backpressure (`event: dropped`), and a per-connection duration cap.
+
+    Strict ordering: cap-check (503) -> LogsQL probe (422 bad / 502 VL-down) ->
+    200 stream. The registry slot is acquired BEFORE the probe and released on
+    probe failure or in gen()'s finally (never both).
+
+    Auth: cookie session required. CSRF NOT enforced on GET.
+    """
+    log: BoundLogger = cast(
+        BoundLogger,
+        structlog.get_logger().bind(component="logs_tail"),
+    )
+
+    if len(expr) > _MAX_EXPR_LEN:
+        raise HttpProblem(status_code=400, code="invalid_expr", message="expression too long")
+
+    effective_expr = _compose_services_expr(expr, services)
+    base_limits = load_vl_query_limits()
+    tail_config = load_tail_config()
+    client = VictoriaLogsClient(vl_url=vl_url, http_client=http_client, limits=base_limits)
+
+    # 1. Global cap (503 + Retry-After) — acquire BEFORE probing.
+    if not registry.try_acquire():
+        raise ServiceUnavailableProblem(
+            message="tail connection limit reached",
+            code="tail_capacity",
+            details={"retry_after_seconds": _TAIL_RETRY_AFTER_S},
+        )
+
+    # 2. Pre-flight probe: one bounded query over [now-1s, now]. Maps VL 4xx ->
+    #    422 invalid_logsql, VL 5xx/transport -> 502 upstream_unavailable. ALWAYS
+    #    release the slot on any probe failure (prevents a slot leak).
+    now = datetime.now(UTC)
+    probe_start = (now - timedelta(seconds=_TAIL_PROBE_WINDOW_S)).isoformat()
+    probe_end = now.isoformat()
+    try:
+        await client.query(expr=effective_expr, start=probe_start, end=probe_end)
+    except VictoriaLogsClientError as exc:
+        registry.release()
+        sc = exc.status_code
+        if sc is not None and _HTTP_CLIENT_4XX_LO <= sc < _HTTP_CLIENT_4XX_HI:
+            raise HttpProblem(
+                status_code=422,
+                code="invalid_logsql",
+                message="invalid LogsQL expression",
+            ) from exc
+        log.warning("logs_tail.upstream_error", error=str(exc))
+        raise HttpProblem(
+            status_code=502,
+            code="upstream_unavailable",
+            message="victorialogs tail probe failed",
+        ) from exc
+    except BaseException:
+        registry.release()
+        raise
+
+    # 3. Build the session + StreamingResponse. Slot is released ONLY in gen()'s
+    #    finally from here on (probe succeeded).
+    session = TailSession(
+        vl_client=client,
+        expr=effective_expr,
+        config=tail_config,
+        metrics_writer=metrics_writer,
+        clock=lambda: datetime.now(UTC),
+    )
+
+    async def gen() -> AsyncGenerator[bytes, None]:
+        seq = 0
+        try:
+            async for ev in session.events():
+                if isinstance(ev, LineEvent):
+                    seq += 1
+                    payload = ev.line.model_dump_json()
+                    yield f"event: line\ndata: {payload}\nid: {seq}\n\n".encode()
+                elif isinstance(ev, DroppedEvent):
+                    yield f'event: dropped\ndata: {{"count":{ev.count}}}\n\n'.encode()
+                elif isinstance(ev, ErrorEvent):
+                    err = json.dumps(
+                        {"code": ev.code, "message": ev.message},
+                        separators=(",", ":"),
+                        sort_keys=True,
+                    )
+                    yield f"event: error\ndata: {err}\n\n".encode()
+                else:  # KeepaliveEvent
+                    yield b": keepalive\n\n"
+        finally:
+            registry.release()
+
+    headers = {
+        "Cache-Control": "no-cache",
+        "X-Accel-Buffering": "no",
+        "Content-Type": "text/event-stream; charset=utf-8",
+    }
+    return StreamingResponse(gen(), headers=headers, media_type="text/event-stream")
 
 
 @router.get("/logs/services", response_model=LogsServicesResponse)

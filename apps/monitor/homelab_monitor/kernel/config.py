@@ -205,6 +205,56 @@ def load_vl_query_limits() -> VlQueryLimits:
 
 
 @dataclass(frozen=True, slots=True)
+class TailConfig:
+    """Runtime tunables for the live-tail SSE endpoint (STAGE-004-023).
+
+    ``poll_ms`` — VL poll cadence in milliseconds.
+    ``max_connections`` — global cap on concurrent tail connections.
+    ``max_lines_per_sec`` — per-connection backpressure cap; surplus is dropped.
+    ``max_duration_s`` — per-connection hard cap; the stream closes after this.
+    """
+
+    poll_ms: int = 1000
+    max_connections: int = 5
+    max_lines_per_sec: int = 200
+    max_duration_s: int = 3600
+
+
+def load_tail_config() -> TailConfig:
+    """Load live-tail tunables from env (HOMELAB_MONITOR_TAIL_*)."""
+    defaults = TailConfig()
+    poll_ms = defaults.poll_ms
+    max_connections = defaults.max_connections
+    max_lines_per_sec = defaults.max_lines_per_sec
+    max_duration_s = defaults.max_duration_s
+    raw_poll = os.environ.get("HOMELAB_MONITOR_TAIL_POLL_MS")
+    if raw_poll is not None:
+        poll_ms = int(raw_poll)
+    raw_conns = os.environ.get("HOMELAB_MONITOR_TAIL_MAX_CONNECTIONS")
+    if raw_conns is not None:
+        max_connections = int(raw_conns)
+    raw_lps = os.environ.get("HOMELAB_MONITOR_TAIL_MAX_LINES_PER_SEC")
+    if raw_lps is not None:
+        max_lines_per_sec = int(raw_lps)
+    raw_dur = os.environ.get("HOMELAB_MONITOR_TAIL_MAX_DURATION_S")
+    if raw_dur is not None:
+        max_duration_s = int(raw_dur)
+    # Clamp operator foot-gun values: poll_ms must be >= 1 (0 busy-loops the
+    # poll); the caps must be >= 1 (0 connections/lines/seconds makes the
+    # feature unusable). Mirrors load_cron_anomaly_config's max(..) clamps.
+    poll_ms = max(poll_ms, 1)
+    max_connections = max(max_connections, 1)
+    max_lines_per_sec = max(max_lines_per_sec, 1)
+    max_duration_s = max(max_duration_s, 1)
+    return TailConfig(
+        poll_ms=poll_ms,
+        max_connections=max_connections,
+        max_lines_per_sec=max_lines_per_sec,
+        max_duration_s=max_duration_s,
+    )
+
+
+@dataclass(frozen=True, slots=True)
 class CronRunReconcilerConfig:
     """Runtime tunables for CronRunReconciler (env-only).
 
@@ -522,6 +572,7 @@ __all__ = [
     "DiskBudgetConfig",
     "LogStreamBudgetConfig",
     "RedactPattern",
+    "TailConfig",
     "VlDiskWarningConfig",
     "VlQueryLimits",
     "get_public_url",
@@ -530,6 +581,7 @@ __all__ = [
     "load_disk_budget_config",
     "load_log_stream_budget_config",
     "load_redact_patterns",
+    "load_tail_config",
     "load_vl_disk_warning_config",
     "load_vl_query_limits",
     "load_vl_retention_days",

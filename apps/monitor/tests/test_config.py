@@ -490,3 +490,76 @@ def test_load_vl_retention_days_env_override(monkeypatch: pytest.MonkeyPatch) ->
 
     monkeypatch.setenv("HOMELAB_MONITOR_VL_RETENTION_DAYS", "14")
     assert load_vl_retention_days() == 14  # noqa: PLR2004
+
+
+# --- TailConfig / load_tail_config (STAGE-004-023) ------------------------------------------
+
+
+def test_load_tail_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    """load_tail_config returns built-in defaults when no env vars are set."""
+    from homelab_monitor.kernel.config import TailConfig, load_tail_config  # noqa: PLC0415
+
+    monkeypatch.delenv("HOMELAB_MONITOR_TAIL_POLL_MS", raising=False)
+    monkeypatch.delenv("HOMELAB_MONITOR_TAIL_MAX_CONNECTIONS", raising=False)
+    monkeypatch.delenv("HOMELAB_MONITOR_TAIL_MAX_LINES_PER_SEC", raising=False)
+    monkeypatch.delenv("HOMELAB_MONITOR_TAIL_MAX_DURATION_S", raising=False)
+    cfg = load_tail_config()
+    assert cfg == TailConfig()
+    assert cfg.poll_ms == 1000  # noqa: PLR2004
+    assert cfg.max_connections == 5  # noqa: PLR2004
+    assert cfg.max_lines_per_sec == 200  # noqa: PLR2004
+    assert cfg.max_duration_s == 3600  # noqa: PLR2004
+
+
+def test_load_tail_config_env_max_connections(monkeypatch: pytest.MonkeyPatch) -> None:
+    """HOMELAB_MONITOR_TAIL_MAX_CONNECTIONS overrides max_connections (line 235)."""
+    from homelab_monitor.kernel.config import load_tail_config  # noqa: PLC0415
+
+    monkeypatch.delenv("HOMELAB_MONITOR_TAIL_POLL_MS", raising=False)
+    monkeypatch.setenv("HOMELAB_MONITOR_TAIL_MAX_CONNECTIONS", "10")
+    monkeypatch.delenv("HOMELAB_MONITOR_TAIL_MAX_LINES_PER_SEC", raising=False)
+    monkeypatch.delenv("HOMELAB_MONITOR_TAIL_MAX_DURATION_S", raising=False)
+    cfg = load_tail_config()
+    assert cfg.max_connections == 10  # noqa: PLR2004
+
+
+def test_load_tail_config_env_max_lines_per_sec(monkeypatch: pytest.MonkeyPatch) -> None:
+    """HOMELAB_MONITOR_TAIL_MAX_LINES_PER_SEC overrides max_lines_per_sec (line 238)."""
+    from homelab_monitor.kernel.config import load_tail_config  # noqa: PLC0415
+
+    monkeypatch.delenv("HOMELAB_MONITOR_TAIL_POLL_MS", raising=False)
+    monkeypatch.delenv("HOMELAB_MONITOR_TAIL_MAX_CONNECTIONS", raising=False)
+    monkeypatch.setenv("HOMELAB_MONITOR_TAIL_MAX_LINES_PER_SEC", "500")
+    monkeypatch.delenv("HOMELAB_MONITOR_TAIL_MAX_DURATION_S", raising=False)
+    cfg = load_tail_config()
+    assert cfg.max_lines_per_sec == 500  # noqa: PLR2004
+
+
+def test_load_tail_config_all_env_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
+    """All four TAIL env vars override all four fields simultaneously."""
+    from homelab_monitor.kernel.config import load_tail_config  # noqa: PLC0415
+
+    monkeypatch.setenv("HOMELAB_MONITOR_TAIL_POLL_MS", "500")
+    monkeypatch.setenv("HOMELAB_MONITOR_TAIL_MAX_CONNECTIONS", "10")
+    monkeypatch.setenv("HOMELAB_MONITOR_TAIL_MAX_LINES_PER_SEC", "500")
+    monkeypatch.setenv("HOMELAB_MONITOR_TAIL_MAX_DURATION_S", "7200")
+    cfg = load_tail_config()
+    assert cfg.poll_ms == 500  # noqa: PLR2004
+    assert cfg.max_connections == 10  # noqa: PLR2004
+    assert cfg.max_lines_per_sec == 500  # noqa: PLR2004
+    assert cfg.max_duration_s == 7200  # noqa: PLR2004
+
+
+def test_load_tail_config_clamps_zero_to_one(monkeypatch: pytest.MonkeyPatch) -> None:
+    """All four TAIL env vars set to 0 are clamped up to the floor of 1."""
+    from homelab_monitor.kernel.config import load_tail_config  # noqa: PLC0415
+
+    monkeypatch.setenv("HOMELAB_MONITOR_TAIL_POLL_MS", "0")
+    monkeypatch.setenv("HOMELAB_MONITOR_TAIL_MAX_CONNECTIONS", "0")
+    monkeypatch.setenv("HOMELAB_MONITOR_TAIL_MAX_LINES_PER_SEC", "0")
+    monkeypatch.setenv("HOMELAB_MONITOR_TAIL_MAX_DURATION_S", "0")
+    cfg = load_tail_config()
+    assert cfg.poll_ms == 1
+    assert cfg.max_connections == 1
+    assert cfg.max_lines_per_sec == 1
+    assert cfg.max_duration_s == 1

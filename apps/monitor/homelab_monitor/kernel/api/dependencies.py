@@ -32,6 +32,7 @@ if TYPE_CHECKING:
     from homelab_monitor.kernel.db.repository import SqliteRepository
     from homelab_monitor.kernel.dispatch.dispatcher import AlertDispatcher
     from homelab_monitor.kernel.heartbeat.repository import HeartbeatRepo
+    from homelab_monitor.kernel.logs.tail_service import TailRegistry
     from homelab_monitor.kernel.plugins.io import (
         InMemoryLogsWriter,
         LogsWriter,
@@ -300,6 +301,16 @@ def get_log_stream_state(request: Request) -> LogStreamState:
         attr="log_stream_state",
         code="logs_unavailable",
         message="log stream state not initialized",
+    )
+
+
+def get_tail_registry(request: Request) -> TailRegistry:
+    """Get the live-tail connection registry from app state."""
+    return _require_state(
+        request,
+        attr="tail_registry",
+        code="tail_unavailable",
+        message="tail registry is not initialized",
     )
 
 

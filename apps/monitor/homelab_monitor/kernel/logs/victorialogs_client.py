@@ -29,9 +29,18 @@ _HTTP_OK = 200
 class VictoriaLogsClientError(RuntimeError):
     """Raised when VictoriaLogs is unreachable, times out, or returns non-200.
 
-    Callers (CronRunReconciler enrich phase, /logs/query endpoint) catch this
-    and degrade gracefully — they never let it propagate as an unhandled crash.
+    Callers (CronRunReconciler enrich phase, /logs/query endpoint, /logs/tail
+    probe) catch this and degrade gracefully — they never let it propagate as an
+    unhandled crash.
+
+    ``status_code`` is the upstream HTTP status when the error came from a
+    non-200 RESPONSE; it is None for transport errors / timeouts (no response).
+    The /logs/tail probe uses it to map VL 4xx -> 422 and VL 5xx/transport -> 502.
     """
+
+    def __init__(self, message: str, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
 
 
 @dataclass(slots=True, frozen=True)
@@ -176,7 +185,7 @@ class VictoriaLogsClient:
             self._log.warning("victorialogs_client.upstream_status", status=resp.status_code)
             # SECURITY: do not relay resp.text (may carry cross-query log excerpts).
             msg = f"victorialogs returned status {resp.status_code}"
-            raise VictoriaLogsClientError(msg)
+            raise VictoriaLogsClientError(msg, resp.status_code)
 
         return self._parse_ndjson(resp.text)
 
@@ -222,7 +231,7 @@ class VictoriaLogsClient:
                     self._log.warning("victorialogs_client.stream_status", status=resp.status_code)
                     # SECURITY: do not relay body (may carry cross-query excerpts).
                     msg = f"victorialogs returned status {resp.status_code}"
-                    raise VictoriaLogsClientError(msg)
+                    raise VictoriaLogsClientError(msg, resp.status_code)
                 emitted = 0
                 async for raw_line in resp.aiter_lines():
                     if emitted >= limit:
@@ -275,7 +284,7 @@ class VictoriaLogsClient:
             self._log.warning("victorialogs_client.field_names_status", status=resp.status_code)
             # SECURITY: do not relay resp.text (may carry cross-query excerpts).
             msg = f"victorialogs field_names returned status {resp.status_code}"
-            raise VictoriaLogsClientError(msg)
+            raise VictoriaLogsClientError(msg, resp.status_code)
 
         return self._parse_field_names(resp.text)
 
@@ -328,7 +337,7 @@ class VictoriaLogsClient:
             self._log.warning("victorialogs_client.hits_status", status=resp.status_code)
             # SECURITY: do not relay resp.text (may carry cross-query excerpts).
             msg = f"victorialogs hits returned status {resp.status_code}"
-            raise VictoriaLogsClientError(msg)
+            raise VictoriaLogsClientError(msg, resp.status_code)
 
         return self._parse_hits(resp.text, field=field)
 

@@ -19,6 +19,7 @@ from structlog.stdlib import BoundLogger
 from homelab_monitor.kernel.alerts.repository import AlertRepository
 from homelab_monitor.kernel.api.sse import SseBroker
 from homelab_monitor.kernel.backup.service import BackupService
+from homelab_monitor.kernel.config import load_tail_config
 from homelab_monitor.kernel.cron.repository import CronRepo
 from homelab_monitor.kernel.cron.run_repository import CronRunRepository
 from homelab_monitor.kernel.db.engine import dispose_engine, get_engine
@@ -31,6 +32,7 @@ from homelab_monitor.kernel.events import TriggerContext
 from homelab_monitor.kernel.heartbeat.repository import HeartbeatRepo
 from homelab_monitor.kernel.logging import configure_logging
 from homelab_monitor.kernel.logs.multiplex import MultiplexLogsWriter
+from homelab_monitor.kernel.logs.tail_service import TailRegistry
 from homelab_monitor.kernel.logs.vl_writer import VictoriaLogsWriter
 from homelab_monitor.kernel.metrics.multiplex import MultiplexMetricsWriter
 from homelab_monitor.kernel.metrics.prometheus_writer import PrometheusRegistryWriter
@@ -51,6 +53,7 @@ from homelab_monitor.plugins.collectors.builtin.log_stream_budget import (
     LogStreamBudgetCollector,
     LogStreamState,
 )
+from homelab_monitor.plugins.collectors.builtin.tail_metrics import TailMetricsCollector
 
 
 class _StubSshFactory:
@@ -204,6 +207,23 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
             error=str(exc),
         )
         degraded.append("log_stream_budget")
+
+    try:
+        loader.register(
+            TailMetricsCollector,
+            {
+                "name": "tail_metrics",
+                "interval_seconds": int(TailMetricsCollector.interval.total_seconds()),
+                "timeout_seconds": int(TailMetricsCollector.timeout.total_seconds()),
+            },
+        )
+    except Exception as exc:  # pragma: no cover -- defensive
+        log.warning(
+            "lifespan.collector_register_failed",
+            name="tail_metrics",
+            error=str(exc),
+        )
+        degraded.append("tail_metrics")
 
     try:
         from homelab_monitor.plugins.discoverers.cron_discoverer import (  # noqa: PLC0415
@@ -442,6 +462,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
     log_stream_state: LogStreamState = {}
     ssh_factory = _StubSshFactory()
     broker = SseBroker(log)
+    tail_registry = TailRegistry(max_connections=load_tail_config().max_connections)
     alert_repo = AlertRepository(repo)
     heartbeat_repo = HeartbeatRepo(repo)
     cron_repo = CronRepo(repo)
@@ -545,6 +566,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
             c._state = log_stream_state  # pyright: ignore[reportPrivateUsage]
             c._vl_url = vl_url.rstrip("/")  # pyright: ignore[reportPrivateUsage]
             c._http_client = http_client  # pyright: ignore[reportPrivateUsage]
+        if isinstance(c, TailMetricsCollector):
+            c._registry = tail_registry  # pyright: ignore[reportPrivateUsage]
         # Wire cron_repo into the CronDiscoverer instance for API endpoint access
         from homelab_monitor.plugins.discoverers.cron_discoverer import (  # noqa: PLC0415
             CronDiscoverer,
@@ -912,6 +935,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
     app.state.in_memory_logs_writer = in_memory_logs_writer
     app.state.vl_writer = vl_writer
     app.state.log_stream_state = log_stream_state
+    app.state.tail_registry = tail_registry
     app.state.loader = loader
     app.state.failure_budget = failure_budget
 

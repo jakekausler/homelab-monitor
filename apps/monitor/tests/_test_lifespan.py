@@ -25,6 +25,7 @@ from homelab_monitor.kernel.api.sse import SseBroker
 from homelab_monitor.kernel.auth.rate_limit import InProcessLoginRateLimiter
 from homelab_monitor.kernel.auth.repository import AuthRepository
 from homelab_monitor.kernel.backup.service import BackupService
+from homelab_monitor.kernel.config import load_tail_config
 from homelab_monitor.kernel.cron.repository import CronRepo
 from homelab_monitor.kernel.cron.run_repository import CronRunRepository
 from homelab_monitor.kernel.db.engine import get_engine
@@ -44,6 +45,7 @@ from homelab_monitor.kernel.docker.socket_client import DockerSocketClient
 from homelab_monitor.kernel.heartbeat.repository import HeartbeatRepo
 from homelab_monitor.kernel.logging import configure_logging
 from homelab_monitor.kernel.logs.multiplex import MultiplexLogsWriter
+from homelab_monitor.kernel.logs.tail_service import TailRegistry
 from homelab_monitor.kernel.logs.vl_writer import VictoriaLogsWriter
 from homelab_monitor.kernel.metrics.multiplex import MultiplexMetricsWriter
 from homelab_monitor.kernel.metrics.prometheus_writer import PrometheusRegistryWriter
@@ -148,6 +150,7 @@ async def wire_test_app_state(  # noqa: PLR0915
     # NOTE: NO asyncio.create_task(vl_writer.run_flusher()).
     logs_writer = MultiplexLogsWriter([in_memory_logs_writer, vl_writer])
     log_stream_state: LogStreamState = {}
+    tail_registry = TailRegistry(max_connections=load_tail_config().max_connections)
 
     broker = SseBroker(log)
     alert_repo = AlertRepository(repo)
@@ -235,6 +238,7 @@ async def wire_test_app_state(  # noqa: PLR0915
     app.state.in_memory_logs_writer = in_memory_logs_writer
     app.state.vl_writer = vl_writer
     app.state.log_stream_state = log_stream_state
+    app.state.tail_registry = tail_registry
     app.state.loader = loader
     app.state.scheduler = scheduler
     app.state.failure_budget = failure_budget
