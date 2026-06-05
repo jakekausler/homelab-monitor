@@ -244,6 +244,15 @@
 - "buildExplorerUrl (apps/ui/src/lib/explorerLink.ts) emits only the keys in EXPLORER_URL_KEYS (logsql/q/since/start/end/services) — these MUST remain a subset of the /logs route's validateSearch accepted keys (router.tsx). The guard test in explorerLink.test.ts fails if they drift."
 - "Deep-link contract verified: /api/logs/query accepts both `service:"..."` Docker and `run_id:"..."` Cron expressions returning 200. /logs SPA route accepts query params and opens Explorer with pre-filled query + range applied; curl testing confirmed pre-filled params are preserved in rendered page."
 
+## STAGE-004-023 — Backend SSE endpoint for live tail (server-side streaming from VL)
+
+- `GET /api/logs/tail?expr=<LogsQL>&services=<csv>` returns `text/event-stream`; new VL log lines appear as `event: line` SSE events within ~1s latency (true end-to-end streaming with real VL v0.30.0).
+- Connection cap: opening more than HOMELAB_MONITOR_TAIL_MAX_CONNECTIONS (default 5) concurrent tails → 6th returns HTTP 503 + `Retry-After: 60`.
+- Structural-bad LogsQL (e.g. `expr=|limit 10`) → HTTP 422 `invalid_logsql`; phrase-garbage (e.g. `expr={{{{x`) → 200 empty stream (VL treats it as a phrase filter — matches VL's real contract, no client-side LogsQL validation).
+- VL unavailable on the pre-flight probe → 502 `upstream_unavailable` (before the stream opens).
+- Metrics emitted: `homelab_log_tail_active_connections` (gauge), `homelab_log_tail_lines_streamed_total`, `homelab_log_tail_lines_dropped_total`, `homelab_log_tail_errors_total{kind}`.
+- Integration test: `make integration` runs `apps/monitor/tests/integration/test_logs_tail_integration.py` (4 scenarios) against the real VL rig. Clean rig volumes first: `docker compose -f deploy/compose/docker-compose.test.yml down -v` (a stale `shared_rig_secrets`/`rig` token can break bootstrap with a UNIQUE-constraint error).
+
 ## STAGE-004-022 — Global retention settings UI (VL retention + disk thresholds)
 
 - "Sidebar Settings entry + /settings navigation: SidebarNav "Settings" entry (previously disabled "Coming soon") is enabled → clicking navigates to `/settings` (parent route). The /settings route redirects to `/settings/logs`. Navigation works via SPA TanStack Link — no full page reload."
