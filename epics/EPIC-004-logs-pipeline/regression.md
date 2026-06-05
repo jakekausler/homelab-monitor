@@ -286,3 +286,10 @@
 - Cron bucketing: hmrun lines with the same `fields['command']` share one `cron:<16hex>` model; different commands → different models; missing command → `cron:unknown`. `service=None` → `_unknown`.
 - Persistence round-trip: `await engine.snapshot()` writes a non-empty `snapshot` BLOB + `first_seen_map` JSON to the `drain_models` table; a FRESH `DrainEngine` over the same DB restores state so a same-shape line is NOT new (pre-snapshot template_hash == post-restore template_hash).
 - Re-run check: `make verify` (drain_engine.py + drain_persistence.py must stay at 100% coverage; test_drain_engine.py / test_drain_persistence.py / test_drain_model_key.py green; migration 0033 in EXPECTED_TABLES).
+
+## STAGE-004-026 — Periodic DrainConsumer (VL → DrainEngine batch cycle)
+
+- DrainConsumer.run_once() queries VL for lines newer than the global watermark (app_settings key `drain.cycle_watermark_ms`), feeds them through DrainEngine.add_line, snapshots, and advances the watermark. Cold-start seeds the watermark to (now - ingest_lag_grace) — does NOT replay history.
+- Partial cycle: when a cycle hits batch_max_lines, cycle_status='partial' and the watermark advances to MAX(line ts) over the batch (not query_end); the next cycle resumes from there. Complete cycle advances to query_end (= now - ingest_lag_grace). VL failure → cycle_status='failed', watermark NOT advanced (next cycle retries the same window).
+- Real-VL integration: apps/monitor/tests/integration/test_drain_consumer_integration.py validates the full VL→DrainEngine→SQLite pipeline + incremental resume + partial-cycle against the live rig (auto-skips when rig absent via require_rig_components('monitor','victorialogs')). Run via `make integration` (clean volumes first: `docker compose -f deploy/compose/docker-compose.test.yml down -v`).
+- Re-run check: `make verify` (drain_consumer.py + config.py + drain_persistence.py + lifespan.py must stay 100% coverage; run_forever loop tests via monkeypatched asyncio.sleep). Consumer is lifespan-spawned, env-gated by HOMELAB_MONITOR_DRAIN_ENABLED.
