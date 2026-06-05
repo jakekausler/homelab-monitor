@@ -2607,6 +2607,99 @@
         "title": "LogsQueryResponse",
         "type": "object"
       },
+      "LogsRetentionResponse": {
+        "additionalProperties": false,
+        "description": "Response for GET/PATCH /api/settings/logs/retention (STAGE-004-022).",
+        "properties": {
+          "crit_pct": {
+            "description": "Critical threshold (percent of VL budget)",
+            "title": "Crit Pct",
+            "type": "integer"
+          },
+          "disk_budget_available": {
+            "description": "False when budget config is missing or malformed; True otherwise",
+            "title": "Disk Budget Available",
+            "type": "boolean"
+          },
+          "disk_used_gb": {
+            "description": "VL data-dir usage in GiB",
+            "title": "Disk Used Gb",
+            "type": "number"
+          },
+          "disk_used_pct": {
+            "description": "VL usage as percent of the VL disk budget",
+            "title": "Disk Used Pct",
+            "type": "number"
+          },
+          "pending_retention_days": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Desired retention awaiting restart, or null if none pending",
+            "title": "Pending Retention Days"
+          },
+          "restart_required": {
+            "description": "True iff a pending retention differs from effective",
+            "title": "Restart Required",
+            "type": "boolean"
+          },
+          "retention_days": {
+            "description": "EFFECTIVE retention (days) VL is running",
+            "title": "Retention Days",
+            "type": "integer"
+          },
+          "retention_source": {
+            "description": "Where the effective/pending value originates",
+            "enum": [
+              "env",
+              "runtime",
+              "default"
+            ],
+            "title": "Retention Source",
+            "type": "string"
+          },
+          "warn_pct": {
+            "description": "Warn threshold (percent of VL budget)",
+            "title": "Warn Pct",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "retention_days",
+          "disk_used_gb",
+          "disk_used_pct",
+          "disk_budget_available",
+          "warn_pct",
+          "crit_pct",
+          "retention_source",
+          "restart_required"
+        ],
+        "title": "LogsRetentionResponse",
+        "type": "object"
+      },
+      "LogsRetentionUpdateRequest": {
+        "additionalProperties": false,
+        "description": "Request body for PATCH /api/settings/logs/retention.",
+        "properties": {
+          "retention_days": {
+            "description": "Desired retention in days",
+            "maximum": 365.0,
+            "minimum": 1.0,
+            "title": "Retention Days",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "retention_days"
+        ],
+        "title": "LogsRetentionUpdateRequest",
+        "type": "object"
+      },
       "LogsServicesResponse": {
         "additionalProperties": false,
         "description": "Response for GET /api/logs/services.\n\n`services` is sorted DESC by count over (service, source_type) identities.\n`truncated` is True when the number of distinct identities exceeded the\nrequested `limit` (only the top `limit` are returned).",
@@ -7222,6 +7315,62 @@
           }
         },
         "summary": "Metrics Snapshot"
+      }
+    },
+    "/api/settings/logs/retention": {
+      "get": {
+        "description": "Return effective + pending VL retention, disk usage, and thresholds.\n\nAuth: cookie session required. CSRF NOT enforced on GET.",
+        "operationId": "get_logs_retention_api_settings_logs_retention_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogsRetentionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Logs Retention"
+      },
+      "patch": {
+        "description": "Persist the desired VL retention. 422 on out-of-range (Field ge/le).\n\nReturns the reconciled state (pending set + restart_required true when the\nnew value differs from effective; cleared/no-op when it equals effective).\nAuth: cookie session required; CSRF enforced (PATCH).",
+        "operationId": "patch_logs_retention_api_settings_logs_retention_patch",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LogsRetentionUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogsRetentionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Patch Logs Retention"
       }
     },
     "/api/version": {

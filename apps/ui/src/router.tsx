@@ -22,6 +22,8 @@ import { ContainerProbesTab } from '@/routes/integrations/ContainerProbesTab'
 import { ContainerLogsTab } from '@/routes/integrations/ContainerLogsTab'
 import { ContainerActionsTab } from '@/routes/integrations/ContainerActionsTab'
 import { LogsExplorerPage } from '@/routes/logs/LogsExplorerPage'
+import { SettingsLayout } from '@/routes/settings/SettingsLayout'
+import { SettingsLogsPage } from '@/routes/settings/SettingsLogsPage'
 import { AppShell } from '@/components/AppShell'
 import { ErrorDisplay } from '@/components/ErrorDisplay'
 
@@ -260,6 +262,27 @@ const cronRunLogViewerRoute = createRoute({
   }),
 })
 
+const settingsLayoutRoute = createRoute({
+  getParentRoute: () => protectedLayoutRoute,
+  path: '/settings',
+  component: SettingsLayout,
+})
+
+const settingsIndexRoute = createRoute({
+  getParentRoute: () => settingsLayoutRoute,
+  path: '/',
+  beforeLoad: () => {
+    // eslint-disable-next-line @typescript-eslint/only-throw-error -- TanStack Router redirect objects are thrown by design
+    throw redirect({ to: '/settings/logs' })
+  },
+})
+
+const settingsLogsRoute = createRoute({
+  getParentRoute: () => settingsLayoutRoute,
+  path: 'logs',
+  component: SettingsLogsPage,
+})
+
 const dockerIntegrationRoute = createRoute({
   getParentRoute: () => protectedLayoutRoute,
   path: '/integrations/docker',
@@ -333,6 +356,7 @@ const routeTree = rootRoute.addChildren([
       cronRunsListRoute,
       cronRunLogViewerRoute,
     ]),
+    settingsLayoutRoute.addChildren([settingsIndexRoute, settingsLogsRoute]),
     dockerIntegrationRoute,
     containerPageRoute.addChildren([
       containerIndexRoute,

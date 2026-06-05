@@ -328,6 +328,33 @@ def load_vl_retention_days() -> int:
     return int(raw)
 
 
+@dataclass(frozen=True, slots=True)
+class VlDiskWarningConfig:
+    """Warn / crit thresholds (percent of the VL disk budget) for the logs
+    settings page. Env-only (no YAML home yet). ``warn_pct`` < ``crit_pct``
+    is expected but NOT enforced here — the UI colors by ``>=`` comparison."""
+
+    warn_pct: int = 70
+    crit_pct: int = 85
+
+
+def load_vl_disk_warning_config() -> VlDiskWarningConfig:
+    """Load VL disk warn/crit thresholds from env (HOMELAB_MONITOR_VL_DISK_*).
+
+    Normalizes so warn_pct <= crit_pct regardless of env ordering."""
+    defaults = VlDiskWarningConfig()
+    warn_pct = defaults.warn_pct
+    crit_pct = defaults.crit_pct
+    raw_warn = os.environ.get("HOMELAB_MONITOR_VL_DISK_WARN_PCT")
+    if raw_warn is not None:
+        warn_pct = int(raw_warn)
+    raw_crit = os.environ.get("HOMELAB_MONITOR_VL_DISK_CRIT_PCT")
+    if raw_crit is not None:
+        crit_pct = int(raw_crit)
+    lo, hi = sorted([warn_pct, crit_pct])
+    return VlDiskWarningConfig(warn_pct=lo, crit_pct=hi)
+
+
 # ---------------------------------------------------------------------------
 # STAGE-004-006: log redaction patterns (logs.redact:)
 # ---------------------------------------------------------------------------
@@ -495,6 +522,7 @@ __all__ = [
     "DiskBudgetConfig",
     "LogStreamBudgetConfig",
     "RedactPattern",
+    "VlDiskWarningConfig",
     "VlQueryLimits",
     "get_public_url",
     "load_cron_anomaly_config",
@@ -502,6 +530,7 @@ __all__ = [
     "load_disk_budget_config",
     "load_log_stream_budget_config",
     "load_redact_patterns",
+    "load_vl_disk_warning_config",
     "load_vl_query_limits",
     "load_vl_retention_days",
 ]

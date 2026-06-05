@@ -22,12 +22,12 @@ from homelab_monitor.kernel.plugins.base import BaseCollector
 from homelab_monitor.kernel.plugins.context import CollectorContext
 from homelab_monitor.kernel.plugins.types import CollectorResult, RunKind, TrustLevel
 
-_BYTES_PER_GIB = 1024**3
+BYTES_PER_GIB = 1024**3
 _CRITICAL_PCT = 95.0
 _SHRINK_COOLDOWN_S = 300.0  # 5 minutes
 
 
-def _dir_size_bytes(path: Path) -> int:
+def dir_size_bytes(path: Path) -> int:
     """Return total bytes of files under path. Does not follow symlinks."""
     if not path.exists():
         return 0
@@ -108,14 +108,14 @@ class SelfDiskCollector(BaseCollector):
             "runbook_transcripts": (runbook_dir, cfg.sqlite_ratio),
         }
 
-        total_budget_bytes = cfg.total_gb * _BYTES_PER_GIB
+        total_budget_bytes = cfg.total_gb * BYTES_PER_GIB
         used_total = 0
         # The "true" budget total used to compute used_pct excludes the
         # double-counted runbook_transcripts (which shares sqlite's slot).
         budget_total_for_pct = (cfg.vm_ratio + cfg.vl_ratio + cfg.sqlite_ratio) * total_budget_bytes
 
         for slot_name, (path, ratio) in slots.items():
-            used = _dir_size_bytes(path)
+            used = dir_size_bytes(path)
             budget = total_budget_bytes * ratio
             ctx.vm.write_gauge(
                 "homelab_self_disk_used_bytes",

@@ -30,6 +30,8 @@ __all__ = [
     "LogsFieldsResponse",
     "LogsHistogramResponse",
     "LogsQueryResponse",
+    "LogsRetentionResponse",
+    "LogsRetentionUpdateRequest",
     "LogsServicesResponse",
     "LogsStreamSummary",
     "LogsStreamsResponse",
@@ -263,6 +265,37 @@ class LogsStreamsResponse(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     streams: list[LogsStreamSummary]
+
+
+class LogsRetentionResponse(BaseModel):
+    """Response for GET/PATCH /api/settings/logs/retention (STAGE-004-022)."""
+
+    model_config = ConfigDict(extra="forbid")
+    retention_days: int = Field(description="EFFECTIVE retention (days) VL is running")
+    pending_retention_days: int | None = Field(
+        default=None,
+        description="Desired retention awaiting restart, or null if none pending",
+    )
+    disk_used_gb: float = Field(description="VL data-dir usage in GiB")
+    disk_used_pct: float = Field(description="VL usage as percent of the VL disk budget")
+    disk_budget_available: bool = Field(
+        description="False when budget config is missing or malformed; True otherwise"
+    )
+    warn_pct: int = Field(description="Warn threshold (percent of VL budget)")
+    crit_pct: int = Field(description="Critical threshold (percent of VL budget)")
+    retention_source: Literal["env", "runtime", "default"] = Field(
+        description="Where the effective/pending value originates"
+    )
+    restart_required: bool = Field(
+        description="True iff a pending retention differs from effective"
+    )
+
+
+class LogsRetentionUpdateRequest(BaseModel):
+    """Request body for PATCH /api/settings/logs/retention."""
+
+    model_config = ConfigDict(extra="forbid")
+    retention_days: int = Field(ge=1, le=365, description="Desired retention in days")
 
 
 class ServiceCount(BaseModel):

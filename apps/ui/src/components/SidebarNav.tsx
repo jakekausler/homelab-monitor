@@ -49,7 +49,7 @@ const NAV_ITEMS: NavItem[] = [
     disabledNote: 'Coming soon',
   },
   { label: 'Self-status', icon: ShieldCheck, disabledNote: 'Coming soon' },
-  { label: 'Settings', icon: Cog, disabledNote: 'Coming soon' },
+  { label: 'Settings', to: '/settings', icon: Cog },
 ]
 
 export function SidebarNav({

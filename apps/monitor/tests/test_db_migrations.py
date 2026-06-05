@@ -52,6 +52,7 @@ EXPECTED_TABLES = {
     "image_update_state",
     "compose_actions",
     "log_saved_queries",
+    "app_settings",
 }
 
 
@@ -69,7 +70,7 @@ async def test_check_pending_returns_revisions_on_empty_db(db_url: str) -> None:
 
 
 async def test_run_migrations_applies_head(db_url: str) -> None:
-    """After ``run_migrations`` the DB is at head and contains all 20 tables."""
+    """After ``run_migrations`` the DB is at head and contains all expected tables."""
     engine = get_engine(url=db_url)
     try:
         await run_migrations(engine)
