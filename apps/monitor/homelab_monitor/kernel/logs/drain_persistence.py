@@ -93,6 +93,15 @@ class DrainPersistence(Protocol):
         """Upsert the full drain_models row for `model_key`."""
         ...
 
+    async def get_max_cursor(self) -> int | None:
+        """Return MAX(last_processed_ts) across all drain_models rows, or None.
+
+        None when the table is empty OR every row has a NULL last_processed_ts.
+        Used by the DrainConsumer cold-start seed to RESUME from the furthest-
+        advanced per-model cursor rather than replaying history.
+        """
+        ...
+
 
 class SqlitePersistence:
     """`DrainPersistence` backed by the drain_models table."""
@@ -151,6 +160,18 @@ class SqlitePersistence:
                     "ua": updated_at,
                 },
             )
+
+    async def get_max_cursor(self) -> int | None:
+        rows = await self._repo.fetch_all(
+            text("SELECT MAX(last_processed_ts) AS max_cursor FROM drain_models"),
+            {},
+        )
+        if not rows:  # pragma: no cover  -- aggregate always returns one row
+            return None
+        raw: Any = rows[0].max_cursor  # pyright: ignore[reportAny]  -- SQLite Row
+        if raw is None:
+            return None
+        return int(raw)
 
 
 def _decode_first_seen(raw: str) -> dict[str, int]:

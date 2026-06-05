@@ -831,6 +831,31 @@ async def test_lifespan_startup_cron_discovery_disabled_skips_immediate_run(
 
 
 @pytest.mark.asyncio
+async def test_lifespan_drain_disabled_skips_consumer_setup(
+    db_url: str,
+    master_key: bytes,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When HOMELAB_MONITOR_DRAIN_ENABLED=false the DrainConsumer block is skipped.
+
+    Covers lifespan.py branch 877→910: the false-branch of ``if drain_config.enabled``
+    (drain disabled → jump past the DrainConsumer construction block).
+    """
+    monkeypatch.setenv("HOMELAB_MONITOR_DB_URL", db_url)
+    monkeypatch.setenv("HOMELAB_MONITOR_MASTER_KEY", base64.b64encode(master_key).decode())
+    monkeypatch.setenv("HOMELAB_MONITOR_DRAIN_ENABLED", "false")
+
+    app = create_app(lifespan_enabled=True)
+
+    async with app.router.lifespan_context(app):
+        # Lifespan must start and run successfully.
+        assert app.state.scheduler is not None
+        assert app.state.scheduler.running
+        # The drain consumer block was skipped — attribute must be absent or None.
+        assert getattr(app.state, "drain_consumer", None) is None
+
+
+@pytest.mark.asyncio
 async def test_lifespan_wires_local_build_refresher_to_compose_runner(
     db_url: str,
     master_key: bytes,

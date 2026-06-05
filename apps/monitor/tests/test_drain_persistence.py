@@ -152,3 +152,68 @@ async def test_load_state_for_skips_non_int_first_seen_values(
 def test_decode_first_seen_empty_string() -> None:
     assert _decode_first_seen("") == {}
     assert _decode_first_seen("   ") == {}
+
+
+async def test_get_max_cursor_empty_table(repo: SqliteRepository) -> None:
+    persistence = SqlitePersistence(repo)
+    assert await persistence.get_max_cursor() is None
+
+
+async def test_get_max_cursor_returns_max(repo: SqliteRepository) -> None:
+    persistence = SqlitePersistence(repo)
+    await persistence.persist(
+        model_key="m1",
+        snapshot=b"a",
+        line_count=1,
+        template_count=1,
+        last_processed_ts=1000,
+        first_seen_map_json="{}",
+        updated_at=1,
+    )
+    await persistence.persist(
+        model_key="m2",
+        snapshot=b"b",
+        line_count=1,
+        template_count=1,
+        last_processed_ts=5000,
+        first_seen_map_json="{}",
+        updated_at=1,
+    )
+    assert await persistence.get_max_cursor() == 5000  # noqa: PLR2004
+
+
+async def test_get_max_cursor_null_rows_yield_none(repo: SqliteRepository) -> None:
+    persistence = SqlitePersistence(repo)
+    await persistence.persist(
+        model_key="m-null",
+        snapshot=b"x",
+        line_count=0,
+        template_count=0,
+        last_processed_ts=None,
+        first_seen_map_json="{}",
+        updated_at=1,
+    )
+    assert await persistence.get_max_cursor() is None
+
+
+async def test_get_max_cursor_ignores_null_takes_non_null(repo: SqliteRepository) -> None:
+    persistence = SqlitePersistence(repo)
+    await persistence.persist(
+        model_key="m-null",
+        snapshot=b"x",
+        line_count=0,
+        template_count=0,
+        last_processed_ts=None,
+        first_seen_map_json="{}",
+        updated_at=1,
+    )
+    await persistence.persist(
+        model_key="m-real",
+        snapshot=b"y",
+        line_count=1,
+        template_count=1,
+        last_processed_ts=7777,
+        first_seen_map_json="{}",
+        updated_at=1,
+    )
+    assert await persistence.get_max_cursor() == 7777  # noqa: PLR2004

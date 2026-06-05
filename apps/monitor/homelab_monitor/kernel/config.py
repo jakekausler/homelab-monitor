@@ -405,6 +405,63 @@ def load_vl_disk_warning_config() -> VlDiskWarningConfig:
     return VlDiskWarningConfig(warn_pct=lo, crit_pct=hi)
 
 
+@dataclass(frozen=True, slots=True)
+class DrainConfig:
+    """Runtime tunables for the periodic DrainConsumer (STAGE-004-026).
+
+    ``interval_seconds`` — cycle cadence; the consumer queries VL, feeds the
+    DrainEngine, snapshots, and advances the watermark every ``interval_seconds``.
+    ``batch_max_lines`` — per-cycle VL line cap; a cycle that returns exactly this
+    many lines is treated as PARTIAL (more lines pending) and the watermark only
+    advances to the newest line seen, so the next cycle resumes mid-window.
+    ``ingest_lag_grace_seconds`` — subtracted from ``now`` to form the query upper
+    bound, so lines still propagating through journald→Vector→VL ingest are not
+    skipped past by the watermark.
+    ``enabled`` — env gate; when false the consumer is never constructed/started.
+    """
+
+    interval_seconds: int = 300
+    batch_max_lines: int = 50_000
+    ingest_lag_grace_seconds: int = 30
+    enabled: bool = True
+
+
+def load_drain_config() -> DrainConfig:
+    """Load DrainConsumer tunables from env (HOMELAB_MONITOR_DRAIN_*).
+
+    Clamps interval_seconds >= 1 and batch_max_lines >= 1 (0 makes the cycle
+    degenerate) and ingest_lag_grace_seconds >= 0 (negative lag would push the
+    query upper bound into the future). A non-numeric *_S / *_LINES env value
+    propagates ValueError (mirrors load_tail_config / load_cron_run_reconciler_config).
+    """
+    defaults = DrainConfig()
+    interval_seconds = defaults.interval_seconds
+    batch_max_lines = defaults.batch_max_lines
+    ingest_lag_grace_seconds = defaults.ingest_lag_grace_seconds
+    enabled = defaults.enabled
+    raw_interval = os.environ.get("HOMELAB_MONITOR_DRAIN_INTERVAL_S")
+    if raw_interval is not None:
+        interval_seconds = int(raw_interval)
+    raw_batch = os.environ.get("HOMELAB_MONITOR_DRAIN_BATCH_MAX_LINES")
+    if raw_batch is not None:
+        batch_max_lines = int(raw_batch)
+    raw_lag = os.environ.get("HOMELAB_MONITOR_DRAIN_INGEST_LAG_GRACE_S")
+    if raw_lag is not None:
+        ingest_lag_grace_seconds = int(raw_lag)
+    raw_enabled = os.environ.get("HOMELAB_MONITOR_DRAIN_ENABLED")
+    if raw_enabled is not None:
+        enabled = raw_enabled.strip().lower() in ("1", "true", "yes")
+    interval_seconds = max(interval_seconds, 1)
+    batch_max_lines = max(batch_max_lines, 1)
+    ingest_lag_grace_seconds = max(ingest_lag_grace_seconds, 0)
+    return DrainConfig(
+        interval_seconds=interval_seconds,
+        batch_max_lines=batch_max_lines,
+        ingest_lag_grace_seconds=ingest_lag_grace_seconds,
+        enabled=enabled,
+    )
+
+
 # ---------------------------------------------------------------------------
 # STAGE-004-006: log redaction patterns (logs.redact:)
 # ---------------------------------------------------------------------------
@@ -570,6 +627,7 @@ __all__ = [
     "CronAnomalyConfig",
     "CronRunReconcilerConfig",
     "DiskBudgetConfig",
+    "DrainConfig",
     "LogStreamBudgetConfig",
     "RedactPattern",
     "TailConfig",
@@ -579,6 +637,7 @@ __all__ = [
     "load_cron_anomaly_config",
     "load_cron_run_reconciler_config",
     "load_disk_budget_config",
+    "load_drain_config",
     "load_log_stream_budget_config",
     "load_redact_patterns",
     "load_tail_config",

@@ -857,6 +857,43 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
     override_loader.start_task()
     app.state.override_loader = override_loader
 
+    # 7g. Start DrainConsumer periodic task (STAGE-004-026). Env-gated; reuses
+    # the existing repo + http_client + vl_url already constructed above.
+    from homelab_monitor.kernel.config import (  # noqa: PLC0415
+        load_drain_config,
+        load_vl_query_limits,
+    )
+    from homelab_monitor.kernel.db.repositories.app_settings_repository import (  # noqa: PLC0415
+        AppSettingsRepository,
+    )
+    from homelab_monitor.kernel.logs.drain_consumer import DrainConsumer  # noqa: PLC0415
+    from homelab_monitor.kernel.logs.drain_engine import DrainEngine  # noqa: PLC0415
+    from homelab_monitor.kernel.logs.drain_persistence import SqlitePersistence  # noqa: PLC0415
+    from homelab_monitor.kernel.logs.victorialogs_client import (  # noqa: PLC0415
+        VictoriaLogsClient,
+    )
+
+    drain_config = load_drain_config()
+    if drain_config.enabled:
+        drain_persistence = SqlitePersistence(repo)
+        drain_engine = DrainEngine(drain_persistence)
+        drain_vl_limits = load_vl_query_limits()
+        drain_vl_client = VictoriaLogsClient(
+            vl_url=vl_url,
+            http_client=http_client,
+            limits=drain_vl_limits,
+        )
+        drain_consumer = DrainConsumer(
+            vl_client=drain_vl_client,
+            engine=drain_engine,
+            settings=AppSettingsRepository(repo),
+            persistence=drain_persistence,
+            config=drain_config,
+            log=log,
+        )
+        drain_consumer.start_task()
+        app.state.drain_consumer = drain_consumer
+
     # 7d. One-shot cron-discovery on startup. The scheduler's per-collector
     # tick loop applies an initial offset, so the first SCHEDULED cron tick
     # can be up to ~one interval (300s) away. Requesting an immediate run
@@ -1025,6 +1062,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
     try:
         yield
     finally:
+        # Stop DrainConsumer before other services so its in-flight VL stream +
+        # engine snapshot cannot race with http_client/engine teardown.
+        drain_consumer_handle = getattr(app.state, "drain_consumer", None)
+        if drain_consumer_handle is not None:  # pragma: no branch
+            await drain_consumer_handle.stop_task()
         # Stop OverrideLoader before discoverer/supervisor so its in-flight
         # tx cannot race with shutdown ownership reads.
         override_loader_handle = getattr(app.state, "override_loader", None)

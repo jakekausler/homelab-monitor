@@ -563,3 +563,61 @@ def test_load_tail_config_clamps_zero_to_one(monkeypatch: pytest.MonkeyPatch) ->
     assert cfg.max_connections == 1
     assert cfg.max_lines_per_sec == 1
     assert cfg.max_duration_s == 1
+
+
+def test_load_drain_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    from homelab_monitor.kernel.config import DrainConfig, load_drain_config  # noqa: PLC0415
+
+    monkeypatch.delenv("HOMELAB_MONITOR_DRAIN_INTERVAL_S", raising=False)
+    monkeypatch.delenv("HOMELAB_MONITOR_DRAIN_BATCH_MAX_LINES", raising=False)
+    monkeypatch.delenv("HOMELAB_MONITOR_DRAIN_INGEST_LAG_GRACE_S", raising=False)
+    monkeypatch.delenv("HOMELAB_MONITOR_DRAIN_ENABLED", raising=False)
+    cfg = load_drain_config()
+    assert cfg == DrainConfig()
+    assert cfg.interval_seconds == 300  # noqa: PLR2004
+    assert cfg.batch_max_lines == 50_000  # noqa: PLR2004
+    assert cfg.ingest_lag_grace_seconds == 30  # noqa: PLR2004
+    assert cfg.enabled is True
+
+
+def test_load_drain_config_all_env_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
+    from homelab_monitor.kernel.config import load_drain_config  # noqa: PLC0415
+
+    monkeypatch.setenv("HOMELAB_MONITOR_DRAIN_INTERVAL_S", "60")
+    monkeypatch.setenv("HOMELAB_MONITOR_DRAIN_BATCH_MAX_LINES", "1000")
+    monkeypatch.setenv("HOMELAB_MONITOR_DRAIN_INGEST_LAG_GRACE_S", "5")
+    monkeypatch.setenv("HOMELAB_MONITOR_DRAIN_ENABLED", "false")
+    cfg = load_drain_config()
+    assert cfg.interval_seconds == 60  # noqa: PLR2004
+    assert cfg.batch_max_lines == 1000  # noqa: PLR2004
+    assert cfg.ingest_lag_grace_seconds == 5  # noqa: PLR2004
+    assert cfg.enabled is False
+
+
+def test_load_drain_config_clamps(monkeypatch: pytest.MonkeyPatch) -> None:
+    from homelab_monitor.kernel.config import load_drain_config  # noqa: PLC0415
+
+    monkeypatch.setenv("HOMELAB_MONITOR_DRAIN_INTERVAL_S", "0")
+    monkeypatch.setenv("HOMELAB_MONITOR_DRAIN_BATCH_MAX_LINES", "0")
+    monkeypatch.setenv("HOMELAB_MONITOR_DRAIN_INGEST_LAG_GRACE_S", "-5")
+    monkeypatch.delenv("HOMELAB_MONITOR_DRAIN_ENABLED", raising=False)
+    cfg = load_drain_config()
+    assert cfg.interval_seconds == 1
+    assert cfg.batch_max_lines == 1
+    assert cfg.ingest_lag_grace_seconds == 0
+
+
+def test_load_drain_config_enabled_truthy_variants(monkeypatch: pytest.MonkeyPatch) -> None:
+    from homelab_monitor.kernel.config import load_drain_config  # noqa: PLC0415
+
+    for raw, expected in (("1", True), ("yes", True), ("TRUE", True), ("0", False), ("off", False)):
+        monkeypatch.setenv("HOMELAB_MONITOR_DRAIN_ENABLED", raw)
+        assert load_drain_config().enabled is expected
+
+
+def test_load_drain_config_bad_int_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    from homelab_monitor.kernel.config import load_drain_config  # noqa: PLC0415
+
+    monkeypatch.setenv("HOMELAB_MONITOR_DRAIN_INTERVAL_S", "not-a-number")
+    with pytest.raises(ValueError):
+        load_drain_config()
