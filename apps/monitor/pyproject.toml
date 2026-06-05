@@ -10,6 +10,7 @@ dependencies = [
     "structlog>=24.4",
     "httpx>=0.28",
     "cryptography>=43",
+    "drain3>=0.9.11",
     "bcrypt>=4.2",
     "python-multipart>=0.0.18",
     "sqlalchemy[asyncio]>=2.0.36",

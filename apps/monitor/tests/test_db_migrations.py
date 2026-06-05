@@ -53,6 +53,7 @@ EXPECTED_TABLES = {
     "compose_actions",
     "log_saved_queries",
     "app_settings",
+    "drain_models",
 }
 
 
@@ -974,5 +975,35 @@ async def test_migration_0024_round_trip(db_url: str) -> None:
         async with engine.connect() as conn:
             tables_at_0023 = await conn.run_sync(_list_tables)
         assert "docker_override_ownership" not in tables_at_0023
+    finally:
+        await engine.dispose()
+
+
+async def test_migration_0033_round_trip(db_url: str) -> None:
+    """Migration 0033 creates drain_models + its index; downgrade drops them."""
+    engine = get_engine(url=db_url)
+    try:
+        await run_migrations(engine)
+
+        def _list_tables(sync_conn: object) -> set[str]:
+            inspector = inspect(sync_conn)
+            return set(inspector.get_table_names()) if inspector is not None else set()
+
+        async with engine.connect() as conn:
+            tables_at_head = await conn.run_sync(_list_tables)
+        assert "drain_models" in tables_at_head
+
+        async with engine.connect() as conn:
+            idx_rows = (await conn.execute(text("PRAGMA index_list('drain_models')"))).fetchall()
+        assert any(r[1] == "ix_drain_models_updated_at" for r in idx_rows)
+
+        cfg = Config()
+        cfg.set_main_option("script_location", str(ALEMBIC_DIR))
+        cfg.set_main_option("sqlalchemy.url", db_url)
+        command.downgrade(cfg, "0032")
+
+        async with engine.connect() as conn:
+            tables_at_0032 = await conn.run_sync(_list_tables)
+        assert "drain_models" not in tables_at_0032
     finally:
         await engine.dispose()
