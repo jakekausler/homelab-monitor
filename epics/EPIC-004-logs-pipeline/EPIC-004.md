@@ -2,11 +2,11 @@
 
 ## Status: In Progress
 
-## Stages Counter: 28 / 50 Complete
+## Stages Counter: 29 / 50 Complete
 
-## Current Stage: STAGE-004-025
+## Current Stage: STAGE-004-026
 
-## Current Phase: STAGE-004-025 Design / Not Started
+## Current Phase: STAGE-004-026 Design / Not Started
 
 ## Overview
 
@@ -115,7 +115,7 @@ Stages MUST be implemented in order. No parallelization. Each stage lands a sing
 
 | # | Stage | Theme |
 |---|---|---|
-| STAGE-004-025 | drain3 wrapper + SQLite persistence | `DrainEngine` + `SqlitePersistence`; model-key override hook with cron special case. |
+| STAGE-004-025 | drain3 wrapper + SQLite persistence | `DrainEngine` + `SqlitePersistence`; model-key override hook with cron special case. Design ✅ Build ✅ Refinement ✅ Finalize ✅ |
 | STAGE-004-026 | Periodic batch consumer service | Runs every 5 min (configurable); cursor per model; partial-cycle handling. |
 | STAGE-004-027 | Metrics emission + manual refresh API | `homelab_log_signature_count`, `_first_seen_ts`, `_total`; `POST /api/logs/signatures/refresh`. |
 | STAGE-004-028 | Signature catalog backend + list/drill-in UI | Tab on `/logs`; label / suppress / mark-expected / search / sample-lines / Open-in-Explorer. |
