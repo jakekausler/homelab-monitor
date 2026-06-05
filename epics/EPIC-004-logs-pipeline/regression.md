@@ -253,6 +253,15 @@
 - Metrics emitted: `homelab_log_tail_active_connections` (gauge), `homelab_log_tail_lines_streamed_total`, `homelab_log_tail_lines_dropped_total`, `homelab_log_tail_errors_total{kind}`.
 - Integration test: `make integration` runs `apps/monitor/tests/integration/test_logs_tail_integration.py` (4 scenarios) against the real VL rig. Clean rig volumes first: `docker compose -f deploy/compose/docker-compose.test.yml down -v` (a stale `shared_rig_secrets`/`rig` token can break bootstrap with a UNIQUE-constraint error).
 
+## STAGE-004-024 — Frontend tail mode (Explorer consumes SSE; toggle button + windowed pager)
+
+- Logs Explorer "Live tail" toggle button: clicking turns it GREEN (the only live indicator; no status bar); already-loaded historical lines are kept and live lines append below; auto-scroll-to-bottom sticky (scroll up disengages → "Resume auto-scroll" button appears; scroll to bottom re-engages).
+- Stop tail (click the green toggle again): streamed lines stay frozen on screen; the custom end time is set to the stop-moment; reverts to historical paginated view.
+- Bidirectional 1000-line windowed pager (applies to normal browsing too): "Load older" (top) trims newest off the bottom over 1000 + turns OFF tailing; "Load newer" (bottom, hidden while tailing) trims oldest off the top over 1000; when an end is trimmed a "…lines removed" banner shows at that end (top=older, bottom=newer).
+- Tail errors (503 over-cap / 422 invalid LogsQL / 502 VL down) surface as an inline error message below the controls (no status bar).
+- Known limitation: "Load newer" returns the latest ~500 lines in [newestShown, end]; if >500 new lines accumulated, the oldest of the gap are skipped (converges via repeat Load-newer or tail).
+- Frontend tests: `apps/ui/src/lib/__tests__/useWindowedLogs.test.ts` (windowed FIFO reducer), `apps/ui/src/lib/logsTail.test.ts` (slim EventSource hook), `apps/ui/src/routes/logs/__tests__/LogsExplorerPage.test.tsx` (page integration). Manual: prod rig `make dev-prod` (rm -rf apps/ui/dist first), test Desktop + Mobile in the Logs Explorer.
+
 ## STAGE-004-022 — Global retention settings UI (VL retention + disk thresholds)
 
 - "Sidebar Settings entry + /settings navigation: SidebarNav "Settings" entry (previously disabled "Coming soon") is enabled → clicking navigates to `/settings` (parent route). The /settings route redirects to `/settings/logs`. Navigation works via SPA TanStack Link — no full page reload."
