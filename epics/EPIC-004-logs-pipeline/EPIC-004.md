@@ -2,9 +2,9 @@
 
 ## Status: In Progress
 
-## Stages Counter: 25 / 50 Complete
+## Stages Counter: 26 / 50 Complete
 
-## Current Stage: STAGE-004-022
+## Current Stage: STAGE-004-023
 
 ## Current Phase: STAGE-004-020 Design / Not Started
 
@@ -102,7 +102,7 @@ Stages MUST be implemented in order. No parallelization. Each stage lands a sing
 | STAGE-004-019 | Histogram of line counts | Stacked-by-severity bar chart above results; click bucket to narrow range. Design ✅ Build ✅ Refinement ✅ Finalize ✅ |
 | STAGE-004-020 | Log-line export | Download matching lines as .txt or .json with streamed backend + cap. Design ✅ Build ✅ Refinement ✅ Finalize ✅ |
 | STAGE-004-021 | "Open in Explorer" deep-link | Buttons on docker + cron viewers; helper documented for future detail pages. Design ✅ Build ✅ Refinement ✅ Finalize ✅ |
-| STAGE-004-022 | Global retention settings UI | `/settings/logs` page showing VL retention + thresholds; per-store, no coordinator. |
+| STAGE-004-022 | Global retention settings UI | `/settings/logs` page showing VL retention + thresholds; per-store, no coordinator. Design ✅ Build ✅ Refinement ✅ Finalize ✅ |
 
 ### Live tail wave (S23-S24)
 
