@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import AsyncGenerator, AsyncIterator
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Annotated, Literal, cast
+from uuid import uuid4
 
 import httpx
 import structlog
@@ -14,6 +16,8 @@ from starlette.responses import StreamingResponse
 from structlog.stdlib import BoundLogger
 
 from homelab_monitor.kernel.api.dependencies import (
+    get_cycle_status_store,
+    get_drain_consumer,
     get_http_client,
     get_log_stream_state,
     get_metrics_writer,
@@ -29,11 +33,14 @@ from homelab_monitor.kernel.api.errors import (
     ServiceUnavailableProblem,
 )
 from homelab_monitor.kernel.api.schemas import (
+    DrainCycleResultResponse,
     LogsFieldsResponse,
     LogsHistogramResponse,
     LogsQueryResponse,
     LogsServicesResponse,
     LogsStreamsResponse,
+    RefreshCycleResponse,
+    RefreshStatusResponse,
     SavedQueriesListResponse,
     SavedQueryResponse,
     SavedServiceIdentity,
@@ -46,6 +53,11 @@ from homelab_monitor.kernel.db.repository import SqliteRepository
 
 if TYPE_CHECKING:
     from homelab_monitor.kernel.plugins.io import MetricsWriter
+from homelab_monitor.kernel.logs.cycle_status import CycleStatusStore
+from homelab_monitor.kernel.logs.drain_consumer import (
+    CycleInProgressError,
+    DrainConsumer,
+)
 from homelab_monitor.kernel.logs.export import stream_export
 from homelab_monitor.kernel.logs.fields import (
     FieldsCache,
@@ -126,6 +138,29 @@ _fields_cache = FieldsCache()
 # Process-wide 30s TTL cache for /logs/histogram, keyed on
 # (sha256(effective_expr), start, end, buckets). Module-scoped; rebind in tests.
 _histogram_cache = HistogramCache()
+
+# Strong refs to fire-and-forget refresh tasks so they are NOT garbage-collected
+# mid-flight (asyncio only holds a weak ref to created tasks). The done-callback
+# discards each task once it finishes.
+_BACKGROUND_TASKS: set[asyncio.Task[None]] = set()
+
+
+async def _run_and_record(
+    consumer: DrainConsumer,
+    store: CycleStatusStore,
+    cycle_id: str,
+    log: BoundLogger,
+) -> None:
+    """Run one drain cycle and record its outcome into the status store."""
+    try:
+        result = await consumer.run_once()
+    except CycleInProgressError:
+        store.fail(cycle_id, "cycle_in_progress")
+    except Exception as exc:
+        store.fail(cycle_id, str(exc))
+        log.warning("logs_signatures_refresh.cycle_failed", cycle_id=cycle_id, error=str(exc))
+    else:
+        store.complete(cycle_id, result)
 
 
 def _compose_services_expr(expr: str, services_csv: str | None) -> str:
@@ -628,6 +663,68 @@ async def logs_streams(
     """
     # Snapshot the dict to avoid race with collector mid-iteration.
     return LogsStreamsResponse(streams=list(dict(state).values()))
+
+
+@router.post(
+    "/logs/signatures/refresh",
+    response_model=RefreshCycleResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def refresh_signatures(
+    _user: Annotated[User, Depends(require_session())],
+    consumer: Annotated[DrainConsumer, Depends(get_drain_consumer)],
+    store: Annotated[CycleStatusStore, Depends(get_cycle_status_store)],
+) -> RefreshCycleResponse:
+    """Trigger one drain cycle out of band; returns a cycle_id to poll.
+
+    202 + cycle_id on accept. 409 if a cycle is already running. 503 if the drain
+    consumer is not running (drain disabled). Auth: session required; CSRF enforced.
+    """
+    log: BoundLogger = cast(
+        BoundLogger,
+        structlog.get_logger().bind(component="logs_signatures_refresh"),
+    )
+    if consumer.is_cycle_running():
+        raise ConflictProblem(
+            message="a drain cycle is already running",
+            details={"cycle_started_at": consumer.cycle_started_at},
+        )
+    cycle_id = uuid4().hex
+    store.begin(cycle_id)
+    task = asyncio.create_task(_run_and_record(consumer, store, cycle_id, log))
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_TASKS.discard)
+    return RefreshCycleResponse(cycle_id=cycle_id)
+
+
+@router.get(
+    "/logs/signatures/refresh/{cycle_id}",
+    response_model=RefreshStatusResponse,
+)
+async def get_refresh_status(
+    cycle_id: str,
+    _user: Annotated[User, Depends(require_session())],
+    store: Annotated[CycleStatusStore, Depends(get_cycle_status_store)],
+) -> RefreshStatusResponse:
+    """Poll a manually-triggered drain cycle. 404 if unknown or expired.
+
+    Auth: session required. CSRF NOT enforced on GET.
+    """
+    entry = store.get(cycle_id)
+    if entry is None:
+        raise NotFoundProblem(message=f"unknown or expired cycle: {cycle_id}")
+    result: DrainCycleResultResponse | None = None
+    if entry.result is not None:
+        result = DrainCycleResultResponse(
+            started_at=entry.result.started_at,
+            finished_at=entry.result.finished_at,
+            lines_processed=entry.result.lines_processed,
+            new_templates=entry.result.new_templates,
+            models_touched=entry.result.models_touched,
+            cycle_status=entry.result.cycle_status,
+            error=entry.result.error,
+        )
+    return RefreshStatusResponse(status=entry.status, result=result, error=entry.error)
 
 
 # DI helper for saved queries repository

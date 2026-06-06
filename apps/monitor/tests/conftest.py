@@ -46,6 +46,7 @@ from homelab_monitor.kernel.docker.build_sources_loader import BuildSourcesLoade
 from homelab_monitor.kernel.docker.compose_action_runner import ComposeActionRunner
 from homelab_monitor.kernel.docker.socket_client import DockerSocketClient
 from homelab_monitor.kernel.heartbeat.repository import HeartbeatRepo
+from homelab_monitor.kernel.logs.cycle_status import CycleStatusStore
 from homelab_monitor.kernel.logs.multiplex import MultiplexLogsWriter
 from homelab_monitor.kernel.logs.services import ServicesCache
 from homelab_monitor.kernel.logs.vl_writer import VictoriaLogsWriter
@@ -346,6 +347,8 @@ async def _per_test_db(  # noqa: PLR0915  # pyright: ignore[reportUnusedFunction
     state.vl_writer = vl_writer
     state.logs_writer = logs_writer
     state.log_stream_state = log_stream_state
+    state.cycle_status_store = CycleStatusStore()
+    state.drain_consumer = None
     # Re-establish collector-instance attrs that tests may delattr/set-None:
     state.docker_discoverer = None
     state.probe_supervisor = None

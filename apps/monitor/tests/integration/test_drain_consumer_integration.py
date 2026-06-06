@@ -41,6 +41,7 @@ from homelab_monitor.kernel.logs.drain_consumer import WATERMARK_KEY, DrainConsu
 from homelab_monitor.kernel.logs.drain_engine import DrainEngine
 from homelab_monitor.kernel.logs.drain_persistence import SqlitePersistence
 from homelab_monitor.kernel.logs.victorialogs_client import VictoriaLogsClient
+from homelab_monitor.kernel.plugins.io import InMemoryMetricsWriter
 
 from .helpers.rig import Rig
 from .helpers.rig_health import require_rig_components
@@ -119,6 +120,7 @@ def _make_consumer(
         settings=settings,
         persistence=persistence,
         config=config,
+        metrics_writer=InMemoryMetricsWriter(),
         log=_cast_bound_logger(),
     )
 

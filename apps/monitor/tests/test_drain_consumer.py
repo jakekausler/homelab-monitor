@@ -21,6 +21,7 @@ from homelab_monitor.kernel.db.repositories.app_settings_repository import (
 from homelab_monitor.kernel.db.repository import SqliteRepository
 from homelab_monitor.kernel.logs.drain_consumer import (
     WATERMARK_KEY,
+    CycleInProgressError,
     DrainConsumer,
     DrainCycleResult,
     _now_ms,  # pyright: ignore[reportPrivateUsage]
@@ -33,6 +34,7 @@ from homelab_monitor.kernel.logs.victorialogs_client import (
     VictoriaLogsClientError,
     VlLogLine,
 )
+from homelab_monitor.kernel.plugins.io import InMemoryMetricsWriter
 
 
 def _log() -> BoundLogger:
@@ -120,14 +122,15 @@ def _vl(msg: str, ts: str, *, service: str = "pihole") -> VlLogLine:
     return VlLogLine(timestamp=ts, message=msg, stream="stdout", fields={"service": service})
 
 
-def _consumer(
+def _consumer(  # noqa: PLR0913
     repo: SqliteRepository,
     fake: _FakeVlClient | _WindowedFakeVlClient,
     *,
     batch_max_lines: int = 50,
     ingest_lag_grace_seconds: int = 0,
     interval_seconds: int = 300,
-) -> tuple[DrainConsumer, AppSettingsRepository, SqlitePersistence]:
+    signature_cardinality_warn_threshold: int = 100_000,
+) -> tuple[DrainConsumer, AppSettingsRepository, SqlitePersistence, InMemoryMetricsWriter]:
     persistence = SqlitePersistence(repo)
     engine = DrainEngine(persistence)
     settings = AppSettingsRepository(repo)
@@ -136,21 +139,24 @@ def _consumer(
         batch_max_lines=batch_max_lines,
         ingest_lag_grace_seconds=ingest_lag_grace_seconds,
         enabled=True,
+        signature_cardinality_warn_threshold=signature_cardinality_warn_threshold,
     )
+    metrics_writer = InMemoryMetricsWriter()
     consumer = DrainConsumer(
         vl_client=_as_client(fake),
         engine=engine,
         settings=settings,
         persistence=persistence,
         config=config,
+        metrics_writer=metrics_writer,
         log=_log(),
     )
-    return consumer, settings, persistence
+    return consumer, settings, persistence, metrics_writer
 
 
 async def test_cold_start_seed_no_watermark_no_models(repo: SqliteRepository) -> None:
     fake = _FakeVlClient([])
-    consumer, settings, _p = _consumer(repo, fake, ingest_lag_grace_seconds=0)
+    consumer, settings, _p, _mw = _consumer(repo, fake, ingest_lag_grace_seconds=0)
     result = await consumer.run_once()
     assert result.cycle_status == "ok"
     assert result.lines_processed == 0
@@ -167,7 +173,7 @@ async def test_resume_from_existing_watermark(repo: SqliteRepository) -> None:
         _ns_to_iso,  # pyright: ignore[reportPrivateUsage]
     )
 
-    consumer, settings, _p = _consumer(
+    consumer, settings, _p, _mw = _consumer(
         repo,
         _FakeVlClient(
             [
@@ -191,7 +197,7 @@ async def test_resume_from_max_cursor_when_no_watermark(repo: SqliteRepository) 
         _ns_to_iso,  # pyright: ignore[reportPrivateUsage]
     )
 
-    consumer, _settings, persistence = _consumer(
+    consumer, _settings, persistence, _mw = _consumer(
         repo, _FakeVlClient([]), ingest_lag_grace_seconds=0
     )
     await persistence.persist(
@@ -210,7 +216,7 @@ async def test_resume_from_max_cursor_when_no_watermark(repo: SqliteRepository) 
 
 
 async def test_partial_cycle_advances_to_max_ts_seen(repo: SqliteRepository) -> None:
-    consumer, settings, _p = _consumer(
+    consumer, settings, _p, _mw = _consumer(
         repo,
         _FakeVlClient(
             [
@@ -230,7 +236,7 @@ async def test_partial_cycle_advances_to_max_ts_seen(repo: SqliteRepository) -> 
 
 
 async def test_complete_cycle_advances_to_query_end(repo: SqliteRepository) -> None:
-    consumer, settings, _p = _consumer(
+    consumer, settings, _p, _mw = _consumer(
         repo,
         _FakeVlClient(
             [
@@ -255,7 +261,7 @@ async def test_complete_cycle_advances_to_query_end(repo: SqliteRepository) -> N
 
 
 async def test_empty_cycle_advances_watermark(repo: SqliteRepository) -> None:
-    consumer, settings, _p = _consumer(
+    consumer, settings, _p, _mw = _consumer(
         repo,
         _FakeVlClient([]),
         batch_max_lines=50,
@@ -272,7 +278,7 @@ async def test_empty_cycle_advances_watermark(repo: SqliteRepository) -> None:
 
 
 async def test_vl_failure_does_not_advance_watermark(repo: SqliteRepository) -> None:
-    consumer, settings, _p = _consumer(
+    consumer, settings, _p, _mw = _consumer(
         repo,
         _FakeVlClient(
             [
@@ -296,7 +302,7 @@ async def test_vl_failure_does_not_advance_watermark(repo: SqliteRepository) -> 
 
 
 async def test_early_return_when_query_end_le_watermark(repo: SqliteRepository) -> None:
-    consumer, settings, _p = _consumer(
+    consumer, settings, _p, _mw = _consumer(
         repo,
         _FakeVlClient([_vl("x", "2999-01-01T00:00:00Z")]),
         ingest_lag_grace_seconds=0,
@@ -313,7 +319,7 @@ async def test_early_return_when_query_end_le_watermark(repo: SqliteRepository) 
 
 
 async def test_corrupt_watermark_reseeds(repo: SqliteRepository) -> None:
-    consumer, settings, _p = _consumer(
+    consumer, settings, _p, _mw = _consumer(
         repo,
         _FakeVlClient([]),
         ingest_lag_grace_seconds=0,
@@ -329,7 +335,7 @@ async def test_corrupt_watermark_reseeds(repo: SqliteRepository) -> None:
 async def test_run_forever_runs_until_cancelled(
     repo: SqliteRepository, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    consumer, _settings, _p = _consumer(repo, _FakeVlClient([]))
+    consumer, _settings, _p, _mw = _consumer(repo, _FakeVlClient([]))
     calls: dict[str, int] = {"run_once": 0, "sleep": 0}
     real_run_once = consumer.run_once
 
@@ -352,7 +358,7 @@ async def test_run_forever_runs_until_cancelled(
 async def test_run_forever_backstop(
     repo: SqliteRepository, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    consumer, _s, _p = _consumer(repo, _FakeVlClient([]))
+    consumer, _s, _p, _mw = _consumer(repo, _FakeVlClient([]))
     seq = iter([RuntimeError("boom"), asyncio.CancelledError()])
 
     async def flaky_run_once() -> DrainCycleResult:
@@ -368,7 +374,7 @@ async def test_run_forever_backstop(
 
 
 async def test_start_task_idempotent_and_stop_task(repo: SqliteRepository) -> None:
-    consumer, _settings, _p = _consumer(repo, _FakeVlClient([]))
+    consumer, _settings, _p, _mw = _consumer(repo, _FakeVlClient([]))
     consumer.start_task()
     task1 = consumer._task  # pyright: ignore[reportPrivateUsage]
     consumer.start_task()
@@ -380,7 +386,7 @@ async def test_start_task_idempotent_and_stop_task(repo: SqliteRepository) -> No
 
 
 async def test_malformed_line_timestamp_falls_back(repo: SqliteRepository) -> None:
-    consumer, settings, _p = _consumer(
+    consumer, settings, _p, _mw = _consumer(
         repo,
         _FakeVlClient([_vl("msg", "not-iso")]),
         batch_max_lines=50,
@@ -402,7 +408,7 @@ async def test_naive_vl_timestamp_parsed_as_utc(repo: SqliteRepository) -> None:
     """
     # "2026-06-05T12:00:00" has no timezone — triggers line 77.
     naive_ts = "2026-06-05T12:00:00"
-    consumer, settings, _p = _consumer(
+    consumer, settings, _p, _mw = _consumer(
         repo,
         _FakeVlClient([_vl("msg", naive_ts)]),
         batch_max_lines=50,
@@ -429,7 +435,7 @@ async def test_repeated_lines_produce_is_new_false(repo: SqliteRepository) -> No
     """
     identical_msg = "connection accepted from 192.168.1.1"
     lines = [_vl(identical_msg, ms_to_iso(1000 + i * 10)) for i in range(4)]
-    consumer, settings, _p = _consumer(
+    consumer, settings, _p, _mw = _consumer(
         repo,
         _FakeVlClient(lines),
         batch_max_lines=50,
@@ -451,7 +457,9 @@ async def test_partial_resume_start_excludes_boundary_ms(repo: SqliteRepository)
     )
 
     fake = _WindowedFakeVlClient([_vl("a", ms_to_iso(5000)), _vl("b", ms_to_iso(9000))])
-    consumer, settings, _p = _consumer(repo, fake, batch_max_lines=2, ingest_lag_grace_seconds=0)
+    consumer, settings, _p, _mw = _consumer(
+        repo, fake, batch_max_lines=2, ingest_lag_grace_seconds=0
+    )
     await settings.set(WATERMARK_KEY, "1000")
     result = await consumer.run_once()
     assert result.cycle_status == "partial"
@@ -471,7 +479,9 @@ async def test_same_ms_burst_does_not_wedge(repo: SqliteRepository) -> None:
 
     burst = [_vl("x", ms_to_iso(1000)), _vl("y", ms_to_iso(1000)), _vl("z", ms_to_iso(2000))]
     fake = _WindowedFakeVlClient(burst)
-    consumer, settings, _p = _consumer(repo, fake, batch_max_lines=2, ingest_lag_grace_seconds=0)
+    consumer, settings, _p, _mw = _consumer(
+        repo, fake, batch_max_lines=2, ingest_lag_grace_seconds=0
+    )
     await settings.set(WATERMARK_KEY, "500")
     r1 = await consumer.run_once()
     assert r1.cycle_status == "partial"
@@ -488,7 +498,9 @@ async def test_boundary_line_not_double_counted(repo: SqliteRepository) -> None:
 
     msg = "connection accepted from 10.0.0.1"
     fake = _WindowedFakeVlClient([_vl(msg, ms_to_iso(3000)), _vl(msg, ms_to_iso(5000))])
-    consumer, settings, _p = _consumer(repo, fake, batch_max_lines=2, ingest_lag_grace_seconds=0)
+    consumer, settings, _p, _mw = _consumer(
+        repo, fake, batch_max_lines=2, ingest_lag_grace_seconds=0
+    )
     await settings.set(WATERMARK_KEY, "1000")
     await consumer.run_once()
     await consumer.run_once()
@@ -497,3 +509,72 @@ async def test_boundary_line_not_double_counted(repo: SqliteRepository) -> None:
     )
     assert rows
     assert int(rows[0].line_count) == 2  # noqa: PLR2004
+
+
+# ---------------------------------------------------------------------------
+# Re-entrancy guard tests (STAGE-004-027)
+# ---------------------------------------------------------------------------
+
+
+async def test_run_once_raises_when_lock_held(repo: SqliteRepository) -> None:
+    """run_once raises CycleInProgressError immediately when the cycle lock is held."""
+    consumer, *_ = _consumer(repo, _FakeVlClient([]))
+    await consumer._cycle_lock.acquire()  # pyright: ignore[reportPrivateUsage]
+    try:
+        with pytest.raises(CycleInProgressError):
+            await consumer.run_once()
+    finally:
+        consumer._cycle_lock.release()  # pyright: ignore[reportPrivateUsage]
+
+
+async def test_is_cycle_running_and_cycle_started_at(repo: SqliteRepository) -> None:
+    """is_cycle_running reflects lock state; cycle_started_at is None when idle."""
+    consumer, *_ = _consumer(repo, _FakeVlClient([]))
+    assert not consumer.is_cycle_running()
+    assert consumer.cycle_started_at is None
+
+    await consumer._cycle_lock.acquire()  # pyright: ignore[reportPrivateUsage]
+    assert consumer.is_cycle_running()
+    consumer._cycle_lock.release()  # pyright: ignore[reportPrivateUsage]
+    assert not consumer.is_cycle_running()
+
+
+async def test_run_once_clears_started_at_after_completion(
+    repo: SqliteRepository,
+) -> None:
+    """cycle_started_at is None after a normal cycle completes."""
+    consumer, settings, _p, _mw = _consumer(repo, _FakeVlClient([]), ingest_lag_grace_seconds=0)
+    await settings.set(WATERMARK_KEY, "1")
+    await consumer.run_once()
+    assert consumer.cycle_started_at is None
+
+
+async def test_run_forever_skips_on_cycle_in_progress(
+    repo: SqliteRepository, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """run_forever continues past CycleInProgressError (debug-log, no crash)."""
+    from structlog.testing import capture_logs  # noqa: PLC0415
+
+    consumer, *_ = _consumer(repo, _FakeVlClient([]), interval_seconds=0)
+
+    calls: dict[str, int] = {"n": 0}
+
+    async def fake_run_once() -> DrainCycleResult:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise CycleInProgressError(started_at=123)
+        raise asyncio.CancelledError
+
+    consumer.run_once = fake_run_once  # type: ignore[method-assign]
+
+    async def noop_sleep(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr("homelab_monitor.kernel.logs.drain_consumer.asyncio.sleep", noop_sleep)
+
+    with capture_logs() as logs, pytest.raises(asyncio.CancelledError):
+        await consumer.run_forever()
+
+    assert calls["n"] == 2  # noqa: PLR2004
+    skip_logs = [e for e in logs if e.get("event") == "drain_consumer.cycle_skipped_in_progress"]
+    assert len(skip_logs) == 1

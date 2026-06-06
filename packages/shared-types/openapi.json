@@ -1778,6 +1778,62 @@
         "title": "DockerSuggestionRow",
         "type": "object"
       },
+      "DrainCycleResultResponse": {
+        "additionalProperties": false,
+        "description": "One drain cycle's outcome (mirrors DrainCycleResult).",
+        "properties": {
+          "cycle_status": {
+            "enum": [
+              "ok",
+              "partial",
+              "failed"
+            ],
+            "title": "Cycle Status",
+            "type": "string"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "finished_at": {
+            "title": "Finished At",
+            "type": "integer"
+          },
+          "lines_processed": {
+            "title": "Lines Processed",
+            "type": "integer"
+          },
+          "models_touched": {
+            "title": "Models Touched",
+            "type": "integer"
+          },
+          "new_templates": {
+            "title": "New Templates",
+            "type": "integer"
+          },
+          "started_at": {
+            "title": "Started At",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "started_at",
+          "finished_at",
+          "lines_processed",
+          "new_templates",
+          "models_touched",
+          "cycle_status"
+        ],
+        "title": "DrainCycleResultResponse",
+        "type": "object"
+      },
       "FieldDescriptor": {
         "additionalProperties": false,
         "description": "One discovered field in the current query scope (STAGE-004-018).\n\n`name` is the dotted field path (e.g. ``json.context.user_id``). `coverage`\nis the EXACT fraction of matching lines that carry this field, derived from\nVictoriaLogs ``field_names`` hit counts (field hits / total ``_msg`` hits).\n`sample_values` are up to K distinct stringified values seen in the bounded\nmost-recent sample (first-seen order); a rare field with accurate coverage\nbut no value in the sample yields an empty list + ``type_hint=\"unknown\"``.",
@@ -3181,6 +3237,62 @@
           "confirm_phrase"
         ],
         "title": "PullAndRestartRequest",
+        "type": "object"
+      },
+      "RefreshCycleResponse": {
+        "additionalProperties": false,
+        "description": "202 response for POST /logs/signatures/refresh.",
+        "properties": {
+          "cycle_id": {
+            "title": "Cycle Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "cycle_id"
+        ],
+        "title": "RefreshCycleResponse",
+        "type": "object"
+      },
+      "RefreshStatusResponse": {
+        "additionalProperties": false,
+        "description": "Status of a manually-triggered drain cycle.",
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DrainCycleResultResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "enum": [
+              "running",
+              "done",
+              "failed"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "RefreshStatusResponse",
         "type": "object"
       },
       "RegisterCronBody": {
@@ -7201,6 +7313,65 @@
           }
         },
         "summary": "Logs Services"
+      }
+    },
+    "/api/logs/signatures/refresh": {
+      "post": {
+        "description": "Trigger one drain cycle out of band; returns a cycle_id to poll.\n\n202 + cycle_id on accept. 409 if a cycle is already running. 503 if the drain\nconsumer is not running (drain disabled). Auth: session required; CSRF enforced.",
+        "operationId": "refresh_signatures_api_logs_signatures_refresh_post",
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefreshCycleResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Refresh Signatures"
+      }
+    },
+    "/api/logs/signatures/refresh/{cycle_id}": {
+      "get": {
+        "description": "Poll a manually-triggered drain cycle. 404 if unknown or expired.\n\nAuth: session required. CSRF NOT enforced on GET.",
+        "operationId": "get_refresh_status_api_logs_signatures_refresh__cycle_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "cycle_id",
+            "required": true,
+            "schema": {
+              "title": "Cycle Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefreshStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Refresh Status"
       }
     },
     "/api/logs/streams": {

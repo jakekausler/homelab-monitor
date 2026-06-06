@@ -587,11 +587,13 @@ def test_load_drain_config_all_env_overrides(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setenv("HOMELAB_MONITOR_DRAIN_BATCH_MAX_LINES", "1000")
     monkeypatch.setenv("HOMELAB_MONITOR_DRAIN_INGEST_LAG_GRACE_S", "5")
     monkeypatch.setenv("HOMELAB_MONITOR_DRAIN_ENABLED", "false")
+    monkeypatch.setenv("HOMELAB_MONITOR_DRAIN_CARDINALITY_WARN", "250000")
     cfg = load_drain_config()
     assert cfg.interval_seconds == 60  # noqa: PLR2004
     assert cfg.batch_max_lines == 1000  # noqa: PLR2004
     assert cfg.ingest_lag_grace_seconds == 5  # noqa: PLR2004
     assert cfg.enabled is False
+    assert cfg.signature_cardinality_warn_threshold == 250000  # noqa: PLR2004
 
 
 def test_load_drain_config_clamps(monkeypatch: pytest.MonkeyPatch) -> None:

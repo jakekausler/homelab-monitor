@@ -21,6 +21,7 @@ __all__ = [
     "BackupResponse",
     "CollectorStatus",
     "DismissResponse",
+    "DrainCycleResultResponse",
     "ErrorEnvelope",
     "ErrorPayload",
     "FieldDescriptor",
@@ -39,6 +40,8 @@ __all__ = [
     "MetricsSnapshotEntry",
     "MetricsSnapshotResponse",
     "OutcomeView",
+    "RefreshCycleResponse",
+    "RefreshStatusResponse",
     "RetryResponse",
     "SaveQueryCreateRequest",
     "SaveQueryRenameRequest",
@@ -464,3 +467,32 @@ class SaveQueryRenameRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     name: str = Field(min_length=1, max_length=200)
+
+
+class RefreshCycleResponse(BaseModel):
+    """202 response for POST /logs/signatures/refresh."""
+
+    model_config = ConfigDict(extra="forbid")
+    cycle_id: str
+
+
+class DrainCycleResultResponse(BaseModel):
+    """One drain cycle's outcome (mirrors DrainCycleResult)."""
+
+    model_config = ConfigDict(extra="forbid")
+    started_at: int
+    finished_at: int
+    lines_processed: int
+    new_templates: int
+    models_touched: int
+    cycle_status: Literal["ok", "partial", "failed"]
+    error: str | None = None
+
+
+class RefreshStatusResponse(BaseModel):
+    """Status of a manually-triggered drain cycle."""
+
+    model_config = ConfigDict(extra="forbid")
+    status: Literal["running", "done", "failed"]
+    result: DrainCycleResultResponse | None = None
+    error: str | None = None

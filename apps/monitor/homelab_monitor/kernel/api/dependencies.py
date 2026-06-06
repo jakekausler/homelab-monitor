@@ -32,6 +32,8 @@ if TYPE_CHECKING:
     from homelab_monitor.kernel.db.repository import SqliteRepository
     from homelab_monitor.kernel.dispatch.dispatcher import AlertDispatcher
     from homelab_monitor.kernel.heartbeat.repository import HeartbeatRepo
+    from homelab_monitor.kernel.logs.cycle_status import CycleStatusStore
+    from homelab_monitor.kernel.logs.drain_consumer import DrainConsumer
     from homelab_monitor.kernel.logs.tail_service import TailRegistry
     from homelab_monitor.kernel.plugins.io import (
         InMemoryLogsWriter,
@@ -311,6 +313,26 @@ def get_tail_registry(request: Request) -> TailRegistry:
         attr="tail_registry",
         code="tail_unavailable",
         message="tail registry is not initialized",
+    )
+
+
+def get_drain_consumer(request: Request) -> DrainConsumer:
+    """Get the drain consumer from app state (503 when drain disabled/absent)."""
+    return _require_state(
+        request,
+        attr="drain_consumer",
+        code="drain_unavailable",
+        message="drain consumer is not running (drain disabled)",
+    )
+
+
+def get_cycle_status_store(request: Request) -> CycleStatusStore:
+    """Get the manual-cycle status store from app state."""
+    return _require_state(
+        request,
+        attr="cycle_status_store",
+        code="cycle_status_unavailable",
+        message="cycle status store is not initialized",
     )
 
 

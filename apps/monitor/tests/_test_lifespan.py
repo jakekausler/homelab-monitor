@@ -44,6 +44,7 @@ from homelab_monitor.kernel.docker.compose_action_runner import ComposeActionRun
 from homelab_monitor.kernel.docker.socket_client import DockerSocketClient
 from homelab_monitor.kernel.heartbeat.repository import HeartbeatRepo
 from homelab_monitor.kernel.logging import configure_logging
+from homelab_monitor.kernel.logs.cycle_status import CycleStatusStore
 from homelab_monitor.kernel.logs.multiplex import MultiplexLogsWriter
 from homelab_monitor.kernel.logs.tail_service import TailRegistry
 from homelab_monitor.kernel.logs.vl_writer import VictoriaLogsWriter
@@ -239,6 +240,10 @@ async def wire_test_app_state(  # noqa: PLR0915
     app.state.vl_writer = vl_writer
     app.state.log_stream_state = log_stream_state
     app.state.tail_registry = tail_registry
+    app.state.cycle_status_store = CycleStatusStore()
+    # drain_consumer defaults to None so get_drain_consumer 503s; endpoint tests
+    # that need a working consumer inject a fake onto app.state (try/finally).
+    app.state.drain_consumer = None
     app.state.loader = loader
     app.state.scheduler = scheduler
     app.state.failure_budget = failure_budget

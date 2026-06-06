@@ -418,12 +418,17 @@ class DrainConfig:
     bound, so lines still propagating through journald→Vector→VL ingest are not
     skipped past by the watermark.
     ``enabled`` — env gate; when false the consumer is never constructed/started.
+    ``signature_cardinality_warn_threshold`` — when the number of DISTINCT
+    (service_key, template_hash) signatures touched in a single cycle exceeds this,
+    the consumer sets the ``homelab_log_signature_cardinality_warn`` gauge to 1.0
+    and logs a rising-edge warning. Clamped to >= 1.
     """
 
     interval_seconds: int = 300
     batch_max_lines: int = 50_000
     ingest_lag_grace_seconds: int = 30
     enabled: bool = True
+    signature_cardinality_warn_threshold: int = 100_000
 
 
 def load_drain_config() -> DrainConfig:
@@ -439,6 +444,7 @@ def load_drain_config() -> DrainConfig:
     batch_max_lines = defaults.batch_max_lines
     ingest_lag_grace_seconds = defaults.ingest_lag_grace_seconds
     enabled = defaults.enabled
+    signature_cardinality_warn_threshold = defaults.signature_cardinality_warn_threshold
     raw_interval = os.environ.get("HOMELAB_MONITOR_DRAIN_INTERVAL_S")
     if raw_interval is not None:
         interval_seconds = int(raw_interval)
@@ -451,14 +457,19 @@ def load_drain_config() -> DrainConfig:
     raw_enabled = os.environ.get("HOMELAB_MONITOR_DRAIN_ENABLED")
     if raw_enabled is not None:
         enabled = raw_enabled.strip().lower() in ("1", "true", "yes")
+    raw_card = os.environ.get("HOMELAB_MONITOR_DRAIN_CARDINALITY_WARN")
+    if raw_card is not None:
+        signature_cardinality_warn_threshold = int(raw_card)
     interval_seconds = max(interval_seconds, 1)
     batch_max_lines = max(batch_max_lines, 1)
     ingest_lag_grace_seconds = max(ingest_lag_grace_seconds, 0)
+    signature_cardinality_warn_threshold = max(signature_cardinality_warn_threshold, 1)
     return DrainConfig(
         interval_seconds=interval_seconds,
         batch_max_lines=batch_max_lines,
         ingest_lag_grace_seconds=ingest_lag_grace_seconds,
         enabled=enabled,
+        signature_cardinality_warn_threshold=signature_cardinality_warn_threshold,
     )
 
 

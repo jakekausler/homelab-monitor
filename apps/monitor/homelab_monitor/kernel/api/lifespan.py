@@ -866,6 +866,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
     from homelab_monitor.kernel.db.repositories.app_settings_repository import (  # noqa: PLC0415
         AppSettingsRepository,
     )
+    from homelab_monitor.kernel.logs.cycle_status import CycleStatusStore  # noqa: PLC0415
     from homelab_monitor.kernel.logs.drain_consumer import DrainConsumer  # noqa: PLC0415
     from homelab_monitor.kernel.logs.drain_engine import DrainEngine  # noqa: PLC0415
     from homelab_monitor.kernel.logs.drain_persistence import SqlitePersistence  # noqa: PLC0415
@@ -873,6 +874,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
         VictoriaLogsClient,
     )
 
+    app.state.cycle_status_store = CycleStatusStore()
     drain_config = load_drain_config()
     if drain_config.enabled:
         drain_persistence = SqlitePersistence(repo)
@@ -889,6 +891,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
             settings=AppSettingsRepository(repo),
             persistence=drain_persistence,
             config=drain_config,
+            metrics_writer=metrics_writer,
             log=log,
         )
         drain_consumer.start_task()

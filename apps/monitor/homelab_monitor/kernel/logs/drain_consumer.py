@@ -64,6 +64,7 @@ if TYPE_CHECKING:
     from homelab_monitor.kernel.logs.victorialogs_client import (
         VictoriaLogsClient,
     )
+    from homelab_monitor.kernel.plugins.io import MetricsWriter
 
 from homelab_monitor.kernel.logs.drain_engine import (
     _now_ms,  # pyright: ignore[reportPrivateUsage]
@@ -74,6 +75,27 @@ WATERMARK_KEY: Final[str] = "drain.cycle_watermark_ms"
 
 # Match-all LogsQL: every line in the bounded [start, end] window.
 _MATCH_ALL_EXPR: Final[str] = "*"
+
+
+class CycleInProgressError(Exception):
+    """Raised by run_once() when a cycle is already running (re-entrancy guard).
+
+    ``started_at`` is the unix-ms timestamp of the in-flight cycle (or None if the
+    guard fired before the start timestamp was recorded — not normally observable).
+    """
+
+    def __init__(self, *, started_at: int | None) -> None:
+        self.started_at: int | None = started_at
+        super().__init__("a drain cycle is already running")
+
+
+_M_CYCLE_LINES: Final[str] = "homelab_drain_cycle_lines_total"
+_M_CYCLE_NEW_TEMPLATES: Final[str] = "homelab_drain_cycle_new_templates_total"
+_M_CYCLE_DURATION: Final[str] = "homelab_drain_cycle_duration_seconds"
+_M_SIG_COUNT: Final[str] = "homelab_log_signature_count"
+_M_SIG_TOTAL: Final[str] = "homelab_log_signature_total"
+_M_SIG_FIRST_SEEN: Final[str] = "homelab_log_signature_first_seen_ts"
+_M_SIG_CARD_WARN: Final[str] = "homelab_log_signature_cardinality_warn"
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,6 +122,7 @@ class DrainConsumer:
         settings: AppSettingsRepository,
         persistence: DrainPersistence,
         config: DrainConfig,
+        metrics_writer: MetricsWriter,
         log: BoundLogger,
     ) -> None:
         self._vl_client: VictoriaLogsClient = vl_client
@@ -107,8 +130,21 @@ class DrainConsumer:
         self._settings: AppSettingsRepository = settings
         self._persistence: DrainPersistence = persistence
         self._config: DrainConfig = config
+        self._metrics_writer: MetricsWriter = metrics_writer
         self._log: BoundLogger = log
         self._task: asyncio.Task[None] | None = None
+        self._cycle_lock: asyncio.Lock = asyncio.Lock()
+        self._cycle_started_at: int | None = None
+        self._cardinality_warned: bool = False
+
+    @property
+    def cycle_started_at(self) -> int | None:
+        """Unix-ms start of the in-flight cycle, or None when idle."""
+        return self._cycle_started_at
+
+    def is_cycle_running(self) -> bool:
+        """True iff a run_once() cycle currently holds the cycle lock."""
+        return self._cycle_lock.locked()
 
     # ---- Lifecycle (mirrors OverrideLoader) ----
 
@@ -141,6 +177,9 @@ class DrainConsumer:
                 await self.run_once()
             except asyncio.CancelledError:
                 raise
+            except CycleInProgressError:
+                # A manual /refresh holds the lock; skip this scheduled tick.
+                self._log.debug("drain_consumer.cycle_skipped_in_progress")
             except Exception:
                 self._log.exception("drain_consumer.cycle_failed")
             await asyncio.sleep(self._config.interval_seconds)
@@ -150,10 +189,27 @@ class DrainConsumer:
     async def run_once(self) -> DrainCycleResult:
         """Run a single drain cycle. Never raises VictoriaLogsClientError.
 
-        VL errors are caught and returned as cycle_status="failed" (watermark NOT
-        advanced). Other exceptions propagate to run_forever's backstop.
+        Re-entrancy guard: if a cycle is already running, raises
+        CycleInProgressError immediately (no waiting). VL errors are caught and
+        returned as cycle_status="failed"; other exceptions propagate to
+        run_forever's backstop.
         """
-        started_at = _now_ms()
+        if self._cycle_lock.locked():  # NO await before the `async with` below.
+            raise CycleInProgressError(started_at=self._cycle_started_at)
+        async with self._cycle_lock:
+            self._cycle_started_at = _now_ms()
+            try:
+                return await self._run_once_locked(self._cycle_started_at)
+            finally:
+                self._cycle_started_at = None
+
+    async def _run_once_locked(self, started_at: int) -> DrainCycleResult:
+        """Run a single drain cycle with the re-entrancy lock held.
+
+        Never raises VictoriaLogsClientError. VL errors are caught and returned
+        as cycle_status="failed" (watermark NOT advanced). Other exceptions
+        propagate to run_forever's backstop.
+        """
         watermark_ms = await self._read_or_seed_watermark(started_at)
         # Persist the resolved watermark immediately so a freshly seeded/reseeded
         # value survives restarts and the early-return path leaves a valid watermark.
@@ -163,9 +219,22 @@ class DrainConsumer:
         # Early return: nothing to query yet (lag grace exceeds elapsed time, or
         # the watermark already covers everything up to query_end).
         if query_end_ms <= watermark_ms:
+            finished_at = _now_ms()
+            # Early return: no window to query. Emit the cycle counters (0) +
+            # duration only; no signatures were evaluated, so skip per-signature
+            # gauges + the cardinality gauge.
+            self._emit_cycle_metrics(
+                count=0,
+                new_templates=0,
+                started_at=started_at,
+                finished_at=finished_at,
+                cycle_counts={},
+                sig_state={},
+                emit_signatures=False,
+            )
             return DrainCycleResult(
                 started_at=started_at,
-                finished_at=_now_ms(),
+                finished_at=finished_at,
                 lines_processed=0,
                 new_templates=0,
                 models_touched=0,
@@ -193,6 +262,8 @@ class DrainConsumer:
         new_templates = 0
         models_seen: set[str] = set()
         max_ts_seen = watermark_ms  # floor: never regress below the watermark
+        cycle_counts: dict[tuple[str, str, str], int] = {}
+        sig_state: dict[tuple[str, str], tuple[int, int]] = {}
 
         try:
             async for vl_line in self._vl_client.stream_query(
@@ -209,6 +280,13 @@ class DrainConsumer:
                 if event.is_new:
                     new_templates += 1
                 models_seen.add(event.model_key)
+                severity = line.severity or "unknown"
+                ckey = (event.model_key, event.template_hash, severity)
+                cycle_counts[ckey] = cycle_counts.get(ckey, 0) + 1
+                sig_state[(event.model_key, event.template_hash)] = (
+                    event.cluster_size,
+                    event.first_seen_ts,
+                )
         except VictoriaLogsClientError as exc:
             # Snapshot whatever we processed; DO NOT advance the watermark — the
             # failed window is retried next cycle.
@@ -218,9 +296,19 @@ class DrainConsumer:
             # advanced, so the next cycle safely retries the same window.
             await self._engine.snapshot()
             self._log.warning("drain_consumer.vl_error", error=str(exc))
+            finished_at = _now_ms()
+            self._emit_cycle_metrics(
+                count=count,
+                new_templates=new_templates,
+                started_at=started_at,
+                finished_at=finished_at,
+                cycle_counts=cycle_counts,
+                sig_state=sig_state,
+                emit_signatures=True,
+            )
             return DrainCycleResult(
                 started_at=started_at,
-                finished_at=_now_ms(),
+                finished_at=finished_at,
                 lines_processed=count,
                 new_templates=new_templates,
                 models_touched=len(models_seen),
@@ -232,15 +320,79 @@ class DrainConsumer:
         partial = count == batch_cap
         next_watermark = max_ts_seen if partial else query_end_ms
         await self._settings.set(WATERMARK_KEY, str(next_watermark))
+        finished_at = _now_ms()
+        self._emit_cycle_metrics(
+            count=count,
+            new_templates=new_templates,
+            started_at=started_at,
+            finished_at=finished_at,
+            cycle_counts=cycle_counts,
+            sig_state=sig_state,
+            emit_signatures=True,
+        )
         return DrainCycleResult(
             started_at=started_at,
-            finished_at=_now_ms(),
+            finished_at=finished_at,
             lines_processed=count,
             new_templates=new_templates,
             models_touched=len(models_seen),
             cycle_status="partial" if partial else "ok",
             error=None,
         )
+
+    def _emit_cycle_metrics(  # noqa: PLR0913
+        self,
+        *,
+        count: int,
+        new_templates: int,
+        started_at: int,
+        finished_at: int,
+        cycle_counts: dict[tuple[str, str, str], int],
+        sig_state: dict[tuple[str, str], tuple[int, int]],
+        emit_signatures: bool,
+    ) -> None:
+        """Emit per-cycle metrics. Shared by ok/partial, failed, and early-return.
+
+        Always emits the cycle counters + duration. Per-signature gauges + the
+        cardinality gauge are emitted only when ``emit_signatures`` is True
+        (False for the early-return path, where no signatures were evaluated).
+        """
+        mw = self._metrics_writer
+        mw.write_counter(_M_CYCLE_LINES, float(count), {})
+        mw.write_counter(_M_CYCLE_NEW_TEMPLATES, float(new_templates), {})
+        mw.write_summary(_M_CYCLE_DURATION, (finished_at - started_at) / 1000.0, {})
+        if not emit_signatures:
+            return
+        for (model_key, template_hash, severity), c in cycle_counts.items():
+            mw.write_gauge(
+                _M_SIG_COUNT,
+                float(c),
+                {
+                    "service_key": model_key,
+                    "template_hash": template_hash,
+                    "severity": severity,
+                },
+            )
+        for (model_key, template_hash), (size, first_seen) in sig_state.items():
+            labels = {"service_key": model_key, "template_hash": template_hash}
+            mw.write_gauge(_M_SIG_TOTAL, float(size), labels)
+            # first_seen is unix-ms; emit as nanoseconds (ms -> ns).
+            mw.write_gauge(_M_SIG_FIRST_SEEN, float(first_seen * 1_000_000), labels)
+        distinct = len(sig_state)
+        threshold = self._config.signature_cardinality_warn_threshold
+        over = distinct > threshold
+        mw.write_gauge(_M_SIG_CARD_WARN, 1.0 if over else 0.0, {})
+        # Rising-edge log: warn once on the transition into the over-threshold
+        # state; reset when it drops back below so a later breach re-warns.
+        if over and not self._cardinality_warned:
+            self._log.warning(
+                "drain_consumer.signature_cardinality_high",
+                count=distinct,
+                threshold=threshold,
+            )
+            self._cardinality_warned = True
+        elif not over:
+            self._cardinality_warned = False
 
     # ---- Watermark ----
 
@@ -265,4 +417,4 @@ class DrainConsumer:
         return now_ms - self._config.ingest_lag_grace_seconds * 1000
 
 
-__all__ = ["WATERMARK_KEY", "DrainConsumer", "DrainCycleResult"]
+__all__ = ["WATERMARK_KEY", "CycleInProgressError", "DrainConsumer", "DrainCycleResult"]
