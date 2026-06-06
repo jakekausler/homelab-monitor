@@ -33,6 +33,9 @@ from homelab_monitor.kernel.api.errors import (
     ServiceUnavailableProblem,
 )
 from homelab_monitor.kernel.api.schemas import (
+    AnnotationCreateRequest,
+    AnnotationListResponse,
+    AnnotationResponse,
     DrainCycleResultResponse,
     LogsFieldsResponse,
     LogsHistogramResponse,
@@ -84,6 +87,10 @@ from homelab_monitor.kernel.logs.saved_queries_repo import (
 from homelab_monitor.kernel.logs.services import (
     ServicesCache,
     fetch_services,
+)
+from homelab_monitor.kernel.logs.signature_annotations_repo import (
+    Annotation,
+    AnnotationsRepository,
 )
 from homelab_monitor.kernel.logs.signatures_repo import (
     Signature,
@@ -762,6 +769,23 @@ def _signature_to_response(sig: Signature) -> SignatureResponse:
     )
 
 
+def _get_annotations_repo(
+    repo: Annotated[SqliteRepository, Depends(get_repo)],
+) -> AnnotationsRepository:
+    return AnnotationsRepository(repo)
+
+
+def _annotation_to_response(a: Annotation) -> AnnotationResponse:
+    return AnnotationResponse(
+        id=a.id,
+        template_hash=a.template_hash,
+        service_key=a.service_key,
+        note=a.note,
+        author=a.author,
+        created_at=a.created_at,
+    )
+
+
 @router.get("/logs/signatures", response_model=SignatureListResponse)
 async def list_signatures(  # noqa: PLR0913
     _user: Annotated[User, Depends(require_session())],
@@ -898,6 +922,73 @@ def _signature_samples_expr(template_str: str, service_key: str) -> str | None:
     if not service_key.startswith("cron:") and service_key != "_unknown":
         expr = f"service:{logsql_quote_phrase(service_key)} AND {expr}"
     return expr
+
+
+@router.get(
+    "/logs/signatures/{template_hash}/{service_key}/annotations",
+    response_model=AnnotationListResponse,
+)
+async def list_annotations(
+    template_hash: str,
+    service_key: str,
+    _user: Annotated[User, Depends(require_session())],
+    repo: Annotated[AnnotationsRepository, Depends(_get_annotations_repo)],
+) -> AnnotationListResponse:
+    """List a signature's annotations, newest first. Returns [] for an unknown
+    signature (no 404). Auth: session required; GET (no CSRF)."""
+    rows = await repo.list_for_signature(template_hash, service_key)
+    return AnnotationListResponse(annotations=[_annotation_to_response(r) for r in rows])
+
+
+@router.post(
+    "/logs/signatures/{template_hash}/{service_key}/annotations",
+    response_model=AnnotationResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_annotation(  # noqa: PLR0913
+    template_hash: str,
+    service_key: str,
+    body: AnnotationCreateRequest,
+    user: Annotated[User, Depends(require_session())],
+    repo: Annotated[AnnotationsRepository, Depends(_get_annotations_repo)],
+    sig_repo: Annotated[SignaturesRepository, Depends(_get_signatures_repo)],
+) -> AnnotationResponse:
+    """Create an annotation. 201 on success, 404 if the parent signature is absent.
+
+    `author` is the session username (Decision A2). Auth: session required;
+    CSRF enforced (POST). The signature existence pre-check gives a clean 404
+    instead of an opaque FK IntegrityError.
+    """
+    sig = await sig_repo.get(template_hash, service_key)
+    if sig is None:
+        raise NotFoundProblem(message=f"signature not found: {template_hash}/{service_key}")
+    created = await repo.create(
+        template_hash=template_hash,
+        service_key=service_key,
+        note=body.note,
+        author=user.username,
+    )
+    return _annotation_to_response(created)
+
+
+@router.delete(
+    "/logs/signatures/{template_hash}/{service_key}/annotations/{annotation_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_annotation(
+    template_hash: str,
+    service_key: str,
+    annotation_id: int,
+    _user: Annotated[User, Depends(require_session())],
+    repo: Annotated[AnnotationsRepository, Depends(_get_annotations_repo)],
+) -> None:
+    """Delete an annotation scoped to its signature. 204 on success, 404 if
+    absent or it belongs to a different signature. CSRF enforced (DELETE)."""
+    deleted = await repo.delete(annotation_id, template_hash, service_key)
+    if not deleted:
+        raise NotFoundProblem(
+            message=f"annotation not found: {annotation_id} for {template_hash}/{service_key}"
+        )
 
 
 # DI helper for saved queries repository

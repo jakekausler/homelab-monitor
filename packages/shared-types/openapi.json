@@ -327,6 +327,81 @@
         "title": "AlertmanagerV2Payload",
         "type": "object"
       },
+      "AnnotationCreateRequest": {
+        "additionalProperties": false,
+        "description": "Body for POST /api/logs/signatures/{h}/{s}/annotations.\n\n`note` is trimmed; whitespace-only is rejected (422). The STRIPPED value is\nwhat gets stored. min_length=1 guards the empty string; the validator guards\nthe whitespace-only string.",
+        "properties": {
+          "note": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Note",
+            "type": "string"
+          }
+        },
+        "required": [
+          "note"
+        ],
+        "title": "AnnotationCreateRequest",
+        "type": "object"
+      },
+      "AnnotationListResponse": {
+        "additionalProperties": false,
+        "description": "Response for GET /api/logs/signatures/{h}/{s}/annotations.",
+        "properties": {
+          "annotations": {
+            "items": {
+              "$ref": "#/components/schemas/AnnotationResponse"
+            },
+            "title": "Annotations",
+            "type": "array"
+          }
+        },
+        "required": [
+          "annotations"
+        ],
+        "title": "AnnotationListResponse",
+        "type": "object"
+      },
+      "AnnotationResponse": {
+        "additionalProperties": false,
+        "description": "One signature annotation row.",
+        "properties": {
+          "author": {
+            "title": "Author",
+            "type": "string"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "note": {
+            "title": "Note",
+            "type": "string"
+          },
+          "service_key": {
+            "title": "Service Key",
+            "type": "string"
+          },
+          "template_hash": {
+            "title": "Template Hash",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "template_hash",
+          "service_key",
+          "note",
+          "author",
+          "created_at"
+        ],
+        "title": "AnnotationResponse",
+        "type": "object"
+      },
       "BackupResponse": {
         "additionalProperties": false,
         "description": "Response shape for POST /api/admin/backup.\n\nNote: errors is a list[str] (best-effort partial-success pattern)\nrather than the standard ErrorEnvelope. Backups proceed even when\none component (SQLite or VM) fails; the errors list captures\ncomponent-specific failures while still returning the partial\npaths that succeeded.",
@@ -7728,6 +7803,163 @@
           }
         },
         "summary": "Patch Signature"
+      }
+    },
+    "/api/logs/signatures/{template_hash}/{service_key}/annotations": {
+      "get": {
+        "description": "List a signature's annotations, newest first. Returns [] for an unknown\nsignature (no 404). Auth: session required; GET (no CSRF).",
+        "operationId": "list_annotations_api_logs_signatures__template_hash___service_key__annotations_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "template_hash",
+            "required": true,
+            "schema": {
+              "title": "Template Hash",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "service_key",
+            "required": true,
+            "schema": {
+              "title": "Service Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnnotationListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Annotations"
+      },
+      "post": {
+        "description": "Create an annotation. 201 on success, 404 if the parent signature is absent.\n\n`author` is the session username (Decision A2). Auth: session required;\nCSRF enforced (POST). The signature existence pre-check gives a clean 404\ninstead of an opaque FK IntegrityError.",
+        "operationId": "create_annotation_api_logs_signatures__template_hash___service_key__annotations_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "template_hash",
+            "required": true,
+            "schema": {
+              "title": "Template Hash",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "service_key",
+            "required": true,
+            "schema": {
+              "title": "Service Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AnnotationCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnnotationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Annotation"
+      }
+    },
+    "/api/logs/signatures/{template_hash}/{service_key}/annotations/{annotation_id}": {
+      "delete": {
+        "description": "Delete an annotation scoped to its signature. 204 on success, 404 if\nabsent or it belongs to a different signature. CSRF enforced (DELETE).",
+        "operationId": "delete_annotation_api_logs_signatures__template_hash___service_key__annotations__annotation_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "template_hash",
+            "required": true,
+            "schema": {
+              "title": "Template Hash",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "service_key",
+            "required": true,
+            "schema": {
+              "title": "Service Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "annotation_id",
+            "required": true,
+            "schema": {
+              "title": "Annotation Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Annotation"
       }
     },
     "/api/logs/signatures/{template_hash}/{service_key}/samples": {

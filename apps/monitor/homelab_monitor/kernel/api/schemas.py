@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from homelab_monitor.kernel.alerts.types import AlertOutcome, AlertStatus, Severity
 
@@ -18,6 +18,9 @@ __all__ = [
     "AlertDetailResponse",
     "AlertListResponse",
     "AlertView",
+    "AnnotationCreateRequest",
+    "AnnotationListResponse",
+    "AnnotationResponse",
     "BackupResponse",
     "CollectorStatus",
     "DismissResponse",
@@ -303,6 +306,46 @@ class SignatureSamplesResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
     lines: list[LogLine]
     reason: str | None = None
+
+
+class AnnotationResponse(BaseModel):
+    """One signature annotation row."""
+
+    model_config = ConfigDict(extra="forbid")
+    id: int
+    template_hash: str
+    service_key: str
+    note: str
+    author: str
+    created_at: str  # ISO-8601 UTC
+
+
+class AnnotationListResponse(BaseModel):
+    """Response for GET /api/logs/signatures/{h}/{s}/annotations."""
+
+    model_config = ConfigDict(extra="forbid")
+    annotations: list[AnnotationResponse]
+
+
+class AnnotationCreateRequest(BaseModel):
+    """Body for POST /api/logs/signatures/{h}/{s}/annotations.
+
+    `note` is trimmed; whitespace-only is rejected (422). The STRIPPED value is
+    what gets stored. min_length=1 guards the empty string; the validator guards
+    the whitespace-only string.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    note: str = Field(min_length=1, max_length=2000)
+
+    @field_validator("note")
+    @classmethod
+    def _strip_note(cls, v: str) -> str:
+        stripped = v.strip()
+        if not stripped:
+            msg = "note must not be empty or whitespace-only"
+            raise ValueError(msg)
+        return stripped
 
 
 class LogsStreamSummary(BaseModel):

@@ -13,6 +13,7 @@ import { Button } from '@/components/ui/button'
 import { LogLineList } from '@/components/logs/LogLineList'
 import { OpenInExplorerButton } from '@/components/logs/OpenInExplorerButton'
 import { msgFilterClause } from '@/lib/logsQlTranslate'
+import { SignatureAnnotations } from './SignatureAnnotations'
 
 export function SignatureDetailPage(): JSX.Element {
   const params = useParams({ strict: false })
@@ -117,6 +118,9 @@ export function SignatureDetailPage(): JSX.Element {
           <div className="text-xs text-muted-foreground">No recent matches.</div>
         )}
       </div>
+
+      {/* Annotations */}
+      {sig && <SignatureAnnotations templateHash={templateHash} serviceKey={serviceKey} />}
 
       {/* Label edit */}
       {sig && (

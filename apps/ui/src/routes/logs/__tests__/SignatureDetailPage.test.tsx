@@ -16,6 +16,12 @@ vi.mock('@/api/signatures', () => ({
   useUpdateSignature: vi.fn(),
 }))
 
+vi.mock('@/api/annotations', () => ({
+  useSignatureAnnotations: vi.fn(() => ({ data: { annotations: [] } })),
+  useAddAnnotation: vi.fn(() => ({ isPending: false, mutate: vi.fn() })),
+  useDeleteAnnotation: vi.fn(() => ({ isPending: false, mutate: vi.fn() })),
+}))
+
 // OpenInExplorerButton uses a TanStack <Link>; mock it — collaborator, not the
 // unit under test here.
 vi.mock('@/components/logs/OpenInExplorerButton', () => ({
