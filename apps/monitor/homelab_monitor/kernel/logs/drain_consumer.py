@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final, Literal
 
@@ -73,6 +74,7 @@ from homelab_monitor.kernel.logs.drain_engine import (
 )
 
 WATERMARK_KEY: Final[str] = "drain.cycle_watermark_ms"
+LAST_CYCLE_KEY: Final[str] = "drain.last_cycle_result"
 
 # Match-all LogsQL: every line in the bounded [start, end] window.
 _MATCH_ALL_EXPR: Final[str] = "*"
@@ -139,15 +141,62 @@ class DrainConsumer:
         self._cycle_lock: asyncio.Lock = asyncio.Lock()
         self._cycle_started_at: int | None = None
         self._cardinality_warned: bool = False
+        self._last_result: DrainCycleResult | None = None
 
     @property
     def cycle_started_at(self) -> int | None:
         """Unix-ms start of the in-flight cycle, or None when idle."""
         return self._cycle_started_at
 
+    @property
+    def last_result(self) -> DrainCycleResult | None:
+        """The most recent run_once() outcome, or None before any cycle has run.
+
+        Set on EVERY run_once() return path (early-return, VL-failed, partial/ok),
+        covering both the periodic background loop and manual /refresh.
+        """
+        return self._last_result
+
+    async def get_last_result(self) -> DrainCycleResult | None:
+        """Return the last cycle result, falling back to persisted value on restart.
+
+        Returns None if no cycle has ever run (in-memory or persisted).
+        Corrupt/missing persisted value is treated as None (logged as warning).
+        """
+        if self._last_result is not None:
+            return self._last_result
+        raw = await self._settings.get(LAST_CYCLE_KEY)
+        if raw is None:
+            return None
+        try:
+            data = json.loads(raw)
+            status = data["cycle_status"]
+            if status not in ("ok", "partial", "failed"):
+                raise ValueError(f"invalid cycle_status: {status!r}")
+            return DrainCycleResult(
+                started_at=int(data["started_at"]),
+                finished_at=int(data["finished_at"]),
+                lines_processed=int(data["lines_processed"]),
+                new_templates=int(data["new_templates"]),
+                models_touched=int(data["models_touched"]),
+                cycle_status=status,
+                error=str(data["error"]) if data["error"] is not None else None,
+            )
+        except Exception:
+            self._log.warning("drain_consumer.corrupt_last_cycle_result", value=raw[:200])
+            return None
+
     def is_cycle_running(self) -> bool:
         """True iff a run_once() cycle currently holds the cycle lock."""
         return self._cycle_lock.locked()
+
+    def get_engine(self) -> DrainEngine:
+        """Expose the engine for the read-only models-debug detail endpoint."""
+        return self._engine
+
+    def get_persistence(self) -> DrainPersistence:
+        """Expose persistence for the read-only models-debug list endpoint."""
+        return self._persistence
 
     # ---- Lifecycle (mirrors OverrideLoader) ----
 
@@ -235,7 +284,7 @@ class DrainConsumer:
                 sig_state={},
                 emit_signatures=False,
             )
-            return DrainCycleResult(
+            result = DrainCycleResult(
                 started_at=started_at,
                 finished_at=finished_at,
                 lines_processed=0,
@@ -244,6 +293,8 @@ class DrainConsumer:
                 cycle_status="ok",
                 error=None,
             )
+            await self._record_result(result)
+            return result
 
         # VL _time:[start,end] is INCLUSIVE on both ends. The watermark is the ms
         # of the newest line already processed last cycle (partial) or query_end
@@ -311,7 +362,7 @@ class DrainConsumer:
                 sig_state=sig_state,
                 emit_signatures=True,
             )
-            return DrainCycleResult(
+            result = DrainCycleResult(
                 started_at=started_at,
                 finished_at=finished_at,
                 lines_processed=count,
@@ -320,6 +371,8 @@ class DrainConsumer:
                 cycle_status="failed",
                 error=str(exc),
             )
+            await self._record_result(result)
+            return result
 
         await self._engine.snapshot()
         partial = count == batch_cap
@@ -336,7 +389,7 @@ class DrainConsumer:
             sig_state=sig_state,
             emit_signatures=True,
         )
-        return DrainCycleResult(
+        result = DrainCycleResult(
             started_at=started_at,
             finished_at=finished_at,
             lines_processed=count,
@@ -345,6 +398,24 @@ class DrainConsumer:
             cycle_status="partial" if partial else "ok",
             error=None,
         )
+        await self._record_result(result)
+        return result
+
+    async def _record_result(self, result: DrainCycleResult) -> None:
+        """Set _last_result and persist it to app_settings for restart recovery."""
+        self._last_result = result
+        payload = json.dumps(
+            {
+                "started_at": result.started_at,
+                "finished_at": result.finished_at,
+                "lines_processed": result.lines_processed,
+                "new_templates": result.new_templates,
+                "models_touched": result.models_touched,
+                "cycle_status": result.cycle_status,
+                "error": result.error,
+            }
+        )
+        await self._settings.set(LAST_CYCLE_KEY, payload)
 
     def _emit_cycle_metrics(  # noqa: PLR0913
         self,
@@ -438,4 +509,10 @@ class DrainConsumer:
         return now_ms - self._config.ingest_lag_grace_seconds * 1000
 
 
-__all__ = ["WATERMARK_KEY", "CycleInProgressError", "DrainConsumer", "DrainCycleResult"]
+__all__ = [
+    "LAST_CYCLE_KEY",
+    "WATERMARK_KEY",
+    "CycleInProgressError",
+    "DrainConsumer",
+    "DrainCycleResult",
+]

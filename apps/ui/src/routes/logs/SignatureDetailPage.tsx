@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react'
-import { Link, useParams } from '@tanstack/react-router'
+import { Link, useNavigate, useParams } from '@tanstack/react-router'
 import { ArrowLeft, Save } from 'lucide-react'
 import type { JSX } from 'react'
 
@@ -19,6 +19,8 @@ export function SignatureDetailPage(): JSX.Element {
   const params = useParams({ strict: false })
   const templateHash = params.templateHash ?? ''
   const serviceKey = params.serviceKey ?? ''
+
+  const navigate = useNavigate()
 
   const { data: sig } = useSignature(templateHash, serviceKey)
   const { data: samples, isLoading: samplesLoading } = useSignatureSamples(templateHash, serviceKey)
@@ -171,6 +173,25 @@ export function SignatureDetailPage(): JSX.Element {
       {sig && logsQl.length > 0 && (
         <div>
           <OpenInExplorerButton logsQl={logsQl} />
+        </div>
+      )}
+
+      {/* View model button */}
+      {sig && (
+        <div>
+          <button
+            type="button"
+            onClick={() => {
+              void navigate({
+                to: '/logs/models-debug',
+                search: { model: sig.service_key },
+              })
+            }}
+            className="inline-flex items-center rounded-md border border-border px-3 py-1.5 text-sm hover:bg-accent"
+            data-testid="view-model-link"
+          >
+            Open in Models
+          </button>
         </div>
       )}
     </div>

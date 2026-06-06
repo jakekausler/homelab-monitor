@@ -2,6 +2,7 @@ import { useCallback } from 'react'
 import { useNavigate, useSearch } from '@tanstack/react-router'
 import type { JSX } from 'react'
 
+import { useLastCycle, useTriggerRefresh } from '@/api/models'
 import { useSignaturesQuery, type SignatureFilter } from '@/api/signatures'
 import { EmptyState } from '@/components/EmptyState'
 import { formatRelative } from '@/lib/relativeTime'
@@ -9,6 +10,8 @@ import { formatRelative } from '@/lib/relativeTime'
 export function SignaturesTab(): JSX.Element {
   const search = useSearch({ from: '/protected/logs/signatures' })
   const navigate = useNavigate()
+  const { data: cycle } = useLastCycle()
+  const refresh = useTriggerRefresh()
 
   // Build the filter from search params
   const filter: SignatureFilter = {
@@ -83,6 +86,22 @@ export function SignaturesTab(): JSX.Element {
       }`}
     >
       {status}
+    </span>
+  )
+
+  const statusBadgeForCycle = (status: string | null | undefined): JSX.Element => (
+    <span
+      className={`inline-block px-2 py-1 rounded text-xs font-medium ${
+        status === 'ok'
+          ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-100'
+          : status === 'partial'
+            ? 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-100'
+            : status === 'failed'
+              ? 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-100'
+              : 'bg-muted text-muted-foreground'
+      }`}
+    >
+      {status ?? 'unknown'}
     </span>
   )
 
@@ -199,6 +218,39 @@ export function SignaturesTab(): JSX.Element {
             </ul>
           </>
         )}
+      </div>
+
+      {/* Last cycle stats footer panel */}
+      <div
+        className="border-t border-border bg-muted/50 p-2 text-xs"
+        data-testid="last-cycle-panel"
+      >
+        <div className="flex flex-wrap items-center gap-3">
+          <span>
+            Last cycle:{' '}
+            {cycle?.has_run && cycle.finished_at != null
+              ? formatRelative(new Date(cycle.finished_at).toISOString())
+              : 'never'}
+          </span>
+          {cycle?.has_run && (
+            <>
+              <span>Lines: {cycle.lines_processed}</span>
+              <span>New templates: {cycle.new_templates}</span>
+              {cycle.started_at != null && cycle.finished_at != null && (
+                <span>Duration: {((cycle.finished_at - cycle.started_at) / 1000).toFixed(1)}s</span>
+              )}
+              <div>{statusBadgeForCycle(cycle.cycle_status)}</div>
+            </>
+          )}
+          <button
+            onClick={() => refresh.mutate()}
+            disabled={refresh.isPending}
+            className="ml-auto rounded-md border border-border bg-background px-2 py-1 text-xs hover:bg-accent disabled:opacity-50"
+            data-testid="cycle-refresh"
+          >
+            {refresh.isPending ? 'Refreshing...' : 'Refresh'}
+          </button>
+        </div>
       </div>
     </div>
   )

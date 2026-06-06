@@ -4,6 +4,7 @@ import type { JSX } from 'react'
 const TABS = [
   { path: '/logs/query', label: 'Query' },
   { path: '/logs/signatures', label: 'Signatures' },
+  { path: '/logs/models-debug', label: 'Models' },
 ] as const
 
 export function LogsLayout(): JSX.Element {
@@ -23,7 +24,7 @@ export function LogsLayout(): JSX.Element {
               className:
                 'shrink-0 rounded-md border-border bg-card px-3 py-1.5 text-sm font-medium text-foreground',
             }}
-            data-testid={`logs-tab-${tab.path === '/logs/query' ? 'query' : 'signatures'}`}
+            data-testid={`logs-tab-${tab.path.split('/').pop()}`}
           >
             {tab.label}
           </Link>

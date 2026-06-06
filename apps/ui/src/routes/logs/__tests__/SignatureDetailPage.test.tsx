@@ -55,8 +55,18 @@ function renderPage(templateHash = 'hash1', serviceKey = 'docker:nginx') {
     path: 'signatures/$templateHash/$serviceKey',
     component: SignatureDetailPage,
   })
+  const modelsDebugRoute = createRoute({
+    getParentRoute: () => logsRoute,
+    path: 'models-debug',
+    component: () => <div data-testid="models-debug-page">Models</div>,
+    validateSearch: (search: Record<string, unknown>): { model?: string | undefined } => ({
+      ...(typeof search.model === 'string' ? { model: search.model } : {}),
+    }),
+  })
   const router = createRouter({
-    routeTree: rootRoute.addChildren([logsRoute.addChildren([listRoute, detailRoute])]),
+    routeTree: rootRoute.addChildren([
+      logsRoute.addChildren([listRoute, detailRoute, modelsDebugRoute]),
+    ]),
     history: createMemoryHistory({
       initialEntries: [`/logs/signatures/${templateHash}/${serviceKey}`],
     }),
@@ -206,5 +216,16 @@ describe('SignatureDetailPage', () => {
     setMocks(baseSig, { data: { lines: [], reason: null }, isLoading: false })
     renderPage()
     expect(await screen.findByText('No recent matches.')).toBeInTheDocument()
+  })
+
+  it('renders "Open in Models" button that navigates to models-debug with model=service_key', async () => {
+    setMocks(baseSig, { data: { lines: [], reason: null }, isLoading: false })
+    renderPage()
+    const btn = await screen.findByTestId('view-model-link')
+    expect(btn).toBeInTheDocument()
+    // Clicking navigates — verify the button is clickable without error
+    fireEvent.click(btn)
+    // After navigation, models-debug page renders (router navigated)
+    expect(await screen.findByTestId('models-debug-page')).toBeInTheDocument()
   })
 })

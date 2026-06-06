@@ -7,6 +7,7 @@ VL client: a fake that yields lines in order, with optional failure injection.
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import AsyncIterator, Sequence
 from typing import cast
 
@@ -20,6 +21,7 @@ from homelab_monitor.kernel.db.repositories.app_settings_repository import (
 )
 from homelab_monitor.kernel.db.repository import SqliteRepository
 from homelab_monitor.kernel.logs.drain_consumer import (
+    LAST_CYCLE_KEY,
     WATERMARK_KEY,
     CycleInProgressError,
     DrainConsumer,
@@ -691,3 +693,132 @@ async def test_vl_failure_partial_path_still_writes_signatures(repo: SqliteRepos
     rows = await repo.fetch_all(text("SELECT COUNT(*) AS n FROM log_signatures"), {})
     count = int(rows[0].n)  # pyright: ignore[reportAttributeAccessIssue]
     assert count >= 1  # at least one signature row persisted from the partial sync
+
+
+# ---------------------------------------------------------------------------
+# last_result + accessor tests (STAGE-004-030)
+# ---------------------------------------------------------------------------
+
+
+async def test_last_result_is_none_before_any_run(repo: SqliteRepository) -> None:
+    """consumer.last_result is None before any run_once() call."""
+    consumer, *_ = _consumer(repo, _FakeVlClient([]))
+    assert consumer.last_result is None  # pyright: ignore[reportPrivateUsage]
+
+
+async def test_last_result_set_after_run_once_empty_feed(repo: SqliteRepository) -> None:
+    """last_result is a DrainCycleResult with cycle_status='ok' after an empty-feed run."""
+    consumer, *_ = _consumer(repo, _FakeVlClient([]), ingest_lag_grace_seconds=0)
+    await consumer.run_once()
+    result = consumer.last_result
+    assert result is not None
+    assert result.cycle_status == "ok"
+    assert result.lines_processed == 0
+
+
+async def test_last_result_set_after_run_once_with_lines(repo: SqliteRepository) -> None:
+    """last_result.lines_processed > 0 after a cycle that actually processes lines."""
+    from homelab_monitor.kernel.logs.histogram import ms_to_iso  # noqa: PLC0415
+
+    lines = [
+        _vl("connection accepted from 10.0.0.1", ms_to_iso(2000)),
+        _vl("connection accepted from 10.0.0.2", ms_to_iso(3000)),
+    ]
+    consumer, settings, _p, _mw = _consumer(
+        repo, _FakeVlClient(lines), ingest_lag_grace_seconds=0, batch_max_lines=50
+    )
+    await settings.set(WATERMARK_KEY, "1000")
+    await consumer.run_once()
+    result = consumer.last_result
+    assert result is not None
+    assert result.lines_processed == 2  # noqa: PLR2004
+
+
+async def test_last_result_set_on_vl_failed_path(repo: SqliteRepository) -> None:
+    """last_result is set even when the cycle fails (VL error path)."""
+    from homelab_monitor.kernel.logs.histogram import ms_to_iso  # noqa: PLC0415
+
+    consumer, settings, _p, _mw = _consumer(
+        repo,
+        _FakeVlClient([_vl("msg", ms_to_iso(2000))], raise_after=0),
+        ingest_lag_grace_seconds=0,
+    )
+    await settings.set(WATERMARK_KEY, "1000")
+    await consumer.run_once()
+    result = consumer.last_result
+    assert result is not None
+    assert result.cycle_status == "failed"
+
+
+async def test_get_engine_returns_engine_instance(repo: SqliteRepository) -> None:
+    """get_engine() returns the DrainEngine instance used by the consumer."""
+    from homelab_monitor.kernel.logs.drain_engine import DrainEngine  # noqa: PLC0415
+
+    consumer, *_ = _consumer(repo, _FakeVlClient([]))
+    engine = consumer.get_engine()
+    assert isinstance(engine, DrainEngine)
+
+
+async def test_get_persistence_returns_persistence_instance(repo: SqliteRepository) -> None:
+    """get_persistence() returns the SqlitePersistence instance used by the consumer."""
+    from homelab_monitor.kernel.logs.drain_persistence import SqlitePersistence  # noqa: PLC0415
+
+    consumer, *_ = _consumer(repo, _FakeVlClient([]))
+    persistence = consumer.get_persistence()
+    assert isinstance(persistence, SqlitePersistence)
+
+
+async def test_last_result_persists_across_restart(repo: SqliteRepository) -> None:
+    """After run_once, a NEW consumer (simulating restart) returns the persisted result."""
+    fake = _FakeVlClient([])
+    consumer, *_ = _consumer(repo, fake, ingest_lag_grace_seconds=0)
+    result = await consumer.run_once()
+    assert result.cycle_status == "ok"
+
+    # Simulate restart: construct a fresh consumer with the SAME repo/settings.
+    # _last_result is None on the new instance.
+    consumer2, *_ = _consumer(
+        repo,
+        _FakeVlClient([]),
+        ingest_lag_grace_seconds=0,
+    )
+    assert consumer2.last_result is None  # in-memory is empty
+
+    restored = await consumer2.get_last_result()
+    assert restored is not None
+    assert restored.cycle_status == result.cycle_status
+    assert restored.started_at == result.started_at
+    assert restored.finished_at == result.finished_at
+    assert restored.lines_processed == result.lines_processed
+    assert restored.new_templates == result.new_templates
+    assert restored.models_touched == result.models_touched
+    assert restored.error == result.error
+
+
+async def test_get_last_result_corrupt_json_returns_none(repo: SqliteRepository) -> None:
+    """Corrupt LAST_CYCLE_KEY value → get_last_result() returns None without crashing."""
+    fake = _FakeVlClient([])
+    consumer, settings, _p, _mw = _consumer(repo, fake)
+    await settings.set(LAST_CYCLE_KEY, "not-valid-json{{{")
+    result = await consumer.get_last_result()
+    assert result is None
+
+
+async def test_get_last_result_invalid_cycle_status_returns_none(repo: SqliteRepository) -> None:
+    """Well-formed JSON but an invalid cycle_status → get_last_result() returns None."""
+    fake = _FakeVlClient([])
+    consumer, settings, _p, _mw = _consumer(repo, fake)
+    payload = json.dumps(
+        {
+            "started_at": 1000,
+            "finished_at": 2000,
+            "lines_processed": 5,
+            "new_templates": 1,
+            "models_touched": 1,
+            "cycle_status": "bogus",
+            "error": None,
+        }
+    )
+    await settings.set(LAST_CYCLE_KEY, payload)
+    result = await consumer.get_last_result()
+    assert result is None

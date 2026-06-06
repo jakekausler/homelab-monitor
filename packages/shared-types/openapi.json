@@ -2534,6 +2534,85 @@
         "title": "InstallWrapperResult",
         "type": "object"
       },
+      "LastCycleResponse": {
+        "additionalProperties": false,
+        "description": "Response for GET /api/logs/signatures/cycle/last.\n\n`has_run` is False (and all numeric fields are null/zero) when no cycle has run\nyet \u2014 this is NOT an error.",
+        "properties": {
+          "cycle_status": {
+            "anyOf": [
+              {
+                "enum": [
+                  "ok",
+                  "partial",
+                  "failed"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cycle Status"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "has_run": {
+            "title": "Has Run",
+            "type": "boolean"
+          },
+          "lines_processed": {
+            "default": 0,
+            "title": "Lines Processed",
+            "type": "integer"
+          },
+          "models_touched": {
+            "default": 0,
+            "title": "Models Touched",
+            "type": "integer"
+          },
+          "new_templates": {
+            "default": 0,
+            "title": "New Templates",
+            "type": "integer"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          }
+        },
+        "required": [
+          "has_run"
+        ],
+        "title": "LastCycleResponse",
+        "type": "object"
+      },
       "ListProbesResponse": {
         "properties": {
           "probes": {
@@ -3007,6 +3086,132 @@
           "entries"
         ],
         "title": "MetricsSnapshotResponse",
+        "type": "object"
+      },
+      "ModelDetailResponse": {
+        "additionalProperties": false,
+        "description": "Response for GET /api/logs/signatures/models/{model_key}.",
+        "properties": {
+          "model_key": {
+            "title": "Model Key",
+            "type": "string"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/ModelSummary"
+          },
+          "templates": {
+            "items": {
+              "$ref": "#/components/schemas/ModelTemplateEntry"
+            },
+            "title": "Templates",
+            "type": "array"
+          }
+        },
+        "required": [
+          "model_key",
+          "summary",
+          "templates"
+        ],
+        "title": "ModelDetailResponse",
+        "type": "object"
+      },
+      "ModelListResponse": {
+        "additionalProperties": false,
+        "description": "Response for GET /api/logs/signatures/models.",
+        "properties": {
+          "models": {
+            "items": {
+              "$ref": "#/components/schemas/ModelSummary"
+            },
+            "title": "Models",
+            "type": "array"
+          }
+        },
+        "required": [
+          "models"
+        ],
+        "title": "ModelListResponse",
+        "type": "object"
+      },
+      "ModelSummary": {
+        "additionalProperties": false,
+        "description": "Column-level summary of one drain_models row (no blob deserialize).",
+        "properties": {
+          "last_processed_ts": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Processed Ts"
+          },
+          "line_count": {
+            "title": "Line Count",
+            "type": "integer"
+          },
+          "model_key": {
+            "title": "Model Key",
+            "type": "string"
+          },
+          "template_count": {
+            "title": "Template Count",
+            "type": "integer"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "model_key",
+          "template_count",
+          "line_count",
+          "updated_at"
+        ],
+        "title": "ModelSummary",
+        "type": "object"
+      },
+      "ModelTemplateEntry": {
+        "additionalProperties": false,
+        "description": "One mined template within a model (from engine.templates()).",
+        "properties": {
+          "first_seen_ts": {
+            "title": "First Seen Ts",
+            "type": "integer"
+          },
+          "last_seen_ts": {
+            "title": "Last Seen Ts",
+            "type": "integer"
+          },
+          "size": {
+            "title": "Size",
+            "type": "integer"
+          },
+          "template_hash": {
+            "title": "Template Hash",
+            "type": "string"
+          },
+          "template_id": {
+            "title": "Template Id",
+            "type": "integer"
+          },
+          "template_str": {
+            "title": "Template Str",
+            "type": "string"
+          }
+        },
+        "required": [
+          "template_id",
+          "template_hash",
+          "template_str",
+          "size",
+          "first_seen_ts",
+          "last_seen_ts"
+        ],
+        "title": "ModelTemplateEntry",
         "type": "object"
       },
       "OutcomeView": {
@@ -7638,6 +7843,84 @@
           }
         },
         "summary": "List Signatures"
+      }
+    },
+    "/api/logs/signatures/cycle/last": {
+      "get": {
+        "description": "Return the last drain cycle's stats. 503 when drain disabled.\n\nReturns has_run=False (empty) when no cycle has run yet \u2014 NOT an error.\nAuth: session required; GET (no CSRF).",
+        "operationId": "get_last_cycle_api_logs_signatures_cycle_last_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LastCycleResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Last Cycle"
+      }
+    },
+    "/api/logs/signatures/models": {
+      "get": {
+        "description": "List all drain models (column-level summaries). 503 when drain disabled.\n\nAuth: session required; GET (no CSRF). Reads drain_models COLUMNS directly via\nthe consumer's persistence \u2014 complete on fresh start, blob-corruption-immune.",
+        "operationId": "list_drain_models_api_logs_signatures_models_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Drain Models"
+      }
+    },
+    "/api/logs/signatures/models/{model_key}": {
+      "get": {
+        "description": "Get one drain model's summary + its mined templates. 503 when drain disabled.\n\nThe summary comes from the drain_models columns (authoritative count). The\ntemplates come from the engine's loaded state via get_model()+templates(), which\nhas a corrupt-blob fallback (degrades to templates=[]). The stored vs live count\nmismatch is surfaced to the FE so corruption is visible. 404 if the model_key has\nno drain_models row. model_key may contain ':' (cron keys) \u2014 a single path\nsegment handles colons fine. Auth: session required; GET (no CSRF).",
+        "operationId": "get_drain_model_api_logs_signatures_models__model_key__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "model_key",
+            "required": true,
+            "schema": {
+              "title": "Model Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelDetailResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Drain Model"
       }
     },
     "/api/logs/signatures/refresh": {

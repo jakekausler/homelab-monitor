@@ -34,12 +34,14 @@ describe('LogsLayout', () => {
     render(<LogsLayout />)
     expect(screen.getByText('Query')).toBeInTheDocument()
     expect(screen.getByText('Signatures')).toBeInTheDocument()
+    expect(screen.getByText('Models')).toBeInTheDocument()
   })
 
   it('renders tab links with correct data-testid attributes', () => {
     render(<LogsLayout />)
     expect(screen.getByTestId('logs-tab-query')).toBeInTheDocument()
     expect(screen.getByTestId('logs-tab-signatures')).toBeInTheDocument()
+    expect(screen.getByTestId('logs-tab-models-debug')).toBeInTheDocument()
   })
 
   it('renders the tabs nav with correct aria-label', () => {

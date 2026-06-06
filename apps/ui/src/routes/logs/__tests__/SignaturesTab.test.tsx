@@ -5,6 +5,11 @@ vi.mock('@/api/signatures', () => ({
   useSignaturesQuery: vi.fn(),
 }))
 
+vi.mock('@/api/models', () => ({
+  useLastCycle: vi.fn(() => ({ data: { has_run: false }, isLoading: false })),
+  useTriggerRefresh: vi.fn(() => ({ mutate: vi.fn(), isPending: false })),
+}))
+
 const navigateSpy = vi.fn()
 vi.mock('@tanstack/react-router', async () => {
   const actual =

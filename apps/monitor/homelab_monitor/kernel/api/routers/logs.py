@@ -37,11 +37,16 @@ from homelab_monitor.kernel.api.schemas import (
     AnnotationListResponse,
     AnnotationResponse,
     DrainCycleResultResponse,
+    LastCycleResponse,
     LogsFieldsResponse,
     LogsHistogramResponse,
     LogsQueryResponse,
     LogsServicesResponse,
     LogsStreamsResponse,
+    ModelDetailResponse,
+    ModelListResponse,
+    ModelSummary,
+    ModelTemplateEntry,
     RefreshCycleResponse,
     RefreshStatusResponse,
     SavedQueriesListResponse,
@@ -65,6 +70,7 @@ from homelab_monitor.kernel.logs.drain_consumer import (
     CycleInProgressError,
     DrainConsumer,
 )
+from homelab_monitor.kernel.logs.drain_persistence import ModelSummaryRow
 from homelab_monitor.kernel.logs.export import stream_export
 from homelab_monitor.kernel.logs.fields import (
     FieldsCache,
@@ -808,6 +814,94 @@ async def list_signatures(  # noqa: PLR0913
     return SignatureListResponse(
         signatures=[_signature_to_response(r) for r in rows],
         total=total,
+    )
+
+
+def _summary_to_response(row: ModelSummaryRow) -> ModelSummary:
+    return ModelSummary(
+        model_key=row.model_key,
+        template_count=row.template_count,
+        line_count=row.line_count,
+        last_processed_ts=row.last_processed_ts,
+        updated_at=row.updated_at,
+    )
+
+
+@router.get("/logs/signatures/models", response_model=ModelListResponse)
+async def list_drain_models(
+    _user: Annotated[User, Depends(require_session())],
+    consumer: Annotated[DrainConsumer, Depends(get_drain_consumer)],
+) -> ModelListResponse:
+    """List all drain models (column-level summaries). 503 when drain disabled.
+
+    Auth: session required; GET (no CSRF). Reads drain_models COLUMNS directly via
+    the consumer's persistence — complete on fresh start, blob-corruption-immune.
+    """
+    rows = await consumer.get_persistence().list_all_summaries()
+    return ModelListResponse(models=[_summary_to_response(r) for r in rows])
+
+
+@router.get("/logs/signatures/cycle/last", response_model=LastCycleResponse)
+async def get_last_cycle(
+    _user: Annotated[User, Depends(require_session())],
+    consumer: Annotated[DrainConsumer, Depends(get_drain_consumer)],
+) -> LastCycleResponse:
+    """Return the last drain cycle's stats. 503 when drain disabled.
+
+    Returns has_run=False (empty) when no cycle has run yet — NOT an error.
+    Auth: session required; GET (no CSRF).
+    """
+    r = await consumer.get_last_result()
+    if r is None:
+        return LastCycleResponse(has_run=False)
+    return LastCycleResponse(
+        has_run=True,
+        started_at=r.started_at,
+        finished_at=r.finished_at,
+        lines_processed=r.lines_processed,
+        new_templates=r.new_templates,
+        models_touched=r.models_touched,
+        cycle_status=r.cycle_status,
+        error=r.error,
+    )
+
+
+@router.get("/logs/signatures/models/{model_key}", response_model=ModelDetailResponse)
+async def get_drain_model(
+    model_key: str,
+    _user: Annotated[User, Depends(require_session())],
+    consumer: Annotated[DrainConsumer, Depends(get_drain_consumer)],
+) -> ModelDetailResponse:
+    """Get one drain model's summary + its mined templates. 503 when drain disabled.
+
+    The summary comes from the drain_models columns (authoritative count). The
+    templates come from the engine's loaded state via get_model()+templates(), which
+    has a corrupt-blob fallback (degrades to templates=[]). The stored vs live count
+    mismatch is surfaced to the FE so corruption is visible. 404 if the model_key has
+    no drain_models row. model_key may contain ':' (cron keys) — a single path
+    segment handles colons fine. Auth: session required; GET (no CSRF).
+    """
+    rows = await consumer.get_persistence().list_all_summaries()
+    summary_row = next((r for r in rows if r.model_key == model_key), None)
+    if summary_row is None:
+        raise NotFoundProblem(message=f"drain model not found: {model_key}")
+    engine = consumer.get_engine()
+    await engine.get_model(model_key)  # ensure loaded (idempotent; corrupt-blob fallback)
+    templates = engine.templates(model_key)
+    return ModelDetailResponse(
+        model_key=model_key,
+        summary=_summary_to_response(summary_row),
+        templates=[
+            ModelTemplateEntry(
+                template_id=t.template_id,
+                template_hash=t.template_hash,
+                template_str=t.template_str,
+                size=t.size,
+                first_seen_ts=t.first_seen_ts,
+                last_seen_ts=t.last_seen_ts,
+            )
+            for t in templates
+        ],
     )
 
 

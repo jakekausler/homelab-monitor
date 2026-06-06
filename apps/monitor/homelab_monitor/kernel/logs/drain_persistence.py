@@ -31,6 +31,17 @@ from homelab_monitor.kernel.db.repository import SqliteRepository
 
 
 @dataclass(frozen=True, slots=True)
+class ModelSummaryRow:
+    """One drain_models row's column-level summary (no blob deserialize)."""
+
+    model_key: str
+    line_count: int
+    template_count: int
+    last_processed_ts: int | None
+    updated_at: int
+
+
+@dataclass(frozen=True, slots=True)
 class StoredModel:
     """A drain_models row as loaded for engine bootstrap.
 
@@ -99,6 +110,14 @@ class DrainPersistence(Protocol):
         None when the table is empty OR every row has a NULL last_processed_ts.
         Used by the DrainConsumer cold-start seed to RESUME from the furthest-
         advanced per-model cursor rather than replaying history.
+        """
+        ...
+
+    async def list_all_summaries(self) -> list[ModelSummaryRow]:
+        """Return a column-level summary of EVERY drain_models row, sorted by model_key.
+
+        Reads COLUMNS only (no snapshot blob deserialize), so it is complete even on
+        a fresh process start and unaffected by corrupt snapshot blobs.
         """
         ...
 
@@ -173,6 +192,28 @@ class SqlitePersistence:
             return None
         return int(raw)
 
+    async def list_all_summaries(self) -> list[ModelSummaryRow]:
+        rows = await self._repo.fetch_all(
+            text(
+                "SELECT model_key, line_count, template_count, "
+                "last_processed_ts, updated_at FROM drain_models ORDER BY model_key"
+            ),
+            {},
+        )
+        out: list[ModelSummaryRow] = []
+        for row in rows:
+            last_raw: Any = row.last_processed_ts  # pyright: ignore[reportAny]  -- SQLite Row
+            out.append(
+                ModelSummaryRow(
+                    model_key=str(row.model_key),  # pyright: ignore[reportAny]  -- SQLite Row
+                    line_count=int(row.line_count),  # pyright: ignore[reportAny]  -- SQLite Row
+                    template_count=int(row.template_count),  # pyright: ignore[reportAny]  -- SQLite Row
+                    last_processed_ts=int(last_raw) if last_raw is not None else None,
+                    updated_at=int(row.updated_at),  # pyright: ignore[reportAny]  -- SQLite Row
+                )
+            )
+        return out
+
 
 def _decode_first_seen(raw: str) -> dict[str, int]:
     """Decode the first_seen_map JSON column into {template_hash: first_seen_ms}.
@@ -198,6 +239,7 @@ def _decode_first_seen(raw: str) -> dict[str, int]:
 
 __all__ = [
     "DrainPersistence",
+    "ModelSummaryRow",
     "SqlitePersistence",
     "StoredModel",
     "_BufferingHandler",

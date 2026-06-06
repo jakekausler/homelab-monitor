@@ -23,6 +23,7 @@ import { ContainerLogsTab } from '@/routes/integrations/ContainerLogsTab'
 import { ContainerActionsTab } from '@/routes/integrations/ContainerActionsTab'
 import { LogsExplorerPage } from '@/routes/logs/LogsExplorerPage'
 import { LogsLayout } from '@/routes/logs/LogsLayout'
+import { ModelsDebugPage } from '@/routes/logs/ModelsDebugPage'
 import { SignaturesTab } from '@/routes/logs/SignaturesTab'
 import { SignatureDetailPage } from '@/routes/logs/SignatureDetailPage'
 import { SettingsLayout } from '@/routes/settings/SettingsLayout'
@@ -207,6 +208,15 @@ const logsSignatureDetailRoute = createRoute({
   getParentRoute: () => logsLayoutRoute,
   path: 'signatures/$templateHash/$serviceKey',
   component: SignatureDetailPage,
+})
+
+const logsModelsDebugRoute = createRoute({
+  getParentRoute: () => logsLayoutRoute,
+  path: 'models-debug',
+  component: ModelsDebugPage,
+  validateSearch: (search: Record<string, unknown>): { model?: string | undefined } => ({
+    ...(typeof search.model === 'string' ? { model: search.model } : {}),
+  }),
 })
 
 const inventoryLayoutRoute = createRoute({
@@ -398,6 +408,7 @@ const routeTree = rootRoute.addChildren([
       logsQueryRoute,
       logsSignaturesRoute,
       logsSignatureDetailRoute,
+      logsModelsDebugRoute,
     ]),
     inventoryLayoutRoute.addChildren([
       inventoryIndexRoute,

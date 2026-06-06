@@ -9,6 +9,7 @@ import json
 
 from homelab_monitor.kernel.db.repository import SqliteRepository
 from homelab_monitor.kernel.logs.drain_persistence import (
+    ModelSummaryRow,
     SqlitePersistence,
     StoredModel,
     _BufferingHandler,
@@ -217,3 +218,106 @@ async def test_get_max_cursor_ignores_null_takes_non_null(repo: SqliteRepository
         updated_at=1,
     )
     assert await persistence.get_max_cursor() == 7777  # noqa: PLR2004
+
+
+# ===========================================================================
+# list_all_summaries (STAGE-004-030)
+# ===========================================================================
+
+
+async def test_list_all_summaries_empty_table(repo: SqliteRepository) -> None:
+    """list_all_summaries returns [] when drain_models is empty."""
+    persistence = SqlitePersistence(repo)
+    summaries = await persistence.list_all_summaries()
+    assert summaries == []
+
+
+async def test_list_all_summaries_returns_correct_fields(repo: SqliteRepository) -> None:
+    """list_all_summaries returns ModelSummaryRow instances with correct column values."""
+    persistence = SqlitePersistence(repo)
+    await persistence.persist(
+        model_key="svc-alpha",
+        snapshot=b"x",
+        line_count=10,
+        template_count=3,
+        last_processed_ts=9000,
+        first_seen_map_json="{}",
+        updated_at=5000,
+    )
+    summaries = await persistence.list_all_summaries()
+    assert len(summaries) == 1
+    row = summaries[0]
+    assert isinstance(row, ModelSummaryRow)
+    assert row.model_key == "svc-alpha"
+    assert row.line_count == 10  # noqa: PLR2004
+    assert row.template_count == 3  # noqa: PLR2004
+    assert row.last_processed_ts == 9000  # noqa: PLR2004
+    assert row.updated_at == 5000  # noqa: PLR2004
+
+
+async def test_list_all_summaries_null_last_processed_ts_preserved(
+    repo: SqliteRepository,
+) -> None:
+    """list_all_summaries preserves NULL last_processed_ts as None."""
+    persistence = SqlitePersistence(repo)
+    await persistence.persist(
+        model_key="svc-null-ts",
+        snapshot=b"n",
+        line_count=0,
+        template_count=0,
+        last_processed_ts=None,
+        first_seen_map_json="{}",
+        updated_at=1,
+    )
+    summaries = await persistence.list_all_summaries()
+    assert len(summaries) == 1
+    assert summaries[0].last_processed_ts is None
+
+
+async def test_list_all_summaries_sorted_by_model_key(repo: SqliteRepository) -> None:
+    """list_all_summaries returns rows sorted ascending by model_key."""
+    persistence = SqlitePersistence(repo)
+    # Insert in reverse alphabetical order.
+    for key in ("zz-svc", "mm-svc", "aa-svc"):
+        await persistence.persist(
+            model_key=key,
+            snapshot=b"x",
+            line_count=1,
+            template_count=1,
+            last_processed_ts=1000,
+            first_seen_map_json="{}",
+            updated_at=1,
+        )
+    summaries = await persistence.list_all_summaries()
+    keys = [s.model_key for s in summaries]
+    assert keys == ["aa-svc", "mm-svc", "zz-svc"]
+
+
+async def test_list_all_summaries_two_rows_mixed_null(repo: SqliteRepository) -> None:
+    """list_all_summaries with one NULL and one non-NULL last_processed_ts."""
+    persistence = SqlitePersistence(repo)
+    await persistence.persist(
+        model_key="b-svc",
+        snapshot=b"x",
+        line_count=5,
+        template_count=2,
+        last_processed_ts=4242,
+        first_seen_map_json="{}",
+        updated_at=100,
+    )
+    await persistence.persist(
+        model_key="a-svc",
+        snapshot=b"y",
+        line_count=0,
+        template_count=0,
+        last_processed_ts=None,
+        first_seen_map_json="{}",
+        updated_at=200,
+    )
+    summaries = await persistence.list_all_summaries()
+    assert len(summaries) == 2  # noqa: PLR2004
+    # Sorted by model_key: a-svc first
+    assert summaries[0].model_key == "a-svc"
+    assert summaries[0].last_processed_ts is None
+    assert summaries[1].model_key == "b-svc"
+    assert summaries[1].last_processed_ts == 4242  # noqa: PLR2004

@@ -31,6 +31,7 @@ __all__ = [
     "HealthzResponse",
     "HistogramBucket",
     "IngestResponse",
+    "LastCycleResponse",
     "LogsFieldsResponse",
     "LogsHistogramResponse",
     "LogsQueryResponse",
@@ -42,6 +43,10 @@ __all__ = [
     "MetricsRangeResponse",
     "MetricsSnapshotEntry",
     "MetricsSnapshotResponse",
+    "ModelDetailResponse",
+    "ModelListResponse",
+    "ModelSummary",
+    "ModelTemplateEntry",
     "OutcomeView",
     "RefreshCycleResponse",
     "RefreshStatusResponse",
@@ -591,4 +596,61 @@ class RefreshStatusResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
     status: Literal["running", "done", "failed"]
     result: DrainCycleResultResponse | None = None
+    error: str | None = None
+
+
+class ModelSummary(BaseModel):
+    """Column-level summary of one drain_models row (no blob deserialize)."""
+
+    model_config = ConfigDict(extra="forbid")
+    model_key: str
+    template_count: int
+    line_count: int
+    last_processed_ts: int | None = None
+    updated_at: int
+
+
+class ModelListResponse(BaseModel):
+    """Response for GET /api/logs/signatures/models."""
+
+    model_config = ConfigDict(extra="forbid")
+    models: list[ModelSummary]
+
+
+class ModelTemplateEntry(BaseModel):
+    """One mined template within a model (from engine.templates())."""
+
+    model_config = ConfigDict(extra="forbid")
+    template_id: int
+    template_hash: str
+    template_str: str
+    size: int
+    first_seen_ts: int
+    last_seen_ts: int
+
+
+class ModelDetailResponse(BaseModel):
+    """Response for GET /api/logs/signatures/models/{model_key}."""
+
+    model_config = ConfigDict(extra="forbid")
+    model_key: str
+    summary: ModelSummary
+    templates: list[ModelTemplateEntry]
+
+
+class LastCycleResponse(BaseModel):
+    """Response for GET /api/logs/signatures/cycle/last.
+
+    `has_run` is False (and all numeric fields are null/zero) when no cycle has run
+    yet — this is NOT an error.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    has_run: bool
+    started_at: int | None = None
+    finished_at: int | None = None
+    lines_processed: int = 0
+    new_templates: int = 0
+    models_touched: int = 0
+    cycle_status: Literal["ok", "partial", "failed"] | None = None
     error: str | None = None
