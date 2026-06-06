@@ -54,6 +54,7 @@ EXPECTED_TABLES = {
     "log_saved_queries",
     "app_settings",
     "drain_models",
+    "log_signatures",
 }
 
 

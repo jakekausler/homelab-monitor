@@ -40,6 +40,7 @@ from homelab_monitor.kernel.db.repository import SqliteRepository
 from homelab_monitor.kernel.logs.drain_consumer import WATERMARK_KEY, DrainConsumer
 from homelab_monitor.kernel.logs.drain_engine import DrainEngine
 from homelab_monitor.kernel.logs.drain_persistence import SqlitePersistence
+from homelab_monitor.kernel.logs.signature_sync import SignatureCatalogSync
 from homelab_monitor.kernel.logs.victorialogs_client import VictoriaLogsClient
 from homelab_monitor.kernel.plugins.io import InMemoryMetricsWriter
 
@@ -114,6 +115,7 @@ def _make_consumer(
         batch_max_lines=batch_max_lines,
         ingest_lag_grace_seconds=ingest_lag_grace_seconds,
     )
+    sig_sync = SignatureCatalogSync(repo)
     return DrainConsumer(
         vl_client=vl_client,
         engine=engine,
@@ -121,6 +123,7 @@ def _make_consumer(
         persistence=persistence,
         config=config,
         metrics_writer=InMemoryMetricsWriter(),
+        sig_sync=sig_sync,
         log=_cast_bound_logger(),
     )
 

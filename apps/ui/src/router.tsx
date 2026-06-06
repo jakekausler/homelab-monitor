@@ -22,6 +22,9 @@ import { ContainerProbesTab } from '@/routes/integrations/ContainerProbesTab'
 import { ContainerLogsTab } from '@/routes/integrations/ContainerLogsTab'
 import { ContainerActionsTab } from '@/routes/integrations/ContainerActionsTab'
 import { LogsExplorerPage } from '@/routes/logs/LogsExplorerPage'
+import { LogsLayout } from '@/routes/logs/LogsLayout'
+import { SignaturesTab } from '@/routes/logs/SignaturesTab'
+import { SignatureDetailPage } from '@/routes/logs/SignatureDetailPage'
 import { SettingsLayout } from '@/routes/settings/SettingsLayout'
 import { SettingsLogsPage } from '@/routes/settings/SettingsLogsPage'
 import { AppShell } from '@/components/AppShell'
@@ -138,9 +141,25 @@ export function parseServicesParam(
   return out.length > 0 ? out : undefined
 }
 
-const logsRoute = createRoute({
+const logsLayoutRoute = createRoute({
   getParentRoute: () => protectedLayoutRoute,
   path: '/logs',
+  component: LogsLayout,
+})
+
+const logsIndexRoute = createRoute({
+  getParentRoute: () => logsLayoutRoute,
+  path: '/',
+  beforeLoad: () => {
+    // Preserve Explorer deep-link search params across the redirect.
+    // eslint-disable-next-line @typescript-eslint/only-throw-error -- TanStack Router redirect objects are thrown by design
+    throw redirect({ to: '/logs/query', search: (prev) => prev })
+  },
+})
+
+const logsQueryRoute = createRoute({
+  getParentRoute: () => logsLayoutRoute,
+  path: 'query',
   component: LogsExplorerPage,
   // STAGE-004-010 — URL is the source of truth. `start`+`end` (ISO, custom) take
   // precedence over `since` (preset token); `q` is the plain-text search term.
@@ -162,6 +181,32 @@ const logsRoute = createRoute({
     end: typeof search.end === 'string' ? search.end : undefined,
     services: parseServicesParam(search.services),
   }),
+})
+
+const logsSignaturesRoute = createRoute({
+  getParentRoute: () => logsLayoutRoute,
+  path: 'signatures',
+  component: SignaturesTab,
+  validateSearch: (
+    search: Record<string, unknown>,
+  ): {
+    service?: string | undefined
+    status?: 'active' | 'suppressed' | 'expected' | undefined
+    label_q?: string | undefined
+  } => ({
+    service: typeof search.service === 'string' ? search.service : undefined,
+    status:
+      search.status === 'active' || search.status === 'suppressed' || search.status === 'expected'
+        ? search.status
+        : undefined,
+    label_q: typeof search.label_q === 'string' ? search.label_q : undefined,
+  }),
+})
+
+const logsSignatureDetailRoute = createRoute({
+  getParentRoute: () => logsLayoutRoute,
+  path: 'signatures/$templateHash/$serviceKey',
+  component: SignatureDetailPage,
 })
 
 const inventoryLayoutRoute = createRoute({
@@ -348,7 +393,12 @@ const routeTree = rootRoute.addChildren([
     overviewRoute,
     alertsRoute,
     metricsRoute,
-    logsRoute,
+    logsLayoutRoute.addChildren([
+      logsIndexRoute,
+      logsQueryRoute,
+      logsSignaturesRoute,
+      logsSignatureDetailRoute,
+    ]),
     inventoryLayoutRoute.addChildren([
       inventoryIndexRoute,
       cronsListRoute,

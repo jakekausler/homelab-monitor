@@ -3708,6 +3708,154 @@
         "title": "Severity",
         "type": "string"
       },
+      "SignatureListResponse": {
+        "additionalProperties": false,
+        "description": "Response for GET /api/logs/signatures.",
+        "properties": {
+          "signatures": {
+            "items": {
+              "$ref": "#/components/schemas/SignatureResponse"
+            },
+            "title": "Signatures",
+            "type": "array"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "signatures",
+          "total"
+        ],
+        "title": "SignatureListResponse",
+        "type": "object"
+      },
+      "SignaturePatchRequest": {
+        "additionalProperties": false,
+        "description": "Request body for PATCH /api/logs/signatures/{template_hash}/{service_key}.\n\nBoth fields optional: a request may set label only, status only, or both.\n`label=None` in the JSON body is INDISTINGUISHABLE from omitted with this shape;\nuse a sentinel-free contract: label is set whenever the key is present. The\nendpoint uses `model_fields_set` to distinguish 'set label to null' from 'omit'.",
+        "properties": {
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "enum": [
+                  "active",
+                  "suppressed",
+                  "expected"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          }
+        },
+        "title": "SignaturePatchRequest",
+        "type": "object"
+      },
+      "SignatureResponse": {
+        "additionalProperties": false,
+        "description": "One signature catalog row.",
+        "properties": {
+          "first_seen_at": {
+            "title": "First Seen At",
+            "type": "integer"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "last_seen_at": {
+            "title": "Last Seen At",
+            "type": "integer"
+          },
+          "service_key": {
+            "title": "Service Key",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "active",
+              "suppressed",
+              "expected"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "template_hash": {
+            "title": "Template Hash",
+            "type": "string"
+          },
+          "template_str": {
+            "title": "Template Str",
+            "type": "string"
+          },
+          "total_count": {
+            "title": "Total Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "template_hash",
+          "service_key",
+          "template_str",
+          "status",
+          "first_seen_at",
+          "last_seen_at",
+          "total_count"
+        ],
+        "title": "SignatureResponse",
+        "type": "object"
+      },
+      "SignatureSamplesResponse": {
+        "additionalProperties": false,
+        "description": "Response for GET /api/logs/signatures/{template_hash}/{service_key}/samples.\n\n`lines` is the converged LogLine shape (reused from /logs/query). `reason` is\nnull on success, or one of 'template_too_generic' / 'vl_unavailable' when\n`lines` is empty for a known best-effort reason.",
+        "properties": {
+          "lines": {
+            "items": {
+              "$ref": "#/components/schemas/LogLine"
+            },
+            "title": "Lines",
+            "type": "array"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "required": [
+          "lines"
+        ],
+        "title": "SignatureSamplesResponse",
+        "type": "object"
+      },
       "SuggestionAcceptRequest": {
         "additionalProperties": false,
         "properties": {
@@ -7315,6 +7463,108 @@
         "summary": "Logs Services"
       }
     },
+    "/api/logs/signatures": {
+      "get": {
+        "description": "List signatures with optional service/status/label filters + pagination.\n\nAuth: session required. CSRF NOT enforced on GET. Sorted by last_seen_at DESC.",
+        "operationId": "list_signatures_api_logs_signatures_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "service",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Service"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "label_q",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Label Q"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignatureListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Signatures"
+      }
+    },
     "/api/logs/signatures/refresh": {
       "post": {
         "description": "Trigger one drain cycle out of band; returns a cycle_id to poll.\n\n202 + cycle_id on accept. 409 if a cycle is already running. 503 if the drain\nconsumer is not running (drain disabled). Auth: session required; CSRF enforced.",
@@ -7372,6 +7622,173 @@
           }
         },
         "summary": "Get Refresh Status"
+      }
+    },
+    "/api/logs/signatures/{template_hash}/{service_key}": {
+      "get": {
+        "description": "Get one signature by composite key. 404 if absent. GET, no CSRF.",
+        "operationId": "get_signature_api_logs_signatures__template_hash___service_key__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "template_hash",
+            "required": true,
+            "schema": {
+              "title": "Template Hash",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "service_key",
+            "required": true,
+            "schema": {
+              "title": "Service Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignatureResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Signature"
+      },
+      "patch": {
+        "description": "Update a signature's label and/or status. 404 if absent.\n\nOnly fields present in the request body are written (model_fields_set). Auth:\nsession required; CSRF enforced (PATCH).",
+        "operationId": "patch_signature_api_logs_signatures__template_hash___service_key__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "template_hash",
+            "required": true,
+            "schema": {
+              "title": "Template Hash",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "service_key",
+            "required": true,
+            "schema": {
+              "title": "Service Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SignaturePatchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignatureResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Patch Signature"
+      }
+    },
+    "/api/logs/signatures/{template_hash}/{service_key}/samples": {
+      "get": {
+        "description": "Best-effort live sample lines for a signature, from VictoriaLogs (last 24h).\n\n404 if the signature is absent. Builds a LogsQL phrase-AND from the template's\nnon-wildcard segments (Decision B1). Empty/generic template -> samples=[] with\nreason 'template_too_generic'. VL down -> samples=[] reason 'vl_unavailable'\n(never 500). Auth: session required; GET (no CSRF).",
+        "operationId": "get_signature_samples_api_logs_signatures__template_hash___service_key__samples_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "template_hash",
+            "required": true,
+            "schema": {
+              "title": "Template Hash",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "service_key",
+            "required": true,
+            "schema": {
+              "title": "Service Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 10,
+              "maximum": 10,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignatureSamplesResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Signature Samples"
       }
     },
     "/api/logs/streams": {

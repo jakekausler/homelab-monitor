@@ -134,7 +134,10 @@ export function LogsExplorerPage() {
     // on read. The cast at the navigate call below bridges this CSV-string write value
     // to validateSearch's ServiceIdentity[] return type.
     if (ids.length > 0) next.services = identitiesToServicesCsv(ids)
-    void navigate({ to: '/logs', search: next as unknown as { services?: ServiceIdentity[] } })
+    void navigate({
+      to: '/logs/query',
+      search: next as unknown as { services?: ServiceIdentity[] },
+    })
     recordQuery(buildHistoryEntry(advanced, plain, lql, r, ids))
   }
 

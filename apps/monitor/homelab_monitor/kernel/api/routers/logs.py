@@ -46,6 +46,10 @@ from homelab_monitor.kernel.api.schemas import (
     SavedServiceIdentity,
     SaveQueryCreateRequest,
     SaveQueryRenameRequest,
+    SignatureListResponse,
+    SignaturePatchRequest,
+    SignatureResponse,
+    SignatureSamplesResponse,
 )
 from homelab_monitor.kernel.auth.models import User
 from homelab_monitor.kernel.config import load_tail_config, load_vl_query_limits
@@ -80,6 +84,11 @@ from homelab_monitor.kernel.logs.saved_queries_repo import (
 from homelab_monitor.kernel.logs.services import (
     ServicesCache,
     fetch_services,
+)
+from homelab_monitor.kernel.logs.signatures_repo import (
+    Signature,
+    SignatureFilter,
+    SignaturesRepository,
 )
 from homelab_monitor.kernel.logs.tail_service import (
     DroppedEvent,
@@ -725,6 +734,170 @@ async def get_refresh_status(
             error=entry.result.error,
         )
     return RefreshStatusResponse(status=entry.status, result=result, error=entry.error)
+
+
+_SAMPLES_WINDOW_HOURS = 24
+_SAMPLES_DEFAULT_LIMIT = 10
+_SAMPLES_MAX_LIMIT = 10
+_SIG_LIST_DEFAULT_LIMIT = 100
+_SIG_LIST_MAX_LIMIT = 500
+
+
+def _get_signatures_repo(
+    repo: Annotated[SqliteRepository, Depends(get_repo)],
+) -> SignaturesRepository:
+    return SignaturesRepository(repo)
+
+
+def _signature_to_response(sig: Signature) -> SignatureResponse:
+    return SignatureResponse(
+        template_hash=sig.template_hash,
+        service_key=sig.service_key,
+        template_str=sig.template_str,
+        label=sig.label,
+        status=cast(Literal["active", "suppressed", "expected"], sig.status),
+        first_seen_at=sig.first_seen_at,
+        last_seen_at=sig.last_seen_at,
+        total_count=sig.total_count,
+    )
+
+
+@router.get("/logs/signatures", response_model=SignatureListResponse)
+async def list_signatures(  # noqa: PLR0913
+    _user: Annotated[User, Depends(require_session())],
+    repo: Annotated[SignaturesRepository, Depends(_get_signatures_repo)],
+    service: str | None = Query(None),
+    status_filter: str | None = Query(None, alias="status"),
+    label_q: str | None = Query(None),
+    limit: int = Query(_SIG_LIST_DEFAULT_LIMIT, ge=1, le=_SIG_LIST_MAX_LIMIT),
+    offset: int = Query(0, ge=0),
+) -> SignatureListResponse:
+    """List signatures with optional service/status/label filters + pagination.
+
+    Auth: session required. CSRF NOT enforced on GET. Sorted by last_seen_at DESC.
+    """
+    rows, total = await repo.list(
+        filter=SignatureFilter(service=service, status=status_filter, label_q=label_q),
+        limit=limit,
+        offset=offset,
+    )
+    return SignatureListResponse(
+        signatures=[_signature_to_response(r) for r in rows],
+        total=total,
+    )
+
+
+@router.get(
+    "/logs/signatures/{template_hash}/{service_key}",
+    response_model=SignatureResponse,
+)
+async def get_signature(
+    template_hash: str,
+    service_key: str,
+    _user: Annotated[User, Depends(require_session())],
+    repo: Annotated[SignaturesRepository, Depends(_get_signatures_repo)],
+) -> SignatureResponse:
+    """Get one signature by composite key. 404 if absent. GET, no CSRF."""
+    sig = await repo.get(template_hash, service_key)
+    if sig is None:
+        raise NotFoundProblem(message=f"signature not found: {template_hash}/{service_key}")
+    return _signature_to_response(sig)
+
+
+@router.patch(
+    "/logs/signatures/{template_hash}/{service_key}",
+    response_model=SignatureResponse,
+)
+async def patch_signature(
+    template_hash: str,
+    service_key: str,
+    body: SignaturePatchRequest,
+    _user: Annotated[User, Depends(require_session())],
+    repo: Annotated[SignaturesRepository, Depends(_get_signatures_repo)],
+) -> SignatureResponse:
+    """Update a signature's label and/or status. 404 if absent.
+
+    Only fields present in the request body are written (model_fields_set). Auth:
+    session required; CSRF enforced (PATCH).
+    """
+    set_fields = body.model_fields_set
+    sig: Signature | None = await repo.get(template_hash, service_key)
+    if sig is None:
+        raise NotFoundProblem(message=f"signature not found: {template_hash}/{service_key}")
+    if "label" in set_fields:
+        sig = await repo.update_label(template_hash, service_key, body.label)
+        if sig is None:  # pragma: no cover -- existed a line ago
+            raise NotFoundProblem(message=f"signature not found: {template_hash}/{service_key}")
+    if "status" in set_fields and body.status is not None:
+        sig = await repo.set_status(template_hash, service_key, body.status)
+        if sig is None:  # pragma: no cover -- existed a line ago
+            raise NotFoundProblem(message=f"signature not found: {template_hash}/{service_key}")
+    return _signature_to_response(sig)
+
+
+@router.get(
+    "/logs/signatures/{template_hash}/{service_key}/samples",
+    response_model=SignatureSamplesResponse,
+)
+async def get_signature_samples(  # noqa: PLR0913
+    template_hash: str,
+    service_key: str,
+    _user: Annotated[User, Depends(require_session())],
+    repo: Annotated[SignaturesRepository, Depends(_get_signatures_repo)],
+    vl_url: str = Depends(get_vl_url),
+    http_client: httpx.AsyncClient = Depends(get_http_client),  # noqa: B008
+    limit: int = Query(_SAMPLES_DEFAULT_LIMIT, ge=1, le=_SAMPLES_MAX_LIMIT),
+) -> SignatureSamplesResponse:
+    """Best-effort live sample lines for a signature, from VictoriaLogs (last 24h).
+
+    404 if the signature is absent. Builds a LogsQL phrase-AND from the template's
+    non-wildcard segments (Decision B1). Empty/generic template -> samples=[] with
+    reason 'template_too_generic'. VL down -> samples=[] reason 'vl_unavailable'
+    (never 500). Auth: session required; GET (no CSRF).
+    """
+    log: BoundLogger = cast(
+        BoundLogger, structlog.get_logger().bind(component="logs_signature_samples")
+    )
+    sig = await repo.get(template_hash, service_key)
+    if sig is None:
+        raise NotFoundProblem(message=f"signature not found: {template_hash}/{service_key}")
+
+    expr = _signature_samples_expr(sig.template_str, service_key)
+    if expr is None:
+        return SignatureSamplesResponse(lines=[], reason="template_too_generic")
+
+    now = datetime.now(UTC)
+    start_iso = (now - timedelta(hours=_SAMPLES_WINDOW_HOURS)).isoformat()
+    end_iso = now.isoformat()
+    base_limits = load_vl_query_limits()
+    client = VictoriaLogsClient(vl_url=vl_url, http_client=http_client, limits=base_limits)
+    lines: list[LogLine] = []
+    try:
+        async for vl_line in client.stream_query(
+            expr=expr, start=start_iso, end=end_iso, limit=limit
+        ):
+            lines.append(from_victorialogs_line(vl_line))
+    except VictoriaLogsClientError as exc:
+        log.warning("logs_signature_samples.upstream_error", error=str(exc))
+        return SignatureSamplesResponse(lines=[], reason="vl_unavailable")
+    return SignatureSamplesResponse(lines=lines, reason=None)
+
+
+def _signature_samples_expr(template_str: str, service_key: str) -> str | None:
+    """Build the LogsQL samples query for a template (Decision B1).
+
+    Splits the template on '<*>' and ANDs the quoted non-whitespace segments. When
+    NO segment has non-whitespace content (template is just '<*>' / whitespace),
+    returns None (caller -> 'template_too_generic'; never a match-all query). For a
+    real service name (not 'cron:*' / '_unknown'), ANDs a `service:"..."` filter.
+    """
+    segments = [seg for seg in template_str.split("<*>") if seg.strip()]
+    if not segments:
+        return None
+    expr = " AND ".join(logsql_quote_phrase(seg) for seg in segments)
+    if not service_key.startswith("cron:") and service_key != "_unknown":
+        expr = f"service:{logsql_quote_phrase(service_key)} AND {expr}"
+    return expr
 
 
 # DI helper for saved queries repository

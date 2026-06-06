@@ -885,6 +885,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
             http_client=http_client,
             limits=drain_vl_limits,
         )
+        from homelab_monitor.kernel.logs.signature_sync import SignatureCatalogSync  # noqa: PLC0415
+
+        drain_sig_sync = SignatureCatalogSync(repo)
         drain_consumer = DrainConsumer(
             vl_client=drain_vl_client,
             engine=drain_engine,
@@ -892,6 +895,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
             persistence=drain_persistence,
             config=drain_config,
             metrics_writer=metrics_writer,
+            sig_sync=drain_sig_sync,
             log=log,
         )
         drain_consumer.start_task()

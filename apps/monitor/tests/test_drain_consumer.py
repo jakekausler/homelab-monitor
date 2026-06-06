@@ -29,6 +29,7 @@ from homelab_monitor.kernel.logs.drain_consumer import (
 from homelab_monitor.kernel.logs.drain_engine import DrainEngine
 from homelab_monitor.kernel.logs.drain_persistence import SqlitePersistence
 from homelab_monitor.kernel.logs.histogram import ms_to_iso
+from homelab_monitor.kernel.logs.signature_sync import SignatureCatalogSync
 from homelab_monitor.kernel.logs.victorialogs_client import (
     VictoriaLogsClient,
     VictoriaLogsClientError,
@@ -142,6 +143,7 @@ def _consumer(  # noqa: PLR0913
         signature_cardinality_warn_threshold=signature_cardinality_warn_threshold,
     )
     metrics_writer = InMemoryMetricsWriter()
+    sig_sync = SignatureCatalogSync(repo)
     consumer = DrainConsumer(
         vl_client=_as_client(fake),
         engine=engine,
@@ -149,6 +151,7 @@ def _consumer(  # noqa: PLR0913
         persistence=persistence,
         config=config,
         metrics_writer=metrics_writer,
+        sig_sync=sig_sync,
         log=_log(),
     )
     return consumer, settings, persistence, metrics_writer
@@ -578,3 +581,113 @@ async def test_run_forever_skips_on_cycle_in_progress(
     assert calls["n"] == 2  # noqa: PLR2004
     skip_logs = [e for e in logs if e.get("event") == "drain_consumer.cycle_skipped_in_progress"]
     assert len(skip_logs) == 1
+
+
+# ---------------------------------------------------------------------------
+# Signature sync tests (STAGE-004-028)
+# ---------------------------------------------------------------------------
+
+
+async def test_cycle_writes_signatures_to_log_signatures(repo: SqliteRepository) -> None:
+    """A cycle feeding N lines → log_signatures rows with correct total_count and last_seen_at."""
+    from sqlalchemy import text  # noqa: PLC0415
+
+    # Two distinct messages → two templates → two signature rows
+    msg_a = "connection accepted from 10.0.0.1"
+    msg_b = "connection accepted from 10.0.0.2"
+    lines = [
+        _vl(msg_a, ms_to_iso(2000)),
+        _vl(msg_a, ms_to_iso(3000)),
+        _vl(msg_b, ms_to_iso(4000)),
+    ]
+    consumer, settings, _p, _mw = _consumer(
+        repo, _FakeVlClient(lines), ingest_lag_grace_seconds=0, batch_max_lines=50
+    )
+    await settings.set(WATERMARK_KEY, "1000")
+    result = await consumer.run_once()
+    assert result.cycle_status in ("ok", "partial")
+    assert result.lines_processed == 3  # noqa: PLR2004
+
+    # Verify rows were written to log_signatures
+    rows = await repo.fetch_all(text("SELECT * FROM log_signatures ORDER BY total_count DESC"), {})
+    assert len(rows) >= 1  # at least one template matched
+    # The most-count row should have accumulated the repeated message_a lines
+    total_inserted = sum(int(r.total_count) for r in rows)  # pyright: ignore[reportAttributeAccessIssue]
+    assert total_inserted == 3  # noqa: PLR2004 -- all lines accounted for
+
+    # last_seen_at should be at most the cycle max ts (4000 ms for msg_b)
+    for row in rows:
+        assert int(row.last_seen_at) >= 2000  # noqa: PLR2004 -- pyright: ignore[reportAttributeAccessIssue]
+    assert max(int(r.last_seen_at) for r in rows) == 4000  # noqa: PLR2004 -- newest line ts (Decision A: last_seen_at == max_ts_seen)  # pyright: ignore[reportAttributeAccessIssue]
+
+
+async def test_sync_error_does_not_fail_cycle(repo: SqliteRepository) -> None:
+    """_sync_signatures exception is swallowed; cycle_status='ok' and watermark advances."""
+
+    # Construct a sig_sync stub whose sync_cycle always raises
+    class _RaisingSigSync:
+        async def sync_cycle(self, **_kwargs: object) -> None:
+            msg = "intentional sync failure for test"
+            raise RuntimeError(msg)
+
+    persistence = SqlitePersistence(repo)
+    engine = DrainEngine(persistence)
+    settings = AppSettingsRepository(repo)
+    config = DrainConfig(
+        interval_seconds=300,
+        batch_max_lines=50,
+        ingest_lag_grace_seconds=0,
+        enabled=True,
+        signature_cardinality_warn_threshold=100_000,
+    )
+    metrics_writer = InMemoryMetricsWriter()
+    fake = _FakeVlClient([_vl("hello world", ms_to_iso(2000))])
+    raising_sync = cast(SignatureCatalogSync, _RaisingSigSync())  # pyright: ignore[reportArgumentType]
+    consumer = DrainConsumer(
+        vl_client=_as_client(fake),
+        engine=engine,
+        settings=settings,
+        persistence=persistence,
+        config=config,
+        metrics_writer=metrics_writer,
+        sig_sync=raising_sync,
+        log=_log(),
+    )
+    await settings.set(WATERMARK_KEY, "1000")
+    result = await consumer.run_once()
+
+    # Cycle must succeed despite the sync error
+    assert result.cycle_status == "ok"
+    assert result.lines_processed == 1
+
+    # Watermark must have advanced past 1000
+    raw_watermark = await settings.get(WATERMARK_KEY)
+    assert raw_watermark is not None
+    assert int(raw_watermark) > 1000  # noqa: PLR2004
+
+
+async def test_vl_failure_partial_path_still_writes_signatures(repo: SqliteRepository) -> None:
+    """VL failure after 1 line (partial path): signature sync still runs for processed lines."""
+    from sqlalchemy import text  # noqa: PLC0415
+
+    # Yield 1 line then raise; partial sync should still persist the 1 template
+    lines = [
+        _vl("connection accepted from 10.0.0.1", ms_to_iso(2000)),
+        _vl("something else here", ms_to_iso(3000)),
+    ]
+    consumer, settings, _p, _mw = _consumer(
+        repo,
+        _FakeVlClient(lines, raise_after=1),
+        ingest_lag_grace_seconds=0,
+        batch_max_lines=50,
+    )
+    await settings.set(WATERMARK_KEY, "1000")
+    result = await consumer.run_once()
+    # VL failure causes cycle_status="failed"
+    assert result.cycle_status == "failed"
+    assert result.lines_processed == 1
+
+    # Despite the failed cycle, signature rows from the partial sync should exist
+    rows = await repo.fetch_all(text("SELECT COUNT(*) AS n FROM log_signatures"), {})
+    count = int(rows[0].n)  # pyright: ignore[reportAttributeAccessIssue]
+    assert count >= 1  # at least one signature row persisted from the partial sync

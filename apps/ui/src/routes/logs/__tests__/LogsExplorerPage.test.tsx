@@ -85,11 +85,11 @@ function makeLine(message: string): LogLine {
   }
 }
 
-function renderRoute(initialPath = '/logs') {
+function renderRoute(initialPath = '/logs/query') {
   const rootRoute = createRootRoute({ component: () => <Outlet /> })
   const logsRoute = createRoute({
     getParentRoute: () => rootRoute,
-    path: '/logs',
+    path: '/logs/query',
     component: LogsExplorerPage,
     validateSearch: (
       search: Record<string, unknown>,
@@ -225,7 +225,7 @@ describe('LogsExplorerPage', () => {
   })
 
   it('hydrates the input value and translated expr from the URL (?q + ?since)', async () => {
-    renderRoute('/logs?q=connection%20refused&since=24h')
+    renderRoute('/logs/query?q=connection%20refused&since=24h')
     const input = await screen.findByTestId<HTMLInputElement>('logs-search-input')
     expect(input.value).toBe('connection refused')
     // The hook is called with the translated expr derived from the committed q.
@@ -251,7 +251,7 @@ describe('LogsExplorerPage', () => {
   })
 
   it('keeps the Clear button visible when input is emptied but a committed filter is still applied', async () => {
-    renderRoute('/logs?q=foo&since=1h')
+    renderRoute('/logs/query?q=foo&since=1h')
     const input = await screen.findByTestId<HTMLInputElement>('logs-search-input')
     // Committed filter 'foo' is active — Clear button must be present.
     expect(input.value).toBe('foo')
@@ -267,7 +267,7 @@ describe('LogsExplorerPage', () => {
   it('hydrates a custom range from the URL (?start + ?end) and queries those exact ISO bounds', async () => {
     const start = '2026-05-30T00:00:00.000Z'
     const end = '2026-05-30T06:00:00.000Z'
-    renderRoute(`/logs?start=${start}&end=${end}`)
+    renderRoute(`/logs/query?start=${start}&end=${end}`)
     await screen.findByTestId('logs-search-input')
     const calls = vi.mocked(useLogsQuery).mock.calls
     expect(calls.some(([, s, e]) => s === start && e === end)).toBe(true)
@@ -382,7 +382,7 @@ describe('LogsExplorerPage', () => {
   })
 
   it('deep-links into advanced mode from ?logsql and queries it raw', async () => {
-    renderRoute('/logs?logsql=service%3Afoo')
+    renderRoute('/logs/query?logsql=service%3Afoo')
     const editor = await screen.findByTestId<HTMLTextAreaElement>('logsql-editor-textarea')
     expect(editor.value).toBe('service:foo')
     expect(screen.queryByTestId('logs-search-input')).toBeNull()
@@ -432,7 +432,7 @@ describe('LogsExplorerPage', () => {
   })
 
   it('chip × removes the service', async () => {
-    renderRoute('/logs?services=docker:home-assistant&since=1h')
+    renderRoute('/logs/query?services=docker:home-assistant&since=1h')
     await screen.findByTestId('logs-search-input')
     const chip = await screen.findByTestId('service-chip')
     expect(chip).toBeInTheDocument()
@@ -445,7 +445,7 @@ describe('LogsExplorerPage', () => {
 
   it('appendMsgFilter composes discrete _msg clauses (switches to advanced mode)', async () => {
     // Render with a plain-text search already committed.
-    renderRoute('/logs?q=error&since=1h')
+    renderRoute('/logs/query?q=error&since=1h')
     await screen.findByTestId('logs-search-input')
     vi.mocked(useLogsQuery).mockClear()
 
@@ -468,7 +468,7 @@ describe('LogsExplorerPage', () => {
     // the composed LogsQL. We do this by checking the logsql URL param after
     // a hypothetical second render — but since appendMsgFilter is not directly
     // exposed, assert via ?logsql deep-link that the composed form is valid.
-    renderRoute('/logs?logsql=_msg%3A%22error%22%20_msg%3A%22host-1%22&since=1h')
+    renderRoute('/logs/query?logsql=_msg%3A%22error%22%20_msg%3A%22host-1%22&since=1h')
     await screen.findByTestId('logsql-editor-textarea')
     const calls = vi.mocked(useLogsQuery).mock.calls
     expect(calls.some(([expr]) => expr === '_msg:"error" _msg:"host-1"')).toBe(true)
@@ -481,7 +481,7 @@ describe('LogsExplorerPage', () => {
     // that the composed form is valid.
     //
     // Expected: plain 'error' → _msg:"error", then host:"prod" ANDed in.
-    renderRoute('/logs?logsql=_msg%3A%22error%22%20host%3A%22prod%22&since=1h')
+    renderRoute('/logs/query?logsql=_msg%3A%22error%22%20host%3A%22prod%22&since=1h')
     await screen.findByTestId('logsql-editor-textarea')
     const calls = vi.mocked(useLogsQuery).mock.calls
     expect(calls.some(([expr]) => expr === '_msg:"error" host:"prod"')).toBe(true)
@@ -489,7 +489,7 @@ describe('LogsExplorerPage', () => {
 
   it('handleAddIdentity is additive — does not remove an already-selected identity', async () => {
     // Start with docker:home-assistant selected.
-    renderRoute('/logs?services=docker:home-assistant&since=1h')
+    renderRoute('/logs/query?services=docker:home-assistant&since=1h')
     await screen.findByTestId('logs-search-input')
     // Chip should be present.
     expect(await screen.findByTestId('service-chip')).toBeInTheDocument()
@@ -508,14 +508,14 @@ describe('LogsExplorerPage', () => {
   })
 
   it('services CSV is forwarded into useLogsQuery', async () => {
-    renderRoute('/logs?services=docker:a,cron:b')
+    renderRoute('/logs/query?services=docker:a,cron:b')
     await screen.findByTestId('logs-search-input')
     const calls = vi.mocked(useLogsQuery).mock.calls
     expect(calls.some(([, , , services]) => services === 'docker:a,cron:b')).toBe(true)
   })
 
   it('selection survives in advanced mode', async () => {
-    renderRoute('/logs?logsql=service:foo&services=docker:nginx')
+    renderRoute('/logs/query?logsql=service:foo&services=docker:nginx')
     const editor = await screen.findByTestId<HTMLTextAreaElement>('logsql-editor-textarea')
     expect(editor.value).toBe('service:foo')
     expect(await screen.findByTestId('service-chip')).toHaveAttribute('data-service', 'nginx')
@@ -526,7 +526,7 @@ describe('LogsExplorerPage', () => {
   })
 
   it('selection survives in plain mode', async () => {
-    renderRoute('/logs?q=boom&services=docker:nginx')
+    renderRoute('/logs/query?q=boom&services=docker:nginx')
     const input = await screen.findByTestId<HTMLInputElement>('logs-search-input')
     expect(input.value).toBe('boom')
     expect(await screen.findByTestId('service-chip')).toHaveAttribute('data-service', 'nginx')

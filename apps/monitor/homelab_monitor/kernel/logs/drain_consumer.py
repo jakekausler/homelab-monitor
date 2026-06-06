@@ -61,6 +61,7 @@ if TYPE_CHECKING:
     )
     from homelab_monitor.kernel.logs.drain_engine import DrainEngine
     from homelab_monitor.kernel.logs.drain_persistence import DrainPersistence
+    from homelab_monitor.kernel.logs.signature_sync import SignatureCatalogSync
     from homelab_monitor.kernel.logs.victorialogs_client import (
         VictoriaLogsClient,
     )
@@ -123,6 +124,7 @@ class DrainConsumer:
         persistence: DrainPersistence,
         config: DrainConfig,
         metrics_writer: MetricsWriter,
+        sig_sync: SignatureCatalogSync,
         log: BoundLogger,
     ) -> None:
         self._vl_client: VictoriaLogsClient = vl_client
@@ -131,6 +133,7 @@ class DrainConsumer:
         self._persistence: DrainPersistence = persistence
         self._config: DrainConfig = config
         self._metrics_writer: MetricsWriter = metrics_writer
+        self._sig_sync: SignatureCatalogSync = sig_sync
         self._log: BoundLogger = log
         self._task: asyncio.Task[None] | None = None
         self._cycle_lock: asyncio.Lock = asyncio.Lock()
@@ -263,7 +266,7 @@ class DrainConsumer:
         models_seen: set[str] = set()
         max_ts_seen = watermark_ms  # floor: never regress below the watermark
         cycle_counts: dict[tuple[str, str, str], int] = {}
-        sig_state: dict[tuple[str, str], tuple[int, int]] = {}
+        sig_state: dict[tuple[str, str], tuple[int, int, str]] = {}
 
         try:
             async for vl_line in self._vl_client.stream_query(
@@ -286,6 +289,7 @@ class DrainConsumer:
                 sig_state[(event.model_key, event.template_hash)] = (
                     event.cluster_size,
                     event.first_seen_ts,
+                    event.template_str,
                 )
         except VictoriaLogsClientError as exc:
             # Snapshot whatever we processed; DO NOT advance the watermark — the
@@ -295,6 +299,7 @@ class DrainConsumer:
             # backstop — intentional: the cycle is lost but the watermark was NOT
             # advanced, so the next cycle safely retries the same window.
             await self._engine.snapshot()
+            await self._sync_signatures(sig_state, cycle_counts, max_ts_seen)
             self._log.warning("drain_consumer.vl_error", error=str(exc))
             finished_at = _now_ms()
             self._emit_cycle_metrics(
@@ -320,6 +325,7 @@ class DrainConsumer:
         partial = count == batch_cap
         next_watermark = max_ts_seen if partial else query_end_ms
         await self._settings.set(WATERMARK_KEY, str(next_watermark))
+        await self._sync_signatures(sig_state, cycle_counts, max_ts_seen)
         finished_at = _now_ms()
         self._emit_cycle_metrics(
             count=count,
@@ -348,7 +354,7 @@ class DrainConsumer:
         started_at: int,
         finished_at: int,
         cycle_counts: dict[tuple[str, str, str], int],
-        sig_state: dict[tuple[str, str], tuple[int, int]],
+        sig_state: dict[tuple[str, str], tuple[int, int, str]],
         emit_signatures: bool,
     ) -> None:
         """Emit per-cycle metrics. Shared by ok/partial, failed, and early-return.
@@ -373,7 +379,7 @@ class DrainConsumer:
                     "severity": severity,
                 },
             )
-        for (model_key, template_hash), (size, first_seen) in sig_state.items():
+        for (model_key, template_hash), (size, first_seen, _tstr) in sig_state.items():
             labels = {"service_key": model_key, "template_hash": template_hash}
             mw.write_gauge(_M_SIG_TOTAL, float(size), labels)
             # first_seen is unix-ms; emit as nanoseconds (ms -> ns).
@@ -393,6 +399,21 @@ class DrainConsumer:
             self._cardinality_warned = True
         elif not over:
             self._cardinality_warned = False
+
+    async def _sync_signatures(
+        self,
+        sig_state: dict[tuple[str, str], tuple[int, int, str]],
+        cycle_counts: dict[tuple[str, str, str], int],
+        last_seen_at: int,
+    ) -> None:
+        try:
+            await self._sig_sync.sync_cycle(
+                sig_state=sig_state,
+                cycle_counts=cycle_counts,
+                last_seen_at=last_seen_at,
+            )
+        except Exception as exc:
+            self._log.warning("drain_consumer.signature_sync_failed", error=str(exc))
 
     # ---- Watermark ----
 

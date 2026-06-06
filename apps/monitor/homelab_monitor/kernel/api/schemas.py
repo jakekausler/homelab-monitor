@@ -49,6 +49,10 @@ __all__ = [
     "SavedQueryResponse",
     "SavedServiceIdentity",
     "ServiceCount",
+    "SignatureListResponse",
+    "SignaturePatchRequest",
+    "SignatureResponse",
+    "SignatureSamplesResponse",
     "VMRangeData",
     "VMRangeResult",
     "VersionResponse",
@@ -250,6 +254,55 @@ class LogsQueryResponse(BaseModel):
     lines: list[LogLine]
     next_cursor: str | None = None
     has_more: bool = False
+
+
+class SignatureResponse(BaseModel):
+    """One signature catalog row."""
+
+    model_config = ConfigDict(extra="forbid")
+    template_hash: str
+    service_key: str
+    template_str: str
+    label: str | None = None
+    status: Literal["active", "suppressed", "expected"]
+    first_seen_at: int
+    last_seen_at: int
+    total_count: int
+
+
+class SignatureListResponse(BaseModel):
+    """Response for GET /api/logs/signatures."""
+
+    model_config = ConfigDict(extra="forbid")
+    signatures: list[SignatureResponse]
+    total: int
+
+
+class SignaturePatchRequest(BaseModel):
+    """Request body for PATCH /api/logs/signatures/{template_hash}/{service_key}.
+
+    Both fields optional: a request may set label only, status only, or both.
+    `label=None` in the JSON body is INDISTINGUISHABLE from omitted with this shape;
+    use a sentinel-free contract: label is set whenever the key is present. The
+    endpoint uses `model_fields_set` to distinguish 'set label to null' from 'omit'.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    label: str | None = None
+    status: Literal["active", "suppressed", "expected"] | None = None
+
+
+class SignatureSamplesResponse(BaseModel):
+    """Response for GET /api/logs/signatures/{template_hash}/{service_key}/samples.
+
+    `lines` is the converged LogLine shape (reused from /logs/query). `reason` is
+    null on success, or one of 'template_too_generic' / 'vl_unavailable' when
+    `lines` is empty for a known best-effort reason.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    lines: list[LogLine]
+    reason: str | None = None
 
 
 class LogsStreamSummary(BaseModel):
