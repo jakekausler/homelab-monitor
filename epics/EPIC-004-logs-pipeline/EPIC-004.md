@@ -2,11 +2,11 @@
 
 ## Status: In Progress
 
-## Stages Counter: 34 / 50 Complete
+## Stages Counter: 35 / 50 Complete
 
-## Current Stage: STAGE-004-031
+## Current Stage: STAGE-004-031A
 
-## Current Phase: STAGE-004-031 Design / Not Started
+## Current Phase: STAGE-004-031A Design / Not Started
 
 ## Overview
 
@@ -131,7 +131,7 @@ Stages MUST be implemented in order. No parallelization. Each stage lands a sing
 
 | # | Stage | Theme |
 |---|---|---|
-| STAGE-004-031 | `LogWindowFetcher` shared service module | Used by crash / healthcheck / cron correlation; cached, capped, degrades gracefully on VL error. |
+| STAGE-004-031 | `LogWindowFetcher` shared service module | Used by crash / healthcheck / cron correlation; cached, capped, degrades gracefully on VL error. Design ✅ Build ✅ Refinement ✅ Finalize ✅ | Complete |
 | STAGE-004-031A | "Show surrounding logs" in the Explorer | From a log line, fetch ~100 lines before/after (scope: all services or only this service) via LogWindowFetcher; step 3 of the model→explorer→context debug flow. Depends on STAGE-031. |
 
 ### Anomaly wave — rules (S32-S39)
