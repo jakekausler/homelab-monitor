@@ -2,11 +2,11 @@
 
 ## Status: In Progress
 
-## Stages Counter: 33 / 50 Complete
+## Stages Counter: 34 / 50 Complete
 
-## Current Stage: STAGE-004-030
+## Current Stage: STAGE-004-031
 
-## Current Phase: STAGE-004-030 Design / Not Started
+## Current Phase: STAGE-004-031 Design / Not Started
 
 ## Overview
 
@@ -125,13 +125,14 @@ Stages MUST be implemented in order. No parallelization. Each stage lands a sing
 
 | # | Stage | Theme |
 |---|---|---|
-| STAGE-004-030 | Drain models dump endpoint + UI viewer | Read-only diagnostics surface; last-cycle stats panel on Signatures tab. |
+| STAGE-004-030 | Drain models dump endpoint + UI viewer | Read-only diagnostics surface; last-cycle stats panel on Signatures tab. Design ✅ Build ✅ Refinement ✅ Finalize ✅ | Complete |
 
 ### Anomaly wave — shared infrastructure (S31)
 
 | # | Stage | Theme |
 |---|---|---|
 | STAGE-004-031 | `LogWindowFetcher` shared service module | Used by crash / healthcheck / cron correlation; cached, capped, degrades gracefully on VL error. |
+| STAGE-004-031A | "Show surrounding logs" in the Explorer | From a log line, fetch ~100 lines before/after (scope: all services or only this service) via LogWindowFetcher; step 3 of the model→explorer→context debug flow. Depends on STAGE-031. |
 
 ### Anomaly wave — rules (S32-S39)
 

@@ -313,6 +313,19 @@
 - **Drain cycle sync accumulation:** After each cycle, signature rows update: `total_count` accumulates per-cycle line deltas (not drain3's cluster_size); `first_seen_at` preserved on INSERT only; `last_seen_at = max_ts_seen` (newest line timestamp in the cycle). User label/status survive the sync (UPSERT preserves non-NULL label/status columns).
 - **Database schema:** Migration 0034 present; `log_signatures` table exists with composite PK (template_hash, service_key), indexes on service_key/status/last_seen. `EXPECTED_TABLES` in conftest includes log_signatures (32 tables total).
 
+## STAGE-004-030 — Drain models debug + last-cycle persistence
+
+- GET /api/logs/signatures/models returns the model summary list (sorted by model_key); 503 when drain disabled; 401 anon.
+- GET /api/logs/signatures/models/{model_key} returns summary + templates; colon-bearing model_key (cron:<hex>) works; 404 for missing key.
+- GET /api/logs/signatures/cycle/last returns last cycle stats; PERSISTS across a monitor restart (has_run stays true from app_settings) — restart the monitor container and confirm the Signatures-tab footer panel is not blank.
+- Models page (/logs/models-debug): sidebar model list + template detail table (desktop) / dropdown + cards (mobile); client-side search + sort; stored-vs-live template count mismatch banner surfaces corrupt/empty snapshots; "Drain disabled" empty state on 503.
+- Models tab label is "Models" (NOT "Models (debug)").
+- Open-in-Explorer button on each model template builds a LogsQL query and opens the Explorer.
+- "View signature" link on a model template → signature detail (/logs/signatures/<hash>/<model_key>).
+- "Open in Models" link on a signature detail → /logs/models-debug?model=<service_key> pre-selects that model.
+- Stats clarifier caption (models-stats-caption) renders when a model is selected.
+- Last-cycle footer panel on the Signatures tab shows finished/lines_processed/new_templates/duration/status + Refresh button.
+
 ## STAGE-004-029 — Signature annotations (timestamped notes)
 
 - **Annotations section display:** Navigate to `/logs` → Signatures tab → click a signature detail route. Below the "Recent Samples" section, an "Annotations" section appears showing a chronological list (newest first, sorted by created_at DESC, id DESC) of prior notes with deletion buttons. An add-form textarea + Add button allows composing new notes.
