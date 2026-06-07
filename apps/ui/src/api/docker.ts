@@ -733,3 +733,71 @@ export function useContainerCrashDetail(
     retry: false,
   })
 }
+
+// ---------------------------------------------------------------------------
+// STAGE-004-033 — container healthcheck-incident log correlation
+// ---------------------------------------------------------------------------
+
+type ContainerHealthcheckIncidentsResponse = Schema<'ContainerHealthcheckIncidentsResponse'>
+type ContainerHealthcheckIncidentDetail = Schema<'ContainerHealthcheckIncidentDetail'>
+
+export const dockerHealthcheckQueryKeys = {
+  list: (containerName: string) =>
+    ['integrations', 'docker', 'containers', containerName, 'healthcheck-incidents'] as const,
+  detail: (containerName: string, incidentId: string) =>
+    [
+      'integrations',
+      'docker',
+      'containers',
+      containerName,
+      'healthcheck-incidents',
+      incidentId,
+    ] as const,
+}
+
+const HEALTHCHECK_STALE_TIME_MS = 30_000
+
+/**
+ * STAGE-004-033 — list detected healthcheck incidents for one container (summaries only).
+ */
+export function useContainerHealthcheckIncidents(
+  containerName: string,
+): UseQueryResult<ContainerHealthcheckIncidentsResponse, ApiError> {
+  return useQuery({
+    queryKey: dockerHealthcheckQueryKeys.list(containerName),
+    queryFn: async () => {
+      const result = await apiClient.GET(
+        '/api/integrations/docker/containers/{name}/healthcheck-incidents',
+        { params: { path: { name: containerName } } },
+      )
+      return unwrap<ContainerHealthcheckIncidentsResponse>(result)
+    },
+    enabled: containerName.length > 0,
+    staleTime: HEALTHCHECK_STALE_TIME_MS,
+    retry: false,
+  })
+}
+
+/**
+ * STAGE-004-033 — one incident's detail incl. the persisted VL log window.
+ * Pass enabled=false to defer the fetch until the row is expanded.
+ */
+export function useContainerHealthcheckIncidentDetail(
+  containerName: string,
+  incidentId: string,
+  enabled: boolean,
+): UseQueryResult<ContainerHealthcheckIncidentDetail, ApiError> {
+  return useQuery({
+    queryKey: dockerHealthcheckQueryKeys.detail(containerName, incidentId),
+    queryFn: async () => {
+      const result = await apiClient.GET(
+        '/api/integrations/docker/containers/{name}/healthcheck-incidents/{incident_id}',
+        { params: { path: { name: containerName, incident_id: incidentId } } },
+      )
+      return unwrap<ContainerHealthcheckIncidentDetail>(result)
+    },
+    enabled: enabled && containerName.length > 0 && incidentId.length > 0,
+    staleTime: HEALTHCHECK_STALE_TIME_MS,
+    retry: false,
+  })
+}

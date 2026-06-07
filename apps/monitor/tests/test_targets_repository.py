@@ -734,3 +734,203 @@ async def test_list_docker_containers_order_by_compose_file_path(
     assert rows[1].compose_file_path == "/b/docker-compose.yml"
     assert rows[2].name == "pihole"
     assert rows[2].compose_file_path is None
+
+
+# ---------------------------------------------------------------------------
+# STAGE-004-033: Healthcheck transition-detection coverage
+# ---------------------------------------------------------------------------
+
+
+async def _read_hc_cols(repo: SqliteRepository, name: str) -> tuple[str | None, str | None]:
+    """Return (healthcheck_changed_at, previous_healthcheck) for a container by name."""
+    rows = await repo.fetch_all(
+        text(
+            "SELECT d.healthcheck_changed_at AS hca, d.previous_healthcheck AS prev "
+            "FROM targets t JOIN targets_docker d ON d.target_id = t.id "
+            "WHERE t.name = :name"
+        ),
+        {"name": name},
+    )
+    r = rows[0]
+    hca: str | None = None if r.hca is None else str(r.hca)
+    prev: str | None = None if r.prev is None else str(r.prev)
+    return hca, prev
+
+
+@pytest.mark.asyncio
+async def test_healthcheck_edge_healthy_to_unhealthy_stamps(repo: SqliteRepository) -> None:
+    """healthy -> unhealthy stamps healthcheck_changed_at + previous_healthcheck='healthy'."""
+    async with repo.transaction() as conn:
+        await TargetsRepository.upsert_docker_container_conn(
+            conn,
+            container_id="c1",
+            logical_key_kind="name",
+            logical_key="svc",
+            name="svc",
+            status="running",
+            image="img",
+            restart_count=0,
+            exit_code=0,
+            healthcheck="healthy",
+            network_mode="bridge",
+            labels={},
+            now="2026-06-07T00:00:00+00:00",
+            cpu_pct=None,
+            mem_mib=None,
+        )
+    async with repo.transaction() as conn:
+        await TargetsRepository.upsert_docker_container_conn(
+            conn,
+            container_id="c1",
+            logical_key_kind="name",
+            logical_key="svc",
+            name="svc",
+            status="running",
+            image="img",
+            restart_count=0,
+            exit_code=0,
+            healthcheck="unhealthy",
+            network_mode="bridge",
+            labels={},
+            now="2026-06-07T00:01:00+00:00",
+            cpu_pct=None,
+            mem_mib=None,
+        )
+    hca, prev = await _read_hc_cols(repo, "svc")
+    assert hca == "2026-06-07T00:01:00+00:00"
+    assert prev == "healthy"
+
+
+@pytest.mark.asyncio
+async def test_healthcheck_staying_unhealthy_preserves_stamp(repo: SqliteRepository) -> None:
+    """Two consecutive unhealthy ticks keep the FIRST stamp (one episode)."""
+    async with repo.transaction() as conn:
+        await TargetsRepository.upsert_docker_container_conn(
+            conn,
+            container_id="c1",
+            logical_key_kind="name",
+            logical_key="svc",
+            name="svc",
+            status="running",
+            image="img",
+            restart_count=0,
+            exit_code=0,
+            healthcheck="healthy",
+            network_mode="bridge",
+            labels={},
+            now="2026-06-07T00:00:00+00:00",
+            cpu_pct=None,
+            mem_mib=None,
+        )
+    async with repo.transaction() as conn:
+        await TargetsRepository.upsert_docker_container_conn(
+            conn,
+            container_id="c1",
+            logical_key_kind="name",
+            logical_key="svc",
+            name="svc",
+            status="running",
+            image="img",
+            restart_count=0,
+            exit_code=0,
+            healthcheck="unhealthy",
+            network_mode="bridge",
+            labels={},
+            now="2026-06-07T00:01:00+00:00",
+            cpu_pct=None,
+            mem_mib=None,
+        )
+    async with repo.transaction() as conn:
+        await TargetsRepository.upsert_docker_container_conn(
+            conn,
+            container_id="c1",
+            logical_key_kind="name",
+            logical_key="svc",
+            name="svc",
+            status="running",
+            image="img",
+            restart_count=0,
+            exit_code=0,
+            healthcheck="unhealthy",
+            network_mode="bridge",
+            labels={},
+            now="2026-06-07T00:02:00+00:00",
+            cpu_pct=None,
+            mem_mib=None,
+        )
+    hca, prev = await _read_hc_cols(repo, "svc")
+    assert hca == "2026-06-07T00:01:00+00:00"  # first edge preserved
+    assert prev == "healthy"
+
+
+@pytest.mark.asyncio
+async def test_healthcheck_unhealthy_to_healthy_no_new_stamp(repo: SqliteRepository) -> None:
+    """unhealthy -> healthy does not stamp a new edge; prior stamp preserved."""
+    async with repo.transaction() as conn:
+        await TargetsRepository.upsert_docker_container_conn(
+            conn,
+            container_id="c1",
+            logical_key_kind="name",
+            logical_key="svc",
+            name="svc",
+            status="running",
+            image="img",
+            restart_count=0,
+            exit_code=0,
+            healthcheck="unhealthy",
+            network_mode="bridge",
+            labels={},
+            now="2026-06-07T00:00:00+00:00",
+            cpu_pct=None,
+            mem_mib=None,
+        )
+    async with repo.transaction() as conn:
+        await TargetsRepository.upsert_docker_container_conn(
+            conn,
+            container_id="c1",
+            logical_key_kind="name",
+            logical_key="svc",
+            name="svc",
+            status="running",
+            image="img",
+            restart_count=0,
+            exit_code=0,
+            healthcheck="healthy",
+            network_mode="bridge",
+            labels={},
+            now="2026-06-07T00:01:00+00:00",
+            cpu_pct=None,
+            mem_mib=None,
+        )
+    hca, prev = await _read_hc_cols(repo, "svc")
+    # First-sight unhealthy stamped at 00:00 with previous=None; healthy tick preserves it.
+    assert hca == "2026-06-07T00:00:00+00:00"
+    assert prev is None
+
+
+@pytest.mark.asyncio
+async def test_healthcheck_first_sight_unhealthy_stamps_previous_null(
+    repo: SqliteRepository,
+) -> None:
+    """A brand-new container first seen unhealthy stamps changed_at with previous=NULL."""
+    async with repo.transaction() as conn:
+        await TargetsRepository.upsert_docker_container_conn(
+            conn,
+            container_id="c1",
+            logical_key_kind="name",
+            logical_key="svc",
+            name="svc",
+            status="running",
+            image="img",
+            restart_count=0,
+            exit_code=0,
+            healthcheck="unhealthy",
+            network_mode="bridge",
+            labels={},
+            now="2026-06-07T00:00:00+00:00",
+            cpu_pct=None,
+            mem_mib=None,
+        )
+    hca, prev = await _read_hc_cols(repo, "svc")
+    assert hca == "2026-06-07T00:00:00+00:00"
+    assert prev is None

@@ -55,6 +55,9 @@ from homelab_monitor.kernel.db.repository import SqliteRepository
 from homelab_monitor.kernel.docker.compose_action_runner import ComposeActionRunner
 from homelab_monitor.kernel.docker.socket_client import DockerSocketClient
 from homelab_monitor.kernel.logs.crash_enrichments_repo import CrashEnrichmentsRepository
+from homelab_monitor.kernel.logs.healthcheck_enrichments_repo import (
+    HealthcheckEnrichmentsRepository,
+)
 from homelab_monitor.kernel.logs.models import LogLine, from_victorialogs_line
 from homelab_monitor.kernel.logs.pagination import (
     InvalidCursorError,
@@ -190,6 +193,55 @@ class ContainerCrashDetail(BaseModel):
     lines: list[LogLine]
 
 
+class ContainerHealthcheckIncidentSummary(BaseModel):
+    """One healthcheck-incident enrichment summary (no log lines)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    incident_id: str
+    previous_healthcheck: str | None
+    new_state: str
+    healthcheck_changed_at: str
+    image_name: str | None
+    compose_project: str | None
+    compose_service: str | None
+    line_count: int
+    truncated: bool
+    degraded: bool
+    created_at: str
+
+
+class ContainerHealthcheckIncidentsResponse(BaseModel):
+    """List of healthcheck-incident summaries for one container, newest first."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    container_name: str
+    incidents: list[ContainerHealthcheckIncidentSummary]
+
+
+class ContainerHealthcheckIncidentDetail(BaseModel):
+    """One healthcheck incident with its persisted VictoriaLogs window."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    incident_id: str
+    container_name: str
+    previous_healthcheck: str | None
+    new_state: str
+    healthcheck_changed_at: str
+    image_name: str | None
+    compose_project: str | None
+    compose_service: str | None
+    line_count: int
+    truncated: bool
+    degraded: bool
+    created_at: str
+    window_start: str
+    window_end: str
+    lines: list[LogLine]
+
+
 def _get_targets_repo(
     repo: Annotated[SqliteRepository, Depends(get_repo)],
 ) -> TargetsRepository:
@@ -202,6 +254,13 @@ def _get_crash_repo(
 ) -> CrashEnrichmentsRepository:
     """Construct a CrashEnrichmentsRepository from the injected SqliteRepository."""
     return CrashEnrichmentsRepository(repo)
+
+
+def _get_healthcheck_repo(
+    repo: Annotated[SqliteRepository, Depends(get_repo)],
+) -> HealthcheckEnrichmentsRepository:
+    """Construct a HealthcheckEnrichmentsRepository from the injected SqliteRepository."""
+    return HealthcheckEnrichmentsRepository(repo)
 
 
 @router.get("/containers", response_model=ContainerListResponse)
@@ -789,6 +848,114 @@ async def get_container_crash_detail(
         window_start=crash.window_start,
         window_end=crash.window_end,
         lines=crash.parse_lines(),
+    )
+
+
+@router.get(
+    "/containers/{name}/healthcheck-incidents",
+    response_model=ContainerHealthcheckIncidentsResponse,
+    responses={
+        200: {"description": "Healthcheck-incident list (possibly empty)"},
+        404: {"description": "Container not in inventory"},
+    },
+)
+async def list_container_healthcheck_incidents(
+    name: str,
+    _user: Annotated[User, Depends(require_session())],
+    targets_repo: Annotated[TargetsRepository, Depends(_get_targets_repo)],
+    hc_repo: Annotated[HealthcheckEnrichmentsRepository, Depends(_get_healthcheck_repo)],
+) -> ContainerHealthcheckIncidentsResponse:
+    """List detected healthcheck incidents for one container (summaries; no log lines).
+
+    Resolves the container's logical_key from inventory, then returns its incident
+    enrichment rows newest-first. 404 if the container is unknown.
+    """
+    rows = await targets_repo.list_docker_containers(include_hidden=False)
+    target = next((r for r in rows if r.name == name), None)
+    if target is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"container not found: {name}",
+        )
+    logical_key = target.logical_key if target.logical_key is not None else target.name
+    incidents = await hc_repo.list_for_container(logical_key)
+    return ContainerHealthcheckIncidentsResponse(
+        container_name=name,
+        incidents=[
+            ContainerHealthcheckIncidentSummary(
+                incident_id=i.incident_id,
+                previous_healthcheck=i.previous_healthcheck,
+                new_state=i.new_state,
+                healthcheck_changed_at=i.healthcheck_changed_at,
+                image_name=i.image_name,
+                compose_project=i.compose_project,
+                compose_service=i.compose_service,
+                line_count=i.line_count,
+                truncated=i.truncated,
+                degraded=i.degraded,
+                created_at=i.created_at,
+            )
+            for i in incidents
+        ],
+    )
+
+
+@router.get(
+    "/containers/{name}/healthcheck-incidents/{incident_id}",
+    response_model=ContainerHealthcheckIncidentDetail,
+    responses={
+        200: {"description": "Healthcheck-incident detail with log window"},
+        404: {"description": "Container or incident unknown / mismatched"},
+    },
+)
+async def get_container_healthcheck_incident_detail(
+    name: str,
+    incident_id: str,
+    _user: Annotated[User, Depends(require_session())],
+    targets_repo: Annotated[TargetsRepository, Depends(_get_targets_repo)],
+    hc_repo: Annotated[HealthcheckEnrichmentsRepository, Depends(_get_healthcheck_repo)],
+) -> ContainerHealthcheckIncidentDetail:
+    """Return one incident's full detail incl. the persisted VL log window.
+
+    404 if the container is unknown, the incident is missing, OR the incident belongs
+    to a different container (defends against cross-container incident_id probing).
+    """
+    rows = await targets_repo.list_docker_containers(include_hidden=False)
+    target = next((r for r in rows if r.name == name), None)
+    if target is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"container not found: {name}",
+        )
+    incident = await hc_repo.get(incident_id)
+    logical_key = target.logical_key if target.logical_key is not None else target.name
+    # Superset of the list filter (which matches strictly on logical_key): an
+    # incident belongs to this container if EITHER its stored container_name matches
+    # the path name OR its logical_key matches. The logical_key branch keeps a
+    # compose container's incidents reachable after a recreate changed its name.
+    if incident is None or (
+        incident.container_name != name and incident.logical_key != logical_key
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"incident not found: {incident_id}",
+        )
+    return ContainerHealthcheckIncidentDetail(
+        incident_id=incident.incident_id,
+        container_name=incident.container_name,
+        previous_healthcheck=incident.previous_healthcheck,
+        new_state=incident.new_state,
+        healthcheck_changed_at=incident.healthcheck_changed_at,
+        image_name=incident.image_name,
+        compose_project=incident.compose_project,
+        compose_service=incident.compose_service,
+        line_count=incident.line_count,
+        truncated=incident.truncated,
+        degraded=incident.degraded,
+        created_at=incident.created_at,
+        window_start=incident.window_start,
+        window_end=incident.window_end,
+        lines=incident.parse_lines(),
     )
 
 

@@ -53,6 +53,8 @@ class DockerContainerListRow:
     compose_file_path: str | None  # STAGE-003-005 Q2
     restart_count_24h_cached: int | None  # STAGE-003-005 Q1
     finished_at: str | None  # STAGE-004-032 — Docker State.FinishedAt
+    healthcheck_changed_at: str | None  # STAGE-004-033 — ISO UTC, edge into unhealthy
+    previous_healthcheck: str | None  # STAGE-004-033 — from-state at the edge
 
 
 class TargetsRepository:
@@ -104,7 +106,8 @@ class TargetsRepository:
         #    ux_targets_docker_logical_key keeps this O(1)).
         row = await conn.execute(
             text(
-                "SELECT t.id AS id, d.container_id AS prior_container_id "
+                "SELECT t.id AS id, d.container_id AS prior_container_id, "
+                "       d.healthcheck AS prior_healthcheck "
                 "FROM targets t "
                 "LEFT JOIN targets_docker d ON d.target_id = t.id "
                 "WHERE t.kind = 'docker_container' "
@@ -115,6 +118,7 @@ class TargetsRepository:
         existing = row.first()
         is_recreation = False
         prior_container_id: str | None = None
+        prior_healthcheck: str | None = None
         if existing is None:
             target_id = uuid7()
         else:
@@ -123,6 +127,18 @@ class TargetsRepository:
                 None if existing.prior_container_id is None else str(existing.prior_container_id)
             )
             is_recreation = prior_container_id is not None and prior_container_id != container_id
+            prior_healthcheck = (
+                None if existing.prior_healthcheck is None else str(existing.prior_healthcheck)
+            )
+
+        # Healthcheck edge = a transition INTO "unhealthy" (D-HEALTHCHECK-ENRICHMENT).
+        # Fires when prior is NOT "unhealthy" (covers healthy->unhealthy, starting->
+        # unhealthy, AND first-sight where prior is None) AND the new healthcheck is
+        # "unhealthy". On a NON-edge (staying unhealthy, or not unhealthy) the
+        # CASE-WHEN below preserves the prior stamp so we get one enrichment per
+        # EPISODE, not per tick. For a brand-new INSERT (no prior row) a first-sight
+        # "unhealthy" stamps now with previous_healthcheck=NULL.
+        is_healthcheck_edge = prior_healthcheck != "unhealthy" and healthcheck == "unhealthy"
 
         # 2. Upsert anchor row. The anchor INSERT path runs only when this is
         #    a brand-new logical service; the UPDATE path runs on every tick
@@ -166,9 +182,10 @@ class TargetsRepository:
                 "   image, network_mode, cpu_pct_cached, mem_mib_cached, "
                 "   metrics_cached_at, previous_container_id, recreated_at, "
                 "   compose_project, compose_service, compose_file_path, restart_count_24h_cached, "
-                "   finished_at) "
+                "   finished_at, healthcheck_changed_at, previous_healthcheck) "
                 "VALUES (:tid, :cid, :rc, :ec, :hc, :img, :nm, :cpu, :mem, :mca, "
-                "        :prev, :rec, :cp, :cs, :cfp, :r24h, :finished_at) "
+                "        :prev, :rec, :cp, :cs, :cfp, :r24h, :finished_at, "
+                "        :hc_changed_at, :prev_hc) "
                 "ON CONFLICT(target_id) DO UPDATE SET "
                 "  container_id = excluded.container_id, "
                 "  restart_count = excluded.restart_count, "
@@ -180,15 +197,9 @@ class TargetsRepository:
                 "    THEN targets_docker.cpu_pct_cached ELSE excluded.cpu_pct_cached END, "
                 "  mem_mib_cached = CASE WHEN excluded.mem_mib_cached IS NULL "
                 "    THEN targets_docker.mem_mib_cached ELSE excluded.mem_mib_cached END, "
-                # TODO: metrics_cached_at is ambiguous under partial-NULL caching.
-                # Consider splitting into cpu_pct_cached_at and mem_mib_cached_at.
-                # See code review I7.
                 "  metrics_cached_at = CASE WHEN excluded.cpu_pct_cached IS NULL "
                 "    AND excluded.mem_mib_cached IS NULL "
                 "    THEN targets_docker.metrics_cached_at ELSE excluded.metrics_cached_at END, "
-                # Only overwrite the recreation columns when this tick is a recreation.
-                # When it's NOT a recreation, preserve whatever was there from the
-                # MOST RECENT prior recreation. We keep one level only.
                 "  previous_container_id = CASE WHEN :is_recreation = 1 "
                 "    THEN :prev ELSE targets_docker.previous_container_id END, "
                 "  recreated_at = CASE WHEN :is_recreation = 1 "
@@ -198,7 +209,13 @@ class TargetsRepository:
                 "  compose_file_path = excluded.compose_file_path, "
                 "  restart_count_24h_cached = CASE WHEN excluded.restart_count_24h_cached IS NULL "
                 "    THEN targets_docker.restart_count_24h_cached ELSE excluded.restart_count_24h_cached END, "  # noqa: E501
-                "  finished_at = excluded.finished_at"
+                "  finished_at = excluded.finished_at, "
+                # Healthcheck edge: stamp changed_at + previous on a transition INTO
+                # unhealthy; otherwise preserve the prior stamp (one row per episode).
+                "  healthcheck_changed_at = CASE WHEN :is_healthcheck_edge = 1 "
+                "    THEN :hc_changed_at ELSE targets_docker.healthcheck_changed_at END, "
+                "  previous_healthcheck = CASE WHEN :is_healthcheck_edge = 1 "
+                "    THEN :prev_hc ELSE targets_docker.previous_healthcheck END"
             ),
             {
                 "tid": target_id,
@@ -219,6 +236,9 @@ class TargetsRepository:
                 "cfp": compose_file_path,
                 "r24h": restart_count_24h,
                 "finished_at": finished_at,
+                "is_healthcheck_edge": 1 if is_healthcheck_edge else 0,
+                "hc_changed_at": now if is_healthcheck_edge else None,
+                "prev_hc": prior_healthcheck if is_healthcheck_edge else None,
             },
         )
 
@@ -283,7 +303,9 @@ class TargetsRepository:
             "  d.compose_service AS compose_service, "
             "  d.compose_file_path AS compose_file_path, "
             "  d.restart_count_24h_cached AS restart_count_24h_cached, "
-            "  d.finished_at AS finished_at "
+            "  d.finished_at AS finished_at, "
+            "  d.healthcheck_changed_at AS healthcheck_changed_at, "
+            "  d.previous_healthcheck AS previous_healthcheck "
             "FROM targets t "
             "LEFT JOIN targets_docker d ON d.target_id = t.id "
             "WHERE t.kind = 'docker_container' "
@@ -338,6 +360,12 @@ class TargetsRepository:
                     if row.restart_count_24h_cached is None
                     else int(row.restart_count_24h_cached),
                     finished_at=None if row.finished_at is None else str(row.finished_at),
+                    healthcheck_changed_at=None
+                    if row.healthcheck_changed_at is None
+                    else str(row.healthcheck_changed_at),
+                    previous_healthcheck=None
+                    if row.previous_healthcheck is None
+                    else str(row.previous_healthcheck),
                 )
             )
         return result

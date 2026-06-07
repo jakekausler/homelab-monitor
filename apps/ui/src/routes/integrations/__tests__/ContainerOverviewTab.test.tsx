@@ -70,6 +70,22 @@ vi.mock('@/api/docker', () => ({
     list: (name: string) => ['crashes', name],
     detail: (name: string, id: string) => ['crashes', name, id],
   },
+  useContainerHealthcheckIncidents: () => ({
+    data: { container_name: 'test-container', incidents: [] },
+    isPending: false,
+    isError: false,
+    error: null,
+  }),
+  useContainerHealthcheckIncidentDetail: () => ({
+    data: undefined,
+    isPending: true,
+    isError: false,
+    error: null,
+  }),
+  dockerHealthcheckQueryKeys: {
+    list: (name: string) => ['healthcheck-incidents', name],
+    detail: (name: string, id: string) => ['healthcheck-incidents', name, id],
+  },
 }))
 
 const mockUseMetricsRange = vi.fn(() => ({

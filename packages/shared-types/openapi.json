@@ -1000,6 +1000,238 @@
         "title": "ContainerCrashesResponse",
         "type": "object"
       },
+      "ContainerHealthcheckIncidentDetail": {
+        "additionalProperties": false,
+        "description": "One healthcheck incident with its persisted VictoriaLogs window.",
+        "properties": {
+          "compose_project": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Compose Project"
+          },
+          "compose_service": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Compose Service"
+          },
+          "container_name": {
+            "title": "Container Name",
+            "type": "string"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "degraded": {
+            "title": "Degraded",
+            "type": "boolean"
+          },
+          "healthcheck_changed_at": {
+            "title": "Healthcheck Changed At",
+            "type": "string"
+          },
+          "image_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Name"
+          },
+          "incident_id": {
+            "title": "Incident Id",
+            "type": "string"
+          },
+          "line_count": {
+            "title": "Line Count",
+            "type": "integer"
+          },
+          "lines": {
+            "items": {
+              "$ref": "#/components/schemas/LogLine"
+            },
+            "title": "Lines",
+            "type": "array"
+          },
+          "new_state": {
+            "title": "New State",
+            "type": "string"
+          },
+          "previous_healthcheck": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Previous Healthcheck"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          },
+          "window_end": {
+            "title": "Window End",
+            "type": "string"
+          },
+          "window_start": {
+            "title": "Window Start",
+            "type": "string"
+          }
+        },
+        "required": [
+          "incident_id",
+          "container_name",
+          "previous_healthcheck",
+          "new_state",
+          "healthcheck_changed_at",
+          "image_name",
+          "compose_project",
+          "compose_service",
+          "line_count",
+          "truncated",
+          "degraded",
+          "created_at",
+          "window_start",
+          "window_end",
+          "lines"
+        ],
+        "title": "ContainerHealthcheckIncidentDetail",
+        "type": "object"
+      },
+      "ContainerHealthcheckIncidentSummary": {
+        "additionalProperties": false,
+        "description": "One healthcheck-incident enrichment summary (no log lines).",
+        "properties": {
+          "compose_project": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Compose Project"
+          },
+          "compose_service": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Compose Service"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "degraded": {
+            "title": "Degraded",
+            "type": "boolean"
+          },
+          "healthcheck_changed_at": {
+            "title": "Healthcheck Changed At",
+            "type": "string"
+          },
+          "image_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Name"
+          },
+          "incident_id": {
+            "title": "Incident Id",
+            "type": "string"
+          },
+          "line_count": {
+            "title": "Line Count",
+            "type": "integer"
+          },
+          "new_state": {
+            "title": "New State",
+            "type": "string"
+          },
+          "previous_healthcheck": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Previous Healthcheck"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "incident_id",
+          "previous_healthcheck",
+          "new_state",
+          "healthcheck_changed_at",
+          "image_name",
+          "compose_project",
+          "compose_service",
+          "line_count",
+          "truncated",
+          "degraded",
+          "created_at"
+        ],
+        "title": "ContainerHealthcheckIncidentSummary",
+        "type": "object"
+      },
+      "ContainerHealthcheckIncidentsResponse": {
+        "additionalProperties": false,
+        "description": "List of healthcheck-incident summaries for one container, newest first.",
+        "properties": {
+          "container_name": {
+            "title": "Container Name",
+            "type": "string"
+          },
+          "incidents": {
+            "items": {
+              "$ref": "#/components/schemas/ContainerHealthcheckIncidentSummary"
+            },
+            "title": "Incidents",
+            "type": "array"
+          }
+        },
+        "required": [
+          "container_name",
+          "incidents"
+        ],
+        "title": "ContainerHealthcheckIncidentsResponse",
+        "type": "object"
+      },
       "ContainerListResponse": {
         "properties": {
           "containers": {
@@ -6616,6 +6848,107 @@
           }
         },
         "summary": "Get Container Crash Detail",
+        "tags": [
+          "docker"
+        ]
+      }
+    },
+    "/api/integrations/docker/containers/{name}/healthcheck-incidents": {
+      "get": {
+        "description": "List detected healthcheck incidents for one container (summaries; no log lines).\n\nResolves the container's logical_key from inventory, then returns its incident\nenrichment rows newest-first. 404 if the container is unknown.",
+        "operationId": "list_container_healthcheck_incidents_api_integrations_docker_containers__name__healthcheck_incidents_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContainerHealthcheckIncidentsResponse"
+                }
+              }
+            },
+            "description": "Healthcheck-incident list (possibly empty)"
+          },
+          "404": {
+            "description": "Container not in inventory"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Container Healthcheck Incidents",
+        "tags": [
+          "docker"
+        ]
+      }
+    },
+    "/api/integrations/docker/containers/{name}/healthcheck-incidents/{incident_id}": {
+      "get": {
+        "description": "Return one incident's full detail incl. the persisted VL log window.\n\n404 if the container is unknown, the incident is missing, OR the incident belongs\nto a different container (defends against cross-container incident_id probing).",
+        "operationId": "get_container_healthcheck_incident_detail_api_integrations_docker_containers__name__healthcheck_incidents__incident_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "incident_id",
+            "required": true,
+            "schema": {
+              "title": "Incident Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContainerHealthcheckIncidentDetail"
+                }
+              }
+            },
+            "description": "Healthcheck-incident detail with log window"
+          },
+          "404": {
+            "description": "Container or incident unknown / mismatched"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Container Healthcheck Incident Detail",
         "tags": [
           "docker"
         ]

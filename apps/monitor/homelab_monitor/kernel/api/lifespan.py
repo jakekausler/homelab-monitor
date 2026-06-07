@@ -310,6 +310,27 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
         degraded.append("container_crash_reconciler")
 
     try:
+        from homelab_monitor.kernel.metrics.container_healthcheck_reconciler import (  # noqa: PLC0415
+            ContainerHealthcheckReconciler,
+        )
+
+        loader.register(
+            ContainerHealthcheckReconciler,
+            {
+                "name": "container_healthcheck_reconciler",
+                "interval_seconds": int(ContainerHealthcheckReconciler.interval.total_seconds()),
+                "timeout_seconds": int(ContainerHealthcheckReconciler.timeout.total_seconds()),
+            },
+        )
+    except Exception as exc:  # pragma: no cover -- defensive
+        log.warning(
+            "lifespan.collector_register_failed",
+            name="container_healthcheck_reconciler",
+            error=str(exc),
+        )
+        degraded.append("container_healthcheck_reconciler")
+
+    try:
         from homelab_monitor.kernel.metrics.redaction_audit import (  # noqa: PLC0415
             RedactionAuditCollector,
         )

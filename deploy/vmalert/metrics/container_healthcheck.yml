@@ -1,0 +1,28 @@
+# vmalert rules for container healthcheck-unhealthy detection (STAGE-004-033).
+# homelab_container_healthcheck_unhealthy_total is a counter emitted by
+# ContainerHealthcheckReconciler once per newly-detected unhealthy episode
+# ((logical_key, healthcheck_changed_at) pair). The enrichment row carries the
+# correlated VictoriaLogs window; this alert links back to the container overview
+# page so the operator can read it.
+#
+# Severity vocabulary locked: info / warning / error / critical (spec §8.2).
+#
+# `for: 0m` — fire as soon as the counter increments (the container is already
+# unhealthy; no point waiting). Like other rules here, this won't fire under the
+# fast `make test-fast` rig.
+
+groups:
+  - name: container_healthcheck
+    interval: 30s
+    rules:
+      - alert: ContainerUnhealthy
+        expr: increase(homelab_container_healthcheck_unhealthy_total[5m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+          source_tool: vmalert-metrics
+          category: container
+          integration: docker
+        annotations:
+          summary: "Container {{ $labels.container_name }} became unhealthy"
+          description: 'Docker container {{ $labels.container_name }} transitioned to unhealthy. Correlated healthcheck logs: /integrations/docker/containers/{{ $labels.container_name }}/overview'

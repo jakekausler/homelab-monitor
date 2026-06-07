@@ -523,6 +523,54 @@ def load_crash_log_config() -> CrashLogConfig:
     )
 
 
+@dataclass(frozen=True, slots=True)
+class HealthcheckLogConfig:
+    """Runtime tunables for ContainerHealthcheckReconciler (STAGE-004-033).
+
+    ``window_before_s`` / ``window_after_s`` bound the VictoriaLogs window centered
+    on a container's healthcheck_changed_at (the edge-into-unhealthy anchor).
+    ``line_limit`` caps lines persisted per episode. ``retention_days`` ages out
+    rows; ``max_rows_per_container`` caps rows per logical container. Only
+    ``window_before_s`` (via HOMELAB_MONITOR_HEALTHCHECK_LOG_WINDOW_S) and
+    ``retention_days`` (via HOMELAB_MONITOR_HEALTHCHECK_ENRICHMENT_RETENTION_DAYS)
+    are env-tunable; the rest are fixed constants. The 60s total window splits
+    30/30 (before is the env-configurable half; after is a fixed 30s constant).
+    """
+
+    window_before_s: int = 30
+    window_after_s: int = 30
+    line_limit: int = 100
+    retention_days: int = 7
+    max_rows_per_container: int = 50
+
+
+def load_healthcheck_log_config() -> HealthcheckLogConfig:
+    """Load ContainerHealthcheckReconciler tunables from env.
+
+    HOMELAB_MONITOR_HEALTHCHECK_LOG_WINDOW_S -> window_before_s (clamped >= 1).
+    HOMELAB_MONITOR_HEALTHCHECK_ENRICHMENT_RETENTION_DAYS -> retention_days (clamped >= 1).
+    """
+    defaults = HealthcheckLogConfig()
+    window_before_s = defaults.window_before_s
+    retention_days = defaults.retention_days
+    raw_window = os.environ.get("HOMELAB_MONITOR_HEALTHCHECK_LOG_WINDOW_S")
+    if raw_window is not None:
+        window_before_s = int(raw_window)
+    raw_retention = os.environ.get("HOMELAB_MONITOR_HEALTHCHECK_ENRICHMENT_RETENTION_DAYS")
+    if raw_retention is not None:
+        retention_days = int(raw_retention)
+    window_before_s = max(window_before_s, 1)
+    retention_days = max(retention_days, 1)
+    max_rows_per_container = max(defaults.max_rows_per_container, 1)
+    return HealthcheckLogConfig(
+        window_before_s=window_before_s,
+        window_after_s=defaults.window_after_s,
+        line_limit=defaults.line_limit,
+        retention_days=retention_days,
+        max_rows_per_container=max_rows_per_container,
+    )
+
+
 # ---------------------------------------------------------------------------
 # STAGE-004-006: log redaction patterns (logs.redact:)
 # ---------------------------------------------------------------------------
@@ -690,6 +738,7 @@ __all__ = [
     "CronRunReconcilerConfig",
     "DiskBudgetConfig",
     "DrainConfig",
+    "HealthcheckLogConfig",
     "LogStreamBudgetConfig",
     "RedactPattern",
     "TailConfig",
@@ -701,6 +750,7 @@ __all__ = [
     "load_cron_run_reconciler_config",
     "load_disk_budget_config",
     "load_drain_config",
+    "load_healthcheck_log_config",
     "load_log_stream_budget_config",
     "load_redact_patterns",
     "load_tail_config",
