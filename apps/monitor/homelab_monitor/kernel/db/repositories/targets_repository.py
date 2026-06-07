@@ -52,6 +52,7 @@ class DockerContainerListRow:
     compose_service: str | None  # STAGE-003-005 Q2
     compose_file_path: str | None  # STAGE-003-005 Q2
     restart_count_24h_cached: int | None  # STAGE-003-005 Q1
+    finished_at: str | None  # STAGE-004-032 — Docker State.FinishedAt
 
 
 class TargetsRepository:
@@ -84,6 +85,7 @@ class TargetsRepository:
         compose_service: str | None = None,
         compose_file_path: str | None = None,
         restart_count_24h: int | None = None,
+        finished_at: str | None = None,
     ) -> str:
         """Insert-or-update generic targets row + sidecar by LOGICAL KEY.
 
@@ -163,9 +165,10 @@ class TargetsRepository:
                 "  (target_id, container_id, restart_count, exit_code, healthcheck, "
                 "   image, network_mode, cpu_pct_cached, mem_mib_cached, "
                 "   metrics_cached_at, previous_container_id, recreated_at, "
-                "   compose_project, compose_service, compose_file_path, restart_count_24h_cached) "
+                "   compose_project, compose_service, compose_file_path, restart_count_24h_cached, "
+                "   finished_at) "
                 "VALUES (:tid, :cid, :rc, :ec, :hc, :img, :nm, :cpu, :mem, :mca, "
-                "        :prev, :rec, :cp, :cs, :cfp, :r24h) "
+                "        :prev, :rec, :cp, :cs, :cfp, :r24h, :finished_at) "
                 "ON CONFLICT(target_id) DO UPDATE SET "
                 "  container_id = excluded.container_id, "
                 "  restart_count = excluded.restart_count, "
@@ -194,7 +197,8 @@ class TargetsRepository:
                 "  compose_service = excluded.compose_service, "
                 "  compose_file_path = excluded.compose_file_path, "
                 "  restart_count_24h_cached = CASE WHEN excluded.restart_count_24h_cached IS NULL "
-                "    THEN targets_docker.restart_count_24h_cached ELSE excluded.restart_count_24h_cached END"  # noqa: E501
+                "    THEN targets_docker.restart_count_24h_cached ELSE excluded.restart_count_24h_cached END, "  # noqa: E501
+                "  finished_at = excluded.finished_at"
             ),
             {
                 "tid": target_id,
@@ -214,6 +218,7 @@ class TargetsRepository:
                 "cs": compose_service,
                 "cfp": compose_file_path,
                 "r24h": restart_count_24h,
+                "finished_at": finished_at,
             },
         )
 
@@ -277,7 +282,8 @@ class TargetsRepository:
             "  d.compose_project AS compose_project, "
             "  d.compose_service AS compose_service, "
             "  d.compose_file_path AS compose_file_path, "
-            "  d.restart_count_24h_cached AS restart_count_24h_cached "
+            "  d.restart_count_24h_cached AS restart_count_24h_cached, "
+            "  d.finished_at AS finished_at "
             "FROM targets t "
             "LEFT JOIN targets_docker d ON d.target_id = t.id "
             "WHERE t.kind = 'docker_container' "
@@ -331,6 +337,7 @@ class TargetsRepository:
                     restart_count_24h_cached=None
                     if row.restart_count_24h_cached is None
                     else int(row.restart_count_24h_cached),
+                    finished_at=None if row.finished_at is None else str(row.finished_at),
                 )
             )
         return result

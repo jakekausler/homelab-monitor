@@ -56,6 +56,7 @@ EXPECTED_TABLES = {
     "drain_models",
     "log_signatures",
     "log_signature_annotations",
+    "container_crash_enrichments",
 }
 
 

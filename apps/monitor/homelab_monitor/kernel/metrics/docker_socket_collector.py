@@ -116,6 +116,7 @@ class DockerContainerRecord:
     compose_project: str | None  # STAGE-003-005 Q2
     compose_service: str | None  # STAGE-003-005 Q2
     compose_file_path: str | None  # STAGE-003-005 Q2
+    finished_at: str | None  # STAGE-004-032 — State.FinishedAt (crash anchor)
 
 
 class DockerSocketCollector(BaseCollector):
@@ -196,6 +197,8 @@ class DockerSocketCollector(BaseCollector):
                 inspect.get("RestartCount") or inspect.get("State", {}).get("RestartCount", 0)
             )
             exit_code = int(inspect["State"].get("ExitCode", 0))
+            finished_at_raw = inspect["State"].get("FinishedAt")
+            finished_at = finished_at_raw if isinstance(finished_at_raw, str) else None
             healthcheck = self._normalize_healthcheck(
                 inspect["State"].get("Health", {}).get("Status"),
                 ctx.log,
@@ -223,6 +226,7 @@ class DockerSocketCollector(BaseCollector):
                     compose_project=compose_project,
                     compose_service=compose_service,
                     compose_file_path=compose_file_path,
+                    finished_at=finished_at,
                 )
             )
             seen_ids.add(entry["Id"])
@@ -270,6 +274,7 @@ class DockerSocketCollector(BaseCollector):
                     compose_service=r.compose_service,
                     compose_file_path=r.compose_file_path,
                     restart_count_24h=restart_24h_val,
+                    finished_at=r.finished_at,
                 )
                 seen_target_ids.add(target_id)
 

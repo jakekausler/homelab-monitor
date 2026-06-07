@@ -54,6 +54,22 @@ vi.mock('@/api/docker', () => ({
   dockerQueryKeys: {
     containers: ['integrations', 'docker', 'containers'],
   },
+  useContainerCrashes: () => ({
+    data: { container_name: 'test-container', crashes: [] },
+    isPending: false,
+    isError: false,
+    error: undefined,
+  }),
+  useContainerCrashDetail: () => ({
+    data: undefined,
+    isPending: true,
+    isError: false,
+    error: undefined,
+  }),
+  dockerCrashesQueryKeys: {
+    list: (name: string) => ['crashes', name],
+    detail: (name: string, id: string) => ['crashes', name, id],
+  },
 }))
 
 const mockUseMetricsRange = vi.fn(() => ({

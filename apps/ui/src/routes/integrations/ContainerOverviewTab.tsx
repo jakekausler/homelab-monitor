@@ -14,6 +14,7 @@ import { useMetricsRange } from '@/api/queries'
 import { Button } from '@/components/ui/button'
 import { ErrorDisplay } from '@/components/ErrorDisplay'
 import { PullRestartModal } from '@/components/docker/PullRestartModal'
+import { RecentCrashesSection } from '@/components/docker/RecentCrashesSection'
 import { Sparkline } from '@/components/tiles/Sparkline'
 import { formatDigest } from '@/lib/digest'
 import { formatRelative } from '@/lib/relativeTime'
@@ -411,6 +412,9 @@ function OverviewBody({ name }: OverviewBodyProps): JSX.Element {
           </div>
         </section>
       )}
+
+      {/* Block 5: Recent crashes (STAGE-004-032) */}
+      <RecentCrashesSection containerName={name} />
     </div>
   )
 }

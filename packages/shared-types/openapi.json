@@ -792,6 +792,214 @@
         "title": "ComposeActionListResponse",
         "type": "object"
       },
+      "ContainerCrashDetail": {
+        "additionalProperties": false,
+        "description": "One crash enrichment with its persisted VictoriaLogs window.",
+        "properties": {
+          "compose_project": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Compose Project"
+          },
+          "compose_service": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Compose Service"
+          },
+          "container_name": {
+            "title": "Container Name",
+            "type": "string"
+          },
+          "crash_id": {
+            "title": "Crash Id",
+            "type": "string"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "degraded": {
+            "title": "Degraded",
+            "type": "boolean"
+          },
+          "exit_code": {
+            "title": "Exit Code",
+            "type": "integer"
+          },
+          "finished_at": {
+            "title": "Finished At",
+            "type": "string"
+          },
+          "image_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Name"
+          },
+          "line_count": {
+            "title": "Line Count",
+            "type": "integer"
+          },
+          "lines": {
+            "items": {
+              "$ref": "#/components/schemas/LogLine"
+            },
+            "title": "Lines",
+            "type": "array"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          },
+          "window_end": {
+            "title": "Window End",
+            "type": "string"
+          },
+          "window_start": {
+            "title": "Window Start",
+            "type": "string"
+          }
+        },
+        "required": [
+          "crash_id",
+          "container_name",
+          "exit_code",
+          "finished_at",
+          "image_name",
+          "compose_project",
+          "compose_service",
+          "line_count",
+          "truncated",
+          "degraded",
+          "created_at",
+          "window_start",
+          "window_end",
+          "lines"
+        ],
+        "title": "ContainerCrashDetail",
+        "type": "object"
+      },
+      "ContainerCrashSummary": {
+        "additionalProperties": false,
+        "description": "One crash enrichment summary (no log lines).",
+        "properties": {
+          "compose_project": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Compose Project"
+          },
+          "compose_service": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Compose Service"
+          },
+          "crash_id": {
+            "title": "Crash Id",
+            "type": "string"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "degraded": {
+            "title": "Degraded",
+            "type": "boolean"
+          },
+          "exit_code": {
+            "title": "Exit Code",
+            "type": "integer"
+          },
+          "finished_at": {
+            "title": "Finished At",
+            "type": "string"
+          },
+          "image_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Name"
+          },
+          "line_count": {
+            "title": "Line Count",
+            "type": "integer"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "crash_id",
+          "exit_code",
+          "finished_at",
+          "image_name",
+          "compose_project",
+          "compose_service",
+          "line_count",
+          "truncated",
+          "degraded",
+          "created_at"
+        ],
+        "title": "ContainerCrashSummary",
+        "type": "object"
+      },
+      "ContainerCrashesResponse": {
+        "additionalProperties": false,
+        "description": "List of crash summaries for one container, newest crash first.",
+        "properties": {
+          "container_name": {
+            "title": "Container Name",
+            "type": "string"
+          },
+          "crashes": {
+            "items": {
+              "$ref": "#/components/schemas/ContainerCrashSummary"
+            },
+            "title": "Crashes",
+            "type": "array"
+          }
+        },
+        "required": [
+          "container_name",
+          "crashes"
+        ],
+        "title": "ContainerCrashesResponse",
+        "type": "object"
+      },
       "ContainerListResponse": {
         "properties": {
           "containers": {
@@ -6307,6 +6515,107 @@
           }
         },
         "summary": "List Containers",
+        "tags": [
+          "docker"
+        ]
+      }
+    },
+    "/api/integrations/docker/containers/{name}/crashes": {
+      "get": {
+        "description": "List detected crashes for one container (summaries; no log lines).\n\nResolves the container's logical_key from inventory, then returns its crash\nenrichment rows newest-first. 404 if the container is unknown.",
+        "operationId": "list_container_crashes_api_integrations_docker_containers__name__crashes_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContainerCrashesResponse"
+                }
+              }
+            },
+            "description": "Crash list (possibly empty)"
+          },
+          "404": {
+            "description": "Container not in inventory"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Container Crashes",
+        "tags": [
+          "docker"
+        ]
+      }
+    },
+    "/api/integrations/docker/containers/{name}/crashes/{crash_id}": {
+      "get": {
+        "description": "Return one crash's full detail incl. the persisted VL log window.\n\n404 if the container is unknown, the crash is missing, OR the crash belongs\nto a different container (defends against cross-container crash_id probing).",
+        "operationId": "get_container_crash_detail_api_integrations_docker_containers__name__crashes__crash_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "crash_id",
+            "required": true,
+            "schema": {
+              "title": "Crash Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContainerCrashDetail"
+                }
+              }
+            },
+            "description": "Crash detail with log window"
+          },
+          "404": {
+            "description": "Container or crash unknown / mismatched"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Container Crash Detail",
         "tags": [
           "docker"
         ]

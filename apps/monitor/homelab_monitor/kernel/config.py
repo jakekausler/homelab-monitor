@@ -473,6 +473,56 @@ def load_drain_config() -> DrainConfig:
     )
 
 
+@dataclass(frozen=True, slots=True)
+class CrashLogConfig:
+    """Runtime tunables for ContainerCrashReconciler (STAGE-004-032).
+
+    ``window_before_s`` / ``window_after_s`` bound the VictoriaLogs window
+    centered on a container's FinishedAt (the crash anchor). ``line_limit``
+    caps lines persisted per crash. ``retention_days`` ages out crash rows;
+    ``max_rows_per_container`` caps rows per logical container. Only
+    ``window_before_s`` (via HOMELAB_MONITOR_CRASH_LOG_WINDOW_S) and
+    ``retention_days`` (via HOMELAB_MONITOR_CRASH_ENRICHMENT_RETENTION_DAYS)
+    are env-tunable; the rest are fixed constants.
+    """
+
+    window_before_s: int = 60
+    window_after_s: int = 5
+    line_limit: int = 200
+    retention_days: int = 7
+    max_rows_per_container: int = 50
+
+
+def load_crash_log_config() -> CrashLogConfig:
+    """Load ContainerCrashReconciler tunables from env.
+
+    HOMELAB_MONITOR_CRASH_LOG_WINDOW_S -> window_before_s (clamped >= 1).
+    HOMELAB_MONITOR_CRASH_ENRICHMENT_RETENTION_DAYS -> retention_days (clamped >= 1).
+    """
+    defaults = CrashLogConfig()
+    window_before_s = defaults.window_before_s
+    retention_days = defaults.retention_days
+    raw_window = os.environ.get("HOMELAB_MONITOR_CRASH_LOG_WINDOW_S")
+    if raw_window is not None:
+        window_before_s = int(raw_window)
+    raw_retention = os.environ.get("HOMELAB_MONITOR_CRASH_ENRICHMENT_RETENTION_DAYS")
+    if raw_retention is not None:
+        retention_days = int(raw_retention)
+    window_before_s = max(window_before_s, 1)
+    retention_days = max(retention_days, 1)
+    # Defensive clamp: a 0 cap would make the prune per-key DELETE wipe every row
+    # (LIMIT 0 -> NOT IN empty set). Harmless today (fixed constant), but guards
+    # against a foot-gun if max_rows_per_container ever becomes env-tunable.
+    max_rows_per_container = max(defaults.max_rows_per_container, 1)
+    return CrashLogConfig(
+        window_before_s=window_before_s,
+        window_after_s=defaults.window_after_s,
+        line_limit=defaults.line_limit,
+        retention_days=retention_days,
+        max_rows_per_container=max_rows_per_container,
+    )
+
+
 # ---------------------------------------------------------------------------
 # STAGE-004-006: log redaction patterns (logs.redact:)
 # ---------------------------------------------------------------------------
@@ -635,6 +685,7 @@ def _validate_redact_entry(idx: int, entry_obj: object, seen: set[str]) -> Redac
 
 __all__ = [
     "DEFAULT_REDACT_PATTERNS",
+    "CrashLogConfig",
     "CronAnomalyConfig",
     "CronRunReconcilerConfig",
     "DiskBudgetConfig",
@@ -645,6 +696,7 @@ __all__ = [
     "VlDiskWarningConfig",
     "VlQueryLimits",
     "get_public_url",
+    "load_crash_log_config",
     "load_cron_anomaly_config",
     "load_cron_run_reconciler_config",
     "load_disk_budget_config",

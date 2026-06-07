@@ -1,0 +1,27 @@
+# vmalert rules for container crash detection (STAGE-004-032).
+# homelab_container_crash_total is a counter emitted by ContainerCrashReconciler
+# once per newly-detected crash ((logical_key, finished_at) pair). The
+# enrichment row carries the correlated VictoriaLogs window; this alert links
+# back to the container overview page so the operator can read it.
+#
+# Severity vocabulary locked: info / warning / error / critical (spec §8.2).
+#
+# `for: 0m` — fire as soon as a crash counter increments (a crash already
+# happened; no point waiting). Like other rules here, this won't fire under the
+# fast `make test-fast` rig.
+
+groups:
+  - name: container_crash
+    interval: 30s
+    rules:
+      - alert: ContainerCrashed
+        expr: increase(homelab_container_crash_total[5m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+          source_tool: vmalert-metrics
+          category: container
+          integration: docker
+        annotations:
+          summary: "Container {{ $labels.container_name }} crashed (exit code {{ $labels.exit_code }})"
+          description: 'Docker container {{ $labels.container_name }} exited with code {{ $labels.exit_code }}. Correlated crash logs: /integrations/docker/containers/{{ $labels.container_name }}/overview'

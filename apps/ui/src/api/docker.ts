@@ -673,3 +673,63 @@ export function useContainerLogs(
     retry: false,
   })
 }
+
+// ---------------------------------------------------------------------------
+// STAGE-004-032 — container crash log correlation
+// ---------------------------------------------------------------------------
+
+type ContainerCrashesResponse = Schema<'ContainerCrashesResponse'>
+type ContainerCrashDetail = Schema<'ContainerCrashDetail'>
+
+export const dockerCrashesQueryKeys = {
+  list: (containerName: string) =>
+    ['integrations', 'docker', 'containers', containerName, 'crashes'] as const,
+  detail: (containerName: string, crashId: string) =>
+    ['integrations', 'docker', 'containers', containerName, 'crashes', crashId] as const,
+}
+
+const CRASHES_STALE_TIME_MS = 30_000
+
+/**
+ * STAGE-004-032 — list detected crashes for one container (summaries only).
+ */
+export function useContainerCrashes(
+  containerName: string,
+): UseQueryResult<ContainerCrashesResponse, ApiError> {
+  return useQuery({
+    queryKey: dockerCrashesQueryKeys.list(containerName),
+    queryFn: async () => {
+      const result = await apiClient.GET('/api/integrations/docker/containers/{name}/crashes', {
+        params: { path: { name: containerName } },
+      })
+      return unwrap<ContainerCrashesResponse>(result)
+    },
+    enabled: containerName.length > 0,
+    staleTime: CRASHES_STALE_TIME_MS,
+    retry: false,
+  })
+}
+
+/**
+ * STAGE-004-032 — one crash's detail incl. the persisted VL log window.
+ * Pass enabled=false to defer the fetch until the row is expanded.
+ */
+export function useContainerCrashDetail(
+  containerName: string,
+  crashId: string,
+  enabled: boolean,
+): UseQueryResult<ContainerCrashDetail, ApiError> {
+  return useQuery({
+    queryKey: dockerCrashesQueryKeys.detail(containerName, crashId),
+    queryFn: async () => {
+      const result = await apiClient.GET(
+        '/api/integrations/docker/containers/{name}/crashes/{crash_id}',
+        { params: { path: { name: containerName, crash_id: crashId } } },
+      )
+      return unwrap<ContainerCrashDetail>(result)
+    },
+    enabled: enabled && containerName.length > 0 && crashId.length > 0,
+    staleTime: CRASHES_STALE_TIME_MS,
+    retry: false,
+  })
+}

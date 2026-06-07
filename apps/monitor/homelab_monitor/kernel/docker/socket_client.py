@@ -75,6 +75,9 @@ class ContainerState(TypedDict, total=False):
     Restarting: bool
     Dead: bool
     ExitCode: int
+    FinishedAt: NotRequired[
+        str
+    ]  # RFC3339 stop time; "0001-01-01T00:00:00Z" sentinel when never stopped
     RestartCount: NotRequired[int]  # may live on .RestartCount root vs .State.RestartCount
     Health: NotRequired[HealthState]
 

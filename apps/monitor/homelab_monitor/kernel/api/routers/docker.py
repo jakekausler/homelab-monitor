@@ -54,6 +54,7 @@ from homelab_monitor.kernel.db.repositories.targets_repository import TargetsRep
 from homelab_monitor.kernel.db.repository import SqliteRepository
 from homelab_monitor.kernel.docker.compose_action_runner import ComposeActionRunner
 from homelab_monitor.kernel.docker.socket_client import DockerSocketClient
+from homelab_monitor.kernel.logs.crash_enrichments_repo import CrashEnrichmentsRepository
 from homelab_monitor.kernel.logs.models import LogLine, from_victorialogs_line
 from homelab_monitor.kernel.logs.pagination import (
     InvalidCursorError,
@@ -142,11 +143,65 @@ class ContainerLogsResponse(BaseModel):
     has_more: bool = False
 
 
+class ContainerCrashSummary(BaseModel):
+    """One crash enrichment summary (no log lines)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    crash_id: str
+    exit_code: int
+    finished_at: str
+    image_name: str | None
+    compose_project: str | None
+    compose_service: str | None
+    line_count: int
+    truncated: bool
+    degraded: bool
+    created_at: str
+
+
+class ContainerCrashesResponse(BaseModel):
+    """List of crash summaries for one container, newest crash first."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    container_name: str
+    crashes: list[ContainerCrashSummary]
+
+
+class ContainerCrashDetail(BaseModel):
+    """One crash enrichment with its persisted VictoriaLogs window."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    crash_id: str
+    container_name: str
+    exit_code: int
+    finished_at: str
+    image_name: str | None
+    compose_project: str | None
+    compose_service: str | None
+    line_count: int
+    truncated: bool
+    degraded: bool
+    created_at: str
+    window_start: str
+    window_end: str
+    lines: list[LogLine]
+
+
 def _get_targets_repo(
     repo: Annotated[SqliteRepository, Depends(get_repo)],
 ) -> TargetsRepository:
     """Construct a TargetsRepository from the injected SqliteRepository."""
     return TargetsRepository(repo)
+
+
+def _get_crash_repo(
+    repo: Annotated[SqliteRepository, Depends(get_repo)],
+) -> CrashEnrichmentsRepository:
+    """Construct a CrashEnrichmentsRepository from the injected SqliteRepository."""
+    return CrashEnrichmentsRepository(repo)
 
 
 @router.get("/containers", response_model=ContainerListResponse)
@@ -628,6 +683,112 @@ async def get_container_logs(  # noqa: PLR0913 -- FastAPI route with injected de
         window_end=window_end,
         next_cursor=page.next_cursor,
         has_more=page.has_more,
+    )
+
+
+@router.get(
+    "/containers/{name}/crashes",
+    response_model=ContainerCrashesResponse,
+    responses={
+        200: {"description": "Crash list (possibly empty)"},
+        404: {"description": "Container not in inventory"},
+    },
+)
+async def list_container_crashes(
+    name: str,
+    _user: Annotated[User, Depends(require_session())],
+    targets_repo: Annotated[TargetsRepository, Depends(_get_targets_repo)],
+    crash_repo: Annotated[CrashEnrichmentsRepository, Depends(_get_crash_repo)],
+) -> ContainerCrashesResponse:
+    """List detected crashes for one container (summaries; no log lines).
+
+    Resolves the container's logical_key from inventory, then returns its crash
+    enrichment rows newest-first. 404 if the container is unknown.
+    """
+    rows = await targets_repo.list_docker_containers(include_hidden=False)
+    target = next((r for r in rows if r.name == name), None)
+    if target is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"container not found: {name}",
+        )
+    logical_key = target.logical_key if target.logical_key is not None else target.name
+    crashes = await crash_repo.list_for_container(logical_key)
+    return ContainerCrashesResponse(
+        container_name=name,
+        crashes=[
+            ContainerCrashSummary(
+                crash_id=c.crash_id,
+                exit_code=c.exit_code,
+                finished_at=c.finished_at,
+                image_name=c.image_name,
+                compose_project=c.compose_project,
+                compose_service=c.compose_service,
+                line_count=c.line_count,
+                truncated=c.truncated,
+                degraded=c.degraded,
+                created_at=c.created_at,
+            )
+            for c in crashes
+        ],
+    )
+
+
+@router.get(
+    "/containers/{name}/crashes/{crash_id}",
+    response_model=ContainerCrashDetail,
+    responses={
+        200: {"description": "Crash detail with log window"},
+        404: {"description": "Container or crash unknown / mismatched"},
+    },
+)
+async def get_container_crash_detail(
+    name: str,
+    crash_id: str,
+    _user: Annotated[User, Depends(require_session())],
+    targets_repo: Annotated[TargetsRepository, Depends(_get_targets_repo)],
+    crash_repo: Annotated[CrashEnrichmentsRepository, Depends(_get_crash_repo)],
+) -> ContainerCrashDetail:
+    """Return one crash's full detail incl. the persisted VL log window.
+
+    404 if the container is unknown, the crash is missing, OR the crash belongs
+    to a different container (defends against cross-container crash_id probing).
+    """
+    rows = await targets_repo.list_docker_containers(include_hidden=False)
+    target = next((r for r in rows if r.name == name), None)
+    if target is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"container not found: {name}",
+        )
+    crash = await crash_repo.get(crash_id)
+    logical_key = target.logical_key if target.logical_key is not None else target.name
+    # Intentionally a superset of the list filter (which matches strictly on
+    # logical_key): a crash belongs to this container if EITHER its stored
+    # container_name matches the path name OR its logical_key matches. The
+    # logical_key branch keeps a compose container's crashes reachable after a
+    # recreate changed its container_name. Reached via an id from the list, so
+    # the extra name branch is harmless and only widens legitimate matches.
+    if crash is None or (crash.container_name != name and crash.logical_key != logical_key):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"crash not found: {crash_id}",
+        )
+    return ContainerCrashDetail(
+        crash_id=crash.crash_id,
+        container_name=crash.container_name,
+        exit_code=crash.exit_code,
+        finished_at=crash.finished_at,
+        image_name=crash.image_name,
+        compose_project=crash.compose_project,
+        compose_service=crash.compose_service,
+        line_count=crash.line_count,
+        truncated=crash.truncated,
+        degraded=crash.degraded,
+        created_at=crash.created_at,
+        window_start=crash.window_start,
+        window_end=crash.window_end,
+        lines=crash.parse_lines(),
     )
 
 
