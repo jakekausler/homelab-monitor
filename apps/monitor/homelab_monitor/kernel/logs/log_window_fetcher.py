@@ -20,6 +20,7 @@ from pydantic import BaseModel
 from structlog.stdlib import BoundLogger
 
 from homelab_monitor.kernel.logs.models import LogLine, from_victorialogs_line
+from homelab_monitor.kernel.logs.pagination import _iso_to_ns  # pyright: ignore[reportPrivateUsage]
 from homelab_monitor.kernel.logs.victorialogs_client import (
     VictoriaLogsClient,
     VictoriaLogsClientError,
@@ -182,19 +183,52 @@ class LogWindowFetcher:
         queried_at = self._wall_clock()
 
         try:
+            # OVERSAMPLE: stream_query keeps the first N lines in VL's NEWEST-FIRST
+            # order. For a one-sided window the lines nearest the anchor are NOT the
+            # newest, so fetching only effective_limit+1 would miss them when the
+            # window is dense. Fetch up to _MAX_LIMIT+1 so the anchor-adjacent lines
+            # are within the fetched set WHEN the window holds <= _MAX_LIMIT+1 lines,
+            # then sort + slice the correct side. (For a one-sided window denser than
+            # _MAX_LIMIT+1, VL returns the newest cap and the AFTER-side's oldest
+            # anchor-adjacent lines may fall outside it; `truncated=True` signals this.)
+            # (No LogsQL `sort` — it OOMs; see pagination.py.)
+            fetch_cap = _MAX_LIMIT + 1
             raw: list[VlLogLine] = []
             async for vl_line in self._vl.stream_query(
                 expr=logs_ql,
                 start=window_start.isoformat(),
                 end=window_end.isoformat(),
-                limit=effective_limit + 1,
+                limit=fetch_cap,
             ):
                 raw.append(vl_line)
 
-            truncated = len(raw) > effective_limit
-            collected: list[LogLine] = [
-                from_victorialogs_line(vl_line) for vl_line in raw[:effective_limit]
-            ]
+            # Sort ascending by _time (ns). Memoize the parse per timestamp string
+            # (pagination.paginate_older precedent): same-ts lines share one parse.
+            _ns_cache: dict[str, int] = {}
+
+            def _ns(line: VlLogLine) -> int:
+                ts = line.timestamp
+                cached_ns = _ns_cache.get(ts)
+                if cached_ns is None:
+                    cached_ns = _iso_to_ns(ts)
+                    _ns_cache[ts] = cached_ns
+                return cached_ns
+
+            ordered = sorted(raw, key=_ns)
+
+            # Side-aware selection: keep the effective_limit lines NEAREST the anchor.
+            # AFTER-side  (before==0, after>0): anchor at window START → keep OLDEST
+            #   effective_limit  (the FIRST after ascending sort).
+            # BEFORE-side (after==0, before>0): anchor at window END → keep NEWEST
+            #   effective_limit  (the LAST after ascending sort).
+            # SYMMETRIC (both>0 or both==0): keep the FIRST effective_limit (legacy).
+            truncated = len(ordered) > effective_limit
+            if window_before_s > 0 and window_after_s == 0:
+                kept = ordered[-effective_limit:] if effective_limit > 0 else []
+            else:
+                kept = ordered[:effective_limit]
+
+            collected: list[LogLine] = [from_victorialogs_line(vl_line) for vl_line in kept]
 
             result = LogWindowResult(
                 lines=collected,

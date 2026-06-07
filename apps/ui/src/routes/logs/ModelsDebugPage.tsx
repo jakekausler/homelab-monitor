@@ -6,7 +6,7 @@ import { EmptyState } from '@/components/EmptyState'
 import { formatRelative } from '@/lib/relativeTime'
 import { useNavigate, useSearch } from '@tanstack/react-router'
 import { OpenInExplorerButton } from '@/components/logs/OpenInExplorerButton'
-import { msgFilterClause } from '@/lib/logsQlTranslate'
+import { templateToLogsQl } from '@/lib/logsQlTranslate'
 
 type SortKey = 'template_id' | 'size' | 'first_seen_ts'
 
@@ -243,14 +243,6 @@ export function ModelsDebugPage(): JSX.Element {
   )
 }
 
-function buildTemplateLogsQl(templateStr: string): string {
-  return templateStr
-    .split('<*>')
-    .map((seg) => msgFilterClause(seg))
-    .filter((clause): clause is string => clause !== null)
-    .join(' AND ')
-}
-
 interface TemplateActionsProps {
   templateStr: string
   templateHash: string
@@ -265,7 +257,7 @@ function TemplateActions({
   serviceKey,
   navigate,
 }: TemplateActionsProps): JSX.Element {
-  const logsQl = buildTemplateLogsQl(templateStr)
+  const logsQl = templateToLogsQl(templateStr)
   return (
     <div className="flex items-center gap-2">
       {logsQl.length > 0 && <OpenInExplorerButton logsQl={logsQl} />}

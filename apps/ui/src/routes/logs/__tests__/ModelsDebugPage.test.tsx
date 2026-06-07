@@ -26,9 +26,13 @@ vi.mock('@/components/logs/OpenInExplorerButton', () => ({
   ),
 }))
 
-vi.mock('@/lib/logsQlTranslate', () => ({
-  msgFilterClause: (seg: string) => (seg.trim().length > 0 ? `_msg:"${seg}"` : null),
-}))
+// Use the REAL templateToLogsQl (OpenInExplorerButton is mocked, so the value is
+// not asserted here; importing the real fn avoids the mock silently diverging from
+// the implementation — its behavior is unit-tested in logsQlTranslate.test.ts).
+vi.mock('@/lib/logsQlTranslate', async (importActual) => {
+  const actual = await importActual<typeof import('@/lib/logsQlTranslate')>()
+  return { ...actual }
+})
 
 import { useModelDetail, useModelsList } from '@/api/models'
 import { ModelsDebugPage } from '../ModelsDebugPage'

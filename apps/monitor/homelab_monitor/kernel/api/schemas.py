@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -32,6 +33,7 @@ __all__ = [
     "HistogramBucket",
     "IngestResponse",
     "LastCycleResponse",
+    "LogWindowResponse",
     "LogsFieldsResponse",
     "LogsHistogramResponse",
     "LogsQueryResponse",
@@ -262,6 +264,27 @@ class LogsQueryResponse(BaseModel):
     lines: list[LogLine]
     next_cursor: str | None = None
     has_more: bool = False
+
+
+class LogWindowResponse(BaseModel):
+    """Response for GET /api/logs/window (STAGE-004-031A).
+
+    The anchor-centered surrounding-logs window: N lines before + N after the
+    selected line's timestamp, merged + deduped + sorted ascending. `lines`
+    reuses the converged LogLine shape (same as /logs/query). All fields except
+    `anchor_index` are ALWAYS populated → required (non-optional FE types).
+    `anchor_index` is genuinely nullable (anchor may not be locatable).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    lines: list[LogLine]
+    truncated_before: bool
+    truncated_after: bool
+    degraded: bool
+    anchor_index: int | None
+    window_start: datetime
+    window_end: datetime
+    queried_at: datetime
 
 
 class SignatureResponse(BaseModel):

@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
 
-import { fieldFilterClause, msgFilterClause, translateSearchToLogsQl } from '../logsQlTranslate'
+import {
+  fieldFilterClause,
+  msgFilterClause,
+  templateToLogsQl,
+  translateSearchToLogsQl,
+} from '../logsQlTranslate'
 
 describe('translateSearchToLogsQl', () => {
   it('empty string → match-all', () => {
@@ -53,6 +58,33 @@ describe('msgFilterClause', () => {
 
   it('escapes embedded backslash', () => {
     expect(msgFilterClause('a\\b')).toBe('_msg:"a\\\\b"')
+  })
+})
+
+describe('templateToLogsQl', () => {
+  it('anchors on the single longest literal run (not an AND-chain of every segment)', () => {
+    // The longest segment is " occurred here always " (between the two wildcards).
+    const tpl = 'err <*> occurred here always <*> x'
+    expect(templateToLogsQl(tpl)).toBe('_msg:"occurred here always"')
+  })
+
+  it('ignores a trailing wildcard fragment with non-printable bytes (the ANSI-reset bug)', () => {
+    // Last segment carries an ANSI reset (\x1b[0m); the longest run is the ERROR
+    // text, so the dead/fragile trailing fragment is never used.
+    const tpl = '<*> <*> ERROR while updating sensor.meter_water reading <*> (<class str>)\x1b[0m'
+    expect(templateToLogsQl(tpl)).toBe('_msg:"ERROR while updating sensor.meter_water reading"')
+  })
+
+  it('escapes embedded quotes/backslashes in the chosen run', () => {
+    expect(templateToLogsQl('a <*> say "hi" now <*> b')).toBe('_msg:"say \\"hi\\" now"')
+  })
+
+  it('template with no usable literal run → match-all', () => {
+    expect(templateToLogsQl('<*> <*>')).toBe('*')
+  })
+
+  it('template without wildcards → the whole string as one phrase', () => {
+    expect(templateToLogsQl('connection timeout')).toBe('_msg:"connection timeout"')
   })
 })
 

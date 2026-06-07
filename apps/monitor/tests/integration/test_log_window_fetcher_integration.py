@@ -399,3 +399,60 @@ def test_lwf_degraded_on_unreachable_vl() -> None:
         f"Expected empty lines on degraded result, got {len(result.lines)} lines"
     )
     assert result.truncated is False
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_lwf_after_side_keeps_lines_adjacent_to_anchor() -> None:
+    """REGRESSION (empty-window bug): one-sided AFTER window with MORE than `limit`
+    lines spread across ~30 min must return the lines IMMEDIATELY after the anchor
+    (contiguous, oldest-first), not the far-future newest tail.
+    """
+    require_rig_components("victorialogs")
+
+    vl = _vl_url()
+    marker = f"lwf-after-adjacent-{uuid.uuid4().hex}"
+    anchor = datetime.now(UTC) - timedelta(minutes=35)  # leave room for +30min window
+
+    count = 60
+    limit = 20
+    # 60 lines, 30s apart → spans 30 min starting 1s after the anchor.
+    plant_log_lines(
+        host="rig-lwf-host",
+        service=_SERVICE,
+        severity="info",
+        message=f"lwf after-adjacent marker={marker}",
+        count=count,
+        base_time=anchor + timedelta(seconds=1),
+        interval_ms=30_000,  # 30s apart
+        vl_url=vl,
+    )
+    _wait_for_vl_ingest(vl, marker, count)
+
+    async def _fetch() -> Any:  # noqa: ANN401
+        async with httpx.AsyncClient() as http_client:
+            vl_client = _make_vl_client(vl, http_client)
+            fetcher = LogWindowFetcher(vl_client)
+            return await fetcher.fetch(
+                logs_ql=f'service:"{_SERVICE}" "{marker}"',
+                anchor_ts=anchor,
+                window_before_s=0,
+                window_after_s=1800,
+                limit=limit,
+            )
+
+    result = asyncio.run(_fetch())
+
+    assert result.degraded is False
+    assert result.truncated is True, "60 lines with limit=20 must truncate"
+    assert len(result.lines) == limit
+    # Lines must be ascending by timestamp (oldest-first).
+    timestamps = [ln.timestamp for ln in result.lines]
+    assert timestamps == sorted(timestamps), f"not ascending: {timestamps}"
+    # The FIRST returned line must be within ~2 min of the anchor (adjacent, not a
+    # far-future island ~30 min away). This is the assertion that FAILED pre-fix.
+    first_ns = datetime.fromisoformat(timestamps[0].replace("Z", "+00:00"))
+    delta_s = (first_ns - anchor).total_seconds()
+    assert 0 <= delta_s < 120, (  # noqa: PLR2004
+        f"First after-side line should be adjacent to anchor (<120s), got {delta_s}s"
+    )

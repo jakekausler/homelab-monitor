@@ -8,6 +8,7 @@ type LogsQueryResponse = Schema<'LogsQueryResponse'>
 type LogsServicesResponse = Schema<'LogsServicesResponse'>
 type LogsFieldsResponse = Schema<'LogsFieldsResponse'>
 type LogsHistogramResponse = Schema<'LogsHistogramResponse'>
+type LogWindowResponse = Schema<'LogWindowResponse'>
 
 /**
  * STAGE-004-012A — a selected stream picker identity. The identity is the PAIR
@@ -31,6 +32,13 @@ export const logsQueryKeys = {
     ['logs', 'fields', expr, start, end, services, sample] as const,
   histogram: (expr: string, start: string, end: string, buckets: number, services: string) =>
     ['logs', 'histogram', expr, start, end, buckets, services] as const,
+  window: (
+    anchorTs: string,
+    anchorStream: string,
+    anchorMessage: string,
+    expr: string,
+    scope: string, // '' for all, or 'source_type:service'
+  ) => ['logs', 'window', anchorTs, anchorStream, anchorMessage, expr, scope] as const,
 }
 
 /**
@@ -71,6 +79,32 @@ export function useLogsQuery(expr: string, start: string, end: string, services 
  * `start`, the oldest of that gap are skipped (converges via repeat / tail).
  */
 export async function fetchNewerLogs(
+  expr: string,
+  start: string,
+  end: string,
+  services = '',
+): Promise<LogLine[]> {
+  const result = await apiClient.GET('/api/logs/query', {
+    params: {
+      query: {
+        expr,
+        start,
+        end,
+        ...(services.length > 0 ? { services } : {}),
+      },
+    },
+  })
+  return unwrap<LogsQueryResponse>(result).lines
+}
+
+/**
+ * STAGE-004-031A (in-place surrounding mode) — "Load older" one-shot.
+ * /api/logs/query returns the LATEST N lines in [start,end] (presented
+ * oldest→newest by the backend). For load-older over [olderStart, end=earliest],
+ * this yields the N lines immediately OLDER than `end`. Caller filters the
+ * boundary line + prepends.
+ */
+export async function fetchOlderLogs(
   expr: string,
   start: string,
   end: string,
@@ -181,6 +215,64 @@ export function useLogsHistogramQuery(
       return unwrap<LogsHistogramResponse>(result)
     },
     enabled: expr.length > 0 && start.length > 0 && end.length > 0,
+    staleTime: 30_000,
+    retry: false,
+  })
+}
+
+/**
+ * STAGE-004-031A — surrounding-logs window for a selected line. Fetches N before
+ * + N after the anchor's timestamp (backend calls LogWindowFetcher twice +
+ * merges). `service`/`sourceType` empty → ALL-services scope; both present →
+ * only-this-service scope. enabled only when an anchor timestamp is provided.
+ */
+const SURROUNDING_DEFAULT_COUNT = 100
+
+export function useSurroundingLogs(args: {
+  anchorTs: string
+  anchorStream: string
+  anchorMessage: string
+  expr: string
+  service?: string
+  sourceType?: string
+  before?: number
+  after?: number
+  enabled?: boolean
+}) {
+  const {
+    anchorTs,
+    anchorStream,
+    anchorMessage,
+    expr,
+    service,
+    sourceType,
+    before = SURROUNDING_DEFAULT_COUNT,
+    after = SURROUNDING_DEFAULT_COUNT,
+    enabled = true,
+  } = args
+  const scope =
+    service !== undefined && service.length > 0 ? `${sourceType ?? 'unknown'}:${service}` : ''
+  return useQuery({
+    queryKey: logsQueryKeys.window(anchorTs, anchorStream, anchorMessage, expr, scope),
+    queryFn: async () => {
+      const result = await apiClient.GET('/api/logs/window', {
+        params: {
+          query: {
+            anchor_ts: anchorTs,
+            anchor_stream: anchorStream,
+            anchor_message: anchorMessage,
+            expr,
+            before,
+            after,
+            ...(service !== undefined && service.length > 0
+              ? { service, source_type: sourceType ?? 'unknown' }
+              : {}),
+          },
+        },
+      })
+      return unwrap<LogWindowResponse>(result)
+    },
+    enabled: enabled && anchorTs.length > 0,
     staleTime: 30_000,
     retry: false,
   })

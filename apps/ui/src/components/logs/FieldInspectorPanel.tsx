@@ -1,4 +1,5 @@
 import { Copy, Plus, X } from 'lucide-react'
+import { useState } from 'react'
 
 import { Button } from '@/components/ui/button'
 import { useCopyToClipboard } from '@/lib/useCopyToClipboard'
@@ -12,6 +13,9 @@ interface FieldInspectorPanelProps {
   onAddServiceFilter?: (service: string, sourceType: string) => void
   onAddMsgFilter?: (value: string) => void
   onAddFieldFilter?: (field: string, value: string) => void
+  /** STAGE-004-031A: enter in-place surrounding-logs mode for this line.
+   *  scopeAll=true → all-services; false → only-this-service. */
+  onShowSurrounding?: (line: LogLine, scopeAll: boolean) => void
 }
 
 /** One normalized row: the display label, the display value, and the raw
@@ -47,8 +51,16 @@ export function FieldInspectorPanel({
   onAddServiceFilter,
   onAddMsgFilter,
   onAddFieldFilter,
+  onShowSurrounding,
 }: FieldInspectorPanelProps) {
   const copy = useCopyToClipboard()
+  const hasService = line.service !== null && line.service !== ''
+  // Default scope: ALL services. The line's `service` is a derived field
+  // (promoted from `service` OR `SYSLOG_IDENTIFIER`), so a `service:"x"` filter
+  // can match nothing in VictoriaLogs and collapse the window to the anchor.
+  // All-services reliably returns the full surrounding window; the user can
+  // still narrow to this service explicitly via the toggle.
+  const [scopeAll, setScopeAll] = useState(true)
 
   const messageDetection = detectJsonMessage(line.message)
   // Suppress bag rows that duplicate the JSON message's top-level OBJECT keys.
@@ -202,6 +214,39 @@ export function FieldInspectorPanel({
           onClick={onClose}
         >
           <X className="h-4 w-4" />
+        </Button>
+      </div>
+      <div className="mb-2 flex flex-col gap-2 border-b border-border/60 pb-2">
+        <div className="flex items-center gap-1" role="group" aria-label="Surrounding logs scope">
+          <Button
+            type="button"
+            size="sm"
+            variant={scopeAll ? 'default' : 'outline'}
+            data-testid="surrounding-scope-all"
+            onClick={() => setScopeAll(true)}
+          >
+            All services
+          </Button>
+          {hasService && (
+            <Button
+              type="button"
+              size="sm"
+              variant={!scopeAll ? 'default' : 'outline'}
+              data-testid="surrounding-scope-service"
+              onClick={() => setScopeAll(false)}
+            >
+              Only {line.service}
+            </Button>
+          )}
+        </div>
+        <Button
+          type="button"
+          size="sm"
+          variant="secondary"
+          data-testid="show-surrounding-logs"
+          onClick={() => onShowSurrounding?.(line, scopeAll || !hasService)}
+        >
+          Show surrounding logs
         </Button>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto">

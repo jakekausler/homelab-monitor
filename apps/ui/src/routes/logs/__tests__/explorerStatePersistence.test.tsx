@@ -37,6 +37,17 @@ vi.mock('@/api/logs', () => ({
   useLogsQuery: vi.fn(),
   useLogsServicesQuery: vi.fn(),
   useLogsHistogramQuery: vi.fn(() => ({ data: undefined, isLoading: false, isError: false })),
+  // STAGE-004-031A: LogsExplorerBody now calls useSurroundingLogs (in-place mode)
+  // and the load-more fetchers. Provide inert mocks so the existing state-persistence
+  // tests still render the Body.
+  useSurroundingLogs: vi.fn(() => ({
+    data: undefined,
+    isLoading: false,
+    isError: false,
+    error: null,
+  })),
+  fetchNewerLogs: vi.fn(),
+  fetchOlderLogs: vi.fn(),
   identitiesToServicesCsv: (identities: Array<{ source_type: string; service: string }>) =>
     identities.map((i) => `${i.source_type}:${i.service}`).join(','),
 }))

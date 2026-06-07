@@ -12,7 +12,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { LogLineList } from '@/components/logs/LogLineList'
 import { OpenInExplorerButton } from '@/components/logs/OpenInExplorerButton'
-import { msgFilterClause } from '@/lib/logsQlTranslate'
+import { templateToLogsQl } from '@/lib/logsQlTranslate'
 import { SignatureAnnotations } from './SignatureAnnotations'
 
 export function SignatureDetailPage(): JSX.Element {
@@ -57,19 +57,12 @@ export function SignatureDetailPage(): JSX.Element {
     [templateHash, serviceKey, updateMut],
   )
 
-  // Issue 5 fix: build the SAME LogsQL conjunction the backend samples endpoint
-  // builds (apps/monitor/.../routers/logs.py _signature_samples_expr): quote
-  // EVERY non-wildcard segment as _msg:"…" (msgFilterClause uses the same escape
-  // order as backend logsql_quote_phrase) and AND them together. Passed via the
-  // logsQl prop -> Explorer advanced/LogsQL mode runs it raw.
-  const logsQl =
-    sig !== undefined
-      ? sig.template_str
-          .split('<*>')
-          .map((seg) => msgFilterClause(seg))
-          .filter((clause): clause is string => clause !== null)
-          .join(' AND ')
-      : ''
+  // Open in Explorer: anchor on the single LONGEST literal run of the template
+  // (templateToLogsQl). AND-chaining every inter-wildcard segment over-constrains
+  // the match and breaks when a trailing fragment carries non-printable bytes
+  // (e.g. an ANSI reset), collapsing to zero results. The longest run is the most
+  // distinctive identifier and reliably matches. (STAGE-004-031A Refinement.)
+  const logsQl = sig !== undefined ? templateToLogsQl(sig.template_str) : ''
 
   // NOTE: do NOT scope the Explorer deep-link by service. The catalog
   // service_key is the VL `service` field, which spans multiple source_types

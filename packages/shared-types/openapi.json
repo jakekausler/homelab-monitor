@@ -2696,6 +2696,69 @@
         "title": "LogLine",
         "type": "object"
       },
+      "LogWindowResponse": {
+        "additionalProperties": false,
+        "description": "Response for GET /api/logs/window (STAGE-004-031A).\n\nThe anchor-centered surrounding-logs window: N lines before + N after the\nselected line's timestamp, merged + deduped + sorted ascending. `lines`\nreuses the converged LogLine shape (same as /logs/query). All fields except\n`anchor_index` are ALWAYS populated \u2192 required (non-optional FE types).\n`anchor_index` is genuinely nullable (anchor may not be locatable).",
+        "properties": {
+          "anchor_index": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Anchor Index"
+          },
+          "degraded": {
+            "title": "Degraded",
+            "type": "boolean"
+          },
+          "lines": {
+            "items": {
+              "$ref": "#/components/schemas/LogLine"
+            },
+            "title": "Lines",
+            "type": "array"
+          },
+          "queried_at": {
+            "format": "date-time",
+            "title": "Queried At",
+            "type": "string"
+          },
+          "truncated_after": {
+            "title": "Truncated After",
+            "type": "boolean"
+          },
+          "truncated_before": {
+            "title": "Truncated Before",
+            "type": "boolean"
+          },
+          "window_end": {
+            "format": "date-time",
+            "title": "Window End",
+            "type": "string"
+          },
+          "window_start": {
+            "format": "date-time",
+            "title": "Window Start",
+            "type": "string"
+          }
+        },
+        "required": [
+          "lines",
+          "truncated_before",
+          "truncated_after",
+          "degraded",
+          "anchor_index",
+          "window_start",
+          "window_end",
+          "queried_at"
+        ],
+        "title": "LogWindowResponse",
+        "type": "object"
+      },
       "LoginRequest": {
         "additionalProperties": false,
         "properties": {
@@ -8381,6 +8444,156 @@
           }
         },
         "summary": "Logs Tail"
+      }
+    },
+    "/api/logs/window": {
+      "get": {
+        "description": "Anchor-centered surrounding-logs window (STAGE-004-031A).\n\nCalls LogWindowFetcher.fetch() TWICE: before-side (window_after_s=0, nearest N\nbefore) and after-side (window_before_s=0, nearest N after), then merges +\ndedupes + sorts ascending. Scope: when `service` is given, AND an identity\nclause via _compose_services_expr; otherwise base expr unchanged.\n\nDegraded (VL down) \u2192 200 with degraded=true, lines=[] (NEVER 500). Auth:\ncookie session required. CSRF NOT enforced on GET.",
+        "operationId": "logs_window_api_logs_window_get",
+        "parameters": [
+          {
+            "description": "ISO-8601 UTC anchor timestamp",
+            "in": "query",
+            "name": "anchor_ts",
+            "required": true,
+            "schema": {
+              "description": "ISO-8601 UTC anchor timestamp",
+              "title": "Anchor Ts",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Anchor line stream (exact identification)",
+            "in": "query",
+            "name": "anchor_stream",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Anchor line stream (exact identification)",
+              "title": "Anchor Stream"
+            }
+          },
+          {
+            "description": "Anchor line message (exact identification)",
+            "in": "query",
+            "name": "anchor_message",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Anchor line message (exact identification)",
+              "title": "Anchor Message"
+            }
+          },
+          {
+            "description": "Base LogsQL expression",
+            "in": "query",
+            "name": "expr",
+            "required": false,
+            "schema": {
+              "default": "*",
+              "description": "Base LogsQL expression",
+              "title": "Expr",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Scope to this service name",
+            "in": "query",
+            "name": "service",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Scope to this service name",
+              "title": "Service"
+            }
+          },
+          {
+            "description": "Scope source_type for `service`",
+            "in": "query",
+            "name": "source_type",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Scope source_type for `service`",
+              "title": "Source Type"
+            }
+          },
+          {
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Before",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "After",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogWindowResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Logs Window"
       }
     },
     "/api/metrics/range": {

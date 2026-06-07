@@ -244,6 +244,19 @@ async def wire_test_app_state(  # noqa: PLR0915
     # drain_consumer defaults to None so get_drain_consumer 503s; endpoint tests
     # that need a working consumer inject a fake onto app.state (try/finally).
     app.state.drain_consumer = None
+
+    # Construct LogWindowFetcher singleton (STAGE-004-031A).
+    from homelab_monitor.kernel.config import load_vl_query_limits  # noqa: PLC0415
+    from homelab_monitor.kernel.logs.log_window_fetcher import LogWindowFetcher  # noqa: PLC0415
+    from homelab_monitor.kernel.logs.victorialogs_client import VictoriaLogsClient  # noqa: PLC0415
+
+    _lwf_vl_client = VictoriaLogsClient(
+        vl_url=_DUMMY_VL_URL,
+        http_client=http_client,
+        limits=load_vl_query_limits(),
+    )
+    app.state.log_window_fetcher = LogWindowFetcher(_lwf_vl_client)
+
     app.state.loader = loader
     app.state.scheduler = scheduler
     app.state.failure_budget = failure_budget

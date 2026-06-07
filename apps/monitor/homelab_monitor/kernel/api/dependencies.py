@@ -34,6 +34,7 @@ if TYPE_CHECKING:
     from homelab_monitor.kernel.heartbeat.repository import HeartbeatRepo
     from homelab_monitor.kernel.logs.cycle_status import CycleStatusStore
     from homelab_monitor.kernel.logs.drain_consumer import DrainConsumer
+    from homelab_monitor.kernel.logs.log_window_fetcher import LogWindowFetcher
     from homelab_monitor.kernel.logs.tail_service import TailRegistry
     from homelab_monitor.kernel.plugins.io import (
         InMemoryLogsWriter,
@@ -333,6 +334,16 @@ def get_cycle_status_store(request: Request) -> CycleStatusStore:
         attr="cycle_status_store",
         code="cycle_status_unavailable",
         message="cycle status store is not initialized",
+    )
+
+
+def get_log_window_fetcher(request: Request) -> LogWindowFetcher:
+    """Get the LogWindowFetcher singleton from app state (STAGE-004-031A)."""
+    return _require_state(
+        request,
+        attr="log_window_fetcher",
+        code="logs_unavailable",
+        message="log window fetcher is not initialized",
     )
 
 

@@ -20,6 +20,7 @@ from homelab_monitor.kernel.api.dependencies import (
     get_drain_consumer,
     get_http_client,
     get_log_stream_state,
+    get_log_window_fetcher,
     get_metrics_writer,
     get_repo,
     get_tail_registry,
@@ -43,6 +44,7 @@ from homelab_monitor.kernel.api.schemas import (
     LogsQueryResponse,
     LogsServicesResponse,
     LogsStreamsResponse,
+    LogWindowResponse,
     ModelDetailResponse,
     ModelListResponse,
     ModelSummary,
@@ -80,6 +82,7 @@ from homelab_monitor.kernel.logs.histogram import (
     HistogramCache,
     fetch_histogram,
 )
+from homelab_monitor.kernel.logs.log_window_fetcher import LogWindowFetcher
 from homelab_monitor.kernel.logs.models import LogLine, from_victorialogs_line
 from homelab_monitor.kernel.logs.pagination import (
     InvalidCursorError,
@@ -138,6 +141,11 @@ _FIELDS_MAX_SAMPLE = 2000
 _HISTOGRAM_DEFAULT_BUCKETS = 60
 _HISTOGRAM_MIN_BUCKETS = 1
 _HISTOGRAM_MAX_BUCKETS = 500
+
+_SURROUNDING_WINDOW_S = 1800  # per-side window for /logs/window (D-B)
+_SURROUNDING_DEFAULT_COUNT = 100
+_SURROUNDING_MIN_COUNT = 1
+_SURROUNDING_MAX_COUNT = 500
 
 _EXPORT_DEFAULT_MAX = 10000
 _EXPORT_MIN_MAX = 1
@@ -286,6 +294,147 @@ async def logs_query(  # noqa: PLR0913
         lines=lines,
         next_cursor=page.next_cursor,
         has_more=page.has_more,
+    )
+
+
+def _merge_window_lines(
+    before: list[LogLine],
+    after: list[LogLine],
+) -> list[LogLine]:
+    """Merge the before-side + after-side line lists.
+
+    Dedup by (timestamp, stream, message) (D-D); a line present in both sides is
+    kept once. Sort ascending by timestamp (D-E); ISO UTC strings sort
+    lexicographically. `sorted` is stable, so equal-timestamp ties preserve
+    before-then-after insertion order.
+    """
+    seen: set[tuple[str, str, str]] = set()
+    merged: list[LogLine] = []
+    for line in (*before, *after):
+        key = (line.timestamp, line.stream, line.message)
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(line)
+    merged.sort(key=lambda ln: ln.timestamp)
+    return merged
+
+
+def _locate_anchor_index(
+    lines: list[LogLine],
+    anchor_ts_iso: str,
+    anchor_stream: str | None,
+    anchor_message: str | None,
+) -> int | None:
+    """Find the anchor's position in the merged+sorted lines (D-C).
+
+    1. Exact match on (timestamp, stream, message) when stream+message given.
+    2. Else first line with timestamp >= anchor_ts_iso (insertion point).
+    3. None when no line qualifies (empty list, or all lines precede anchor).
+    """
+    if not lines:
+        return None
+    if anchor_stream is not None and anchor_message is not None:
+        for i, line in enumerate(lines):
+            if (
+                line.timestamp == anchor_ts_iso
+                and line.stream == anchor_stream
+                and line.message == anchor_message
+            ):
+                return i
+    for i, line in enumerate(lines):
+        if line.timestamp >= anchor_ts_iso:
+            return i
+    return None
+
+
+@router.get("/logs/window", response_model=LogWindowResponse)
+async def logs_window(  # noqa: PLR0913
+    anchor_ts: str = Query(..., description="ISO-8601 UTC anchor timestamp"),
+    anchor_stream: str | None = Query(
+        None, description="Anchor line stream (exact identification)"
+    ),
+    anchor_message: str | None = Query(
+        None, description="Anchor line message (exact identification)"
+    ),
+    expr: str = Query("*", description="Base LogsQL expression"),
+    service: str | None = Query(None, description="Scope to this service name"),
+    source_type: str | None = Query(None, description="Scope source_type for `service`"),
+    before: int = Query(
+        _SURROUNDING_DEFAULT_COUNT, ge=_SURROUNDING_MIN_COUNT, le=_SURROUNDING_MAX_COUNT
+    ),
+    after: int = Query(
+        _SURROUNDING_DEFAULT_COUNT, ge=_SURROUNDING_MIN_COUNT, le=_SURROUNDING_MAX_COUNT
+    ),
+    _user: User = Depends(require_session()),  # noqa: B008
+    fetcher: LogWindowFetcher = Depends(get_log_window_fetcher),  # noqa: B008
+) -> LogWindowResponse:
+    """Anchor-centered surrounding-logs window (STAGE-004-031A).
+
+    Calls LogWindowFetcher.fetch() TWICE: before-side (window_after_s=0, nearest N
+    before) and after-side (window_before_s=0, nearest N after), then merges +
+    dedupes + sorts ascending. Scope: when `service` is given, AND an identity
+    clause via _compose_services_expr; otherwise base expr unchanged.
+
+    Degraded (VL down) → 200 with degraded=true, lines=[] (NEVER 500). Auth:
+    cookie session required. CSRF NOT enforced on GET.
+    """
+    if len(expr) > _MAX_EXPR_LEN:
+        raise HttpProblem(
+            status_code=400,
+            code="invalid_expr",
+            message="expression too long",
+        )
+
+    # Parse the anchor timestamp. Reuse the same ISO contract as the window
+    # validator: a bad timestamp is a 400 invalid_time_format.
+    try:
+        anchor_dt = datetime.fromisoformat(anchor_ts.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise HttpProblem(
+            status_code=400,
+            code="invalid_time_format",
+            message="anchor_ts is not a valid ISO-8601 timestamp",
+        ) from exc
+
+    # Scope: build the services CSV only when a service name is given.
+    if service is not None:
+        st = source_type if source_type is not None else "unknown"
+        services_csv = f"{st}:{service}"
+        effective_expr = _compose_services_expr(expr, services_csv)
+    else:
+        effective_expr = expr
+
+    before_result = await fetcher.fetch(
+        effective_expr,
+        anchor_dt,
+        window_before_s=_SURROUNDING_WINDOW_S,
+        window_after_s=0,
+        limit=before,
+    )
+    after_result = await fetcher.fetch(
+        effective_expr,
+        anchor_dt,
+        window_before_s=0,
+        window_after_s=_SURROUNDING_WINDOW_S,
+        limit=after,
+    )
+
+    merged = _merge_window_lines(before_result.lines, after_result.lines)
+
+    # Find the anchor's position in the merged+sorted lines. Use the raw
+    # anchor_ts param so exact-match comparisons match the strings from VL.
+    anchor_index = _locate_anchor_index(merged, anchor_ts, anchor_stream, anchor_message)
+
+    return LogWindowResponse(
+        lines=merged,
+        truncated_before=before_result.truncated,
+        truncated_after=after_result.truncated,
+        degraded=before_result.degraded or after_result.degraded,
+        anchor_index=anchor_index,
+        window_start=before_result.window_start,
+        window_end=after_result.window_end,
+        queried_at=after_result.queried_at,
     )
 
 

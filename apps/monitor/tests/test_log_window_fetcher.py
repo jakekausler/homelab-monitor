@@ -37,6 +37,17 @@ def _make_vl_line(n: int) -> VlLogLine:
     )
 
 
+def _line_at(second: int) -> VlLogLine:
+    """A VL line whose timestamp encodes `second` (0..3599) past 12:00:00."""
+    mm, ss = divmod(second, 60)
+    return VlLogLine(
+        timestamp=f"2026-01-01T{12 + mm // 60:02d}:{mm % 60:02d}:{ss:02d}Z",
+        message=f"sec {second}",
+        stream="journal",
+        fields={},
+    )
+
+
 class _FakeVlClient:
     """Stand-in for VictoriaLogsClient exposing only stream_query.
 
@@ -103,6 +114,10 @@ def _make_fetcher(
 #   T7 — cache MISS after TTL expiry (clock advances, re-fetch)
 #   T8 — LRU eviction (max_cache_entries=2, 3 distinct keys → first evicted)
 #   T9 — VL error → degraded result, NOT cached (second call re-attempts)
+#   T10 — one-sided AFTER window, VL returns >limit lines NEWEST-FIRST → keep
+#         the OLDEST effective_limit (nearest the anchor at window START).
+#   T11 — one-sided BEFORE window, VL returns >limit lines NEWEST-FIRST → keep
+#         the NEWEST effective_limit (nearest the anchor at window END).
 
 
 async def test_happy_path() -> None:
@@ -122,7 +137,7 @@ async def test_happy_path() -> None:
     assert result.window_end == anchor + timedelta(seconds=60)
     # stream_query called once
     assert len(fake.calls) == 1
-    assert fake.calls[0]["limit"] == 201  # noqa: PLR2004  (effective_limit + 1)
+    assert fake.calls[0]["limit"] == 1001  # noqa: PLR2004  (_MAX_LIMIT + 1, oversample)
 
 
 async def test_truncation() -> None:
@@ -140,14 +155,14 @@ async def test_truncation() -> None:
 
 
 async def test_limit_cap() -> None:
-    """T3: limit=5000 → stream_query called with limit=1001 (effective_limit+1)."""
+    """T3: limit=5000 → stream_query called with limit=1001 (_MAX_LIMIT+1)."""
     fake = _FakeVlClient([_make_vl_line(0)])
     fetcher = _make_fetcher(fake)
     anchor = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
 
     await fetcher.fetch("*", anchor, limit=5000)
 
-    assert fake.calls[0]["limit"] == 1001  # min(5000, 1000) + 1  # noqa: PLR2004
+    assert fake.calls[0]["limit"] == 1001  # noqa: PLR2004  (_MAX_LIMIT + 1, oversample; independent of caller limit)
 
 
 async def test_window_clamp() -> None:
@@ -258,6 +273,85 @@ async def test_vl_error_degrades_not_cached() -> None:
     result2 = await fetcher.fetch("*", anchor)
     assert result2.degraded is True
     assert len(fake.calls) == 2  # noqa: PLR2004
+
+
+async def test_one_sided_after_keeps_nearest_anchor() -> None:
+    """T10: AFTER-side window, VL yields lines NEWEST-FIRST. fetch() must keep the
+    OLDEST effective_limit (nearest the anchor, which sits at the window START)."""
+    limit = 3
+    # 6 lines at seconds 1..6 after the anchor. VL yields NEWEST-FIRST: 6,5,4,3,2,1.
+    newest_first = [_line_at(s) for s in (6, 5, 4, 3, 2, 1)]
+    fake = _FakeVlClient(newest_first)
+    fetcher = _make_fetcher(fake)
+    anchor = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
+
+    result = await fetcher.fetch("*", anchor, window_before_s=0, window_after_s=1800, limit=limit)
+
+    # Nearest the anchor (start) = seconds 1,2,3 (oldest), ascending.
+    assert [ln.message for ln in result.lines] == ["sec 1", "sec 2", "sec 3"]
+    assert result.truncated is True  # 6 > 3
+    # Oversampled fetch cap was used.
+    assert fake.calls[0]["limit"] == 1001  # noqa: PLR2004
+
+
+async def test_one_sided_before_keeps_nearest_anchor() -> None:
+    """T11: BEFORE-side window, VL yields lines NEWEST-FIRST. fetch() must keep the
+    NEWEST effective_limit (nearest the anchor, which sits at the window END)."""
+    limit = 3
+    # 6 lines at seconds 1..6 (i.e. anchor-6 .. anchor-1). VL yields NEWEST-FIRST.
+    newest_first = [_line_at(s) for s in (6, 5, 4, 3, 2, 1)]
+    fake = _FakeVlClient(newest_first)
+    fetcher = _make_fetcher(fake)
+    anchor = datetime(2026, 1, 1, 12, 0, 10, tzinfo=UTC)  # after all planted lines
+
+    result = await fetcher.fetch("*", anchor, window_before_s=1800, window_after_s=0, limit=limit)
+
+    # Nearest the anchor (end) = the 3 newest = seconds 4,5,6, ascending.
+    assert [ln.message for ln in result.lines] == ["sec 4", "sec 5", "sec 6"]
+    assert result.truncated is True
+
+
+async def test_duplicate_timestamps_memoize_cache() -> None:
+    """Timestamp memoization: lines with duplicate _time strings share one parse."""
+    limit = 10
+    # 4 lines: 2 with same timestamp, then 2 more with same timestamp
+    lines = [
+        VlLogLine(
+            timestamp="2026-01-01T12:00:05Z",
+            message="msg a",
+            stream="journal",
+            fields={},
+        ),
+        VlLogLine(
+            timestamp="2026-01-01T12:00:05Z",
+            message="msg b",
+            stream="journal",
+            fields={},
+        ),
+        VlLogLine(
+            timestamp="2026-01-01T12:00:10Z",
+            message="msg c",
+            stream="journal",
+            fields={},
+        ),
+        VlLogLine(
+            timestamp="2026-01-01T12:00:10Z",
+            message="msg d",
+            stream="journal",
+            fields={},
+        ),
+    ]
+    fake = _FakeVlClient(lines)
+    fetcher = _make_fetcher(fake)
+    anchor = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
+
+    result = await fetcher.fetch("*", anchor, limit=limit)
+
+    # All 4 lines returned, sorted ascending by timestamp (memoized parse reused).
+    assert len(result.lines) == 4  # noqa: PLR2004
+    # Lines with same timestamp stay in their original order (stable sort).
+    assert [ln.message for ln in result.lines] == ["msg a", "msg b", "msg c", "msg d"]
+    assert result.truncated is False
 
 
 def test_default_wall_clock_returns_aware_utc() -> None:

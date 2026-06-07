@@ -901,6 +901,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
         drain_consumer.start_task()
         app.state.drain_consumer = drain_consumer
 
+    # 7g (continued). Construct LogWindowFetcher singleton (STAGE-004-031A).
+    # This runs UNCONDITIONALLY (not gated by drain_config), reusing the shared
+    # vl_url/http_client/load_vl_query_limits already in scope.
+    from homelab_monitor.kernel.logs.log_window_fetcher import LogWindowFetcher  # noqa: PLC0415
+
+    log_window_vl_client = VictoriaLogsClient(
+        vl_url=vl_url,
+        http_client=http_client,
+        limits=load_vl_query_limits(),
+    )
+    app.state.log_window_fetcher = LogWindowFetcher(log_window_vl_client)
+
     # 7d. One-shot cron-discovery on startup. The scheduler's per-collector
     # tick loop applies an initial offset, so the first SCHEDULED cron tick
     # can be up to ~one interval (300s) away. Requesting an immediate run

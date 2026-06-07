@@ -86,7 +86,11 @@ function LogRow({
   return (
     <div
       className={cn(
-        'grid grid-cols-[auto_1fr] items-start gap-x-2',
+        // min-w-max sizes the row to its content width so the hover/selected
+        // background + ring span the FULL line, not just the viewport, when the
+        // line overflows the horizontally-scrollable container. (No-op when wrap
+        // is on — the <pre> has no horizontal overflow then.)
+        'grid min-w-max grid-cols-[auto_1fr] items-start gap-x-2',
         clickable && 'cursor-pointer rounded-sm hover:bg-accent/40',
         isSelected && 'bg-accent ring-1 ring-ring',
       )}

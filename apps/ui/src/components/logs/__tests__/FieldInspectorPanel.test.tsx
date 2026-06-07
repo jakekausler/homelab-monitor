@@ -602,4 +602,60 @@ describe('FieldInspectorPanel', () => {
       expect(screen.getByTestId('field-row-other')).toBeInTheDocument()
     })
   })
+
+  it('renders the Show surrounding logs button', () => {
+    render(<FieldInspectorPanel line={mockLine} onClose={() => {}} />)
+    expect(screen.getByTestId('show-surrounding-logs')).toBeInTheDocument()
+  })
+
+  it('hides only-this-service scope when line has no service', () => {
+    const noSvc: LogLine = { ...mockLine, service: null }
+    render(<FieldInspectorPanel line={noSvc} onClose={() => {}} />)
+    expect(screen.getByTestId('surrounding-scope-all')).toBeInTheDocument()
+    expect(screen.queryByTestId('surrounding-scope-service')).not.toBeInTheDocument()
+  })
+
+  it('defaults to all-services scope (scopeAll=true) even when the line has a service', async () => {
+    const onShowSurroundingMock = vi.fn()
+    render(
+      <FieldInspectorPanel
+        line={mockLine}
+        onClose={() => {}}
+        onShowSurrounding={onShowSurroundingMock}
+      />,
+    )
+    // mockLine HAS a service ('nginx'), but the default scope is now ALL services
+    // (the line's `service` is a derived field that may not match in VL).
+    await userEvent.click(screen.getByTestId('show-surrounding-logs'))
+    expect(onShowSurroundingMock).toHaveBeenCalledWith(mockLine, true)
+  })
+
+  it('passes scopeAll=false after explicitly selecting Only-this-service scope', async () => {
+    const onShowSurroundingMock = vi.fn()
+    render(
+      <FieldInspectorPanel
+        line={mockLine}
+        onClose={() => {}}
+        onShowSurrounding={onShowSurroundingMock}
+      />,
+    )
+    await userEvent.click(screen.getByTestId('surrounding-scope-service'))
+    await userEvent.click(screen.getByTestId('show-surrounding-logs'))
+    expect(onShowSurroundingMock).toHaveBeenCalledWith(mockLine, false)
+  })
+
+  it('passes scopeAll=true for a line with no service (only-this-service hidden)', async () => {
+    const onShowSurroundingMock = vi.fn()
+    const noSvc: LogLine = { ...mockLine, service: null }
+    render(
+      <FieldInspectorPanel
+        line={noSvc}
+        onClose={() => {}}
+        onShowSurrounding={onShowSurroundingMock}
+      />,
+    )
+    await userEvent.click(screen.getByTestId('show-surrounding-logs'))
+    // hasService false → scopeAll starts true → (true || !false) = true.
+    expect(onShowSurroundingMock).toHaveBeenCalledWith(noSvc, true)
+  })
 })

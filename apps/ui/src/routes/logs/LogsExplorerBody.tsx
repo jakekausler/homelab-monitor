@@ -4,9 +4,11 @@ import { Activity, Filter, RefreshCw, Save, Search, X } from 'lucide-react'
 import { ApiError } from '@/api/client'
 import {
   fetchNewerLogs,
+  fetchOlderLogs,
   identitiesToServicesCsv,
   useLogsQuery,
   useLogsServicesQuery,
+  useSurroundingLogs,
   type ServiceIdentity,
 } from '@/api/logs'
 import { type SavedQuery } from '@/api/savedLogQueries'
@@ -44,6 +46,16 @@ import type { LogLine, LogViewerStatus, UseLogsResult } from '@/components/logs/
 
 const EMPTY_COPY = 'No matches in the selected range. Try a wider time range or a different query.'
 const UNAVAILABLE_COPY = 'Logs backend (VictoriaLogs) is unavailable. Check service health.'
+const SURROUNDING_INCREMENTAL_WINDOW_S = 1800
+const SURROUNDING_INCREMENTAL_LIMIT = 100
+// Surrounding-logs is match-all: it shows the full context around the anchor and
+// deliberately ignores the Explorer's active query filter (see useSurroundingLogs).
+const SURROUNDING_EXPR = '*'
+
+// Composite identity key for a log line, matching the windowed buffer's dedupe key.
+// Used to locate the surrounding-logs anchor within windowed.state.lines.
+const surrLineKey = (l: LogLine): string =>
+  `${l.timestamp}|${l.message}|${l.severity ?? ''}|${l.host ?? ''}|${l.service ?? ''}`
 
 interface LogsExplorerBodyProps {
   /** Advanced (raw LogsQL) mode vs plain-text mode. */
@@ -147,6 +159,29 @@ export function LogsExplorerBody({
   // Clearing this closes the panel AND removes the row highlight atomically.
   const [selection, setSelection] = useState<{ key: string; line: LogLine } | null>(null)
 
+  // STAGE-004-031A in-place surrounding-logs mode. null = normal mode;
+  // non-null = anchored on that line. scopeAll captured at enter time.
+  const [surroundingAnchor, setSurroundingAnchor] = useState<{
+    line: LogLine
+    scopeAll: boolean
+  } | null>(null)
+  const inSurroundingMode = surroundingAnchor !== null
+  // Incremental load state for surrounding mode.
+  const [surrIsLoadingOlder, setSurrIsLoadingOlder] = useState(false)
+  const [surrIsLoadingNewer, setSurrIsLoadingNewer] = useState(false)
+  const [surrHasOlder, setSurrHasOlder] = useState(true)
+  const [surrHasNewer, setSurrHasNewer] = useState(true)
+  const [surrError, setSurrError] = useState<string | null>(null)
+  // Saved normal-mode scroll so we can restore on exit.
+  const savedNormalScrollRef = useRef<number | null>(null)
+  // Identity (composite key) of the anchor line AS IT EXISTS in the surrounding
+  // window, seeded from the backend's authoritative anchor_index. Used to re-locate
+  // the anchor's index after load-older/newer shift positions. The anchor line
+  // captured from the normal Explorer query has query-dependent timestamp/stream
+  // that may diverge from the window query's copy — so we trust the backend index.
+  // State (not a ref) so the highlight memo can read it during render.
+  const [surrAnchorKey, setSurrAnchorKey] = useState<string | null>(null)
+
   // STAGE-004-024: live tail state + refs
   const [isTailing, setIsTailing] = useState(false)
   const [sticky, setSticky] = useState(true)
@@ -156,6 +191,10 @@ export function LogsExplorerBody({
   // Latest-value refs read inside the scroll listener (which captures stale state).
   const isTailingRef = useRef(false)
   const stickyRef = useRef(true)
+  const inSurroundingModeRef = useRef(false)
+  useEffect(() => {
+    inSurroundingModeRef.current = inSurroundingMode
+  }, [inSurroundingMode])
   // Windowed buffer + page/query-key diff tracking
   const windowed = useWindowedLogs()
   const prevPagesLenRef = useRef(0)
@@ -199,6 +238,48 @@ export function LogsExplorerBody({
   // always true for this consumer by design.
   const servicesCsv = identitiesToServicesCsv(selectedIdentities)
   const logs = useLogsQuery(expr, startIso, endIso, servicesCsv)
+
+  // Only-this-service scope ANDs `service:"x" AND source_type:"y"` onto the
+  // backend query. Each clause must match a RAW VictoriaLogs field or it
+  // collapses the window to the anchor:
+  //  - `line.service` is a DERIVED field (promoted from `fields.service` OR
+  //    `fields.SYSLOG_IDENTIFIER`), so only scope on it when `fields.service`
+  //    actually exists — otherwise `service:"x"` matches nothing.
+  //  - a bogus `source_type:"unknown"` matches nothing too.
+  // When either would be a dead clause, fall back to all-services scope.
+  const surrSourceTypeRaw =
+    surroundingAnchor !== null &&
+    typeof surroundingAnchor.line.fields['source_type'] === 'string' &&
+    surroundingAnchor.line.fields['source_type'].length > 0
+      ? surroundingAnchor.line.fields['source_type']
+      : undefined
+  const surrHasRawService =
+    surroundingAnchor !== null &&
+    typeof surroundingAnchor.line.fields['service'] === 'string' &&
+    surroundingAnchor.line.fields['service'].length > 0
+  const surrService =
+    surroundingAnchor !== null &&
+    !surroundingAnchor.scopeAll &&
+    surrSourceTypeRaw !== undefined &&
+    surrHasRawService
+      ? (surroundingAnchor.line.service ?? undefined)
+      : undefined
+  const surrSourceType = surrSourceTypeRaw ?? 'unknown'
+  // Surrounding-logs shows the FULL context around the anchor line — it must NOT
+  // inherit the Explorer's active query filter (`expr`). Opening the Explorer from
+  // a model/elsewhere leaves a narrow `expr` active; ANDing it onto the window
+  // collapses the result to (near) just the anchor. Use match-all; the
+  // service-scope toggle still narrows by service when chosen.
+  const surrounding = useSurroundingLogs({
+    anchorTs: surroundingAnchor?.line.timestamp ?? '',
+    anchorStream: surroundingAnchor?.line.stream ?? '',
+    anchorMessage: surroundingAnchor?.line.message ?? '',
+    expr: SURROUNDING_EXPR,
+    ...(surrService !== undefined ? { service: surrService, sourceType: surrSourceType } : {}),
+    before: SURROUNDING_INCREMENTAL_LIMIT,
+    after: SURROUNDING_INCREMENTAL_LIMIT,
+    enabled: inSurroundingMode,
+  })
 
   const handleTailLines = useCallback(
     (batch: typeof windowed.state.lines) => {
@@ -270,6 +351,7 @@ export function LogsExplorerBody({
   const handleScroll = (): void => {
     const el = getScrollContainer()
     if (el === null) return
+    if (inSurroundingModeRef.current) return // STAGE-004-031A: don't save in mode
     // While tailing: track sticky (near-bottom) and SKIP the historical scroll-save.
     if (isTailingRef.current) {
       const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 100
@@ -332,6 +414,7 @@ export function LogsExplorerBody({
   useLayoutEffect(() => {
     const el = getScrollContainer()
     if (
+      !inSurroundingMode &&
       !isTailing &&
       pendingRestoreRef.current &&
       restoreScrollTarget != null &&
@@ -342,7 +425,7 @@ export function LogsExplorerBody({
       if (typeof el.scrollTo === 'function') el.scrollTo({ top: restoreScrollTarget })
       pendingRestoreRef.current = false
     }
-  }, [windowed.state.lines.length, restoreScrollTarget, isTailing])
+  }, [windowed.state.lines.length, restoreScrollTarget, isTailing, inSurroundingMode])
 
   useEffect(() => {
     if (isTailing) pendingRestoreRef.current = false
@@ -351,6 +434,7 @@ export function LogsExplorerBody({
   // STAGE-004-024: historical query → buffer effect (NEW)
   const { reset: resetWindowed, prependOlder } = windowed
   useEffect(() => {
+    if (inSurroundingMode) return // STAGE-004-031A: normal seeding paused in mode
     if (frozen) {
       // If the key matches the seeded pinned key (the range settling after Stop),
       // leave frozen. If a genuine user query action changed the key, un-freeze.
@@ -381,6 +465,7 @@ export function LogsExplorerBody({
       prevPagesLenRef.current = pages.length
     }
   }, [
+    inSurroundingMode,
     frozen,
     expr,
     startIso,
@@ -392,6 +477,39 @@ export function LogsExplorerBody({
     prependOlder,
     setLoadNewerError,
   ])
+
+  // STAGE-004-031A: seed/reset the windowed buffer when the surrounding window
+  // data arrives (on enter or re-anchor). Keyed on anchor identity + data ref.
+  const prevSurrSeedKeyRef = useRef<string>('')
+  useEffect(() => {
+    const anchorState = surroundingAnchor
+    if (anchorState === null) {
+      if (prevSurrSeedKeyRef.current !== '') prevSurrSeedKeyRef.current = ''
+      return
+    }
+    const data = surrounding.data
+    if (data === undefined) return
+    const anchor = anchorState.line
+    const seedKey = `${anchor.timestamp}|${anchor.stream}|${anchor.message}|${String(
+      anchorState.scopeAll,
+    )}`
+    if (seedKey === prevSurrSeedKeyRef.current) return
+    prevSurrSeedKeyRef.current = seedKey
+    resetWindowed(data.lines)
+    // Capture the anchor's identity from the backend-authoritative anchor_index
+    // (data.lines order == windowed order right after reset). Re-finding by this
+    // line's own composite key keeps the highlight correct across load-older/newer
+    // and survives query-dependent timestamp/stream divergence between the normal
+    // Explorer line and the window query's copy.
+    const ai = data.anchor_index
+    const anchorLine = ai !== null && ai >= 0 && ai < data.lines.length ? data.lines[ai] : undefined
+    setSurrAnchorKey(anchorLine !== undefined ? surrLineKey(anchorLine) : null)
+    setSurrError(null)
+    setSurrIsLoadingOlder(false)
+    setSurrIsLoadingNewer(false)
+    setSurrHasOlder(true)
+    setSurrHasNewer(true)
+  }, [surroundingAnchor, surrounding.data, resetWindowed])
 
   // STAGE-004-024: sticky auto-scroll while tailing. Keyed on the live line count
   // so each new batch scrolls to bottom when sticky. The `!isTailing` gate on the
@@ -652,7 +770,180 @@ export function LogsExplorerBody({
       })
   }, [isTailing, isLoadingNewer, startIso, endIso, expr, servicesCsv, appendNewer])
 
+  // STAGE-004-031A: anchor selectedKey tracking (recompute as window grows).
+  // Locate the anchor by the identity seeded from the backend's anchor_index
+  // (surrLineKey is the SAME composite key the windowed buffer dedupes on, so it
+  // is internally consistent across reset/prependOlder/appendNewer). Fall back to
+  // the original (timestamp,stream,message) triple only if the seeded key is absent.
+  // Build the row key from the WINDOWED line's OWN timestamp — LogLineList keys rows
+  // as `${line.timestamp}-${i}`, so the anchor's (possibly divergent) timestamp would
+  // not match even at a correct index.
+  const surroundingSelectedKey = useMemo(() => {
+    if (surroundingAnchor === null) return null
+    const lines = windowed.state.lines
+    const anchorKey = surrAnchorKey
+    let idx = anchorKey !== null ? lines.findIndex((l) => surrLineKey(l) === anchorKey) : -1
+    if (idx === -1) {
+      const a = surroundingAnchor.line
+      idx = lines.findIndex(
+        (l) => l.timestamp === a.timestamp && l.stream === a.stream && l.message === a.message,
+      )
+    }
+    if (idx === -1) return null
+    const row = lines[idx]
+    if (row === undefined) return null
+    return `${row.timestamp}-${String(idx)}`
+  }, [surroundingAnchor, windowed.state.lines, surrAnchorKey])
+
+  // Scope CSV for surrounding incremental fetches (only-this-service vs all).
+  const surrServicesCsv =
+    surroundingAnchor !== null && !surroundingAnchor.scopeAll && surrService !== undefined
+      ? `${surrSourceType}:${surrService}`
+      : ''
+
+  const handleSurrLoadOlder = useCallback(() => {
+    if (surrIsLoadingOlder) return
+    const lines = linesRef.current
+    const earliest = lines.length > 0 ? lines[0] : undefined
+    if (earliest === undefined) return
+    const endIso2 = earliest.timestamp
+    const startDate = new Date(parseIso(endIso2)?.getTime() ?? Date.now())
+    startDate.setSeconds(startDate.getSeconds() - SURROUNDING_INCREMENTAL_WINDOW_S)
+    const startIso2 = toIsoZ(startDate)
+    setSurrIsLoadingOlder(true)
+    setSurrError(null)
+    // Match-all (SURROUNDING_EXPR): incremental context must not inherit the
+    // Explorer's active filter, mirroring the initial window fetch.
+    void fetchOlderLogs(SURROUNDING_EXPR, startIso2, endIso2, surrServicesCsv)
+      .then((batch) => {
+        // Drop the boundary line (== earliest) so prepend has no duplicate.
+        const earliestKey = surrLineKey(earliest)
+        const filtered = batch.filter((l) => surrLineKey(l) !== earliestKey)
+        if (filtered.length === 0) setSurrHasOlder(false)
+        prependOlder(filtered)
+      })
+      .catch((err: unknown) => {
+        setSurrError(err instanceof Error ? err.message : 'Failed to load older lines')
+      })
+      .finally(() => setSurrIsLoadingOlder(false))
+  }, [surrIsLoadingOlder, surrServicesCsv, prependOlder])
+
+  const handleSurrLoadNewer = useCallback(() => {
+    if (surrIsLoadingNewer) return
+    const lines = linesRef.current
+    const latest = lines.length > 0 ? lines[lines.length - 1] : undefined
+    if (latest === undefined) return
+    const startIso2 = latest.timestamp
+    const endDate = new Date(parseIso(startIso2)?.getTime() ?? Date.now())
+    endDate.setSeconds(endDate.getSeconds() + SURROUNDING_INCREMENTAL_WINDOW_S)
+    const now = new Date()
+    if (endDate.getTime() > now.getTime()) endDate.setTime(now.getTime())
+    const endIso2 = toIsoZ(endDate)
+    setSurrIsLoadingNewer(true)
+    setSurrError(null)
+    // Match-all (SURROUNDING_EXPR): see handleSurrLoadOlder.
+    void fetchNewerLogs(SURROUNDING_EXPR, startIso2, endIso2, surrServicesCsv)
+      .then((batch) => {
+        // appendNewer dedupes against the tail window (drops the boundary line).
+        if (batch.length === 0) setSurrHasNewer(false)
+        appendNewer(batch)
+      })
+      .catch((err: unknown) => {
+        setSurrError(err instanceof Error ? err.message : 'Failed to load newer lines')
+      })
+      .finally(() => setSurrIsLoadingNewer(false))
+  }, [surrIsLoadingNewer, surrServicesCsv, appendNewer])
+
+  // STAGE-004-031A: enter / exit / re-anchor handlers
+  const handleShowSurrounding = useCallback(
+    (line: LogLine, scopeAll: boolean) => {
+      // Save normal-mode scroll before entering (only on first enter, not re-anchor).
+      if (surroundingAnchor === null) {
+        const el = getScrollContainer()
+        savedNormalScrollRef.current = el !== null ? el.scrollTop : null
+      }
+      if (isTailing) setIsTailing(false)
+      setSurroundingAnchor({ line, scopeAll })
+      // Keep the inspector open on the (possibly new) anchor line is OPTIONAL.
+      // For v1, CLOSE the inspector on enter so the surrounding lines are unobstructed.
+      setSelection(null)
+    },
+    [isTailing],
+  )
+
+  const handleExitSurrounding = useCallback(() => {
+    setSurroundingAnchor(null)
+    setSelection(null)
+    setSurrError(null)
+    // Force the normal windowed-seeding effect to re-seed cleanly (avoid stale
+    // surrounding lines leaking into normal mode).
+    prevQueryKeyRef.current = ''
+    resetWindowed(flatLines)
+    // Restore normal-mode scroll after the normal lines render.
+    const target = savedNormalScrollRef.current
+    if (target != null) {
+      requestAnimationFrame(() => {
+        const el = getScrollContainer()
+        if (el !== null && typeof el.scrollTo === 'function') el.scrollTo({ top: target })
+      })
+    }
+  }, [resetWindowed, flatLines])
+
+  // STAGE-004-031A: scroll-to-anchor on enter (center)
+  const prevScrolledSeedRef = useRef<string>('')
+  useLayoutEffect(() => {
+    if (surroundingSelectedKey === null) return
+    // Only scroll once per seed (not on every accumulate).
+    if (prevScrolledSeedRef.current === prevSurrSeedKeyRef.current) return
+    if (prevSurrSeedKeyRef.current === '') return
+    const el = getScrollContainer()
+    const row = el?.querySelector('[data-testid="log-row-selected"]')
+    if (row !== null && row !== undefined && 'scrollIntoView' in row) {
+      ;(row as HTMLElement).scrollIntoView({ block: 'center' })
+      prevScrolledSeedRef.current = prevSurrSeedKeyRef.current
+    }
+  }, [surroundingSelectedKey, windowed.state.lines.length])
+
   const useLogs = (): UseLogsResult => {
+    if (inSurroundingMode) {
+      const surrUnavailable =
+        (surrounding.error instanceof ApiError && surrounding.error.status === 502) ||
+        surrounding.data?.degraded === true
+      if (surrUnavailable) {
+        return {
+          lines: undefined,
+          isLoading: false,
+          isError: true,
+          error: surrounding.error instanceof ApiError ? surrounding.error : undefined,
+          logStatus: 'unavailable',
+        }
+      }
+      const lines = windowed.state.lines
+      const status: LogViewerStatus | undefined =
+        surrounding.data === undefined && lines.length === 0
+          ? undefined
+          : lines.length === 0
+            ? 'no_lines'
+            : 'available'
+      return {
+        lines,
+        isLoading: surrounding.isLoading && lines.length === 0,
+        isError: false,
+        error: undefined,
+        logStatus: status,
+        truncated:
+          (surrounding.data?.truncated_before ?? false) ||
+          (surrounding.data?.truncated_after ?? false),
+        hasMore: surrHasOlder,
+        isLoadingOlder: surrIsLoadingOlder,
+        loadOlder: handleSurrLoadOlder,
+        trimmedOlder: windowed.state.trimmedOlder,
+        trimmedNewer: windowed.state.trimmedNewer,
+        hasNewer: surrHasNewer,
+        isLoadingNewer: surrIsLoadingNewer,
+        loadNewer: handleSurrLoadNewer,
+      }
+    }
     if (isUnavailable) {
       return {
         lines: undefined,
@@ -714,7 +1005,38 @@ export function LogsExplorerBody({
         onAddServiceFilter={handleAddServiceFilter}
         onAddMsgFilter={handleAddMsgFilter}
         onAddFieldFilter={handleAddFieldFilter}
+        onShowSurrounding={handleShowSurrounding}
       />
+    ) : null
+
+  const surroundingHeader =
+    surroundingAnchor !== null ? (
+      <div className="flex flex-wrap items-center gap-2" data-testid="surrounding-mode-bar">
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          data-testid="surrounding-exit"
+          onClick={handleExitSurrounding}
+        >
+          <X className="mr-1 size-4" /> Exit surrounding logs
+        </Button>
+        <span
+          className="truncate text-sm text-muted-foreground"
+          data-testid="surrounding-indicator"
+        >
+          Surrounding logs for{' '}
+          <span className="font-mono">
+            {surroundingAnchor.line.service ?? surroundingAnchor.line.stream}
+          </span>
+          : {surroundingAnchor.line.message}
+        </span>
+        {surrError !== null && (
+          <p role="alert" className="text-sm text-red-600" data-testid="surrounding-error">
+            {surrError}
+          </p>
+        )}
+      </div>
     ) : null
 
   const sidebar = (
@@ -802,26 +1124,28 @@ export function LogsExplorerBody({
       )}
 
       <div className="relative flex h-full min-h-0 min-w-0 flex-1 flex-col">
-        <div className="shrink-0 border-b border-border pb-1">
-          <HistogramChart
-            expr={expr}
-            start={startIso}
-            end={endIso}
-            services={servicesCsv}
-            onNarrowRange={onNarrowRange}
-          />
-        </div>
+        {!inSurroundingMode && (
+          <div className="shrink-0 border-b border-border pb-1">
+            <HistogramChart
+              expr={expr}
+              start={startIso}
+              end={endIso}
+              services={servicesCsv}
+              onNarrowRange={onNarrowRange}
+            />
+          </div>
+        )}
 
         <LogViewer
           useLogs={useLogs}
-          headerSlot={header}
+          headerSlot={inSurroundingMode ? surroundingHeader : header}
           emptyStateCopy={EMPTY_COPY}
           unavailableCopy={UNAVAILABLE_COPY}
           wrap={wrap}
           timezone={timezone}
           fieldInspectorEnabled
           fillHeight
-          selectedKey={selection?.key ?? null}
+          selectedKey={inSurroundingMode ? surroundingSelectedKey : (selection?.key ?? null)}
           onLineSelected={(line, key) => {
             setSelection(line !== null && key !== null ? { key, line } : null)
           }}
