@@ -373,3 +373,12 @@
 - vmalert rule ContainerUnhealthy (deploy/vmalert/metrics/container_healthcheck.yml) loads + fires on increase(homelab_container_healthcheck_unhealthy_total[5m]) > 0 with labels severity/source_tool:vmalert-metrics/category:container.
 - UI: ContainerOverviewTab "Recent healthcheck incidents" section lists incidents (transition string previous→unhealthy) and expands to the captured log window via the unified <LogViewer> with timestamps; on mobile the log lines WRAP. Confirm migration 0037 round-trips cleanly (downgrade rebuilds targets_docker dropping healthcheck_changed_at + previous_healthcheck).
 - Endpoint auth: /healthcheck-incidents returns 401 without a session; 404 for unknown container or an incident_id belonging to a different container.
+
+## STAGE-004-034 — Cron run failure log correlation
+
+- Drive a cron run to state=fail (heartbeat /start then /fail with exit_code!=0, with VL lines tagged by the run_id); within ~60-120s `GET /api/crons/{fingerprint}/runs/{run_id}/failure-enrichment` returns an enrichment with exit_code!=0, line_count>0, degraded=false.
+- The enrichment `lines` array contains the run's REAL log lines (the LogsQL run_id selector — build_amode_query(run_id) — must match real hmrun-shipped lines in VictoriaLogs).
+- The failure-enrich step fires inside the existing CronRunReconciler._enrich loop ONLY for state=="fail" runs (state=="ok" runs produce no failure enrichment); dedup on UNIQUE (cron_fingerprint, run_id) — a second reconciler tick does NOT re-insert or re-emit.
+- Metric homelab_cron_run_failure_total{cron_fingerprint,run_id,name,host} emitted once per newly-failure-enriched run (counter). Degraded VL at enrich time still inserts a degraded row + emits the counter so the alert fires.
+- vmalert rule CronRunFailed (deploy/vmalert/metrics/heartbeats.yaml) loads + fires on increase(homelab_cron_run_failure_total[5m]) > 0 with labels severity:error, source_tool:vmalert-metrics, category:cron; annotation deep-links to /inventory/crons/{cron_fingerprint}/runs/{run_id}. Confirm migration 0038 round-trips cleanly (downgrade drops the cron_run_failure_enrichments table + indexes).
+- Endpoint auth: /failure-enrichment returns 401 without a session; 404 for a run with no failure enrichment or an unknown run.

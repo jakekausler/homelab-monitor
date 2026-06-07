@@ -2,11 +2,11 @@
 
 ## Status: In Progress
 
-## Stages Counter: 38 / 50 Complete
+## Stages Counter: 39 / 50 Complete
 
-## Current Stage: STAGE-004-034
+## Current Stage: STAGE-004-035
 
-## Current Phase: STAGE-004-034 Design / Not Started
+## Current Phase: STAGE-004-035 Design / Not Started
 
 ## Overview
 
@@ -140,7 +140,7 @@ Stages MUST be implemented in order. No parallelization. Each stage lands a sing
 |---|---|---|
 | STAGE-004-032 | Container crash log correlation | `homelab_container_crash` metric + alert annotation + UI render. Design ✅ Build ✅ Refinement ✅ Finalize ✅ |
 | STAGE-004-033 | Healthcheck-failure log enrichment | 60s window attached to unhealthy alerts. Design ✅ Build ✅ Refinement ✅ Finalize ✅ |
-| STAGE-004-034 | Cron run failure log correlation | Last N lines of hmrun output enriched into cron-failed alerts. |
+| STAGE-004-034 | Cron run failure log correlation | Last N lines of hmrun output enriched into cron-failed alerts. Design ✅ Build ✅ Refinement ✅ Finalize ✅ |
 | STAGE-004-035 | Anomaly Type A: New signature detected | Rules + first_seen metric + suppression integration. |
 | STAGE-004-036 | Anomaly Type B: Signature count spike vs baseline | 7d rolling baseline + 1h cold-start fallback; template rendered per signature via STAGE-004-044. |
 | STAGE-004-037 | Anomaly Type C: Service-wide error rate spike | `homelab_container_error_rate` metric + rule; satisfies docker req #4. |
