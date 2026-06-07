@@ -2,11 +2,11 @@
 
 ## Status: In Progress
 
-## Stages Counter: 36 / 50 Complete
+## Stages Counter: 37 / 50 Complete
 
-## Current Stage: STAGE-004-032
+## Current Stage: STAGE-004-033
 
-## Current Phase: STAGE-004-032 Design / Not Started
+## Current Phase: STAGE-004-033 Design / Not Started
 
 ## Overview
 
@@ -138,7 +138,7 @@ Stages MUST be implemented in order. No parallelization. Each stage lands a sing
 
 | # | Stage | Theme |
 |---|---|---|
-| STAGE-004-032 | Container crash log correlation | `homelab_container_crash` metric + alert annotation + UI render. |
+| STAGE-004-032 | Container crash log correlation | `homelab_container_crash` metric + alert annotation + UI render. Design ✅ Build ✅ Refinement ✅ Finalize ✅ |
 | STAGE-004-033 | Healthcheck-failure log enrichment | 60s window attached to unhealthy alerts. |
 | STAGE-004-034 | Cron run failure log correlation | Last N lines of hmrun output enriched into cron-failed alerts. |
 | STAGE-004-035 | Anomaly Type A: New signature detected | Rules + first_seen metric + suppression integration. |

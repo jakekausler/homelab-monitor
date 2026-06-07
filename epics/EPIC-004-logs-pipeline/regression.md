@@ -354,3 +354,12 @@
 - Load older / Load newer in surrounding mode accumulate lines bidirectionally, keep the anchor highlighted, and use expr=*.
 - "Open in Explorer" on a Drain template (Models page + Signature detail page) returns matching log lines (anchors on the longest literal run; tolerant of ANSI bytes / punctuation in the template).
 - Backend kernel coverage remains 100%; the two-sided window endpoint + LogWindowFetcher side-aware selection are fully branch-covered.
+
+## STAGE-004-032 — Container crash log correlation
+
+- Crash a container with a non-zero exit (`docker run --name X busybox sh -c 'echo hi; exit 7'`); within ~90s `GET /api/integrations/docker/containers/X/crashes` returns a crash with exit_code=7, line_count>0, degraded=false.
+- The crash detail `GET .../crashes/{crash_id}` returns a `lines` array populated with the container's real log lines (the LogsQL `container_name:"X" AND source_type:docker` must match real docker log fields in VictoriaLogs).
+- Metric `homelab_container_crash_total{container_name,exit_code,...}` is emitted once per newly-enriched crash (counter — re-detect of the same crash does NOT double-increment; deduped on UNIQUE (logical_key, finished_at)).
+- vmalert rule ContainerCrashed (deploy/vmalert/metrics/container_crash.yml) loads and fires on `increase(homelab_container_crash_total[5m]) > 0` with labels severity/source_tool:vmalert-metrics/category:container.
+- UI: ContainerOverviewTab "Recent crashes" section lists crashes and expands to show the captured log window via the unified <LogViewer> WITH timestamps; on mobile the log lines WRAP (no horizontal overflow). Confirm migration 0036 round-trips cleanly (downgrade restores targets_docker to pre-0036 shape, dropping finished_at).
+- Endpoint auth: /crashes returns 401 without a session; 404 for an unknown container or a crash_id belonging to a different container.
