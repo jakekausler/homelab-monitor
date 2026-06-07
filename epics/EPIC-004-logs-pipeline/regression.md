@@ -343,3 +343,14 @@
 - Unit: `make uv ARGS="--directory apps/monitor pytest tests/test_log_window_fetcher.py"` — 10 tests pass, 100% module coverage (happy path; truncation boundary at limit+1; limit cap → 1000; proportional window clamp to 3600s; naive-datetime → UTC; cache hit within TTL; cache miss after TTL expiry; LRU eviction at max_cache_entries; VL-error → degraded not-cached; default wall clock).
 - Integration (rig up): `apps/monitor/tests/integration/test_log_window_fetcher_integration.py` validates against real VictoriaLogs — window filtering excludes out-of-window lines, truncation, cache-hit queried_at preservation, narrow-vs-wide window scoping, degrade on unreachable VL. Runs via the integration rig (docker-compose.test.yml); auto-skips (@pytest.mark.integration + require_rig_components("victorialogs")) when VL absent.
 - Contract: LogWindowFetcher.fetch(logs_ql, anchor_ts, window_before_s=60, window_after_s=60, limit=200) → LogWindowResult{lines, truncated, degraded, window_start, window_end, queried_at}; degrade-gracefully (VL error → degraded=True empty, never raises, never cached); bounded LRU(1000)+TTL(300s) cache; window cap 3600s proportional clamp; limit cap 1000.
+
+## STAGE-004-031A — Surrounding logs (in-place mode)
+
+- GET /api/logs/window with `expr=*`, an anchor_ts/stream/message from a real line, before=100 after=100 → returns ~100-200 lines (NOT 1), anchor_index ~middle, degraded=false. (Backend two-sided fetch + merge.)
+- LogWindowFetcher one-sided AFTER window with >limit lines spread across the window returns the lines IMMEDIATELY after the anchor (contiguous), not a far-future island. (Covered by test_log_window_fetcher.py T10/T11 + the integration regression test.)
+- In the Logs Explorer, opening surrounding-logs from a FILTERED Explorer (active query) still shows the full window (surrounding uses expr=* and does NOT inherit the active filter).
+- Surrounding-logs DEFAULTS to All-services scope; toggling to Only-this-service narrows but only sends a `service:`/`source_type:` clause when the line has a raw `fields.service` + real `source_type` (never `source_type=unknown`).
+- Anchor line HIGHLIGHTS in BOTH all-services and only-this-service scope (uses backend anchor_index), and the highlight spans the FULL line width when scrolled horizontally (min-w-max).
+- Load older / Load newer in surrounding mode accumulate lines bidirectionally, keep the anchor highlighted, and use expr=*.
+- "Open in Explorer" on a Drain template (Models page + Signature detail page) returns matching log lines (anchors on the longest literal run; tolerant of ANSI bytes / punctuation in the template).
+- Backend kernel coverage remains 100%; the two-sided window endpoint + LogWindowFetcher side-aware selection are fully branch-covered.
