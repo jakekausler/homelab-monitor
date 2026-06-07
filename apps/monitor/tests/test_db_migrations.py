@@ -58,6 +58,7 @@ EXPECTED_TABLES = {
     "log_signature_annotations",
     "container_crash_enrichments",
     "container_healthcheck_enrichments",
+    "cron_run_failure_enrichments",
 }
 
 

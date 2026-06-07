@@ -22,6 +22,8 @@ import hashlib
 import os
 import re
 import time
+import uuid
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import ClassVar
 
@@ -41,14 +43,20 @@ from homelab_monitor.kernel.cron.run_anomaly import evaluate_run
 from homelab_monitor.kernel.cron.run_repository import CronRunRecord, CronRunRepository
 from homelab_monitor.kernel.db.repository import SqliteRepository
 from homelab_monitor.kernel.db.time import utc_now_iso
+from homelab_monitor.kernel.logs.cron_run_failure_enrichments_repo import (
+    CronRunFailureEnrichmentsRepository,
+)
+from homelab_monitor.kernel.logs.models import LogLine, from_victorialogs_line
 from homelab_monitor.kernel.logs.victorialogs_client import (
     VictoriaLogsClient,
+    VictoriaLogsClientError,
     VlQueryResult,
     build_amode_query,
     build_bmode_query,
 )
 from homelab_monitor.kernel.plugins.base import BaseCollector
 from homelab_monitor.kernel.plugins.context import CollectorContext
+from homelab_monitor.kernel.plugins.io import MetricsWriter
 from homelab_monitor.kernel.plugins.types import CollectorResult, RunKind, TrustLevel
 
 # content_digest normalization regexes (D-DIGEST — most aggressive).
@@ -137,22 +145,32 @@ class CronRunReconciler(BaseCollector):
             errors.append(f"window_finalize: {exc}")
 
         # Phase 2: enrich (needs VL; skipped on VL failure).
+        metrics_emitted = 0
         try:
-            await self._enrich(
-                ctx.db, ctx.http, run_repo, cron_repo, now, cfg, vl_limits, anomaly_cfg, ctx.log
+            metrics_emitted = await self._enrich(
+                ctx.db,
+                ctx.http,
+                run_repo,
+                cron_repo,
+                now,
+                cfg,
+                vl_limits,
+                anomaly_cfg,
+                ctx.vm,
+                ctx.log,
             )
         except Exception as exc:
             errors.append(f"enrich: {exc}")
 
         # Phase 3: prune (no VL needed).
         try:
-            await self._prune(run_repo, now, cfg)
+            await self._prune(ctx.db, run_repo, now, cfg)
         except Exception as exc:
             errors.append(f"prune: {exc}")
 
         return CollectorResult(
             ok=(len(errors) == 0),
-            metrics_emitted=0,
+            metrics_emitted=metrics_emitted,
             errors=errors,
             events=[],
             duration_seconds=time.monotonic() - start,
@@ -223,13 +241,19 @@ class CronRunReconciler(BaseCollector):
         cfg: CronRunReconcilerConfig,
         vl_limits: VlQueryLimits,
         anomaly_cfg: CronAnomalyConfig,
+        vm: MetricsWriter,
         log: structlog.BoundLogger,
-    ) -> None:
-        """Enrich closed, un-enriched runs past the grace delay with VL fields."""
+    ) -> int:
+        """Enrich closed, un-enriched runs past the grace delay with VL fields.
+
+        Returns the number of failure-enrich metric writes emitted this call
+        (homelab_cron_run_failure_total). The main per-run VL enrichment emits no
+        metrics; only the STAGE-004-034 failure-enrich step does.
+        """
         grace_cutoff = (now - timedelta(seconds=cfg.enrich_grace_seconds)).isoformat()
         pending = await run_repo.list_runs_needing_enrich(grace_cutoff)
         if not pending:
-            return
+            return 0
 
         # Bound per-tick work to keep the tick well inside the 20s timeout.
         # A large backlog drains over successive ticks; enrichment is idempotent
@@ -240,6 +264,14 @@ class CronRunReconciler(BaseCollector):
 
         vl_url = os.environ.get("HOMELAB_MONITOR_VL_URL", "http://victorialogs:9428")
         client = VictoriaLogsClient(vl_url=vl_url, http_client=http, limits=vl_limits)
+
+        # STAGE-004-034: a dedicated small-limit client for the last-N failure
+        # snapshot (one extra capped VL call per NEWLY-failed run). max_bytes /
+        # timeout reuse the standard vl_limits; only max_lines is narrowed.
+        failure_repo = CronRunFailureEnrichmentsRepository(db)
+        failure_limits = replace(vl_limits, max_lines=cfg.cron_failure_enrich_max_lines)
+        failure_client = VictoriaLogsClient(vl_url=vl_url, http_client=http, limits=failure_limits)
+        failure_metrics_emitted = 0
 
         for run in pending:
             window_start = run.vl_window_start or run.started_at
@@ -336,17 +368,127 @@ class CronRunReconciler(BaseCollector):
                 )
                 continue
 
+            # STAGE-004-034: failure-enrich — for a FAILED run, persist the last-N
+            # lines as a forensic snapshot + emit the per-run alert counter. Its
+            # OWN try/except: a VL/DB error here must not break the main enrich
+            # loop or other runs. Reuses `expr` + `window_start`/`window_end`
+            # already computed above for this run.
+            if run.state == "fail":
+                try:
+                    failure_metrics_emitted += await self._failure_enrich_run(
+                        failure_repo=failure_repo,
+                        failure_client=failure_client,
+                        cron_repo=cron_repo,
+                        run=run,
+                        expr=expr,
+                        window_start=window_start,
+                        window_end=window_end,
+                        vm=vm,
+                        log=log,
+                    )
+                except Exception as exc:
+                    log.warning(
+                        "cron_run_reconciler.failure_enrich_skipped",
+                        run_id=run.run_id,
+                        source=run.source,
+                        error=str(exc),
+                    )
+                    continue
+
+        return failure_metrics_emitted
+
+    async def _failure_enrich_run(  # noqa: PLR0913
+        self,
+        *,
+        failure_repo: CronRunFailureEnrichmentsRepository,
+        failure_client: VictoriaLogsClient,
+        cron_repo: CronRepo,
+        run: CronRunRecord,
+        expr: str,
+        window_start: str,
+        window_end: str,
+        vm: MetricsWriter,
+        log: structlog.BoundLogger,
+    ) -> int:
+        """Persist the last-N lines of a FAILED run + emit the alert counter.
+
+        Returns the number of counter writes emitted (0 or 1). A VL failure still
+        inserts a degraded row (lines=[], degraded=True) so the alert fires —
+        mirrors the 032/033 "degraded-still-emits" decision. Idempotent via the
+        repo's INSERT OR IGNORE on (cron_fingerprint, run_id): a re-enriched run
+        neither double-inserts nor double-emits.
+        """
+        lines: list[LogLine] = []
+        truncated = False
+        degraded = False
+        try:
+            result: VlQueryResult = await failure_client.query(
+                expr=expr, start=window_start, end=window_end
+            )
+            lines = [from_victorialogs_line(line) for line in result.lines]
+            truncated = result.truncated
+        except VictoriaLogsClientError as exc:
+            # VL down: still persist a degraded row so the alert fires; the
+            # snapshot is empty and degraded=1 flags it.
+            degraded = True
+            log.warning(
+                "cron_run_reconciler.failure_enrich_vl_degraded",
+                run_id=run.run_id,
+                error=str(exc),
+            )
+
+        inserted = await failure_repo.insert(
+            failure_id=uuid.uuid4().hex,
+            cron_fingerprint=run.cron_fingerprint,
+            run_id=run.run_id,
+            exit_code=run.exit_code,
+            started_at=run.started_at,
+            ended_at=run.ended_at,
+            lines=lines,
+            truncated=truncated,
+            degraded=degraded,
+            window_start=window_start,
+            window_end=window_end,
+        )
+        if not inserted:
+            return 0
+
+        # New failure row: emit the alerting counter. Resolve a human name for the
+        # label from the cron registry (cheap — only on a newly-failed run).
+        cron = await cron_repo.get_cron(run.cron_fingerprint, include_hidden=True)
+        labels: dict[str, str] = {
+            "cron_fingerprint": run.cron_fingerprint,
+            "run_id": run.run_id,
+        }
+        if cron is not None:
+            labels["name"] = cron.name
+            labels["host"] = cron.host
+        vm.write_counter("homelab_cron_run_failure_total", 1.0, labels)
+        return 1
+
     async def _prune(
         self,
+        db: SqliteRepository,
         run_repo: CronRunRepository,
         now: datetime,
         cfg: CronRunReconcilerConfig,
     ) -> None:
-        """Prune cron_runs beyond 30-day / 50k-per-cron retention."""
+        """Prune cron_runs AND cron_run_failure_enrichments beyond retention.
+
+        The failure-enrichment table has its OWN retention horizon
+        (cron_failure_enrich_retention_days, default 30) + per-fingerprint cap,
+        decoupled from cron_runs' prune so a failed run's forensic record
+        outlives the lifecycle row (D-CRON-RETAIN-30D).
+        """
         retention_cutoff = (now - timedelta(days=cfg.retention_days)).isoformat()
         await run_repo.prune_runs(
             retention_cutoff=retention_cutoff,
             max_rows_per_cron=cfg.max_rows_per_cron,
+        )
+        failure_cutoff = (now - timedelta(days=cfg.cron_failure_enrich_retention_days)).isoformat()
+        await CronRunFailureEnrichmentsRepository(db).prune(
+            retention_cutoff_iso=failure_cutoff,
+            max_rows_per_cron=cfg.cron_failure_enrich_max_rows_per_cron,
         )
 
 

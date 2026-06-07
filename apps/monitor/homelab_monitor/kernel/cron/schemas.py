@@ -360,6 +360,34 @@ class RunLogResponse(BaseModel):
     has_more: bool = False
 
 
+# ---------- Run failure enrichment (STAGE-004-034) ----------
+
+
+class CronRunFailureEnrichmentResponse(BaseModel):
+    """Response body for ``GET /api/crons/{fp}/runs/{run_id}/failure-enrichment``.
+
+    The persisted last-N-lines snapshot captured when the run failed. 404 if no
+    enrichment exists for the (fingerprint, run_id) pair. ``degraded`` is True
+    when VictoriaLogs was unreachable at capture time (lines may be empty).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    failure_id: str
+    cron_fingerprint: str
+    run_id: str
+    exit_code: int | None
+    started_at: str | None
+    ended_at: str | None
+    line_count: int
+    truncated: bool
+    degraded: bool
+    window_start: str | None
+    window_end: str | None
+    created_at: str
+    lines: list[LogLine]
+
+
 # ---------- Helpers ----------
 
 

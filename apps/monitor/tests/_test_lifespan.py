@@ -44,6 +44,9 @@ from homelab_monitor.kernel.docker.compose_action_runner import ComposeActionRun
 from homelab_monitor.kernel.docker.socket_client import DockerSocketClient
 from homelab_monitor.kernel.heartbeat.repository import HeartbeatRepo
 from homelab_monitor.kernel.logging import configure_logging
+from homelab_monitor.kernel.logs.cron_run_failure_enrichments_repo import (
+    CronRunFailureEnrichmentsRepository,
+)
 from homelab_monitor.kernel.logs.cycle_status import CycleStatusStore
 from homelab_monitor.kernel.logs.multiplex import MultiplexLogsWriter
 from homelab_monitor.kernel.logs.tail_service import TailRegistry
@@ -158,6 +161,7 @@ async def wire_test_app_state(  # noqa: PLR0915
     heartbeat_repo = HeartbeatRepo(repo)
     cron_repo = CronRepo(repo)
     cron_run_repo = CronRunRepository(repo)
+    cron_run_failure_repo = CronRunFailureEnrichmentsRepository(repo)
     alert_dispatcher = AlertDispatcher(channels=[InprocDashboardChannel(broker)], log=log)
     failure_budget = FailureBudget(repo, log, alert_repo=alert_repo, dispatcher=alert_dispatcher)
     # NOTE: NO await failure_budget.clear_all_quarantine(...).
@@ -231,6 +235,7 @@ async def wire_test_app_state(  # noqa: PLR0915
     app.state.heartbeat_repo = heartbeat_repo
     app.state.cron_repo = cron_repo
     app.state.cron_run_repo = cron_run_repo
+    app.state.cron_run_failure_repo = cron_run_failure_repo
     app.state.http_client = http_client
     app.state.metrics_writer = metrics_writer
     app.state.in_memory_metrics_writer = in_memory_metrics_writer

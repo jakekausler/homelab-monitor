@@ -275,6 +275,15 @@ class CronRunReconcilerConfig:
     enrich_grace_seconds: int = 15
     enrich_max_per_tick: int = 200
     enrich_window_slack_seconds: int = 30
+    # STAGE-004-034 — cron run-failure log correlation.
+    # cron_failure_enrich_max_lines: capped last-N lines fetched per failed run.
+    # cron_failure_enrich_retention_days: independent 30d retention for the
+    #   cron_run_failure_enrichments table (D-CRON-RETAIN-30D; outlives the
+    #   cron_runs row's own prune). Env: HOMELAB_MONITOR_CRON_ENRICHMENT_RETENTION_DAYS.
+    # cron_failure_enrich_max_rows_per_cron: per-fingerprint cap on stored rows.
+    cron_failure_enrich_max_lines: int = 50
+    cron_failure_enrich_retention_days: int = 30
+    cron_failure_enrich_max_rows_per_cron: int = 100
 
 
 def load_cron_run_reconciler_config() -> CronRunReconcilerConfig:
@@ -286,6 +295,9 @@ def load_cron_run_reconciler_config() -> CronRunReconcilerConfig:
     enrich_grace_seconds = defaults.enrich_grace_seconds
     enrich_max_per_tick = defaults.enrich_max_per_tick
     enrich_window_slack_seconds = defaults.enrich_window_slack_seconds
+    cron_failure_enrich_max_lines = defaults.cron_failure_enrich_max_lines
+    cron_failure_enrich_retention_days = defaults.cron_failure_enrich_retention_days
+    cron_failure_enrich_max_rows_per_cron = defaults.cron_failure_enrich_max_rows_per_cron
     raw_days = os.environ.get("HOMELAB_MONITOR_CRON_RUN_RETENTION_DAYS")
     if raw_days is not None:
         retention_days = int(raw_days)
@@ -304,6 +316,18 @@ def load_cron_run_reconciler_config() -> CronRunReconcilerConfig:
     raw_slack = os.environ.get("HOMELAB_MONITOR_CRON_RUN_ENRICH_WINDOW_SLACK_SECONDS")
     if raw_slack is not None:
         enrich_window_slack_seconds = int(raw_slack)
+    raw_fail_retention = os.environ.get("HOMELAB_MONITOR_CRON_ENRICHMENT_RETENTION_DAYS")
+    if raw_fail_retention is not None:
+        cron_failure_enrich_retention_days = int(raw_fail_retention)
+    cron_failure_enrich_retention_days = max(cron_failure_enrich_retention_days, 1)
+    raw_fail_lines = os.environ.get("HOMELAB_MONITOR_CRON_FAILURE_ENRICH_MAX_LINES")
+    if raw_fail_lines is not None:
+        cron_failure_enrich_max_lines = int(raw_fail_lines)
+    cron_failure_enrich_max_lines = max(cron_failure_enrich_max_lines, 1)
+    raw_fail_rows = os.environ.get("HOMELAB_MONITOR_CRON_FAILURE_ENRICH_MAX_ROWS_PER_CRON")
+    if raw_fail_rows is not None:
+        cron_failure_enrich_max_rows_per_cron = int(raw_fail_rows)
+    cron_failure_enrich_max_rows_per_cron = max(cron_failure_enrich_max_rows_per_cron, 1)
     return CronRunReconcilerConfig(
         retention_days=retention_days,
         max_rows_per_cron=max_rows_per_cron,
@@ -311,6 +335,9 @@ def load_cron_run_reconciler_config() -> CronRunReconcilerConfig:
         enrich_grace_seconds=enrich_grace_seconds,
         enrich_max_per_tick=enrich_max_per_tick,
         enrich_window_slack_seconds=enrich_window_slack_seconds,
+        cron_failure_enrich_max_lines=cron_failure_enrich_max_lines,
+        cron_failure_enrich_retention_days=cron_failure_enrich_retention_days,
+        cron_failure_enrich_max_rows_per_cron=cron_failure_enrich_max_rows_per_cron,
     )
 
 

@@ -371,6 +371,59 @@ def test_load_cron_run_reconciler_config_enrich_window_slack_seconds_default_and
 
 
 # ---------------------------------------------------------------------------
+# STAGE-004-034: CronRunReconcilerConfig — new failure-enrich fields
+# ---------------------------------------------------------------------------
+
+
+def test_cron_run_reconciler_config_failure_enrich_defaults(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """New failure-enrich fields have correct defaults when no env vars are set."""
+    from homelab_monitor.kernel.config import load_cron_run_reconciler_config  # noqa: PLC0415
+
+    monkeypatch.delenv("HOMELAB_MONITOR_CRON_ENRICHMENT_RETENTION_DAYS", raising=False)
+    monkeypatch.delenv("HOMELAB_MONITOR_CRON_FAILURE_ENRICH_MAX_LINES", raising=False)
+    monkeypatch.delenv("HOMELAB_MONITOR_CRON_FAILURE_ENRICH_MAX_ROWS_PER_CRON", raising=False)
+
+    cfg = load_cron_run_reconciler_config()
+    assert cfg.cron_failure_enrich_max_lines == 50  # noqa: PLR2004
+    assert cfg.cron_failure_enrich_retention_days == 30  # noqa: PLR2004
+    assert cfg.cron_failure_enrich_max_rows_per_cron == 100  # noqa: PLR2004
+
+
+def test_cron_run_reconciler_config_failure_enrich_env_overrides(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Env vars for new failure-enrich fields override defaults."""
+    from homelab_monitor.kernel.config import load_cron_run_reconciler_config  # noqa: PLC0415
+
+    monkeypatch.setenv("HOMELAB_MONITOR_CRON_ENRICHMENT_RETENTION_DAYS", "14")
+    monkeypatch.setenv("HOMELAB_MONITOR_CRON_FAILURE_ENRICH_MAX_LINES", "25")
+    monkeypatch.setenv("HOMELAB_MONITOR_CRON_FAILURE_ENRICH_MAX_ROWS_PER_CRON", "200")
+
+    cfg = load_cron_run_reconciler_config()
+    assert cfg.cron_failure_enrich_retention_days == 14  # noqa: PLR2004
+    assert cfg.cron_failure_enrich_max_lines == 25  # noqa: PLR2004
+    assert cfg.cron_failure_enrich_max_rows_per_cron == 200  # noqa: PLR2004
+
+
+def test_cron_run_reconciler_config_failure_enrich_clamping_ge_1(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Values of 0 or negative are clamped to 1 for all three failure-enrich fields."""
+    from homelab_monitor.kernel.config import load_cron_run_reconciler_config  # noqa: PLC0415
+
+    monkeypatch.setenv("HOMELAB_MONITOR_CRON_ENRICHMENT_RETENTION_DAYS", "0")
+    monkeypatch.setenv("HOMELAB_MONITOR_CRON_FAILURE_ENRICH_MAX_LINES", "-5")
+    monkeypatch.setenv("HOMELAB_MONITOR_CRON_FAILURE_ENRICH_MAX_ROWS_PER_CRON", "0")
+
+    cfg = load_cron_run_reconciler_config()
+    assert cfg.cron_failure_enrich_retention_days == 1
+    assert cfg.cron_failure_enrich_max_lines == 1
+    assert cfg.cron_failure_enrich_max_rows_per_cron == 1
+
+
+# ---------------------------------------------------------------------------
 # STAGE-002-014: CronAnomalyConfig + load_vl_retention_days
 # ---------------------------------------------------------------------------
 

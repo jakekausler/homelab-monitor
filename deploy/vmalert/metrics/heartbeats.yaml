@@ -61,6 +61,22 @@ groups:
           summary: "Cron {{ $labels.name }} on {{ $labels.host }} is failing"
           description: 'Cron {{ $labels.name }} has a failing streak ({{ $value }}) with a recent failure.'
 
+      # STAGE-004-034: per-run failure with correlated log snapshot. Distinct from
+      # HeartbeatFailed (sustained streak): this fires once per newly-failure-
+      # enriched run and deep-links to that specific run's log viewer.
+      - alert: CronRunFailed
+        expr: increase(homelab_cron_run_failure_total[5m]) > 0
+        for: 0m
+        labels:
+          severity: error
+          source_tool: vmalert-metrics
+          category: cron
+          target_kind: cron
+          routing_channel: cron-health
+        annotations:
+          summary: "Cron run failed: {{ $labels.name }} (run {{ $labels.run_id }})"
+          description: 'A cron run for {{ $labels.name }} failed. Correlated log snapshot: /inventory/crons/{{ $labels.cron_fingerprint }}/runs/{{ $labels.run_id }}'
+
       - alert: HeartbeatFlapping
         expr: changes(homelab_heartbeat_current_streak[10m]) > 6
         for: 0s

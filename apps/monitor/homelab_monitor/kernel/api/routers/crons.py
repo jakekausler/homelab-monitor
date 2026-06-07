@@ -35,6 +35,7 @@ from starlette.responses import Response as _FastApiResponse
 
 from homelab_monitor.kernel.api.dependencies import (
     get_cron_repo,
+    get_cron_run_failure_repo,
     get_cron_run_repo,
     get_http_client,
     get_vl_url,
@@ -69,6 +70,7 @@ from homelab_monitor.kernel.cron.schemas import (
     CronListQuery,
     CronListResponse,
     CronOut,
+    CronRunFailureEnrichmentResponse,
     CronRunListResponse,
     CronRunsListQuery,
     CrontabDiffOut,
@@ -91,6 +93,9 @@ from homelab_monitor.kernel.cron.schemas import (
 )
 from homelab_monitor.kernel.db.time import utc_now_iso
 from homelab_monitor.kernel.heartbeat.schemas import query_model
+from homelab_monitor.kernel.logs.cron_run_failure_enrichments_repo import (
+    CronRunFailureEnrichmentsRepository,
+)
 from homelab_monitor.kernel.logs.models import from_victorialogs_line
 from homelab_monitor.kernel.logs.pagination import (
     InvalidCursorError as LogInvalidCursorError,
@@ -526,6 +531,50 @@ async def _query_run_log(  # noqa: PLR0913
         truncated=page.truncated,
         next_cursor=page.next_cursor,
         has_more=page.has_more,
+    )
+
+
+@router.get(
+    "/{fingerprint}/runs/{run_id}/failure-enrichment",
+    response_model=CronRunFailureEnrichmentResponse,
+    responses={
+        200: {"description": "Persisted last-N-lines failure snapshot"},
+        404: {"description": "No failure enrichment for this run"},
+    },
+)
+async def get_cron_run_failure_enrichment(
+    fingerprint: str,
+    run_id: str,
+    _user: Annotated[User, Depends(require_session())],
+    failure_repo: Annotated[
+        CronRunFailureEnrichmentsRepository, Depends(get_cron_run_failure_repo)
+    ],
+) -> CronRunFailureEnrichmentResponse:
+    """Return the persisted failure-log snapshot for one failed run.
+
+    STAGE-004-034. The snapshot is captured by CronRunReconciler when a run's
+    state becomes 'fail'. 404 if no enrichment exists for (fingerprint, run_id).
+    Session-auth (D-AUTH); the frontend never sees LogsQL.
+    """
+    row = await failure_repo.get_by_run(fingerprint, run_id)
+    if row is None:
+        raise NotFoundProblem(
+            message=f"failure enrichment not found for run: {run_id}",
+        )
+    return CronRunFailureEnrichmentResponse(
+        failure_id=row.failure_id,
+        cron_fingerprint=row.cron_fingerprint,
+        run_id=row.run_id,
+        exit_code=row.exit_code,
+        started_at=row.started_at,
+        ended_at=row.ended_at,
+        line_count=row.line_count,
+        truncated=row.truncated,
+        degraded=row.degraded,
+        window_start=row.window_start,
+        window_end=row.window_end,
+        created_at=row.created_at,
+        lines=row.parse_lines(),
     )
 
 

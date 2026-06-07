@@ -1461,3 +1461,578 @@ async def test_enrich_query_no_slack_for_logscrape(
         f"end param should be approximately {expected_end_dt} (no slack for B-mode), "
         f"got {actual_end_dt}"
     )
+
+
+# ---------------------------------------------------------------------------
+# STAGE-004-034: failure-enrich tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_failure_enrich_fail_run_inserts_row_and_emits_counter(
+    repo: SqliteRepository,
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A state='fail' run gets a failure_enrichments row AND emits homelab_cron_run_failure_total.
+
+    The reconciler makes TWO VL requests per failed run (main enrich + failure enrich).
+    Both succeed (reusable mock). After one tick the failure enrichment row exists and
+    the failure counter appears in the metrics writer.
+    """
+    monkeypatch.setenv("HOMELAB_MONITOR_VL_URL", "http://vl-test:9428")
+    monkeypatch.setenv("HOMELAB_MONITOR_CRON_RUN_ENRICH_GRACE_SECONDS", "5")
+
+    from homelab_monitor.kernel.cron.run_repository import CronRunRepository as _RR  # noqa: PLC0415
+    from homelab_monitor.kernel.logs.cron_run_failure_enrichments_repo import (  # noqa: PLC0415
+        CronRunFailureEnrichmentsRepository,
+    )
+
+    fp: str = "fp-fail-enrich"
+    run_id: str = "run-fail-001"
+    ended_at: str = (datetime.now(UTC) - timedelta(seconds=60)).isoformat()
+
+    run_repo = _RR(repo)
+    await run_repo.close_run(
+        run_id=run_id,
+        cron_fingerprint=fp,
+        source="wrapper",
+        state="fail",
+        ended_at=ended_at,
+        duration_seconds=10.0,
+        exit_code=1,
+        vl_window_end=ended_at,
+    )
+
+    # Both VL queries (main enrich + failure enrich) succeed
+    httpx_mock.add_response(method="GET", text=_ndjson_line("fail output") + "\n", is_reusable=True)
+
+    vm = MemoryRetainingMetricsWriter()
+
+    import dataclasses  # noqa: PLC0415
+
+    async with httpx.AsyncClient() as http:
+        ctx_with_vm = dataclasses.replace(_ctx(repo, http), vm=vm)
+        result = await CronRunReconciler().run(ctx_with_vm)
+
+    assert result.ok is True
+
+    # Failure enrichment row must exist
+    failure_repo = CronRunFailureEnrichmentsRepository(repo)
+    row = await failure_repo.get_by_run(fp, run_id)
+    assert row is not None
+    assert row.run_id == run_id
+    assert row.cron_fingerprint == fp
+    assert row.degraded is False
+
+    # Counter must be emitted
+    counter_entries = [e for e in vm.recorded if e.name == "homelab_cron_run_failure_total"]
+    assert len(counter_entries) >= 1
+    assert counter_entries[0].labels["cron_fingerprint"] == fp
+    assert counter_entries[0].labels["run_id"] == run_id
+
+
+@pytest.mark.asyncio
+async def test_failure_enrich_ok_run_produces_no_row_no_counter(
+    repo: SqliteRepository,
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A state='ok' run does NOT get a failure enrichment row and emits NO counter."""
+    monkeypatch.setenv("HOMELAB_MONITOR_VL_URL", "http://vl-test:9428")
+    monkeypatch.setenv("HOMELAB_MONITOR_CRON_RUN_ENRICH_GRACE_SECONDS", "5")
+
+    from homelab_monitor.kernel.logs.cron_run_failure_enrichments_repo import (  # noqa: PLC0415
+        CronRunFailureEnrichmentsRepository,
+    )
+
+    fp: str = "fp-ok-no-fail-enrich"
+    run_id: str = "run-ok-002"
+    ended_at: str = (datetime.now(UTC) - timedelta(seconds=60)).isoformat()
+
+    await _insert_closed_run(
+        repo, run_id=run_id, cron_fingerprint=fp, state="ok", ended_at=ended_at
+    )
+
+    # Only ONE VL call (main enrich; no failure-enrich call for state='ok')
+    httpx_mock.add_response(method="GET", text=_ndjson_line("ok output") + "\n")
+
+    vm = MemoryRetainingMetricsWriter()
+
+    import dataclasses  # noqa: PLC0415
+
+    async with httpx.AsyncClient() as http:
+        ctx = dataclasses.replace(_ctx(repo, http), vm=vm)
+        result = await CronRunReconciler().run(ctx)
+
+    assert result.ok is True
+
+    failure_repo = CronRunFailureEnrichmentsRepository(repo)
+    row = await failure_repo.get_by_run(fp, run_id)
+    assert row is None
+
+    counter_entries = [e for e in vm.recorded if e.name == "homelab_cron_run_failure_total"]
+    assert counter_entries == []
+
+
+@pytest.mark.asyncio
+async def test_failure_enrich_second_tick_deduplicates_row_and_counter(
+    repo: SqliteRepository,
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Second tick on the same failed run: still ONE row, counter NOT re-emitted.
+
+    INSERT OR IGNORE ensures idempotency — the failure enrichment row is created
+    once; subsequent ticks see inserted=False and skip the counter emit.
+    The run is already enriched after tick 1 so tick 2 has no pending runs to
+    process at all (no extra VL call registered).
+    """
+    monkeypatch.setenv("HOMELAB_MONITOR_VL_URL", "http://vl-test:9428")
+    monkeypatch.setenv("HOMELAB_MONITOR_CRON_RUN_ENRICH_GRACE_SECONDS", "5")
+
+    from homelab_monitor.kernel.cron.run_repository import CronRunRepository as _RR  # noqa: PLC0415
+    from homelab_monitor.kernel.logs.cron_run_failure_enrichments_repo import (  # noqa: PLC0415
+        CronRunFailureEnrichmentsRepository,
+    )
+
+    fp: str = "fp-dedup-fail"
+    run_id: str = "run-fail-dedup"
+    ended_at: str = (datetime.now(UTC) - timedelta(seconds=60)).isoformat()
+
+    run_repo = _RR(repo)
+    await run_repo.close_run(
+        run_id=run_id,
+        cron_fingerprint=fp,
+        source="wrapper",
+        state="fail",
+        ended_at=ended_at,
+        duration_seconds=10.0,
+        exit_code=2,
+        vl_window_end=ended_at,
+    )
+
+    # Tick 1: both main enrich + failure enrich VL calls succeed
+    httpx_mock.add_response(method="GET", text=_ndjson_line("fail log") + "\n", is_reusable=True)
+
+    vm = MemoryRetainingMetricsWriter()
+
+    import dataclasses  # noqa: PLC0415
+
+    async with httpx.AsyncClient() as http:
+        ctx1 = dataclasses.replace(_ctx(repo, http), vm=vm)
+        r1 = await CronRunReconciler().run(ctx1)
+
+    assert r1.ok is True
+    counters_after_tick1 = [e for e in vm.recorded if e.name == "homelab_cron_run_failure_total"]
+    assert len(counters_after_tick1) == 1
+
+    # Tick 2: run already enriched — no pending runs, no VL call, no counter
+    # (httpx_mock still has is_reusable response registered but should not be called)
+    vm2 = MemoryRetainingMetricsWriter()
+    async with httpx.AsyncClient() as http:
+        ctx2 = dataclasses.replace(_ctx(repo, http), vm=vm2)
+        r2 = await CronRunReconciler().run(ctx2)
+
+    assert r2.ok is True
+    counters_after_tick2 = [e for e in vm2.recorded if e.name == "homelab_cron_run_failure_total"]
+    assert counters_after_tick2 == []
+
+    # Only one row exists
+    failure_repo = CronRunFailureEnrichmentsRepository(repo)
+    row = await failure_repo.get_by_run(fp, run_id)
+    assert row is not None
+
+
+@pytest.mark.asyncio
+async def test_failure_enrich_degraded_vl_inserts_degraded_row_and_counter(
+    repo: SqliteRepository,
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """VL failure during failure-fetch: degraded=True row inserted + counter STILL emitted.
+
+    The main enrich VL call succeeds. The failure-enrich VL call (failure_client)
+    raises VictoriaLogsClientError. The degraded=1 row must exist and the
+    homelab_cron_run_failure_total counter must still be emitted.
+
+    Strategy: register TWO mock responses — first succeeds (main enrich),
+    second raises ConnectError (failure enrich).
+    """
+    monkeypatch.setenv("HOMELAB_MONITOR_VL_URL", "http://vl-test:9428")
+    monkeypatch.setenv("HOMELAB_MONITOR_CRON_RUN_ENRICH_GRACE_SECONDS", "5")
+
+    from homelab_monitor.kernel.cron.run_repository import CronRunRepository as _RR  # noqa: PLC0415
+    from homelab_monitor.kernel.logs.cron_run_failure_enrichments_repo import (  # noqa: PLC0415
+        CronRunFailureEnrichmentsRepository,
+    )
+
+    fp: str = "fp-degraded-fail"
+    run_id: str = "run-fail-degraded"
+    ended_at: str = (datetime.now(UTC) - timedelta(seconds=60)).isoformat()
+
+    run_repo = _RR(repo)
+    await run_repo.close_run(
+        run_id=run_id,
+        cron_fingerprint=fp,
+        source="wrapper",
+        state="fail",
+        ended_at=ended_at,
+        duration_seconds=10.0,
+        exit_code=1,
+        vl_window_end=ended_at,
+    )
+
+    # First request → main enrich succeeds
+    httpx_mock.add_response(method="GET", text=_ndjson_line("main enrich") + "\n")
+    # Second request (failure_client.query) → ConnectError → VictoriaLogsClientError
+    httpx_mock.add_exception(httpx.ConnectError("VL down for failure fetch"))
+
+    vm = MemoryRetainingMetricsWriter()
+
+    import dataclasses  # noqa: PLC0415
+
+    async with httpx.AsyncClient() as http:
+        ctx = dataclasses.replace(_ctx(repo, http), vm=vm)
+        result = await CronRunReconciler().run(ctx)
+
+    assert result.ok is True
+
+    failure_repo = CronRunFailureEnrichmentsRepository(repo)
+    row = await failure_repo.get_by_run(fp, run_id)
+    assert row is not None
+    assert row.degraded is True
+    assert row.line_count == 0
+
+    # Counter still emitted despite VL failure
+    counter_entries = [e for e in vm.recorded if e.name == "homelab_cron_run_failure_total"]
+    assert len(counter_entries) >= 1
+
+
+@pytest.mark.asyncio
+async def test_failure_enrich_unexpected_exception_isolates_from_enrich_loop(
+    repo: SqliteRepository,
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Unexpected exception in failure-enrich does NOT break the main enrich loop.
+
+    Seed two failed runs. The first run's _failure_enrich_run raises an unexpected
+    RuntimeError (via monkeypatching). The second run's failure-enrich should still
+    succeed — demonstrating per-run try/except isolation (the outer except in _enrich).
+
+    After one tick:
+    - result.ok is True
+    - first run IS enriched (main enrich succeeded; only failure-enrich raised)
+    - second run's failure enrichment row exists
+    """
+    monkeypatch.setenv("HOMELAB_MONITOR_VL_URL", "http://vl-test:9428")
+    monkeypatch.setenv("HOMELAB_MONITOR_CRON_RUN_ENRICH_GRACE_SECONDS", "5")
+
+    from homelab_monitor.kernel.cron.run_repository import CronRunRepository as _RR  # noqa: PLC0415
+    from homelab_monitor.kernel.logs.cron_run_failure_enrichments_repo import (  # noqa: PLC0415
+        CronRunFailureEnrichmentsRepository,
+    )
+
+    # Older run (queried first) — _failure_enrich_run will raise for this one
+    ended_first: str = (datetime.now(UTC) - timedelta(seconds=120)).isoformat()
+    # Newer run (queried second) — failure-enrich succeeds
+    ended_second: str = (datetime.now(UTC) - timedelta(seconds=60)).isoformat()
+
+    run_repo = _RR(repo)
+    fp_bad: str = "fp-fail-exc-bad"
+    fp_good: str = "fp-fail-exc-good"
+
+    await run_repo.close_run(
+        run_id="fail-exc-bad-run",
+        cron_fingerprint=fp_bad,
+        source="wrapper",
+        state="fail",
+        ended_at=ended_first,
+        duration_seconds=5.0,
+        exit_code=1,
+        vl_window_end=ended_first,
+    )
+    await run_repo.close_run(
+        run_id="fail-exc-good-run",
+        cron_fingerprint=fp_good,
+        source="wrapper",
+        state="fail",
+        ended_at=ended_second,
+        duration_seconds=5.0,
+        exit_code=1,
+        vl_window_end=ended_second,
+    )
+
+    # All VL requests succeed (main enrich + failure enrich for good run)
+    httpx_mock.add_response(method="GET", text="", is_reusable=True)
+
+    # Monkeypatch _failure_enrich_run to raise for the first run only
+    original_failure_enrich = CronRunReconciler._failure_enrich_run  # pyright: ignore[reportPrivateUsage]
+    call_count: dict[str, int] = {"n": 0}
+
+    async def _flaky_failure_enrich(
+        self: CronRunReconciler, *args: object, **kwargs: object
+    ) -> int:
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            raise RuntimeError("simulated unexpected failure-enrich error")
+        return await original_failure_enrich(self, *args, **kwargs)  # pyright: ignore[reportArgumentType]
+
+    monkeypatch.setattr(CronRunReconciler, "_failure_enrich_run", _flaky_failure_enrich)  # pyright: ignore[reportPrivateUsage]
+
+    vm = MemoryRetainingMetricsWriter()
+    import dataclasses  # noqa: PLC0415
+
+    async with httpx.AsyncClient() as http:
+        ctx = dataclasses.replace(_ctx(repo, http), vm=vm)
+        result = await CronRunReconciler().run(ctx)
+
+    assert result.ok is True
+
+    # First run: main enrich completed (enriched_at set); failure-enrich row absent
+    bad_row = await run_repo.get_run("fail-exc-bad-run")
+    assert bad_row is not None
+    assert bad_row.enriched_at is not None  # main enrich succeeded
+
+    # Second run: failure enrichment row exists
+    failure_repo = CronRunFailureEnrichmentsRepository(repo)
+    good_fe_row = await failure_repo.get_by_run(fp_good, "fail-exc-good-run")
+    assert good_fe_row is not None
+
+
+@pytest.mark.asyncio
+async def test_failure_enrich_dedup_skip_when_row_already_exists(
+    repo: SqliteRepository,
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When failure-enrich row already exists, INSERT OR IGNORE returns False → return 0.
+
+    Strategy: seed a failed run that needs enrich (enriched_at=NULL) AND a
+    pre-existing failure enrichment row for that (fp, run_id). The reconciler
+    processes the run normally (main enrich succeeds), then calls _failure_enrich_run
+    which finds the pre-existing row (inserted=False) and returns 0 — no counter emitted.
+    """
+    monkeypatch.setenv("HOMELAB_MONITOR_VL_URL", "http://vl-test:9428")
+    monkeypatch.setenv("HOMELAB_MONITOR_CRON_RUN_ENRICH_GRACE_SECONDS", "5")
+
+    from homelab_monitor.kernel.cron.run_repository import CronRunRepository as _RR  # noqa: PLC0415
+    from homelab_monitor.kernel.logs.cron_run_failure_enrichments_repo import (  # noqa: PLC0415
+        CronRunFailureEnrichmentsRepository,
+    )
+
+    fp: str = "fp-dedup-skip"
+    run_id: str = "run-dedup-skip-001"
+    ended_at: str = (datetime.now(UTC) - timedelta(seconds=60)).isoformat()
+
+    run_repo = _RR(repo)
+    await run_repo.close_run(
+        run_id=run_id,
+        cron_fingerprint=fp,
+        source="wrapper",
+        state="fail",
+        ended_at=ended_at,
+        duration_seconds=5.0,
+        exit_code=1,
+        vl_window_end=ended_at,
+    )
+
+    # Pre-seed failure enrichment row so INSERT OR IGNORE will be a no-op
+    failure_repo = CronRunFailureEnrichmentsRepository(repo)
+    await failure_repo.insert(
+        failure_id="pre-existing-failure-id",
+        cron_fingerprint=fp,
+        run_id=run_id,
+        exit_code=1,
+        started_at=ended_at,
+        ended_at=ended_at,
+        lines=[],
+        truncated=False,
+        degraded=False,
+        window_start=ended_at,
+        window_end=ended_at,
+    )
+
+    # Main enrich VL call succeeds; failure-enrich VL call also succeeds (is_reusable)
+    httpx_mock.add_response(method="GET", text="", is_reusable=True)
+
+    vm = MemoryRetainingMetricsWriter()
+    import dataclasses  # noqa: PLC0415
+
+    async with httpx.AsyncClient() as http:
+        ctx = dataclasses.replace(_ctx(repo, http), vm=vm)
+        result = await CronRunReconciler().run(ctx)
+
+    assert result.ok is True
+
+    # Counter must NOT be emitted (dedup — inserted=False → return 0)
+    counter_entries = [e for e in vm.recorded if e.name == "homelab_cron_run_failure_total"]
+    assert counter_entries == []
+
+
+@pytest.mark.asyncio
+async def test_prune_removes_old_failure_enrichment_rows_via_reconciler_tick(
+    repo: SqliteRepository,
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """_prune also prunes cron_run_failure_enrichments, not only cron_runs.
+
+    This is the wiring-guard test: it ensures the reconciler's _prune phase
+    actually calls CronRunFailureEnrichmentsRepository.prune().
+
+    Seed two failure enrichment rows:
+    - old_row: created_at set to 40 days ago (older than the 30-day retention)
+    - fresh_row: created_at set to 1 day ago (within retention)
+
+    Run a full reconciler tick (no pending cron_runs, VL never called).
+    Assert the old row is deleted and the fresh row survives.
+    """
+    monkeypatch.setenv("HOMELAB_MONITOR_VL_URL", "http://vl-test:9428")
+    monkeypatch.setenv("HOMELAB_MONITOR_CRON_RUN_RETENTION_DAYS", "30")
+    # Use the default cron_failure_enrich_retention_days (30) by not setting it,
+    # so we rely on the config default.  Set a high max_rows_per_cron so the
+    # count cap never triggers.
+    monkeypatch.setenv("HOMELAB_MONITOR_CRON_FAILURE_ENRICH_MAX_ROWS_PER_CRON", "1000")
+
+    from homelab_monitor.kernel.logs.cron_run_failure_enrichments_repo import (  # noqa: PLC0415
+        CronRunFailureEnrichmentsRepository,
+    )
+
+    failure_repo: CronRunFailureEnrichmentsRepository = CronRunFailureEnrichmentsRepository(repo)
+
+    fp_old: str = "fp-prune-old-failure"
+    run_id_old: str = "run-old-failure-001"
+    fp_fresh: str = "fp-prune-fresh-failure"
+    run_id_fresh: str = "run-fresh-failure-001"
+
+    # Insert both rows via the normal insert path (creates NOW as created_at),
+    # then back-date the old row via direct SQL.
+    ts_ref: str = "2026-01-01T00:00:00+00:00"  # just needs a valid ISO string
+    await failure_repo.insert(
+        failure_id="old-failure-id",
+        cron_fingerprint=fp_old,
+        run_id=run_id_old,
+        exit_code=1,
+        started_at=ts_ref,
+        ended_at=ts_ref,
+        lines=[],
+        truncated=False,
+        degraded=False,
+        window_start=ts_ref,
+        window_end=ts_ref,
+    )
+    await failure_repo.insert(
+        failure_id="fresh-failure-id",
+        cron_fingerprint=fp_fresh,
+        run_id=run_id_fresh,
+        exit_code=1,
+        started_at=ts_ref,
+        ended_at=ts_ref,
+        lines=[],
+        truncated=False,
+        degraded=False,
+        window_start=ts_ref,
+        window_end=ts_ref,
+    )
+
+    # Back-date the old row to 40 days ago so it is past the 30-day retention cutoff.
+    old_created_at: str = (datetime.now(UTC) - timedelta(days=40)).isoformat()
+    fresh_created_at: str = (datetime.now(UTC) - timedelta(days=1)).isoformat()
+    async with repo.engine.begin() as conn:
+        await conn.execute(
+            text(
+                "UPDATE cron_run_failure_enrichments SET created_at = :ca WHERE failure_id = :fid"
+            ),
+            {"ca": old_created_at, "fid": "old-failure-id"},
+        )
+        await conn.execute(
+            text(
+                "UPDATE cron_run_failure_enrichments SET created_at = :ca WHERE failure_id = :fid"
+            ),
+            {"ca": fresh_created_at, "fid": "fresh-failure-id"},
+        )
+
+    # No cron_runs seeded → no VL calls; httpx_mock has no registered responses
+    # and would raise if called — that acts as an implicit assertion.
+    async with httpx.AsyncClient() as http:
+        result = await CronRunReconciler().run(_ctx(repo, http))
+
+    assert result.ok is True
+
+    # Old row must be gone.
+    old: CronRunFailureEnrichmentRow | None = await failure_repo.get_by_run(fp_old, run_id_old)
+    assert old is None
+
+    # Fresh row must survive.
+    from homelab_monitor.kernel.logs.cron_run_failure_enrichments_repo import (  # noqa: PLC0415
+        CronRunFailureEnrichmentRow,
+    )
+
+    fresh: CronRunFailureEnrichmentRow | None = await failure_repo.get_by_run(
+        fp_fresh, run_id_fresh
+    )
+    assert fresh is not None
+
+
+@pytest.mark.asyncio
+async def test_failure_enrich_emits_counter_with_cron_name_host_labels(
+    repo: SqliteRepository,
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the cron row exists, counter labels include 'name' and 'host'.
+
+    Covers lines 464-465 (the cron is not None branch in _failure_enrich_run).
+    """
+    monkeypatch.setenv("HOMELAB_MONITOR_VL_URL", "http://vl-test:9428")
+    monkeypatch.setenv("HOMELAB_MONITOR_CRON_RUN_ENRICH_GRACE_SECONDS", "5")
+
+    from homelab_monitor.kernel.cron.run_repository import CronRunRepository as _RR  # noqa: PLC0415
+    from homelab_monitor.kernel.logs.cron_run_failure_enrichments_repo import (  # noqa: PLC0415
+        CronRunFailureEnrichmentsRepository,
+    )
+
+    fp: str = "fp-labels-test"
+    run_id: str = "run-labels-001"
+    ended_at: str = (datetime.now(UTC) - timedelta(seconds=60)).isoformat()
+
+    # Insert a cron row so cron_repo.get_cron returns non-None
+    await _insert_cron(repo, fingerprint=fp, command="/usr/bin/labels-test.sh", host="labels-host")
+
+    run_repo = _RR(repo)
+    await run_repo.close_run(
+        run_id=run_id,
+        cron_fingerprint=fp,
+        source="wrapper",
+        state="fail",
+        ended_at=ended_at,
+        duration_seconds=5.0,
+        exit_code=1,
+        vl_window_end=ended_at,
+    )
+
+    # Both VL calls succeed (main enrich + failure enrich)
+    httpx_mock.add_response(method="GET", text="", is_reusable=True)
+
+    vm = MemoryRetainingMetricsWriter()
+    import dataclasses  # noqa: PLC0415
+
+    async with httpx.AsyncClient() as http:
+        ctx = dataclasses.replace(_ctx(repo, http), vm=vm)
+        result = await CronRunReconciler().run(ctx)
+
+    assert result.ok is True
+
+    counter_entries = [e for e in vm.recorded if e.name == "homelab_cron_run_failure_total"]
+    assert len(counter_entries) >= 1
+    labels = counter_entries[0].labels
+    assert labels["cron_fingerprint"] == fp
+    assert labels["run_id"] == run_id
+    assert "name" in labels
+    assert labels["host"] == "labels-host"
+
+    # Failure row exists
+    failure_repo = CronRunFailureEnrichmentsRepository(repo)
+    assert await failure_repo.get_by_run(fp, run_id) is not None

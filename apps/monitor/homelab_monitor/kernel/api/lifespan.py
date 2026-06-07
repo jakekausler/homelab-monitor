@@ -31,6 +31,9 @@ from homelab_monitor.kernel.dispatch.dispatcher import AlertDispatcher
 from homelab_monitor.kernel.events import TriggerContext
 from homelab_monitor.kernel.heartbeat.repository import HeartbeatRepo
 from homelab_monitor.kernel.logging import configure_logging
+from homelab_monitor.kernel.logs.cron_run_failure_enrichments_repo import (
+    CronRunFailureEnrichmentsRepository,
+)
 from homelab_monitor.kernel.logs.multiplex import MultiplexLogsWriter
 from homelab_monitor.kernel.logs.tail_service import TailRegistry
 from homelab_monitor.kernel.logs.vl_writer import VictoriaLogsWriter
@@ -509,6 +512,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
     heartbeat_repo = HeartbeatRepo(repo)
     cron_repo = CronRepo(repo)
     cron_run_repo = CronRunRepository(repo)
+    cron_run_failure_repo = CronRunFailureEnrichmentsRepository(repo)
     alert_dispatcher = AlertDispatcher(
         channels=[InprocDashboardChannel(broker)],
         log=log,
@@ -1023,6 +1027,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
     app.state.heartbeat_repo = heartbeat_repo
     app.state.cron_repo = cron_repo
     app.state.cron_run_repo = cron_run_repo
+    app.state.cron_run_failure_repo = cron_run_failure_repo
     app.state.alert_dispatcher = alert_dispatcher
     app.state.ttl_resolver = ttl_resolver
     app.state.http_client = http_client

@@ -32,6 +32,9 @@ if TYPE_CHECKING:
     from homelab_monitor.kernel.db.repository import SqliteRepository
     from homelab_monitor.kernel.dispatch.dispatcher import AlertDispatcher
     from homelab_monitor.kernel.heartbeat.repository import HeartbeatRepo
+    from homelab_monitor.kernel.logs.cron_run_failure_enrichments_repo import (
+        CronRunFailureEnrichmentsRepository,
+    )
     from homelab_monitor.kernel.logs.cycle_status import CycleStatusStore
     from homelab_monitor.kernel.logs.drain_consumer import DrainConsumer
     from homelab_monitor.kernel.logs.log_window_fetcher import LogWindowFetcher
@@ -259,6 +262,18 @@ def get_cron_run_repo(request: Request) -> CronRunRepository:  # type: ignore[na
         attr="cron_run_repo",
         code="cron_run_repo_unavailable",
         message="cron run repository is not initialized",
+    )
+
+
+def get_cron_run_failure_repo(
+    request: Request,
+) -> CronRunFailureEnrichmentsRepository:  # type: ignore[name-defined]
+    """Get the cron run failure-enrichment repository from app state (STAGE-004-034)."""
+    return _require_state(
+        request,
+        attr="cron_run_failure_repo",
+        code="cron_run_failure_repo_unavailable",
+        message="cron run failure repository is not initialized",
     )
 
 

@@ -1887,6 +1887,119 @@
         "title": "CronOut",
         "type": "object"
       },
+      "CronRunFailureEnrichmentResponse": {
+        "additionalProperties": false,
+        "description": "Response body for ``GET /api/crons/{fp}/runs/{run_id}/failure-enrichment``.\n\nThe persisted last-N-lines snapshot captured when the run failed. 404 if no\nenrichment exists for the (fingerprint, run_id) pair. ``degraded`` is True\nwhen VictoriaLogs was unreachable at capture time (lines may be empty).",
+        "properties": {
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "cron_fingerprint": {
+            "title": "Cron Fingerprint",
+            "type": "string"
+          },
+          "degraded": {
+            "title": "Degraded",
+            "type": "boolean"
+          },
+          "ended_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ended At"
+          },
+          "exit_code": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exit Code"
+          },
+          "failure_id": {
+            "title": "Failure Id",
+            "type": "string"
+          },
+          "line_count": {
+            "title": "Line Count",
+            "type": "integer"
+          },
+          "lines": {
+            "items": {
+              "$ref": "#/components/schemas/LogLine"
+            },
+            "title": "Lines",
+            "type": "array"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          },
+          "window_end": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Window End"
+          },
+          "window_start": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Window Start"
+          }
+        },
+        "required": [
+          "failure_id",
+          "cron_fingerprint",
+          "run_id",
+          "exit_code",
+          "started_at",
+          "ended_at",
+          "line_count",
+          "truncated",
+          "degraded",
+          "window_start",
+          "window_end",
+          "created_at",
+          "lines"
+        ],
+        "title": "CronRunFailureEnrichmentResponse",
+        "type": "object"
+      },
       "CronRunListResponse": {
         "additionalProperties": false,
         "description": "Cursor-paginated list payload for ``GET /api/crons/{fp}/runs``.",
@@ -6155,6 +6268,61 @@
           }
         },
         "summary": "List Cron Runs",
+        "tags": [
+          "crons"
+        ]
+      }
+    },
+    "/api/crons/{fingerprint}/runs/{run_id}/failure-enrichment": {
+      "get": {
+        "description": "Return the persisted failure-log snapshot for one failed run.\n\nSTAGE-004-034. The snapshot is captured by CronRunReconciler when a run's\nstate becomes 'fail'. 404 if no enrichment exists for (fingerprint, run_id).\nSession-auth (D-AUTH); the frontend never sees LogsQL.",
+        "operationId": "get_cron_run_failure_enrichment_api_crons__fingerprint__runs__run_id__failure_enrichment_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "fingerprint",
+            "required": true,
+            "schema": {
+              "title": "Fingerprint",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CronRunFailureEnrichmentResponse"
+                }
+              }
+            },
+            "description": "Persisted last-N-lines failure snapshot"
+          },
+          "404": {
+            "description": "No failure enrichment for this run"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Cron Run Failure Enrichment",
         "tags": [
           "crons"
         ]

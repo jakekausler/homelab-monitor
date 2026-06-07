@@ -46,6 +46,9 @@ from homelab_monitor.kernel.docker.build_sources_loader import BuildSourcesLoade
 from homelab_monitor.kernel.docker.compose_action_runner import ComposeActionRunner
 from homelab_monitor.kernel.docker.socket_client import DockerSocketClient
 from homelab_monitor.kernel.heartbeat.repository import HeartbeatRepo
+from homelab_monitor.kernel.logs.cron_run_failure_enrichments_repo import (
+    CronRunFailureEnrichmentsRepository,
+)
 from homelab_monitor.kernel.logs.cycle_status import CycleStatusStore
 from homelab_monitor.kernel.logs.multiplex import MultiplexLogsWriter
 from homelab_monitor.kernel.logs.services import ServicesCache
@@ -329,6 +332,7 @@ async def _per_test_db(  # noqa: PLR0915  # pyright: ignore[reportUnusedFunction
     state.heartbeat_repo = heartbeat_repo
     state.cron_repo = cron_repo
     state.cron_run_repo = cron_run_repo
+    state.cron_run_failure_repo = CronRunFailureEnrichmentsRepository(repo)
     state.failure_budget = failure_budget
     state.backup_service = backup_service
     state.loader = loader
