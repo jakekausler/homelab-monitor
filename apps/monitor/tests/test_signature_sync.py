@@ -12,7 +12,10 @@ Project test conventions:
 from __future__ import annotations
 
 from homelab_monitor.kernel.db.repository import SqliteRepository
-from homelab_monitor.kernel.logs.signature_sync import SignatureCatalogSync
+from homelab_monitor.kernel.logs.signature_sync import (
+    SignatureCatalogSync,
+    _pick_first_seen_severity,  # pyright: ignore[reportPrivateUsage]
+)
 from homelab_monitor.kernel.logs.signatures_repo import SignatureFilter, SignaturesRepository
 
 # ---------------------------------------------------------------------------
@@ -53,6 +56,7 @@ async def test_insert_path_creates_row_with_correct_fields(repo: SqliteRepositor
     assert row.label is None
     assert row.status == "active"
     assert row.first_seen_at == 1000  # noqa: PLR2004
+    assert row.first_seen_severity == "info"
     assert row.last_seen_at == 2000  # noqa: PLR2004
     assert row.total_count == 3  # noqa: PLR2004
 
@@ -236,3 +240,115 @@ async def test_multiple_keys_in_one_cycle(repo: SqliteRepository) -> None:
     assert row2.total_count == 6  # noqa: PLR2004
     assert row2.template_str == "template two"
     assert row2.first_seen_at == 2000  # noqa: PLR2004
+
+
+# ===========================================================================
+# first_seen_severity persistence (STAGE-004-035)
+# ===========================================================================
+
+
+async def test_insert_persists_single_severity(repo: SqliteRepository) -> None:
+    """INSERT path persists first_seen_severity from the single severity in cycle_counts."""
+    sync = _sync(repo)
+    sig_repo = _sig_repo(repo)
+
+    sig_state = {("svcA", "h1"): (1, 1000, "foo <*> bar")}
+    cycle_counts = {("svcA", "h1", "warning"): 2}
+
+    await sync.sync_cycle(sig_state=sig_state, cycle_counts=cycle_counts, last_seen_at=2000)
+
+    row = await sig_repo.get("h1", "svcA")
+    assert row is not None
+    assert row.first_seen_severity == "warning"
+
+
+async def test_insert_picks_highest_rank_severity(repo: SqliteRepository) -> None:
+    """INSERT path picks highest-ranked severity when multiple present in cycle."""
+    sync = _sync(repo)
+    sig_repo = _sig_repo(repo)
+
+    sig_state = {("svcA", "h1"): (1, 1000, "foo <*> bar")}
+    # info + error in same cycle -> error wins (higher rank)
+    cycle_counts = {
+        ("svcA", "h1", "info"): 3,
+        ("svcA", "h1", "error"): 1,
+    }
+
+    await sync.sync_cycle(sig_state=sig_state, cycle_counts=cycle_counts, last_seen_at=2000)
+
+    row = await sig_repo.get("h1", "svcA")
+    assert row is not None
+    assert row.first_seen_severity == "error"
+
+
+async def test_insert_picks_highest_rank_among_three_severities(repo: SqliteRepository) -> None:
+    """INSERT with critical, error, warning -> critical wins (highest rank)."""
+    sync = _sync(repo)
+    sig_repo = _sig_repo(repo)
+
+    sig_state = {("svcA", "h1"): (1, 1000, "foo <*> bar")}
+    cycle_counts = {
+        ("svcA", "h1", "warning"): 2,
+        ("svcA", "h1", "critical"): 1,
+        ("svcA", "h1", "error"): 3,
+    }
+
+    await sync.sync_cycle(sig_state=sig_state, cycle_counts=cycle_counts, last_seen_at=2000)
+
+    row = await sig_repo.get("h1", "svcA")
+    assert row is not None
+    assert row.first_seen_severity == "critical"
+
+
+async def test_update_preserves_first_seen_severity(repo: SqliteRepository) -> None:
+    """UPDATE path does not touch first_seen_severity (preserved from first cycle)."""
+    sync = _sync(repo)
+    sig_repo = _sig_repo(repo)
+
+    # Cycle 1: insert with error
+    await sync.sync_cycle(
+        sig_state={("svcA", "h1"): (1, 1000, "foo <*> bar")},
+        cycle_counts={("svcA", "h1", "error"): 2},
+        last_seen_at=2000,
+    )
+
+    # Cycle 2: touch same key with only info (lower rank)
+    await sync.sync_cycle(
+        sig_state={("svcA", "h1"): (1, 1000, "foo <*> bar")},
+        cycle_counts={("svcA", "h1", "info"): 4},
+        last_seen_at=5000,
+    )
+
+    row = await sig_repo.get("h1", "svcA")
+    assert row is not None
+    # first_seen_severity must STILL be "error" from cycle 1 (not overwritten to "info")
+    assert row.first_seen_severity == "error"
+    assert row.total_count == 6  # noqa: PLR2004 -- 2 + 4
+
+
+async def test_insert_with_unknown_severity(repo: SqliteRepository) -> None:
+    """INSERT with unknown/unlisted severity still persists it."""
+    sync = _sync(repo)
+    sig_repo = _sig_repo(repo)
+
+    sig_state = {("svcA", "h1"): (1, 1000, "foo <*> bar")}
+    cycle_counts = {("svcA", "h1", "unknown"): 1}
+
+    await sync.sync_cycle(sig_state=sig_state, cycle_counts=cycle_counts, last_seen_at=2000)
+
+    row = await sig_repo.get("h1", "svcA")
+    assert row is not None
+    assert row.first_seen_severity == "unknown"
+
+
+async def test_severity_ranking_deterministic(repo: SqliteRepository) -> None:
+    """Severity ranking is deterministic: same severities always pick the same winner."""
+    # Test the ranking helper directly
+    result1 = _pick_first_seen_severity(["info", "critical", "error"])
+    result2 = _pick_first_seen_severity(["critical", "info", "error"])
+    result3 = _pick_first_seen_severity(["error", "critical", "info"])
+    assert result1 == result2 == result3 == "critical"
+
+    # Test with unknown severities (they sort after all ranked ones)
+    result4 = _pick_first_seen_severity(["foo", "bar"])
+    assert result4 == "bar"  # alphabetical tiebreak

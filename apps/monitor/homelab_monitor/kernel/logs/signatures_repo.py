@@ -2,7 +2,9 @@
 
 One row per (template_hash, service_key). `label` + `status` are user-owned and
 edited via this repo; the drain sync (signature_sync.py) only ever touches
-template_str / last_seen_at / total_count / first_seen_at. All *_at are unix-ms INT.
+template_str / last_seen_at / total_count / first_seen_at / first_seen_severity
+(the last INSERT-only, preserved on UPDATE, like first_seen_at). All *_at are
+unix-ms INT.
 """
 
 from __future__ import annotations
@@ -33,6 +35,7 @@ class Signature:
     label: str | None
     status: str
     first_seen_at: int
+    first_seen_severity: str | None
     last_seen_at: int
     total_count: int
 
@@ -68,7 +71,7 @@ class SignaturesRepository:
         rows = await self._repo.fetch_all(
             text(
                 "SELECT template_hash, service_key, template_str, label, status, "
-                "  first_seen_at, last_seen_at, total_count "
+                "  first_seen_at, first_seen_severity, last_seen_at, total_count "
                 f"FROM log_signatures{where_sql} "
                 f"ORDER BY {sort_col} {direction}, template_hash ASC "
                 "LIMIT :limit OFFSET :offset"
@@ -81,7 +84,7 @@ class SignaturesRepository:
         rows = await self._repo.fetch_all(
             text(
                 "SELECT template_hash, service_key, template_str, label, status, "
-                "  first_seen_at, last_seen_at, total_count "
+                "  first_seen_at, first_seen_severity, last_seen_at, total_count "
                 "FROM log_signatures WHERE template_hash = :h AND service_key = :s"
             ),
             {"h": template_hash, "s": service_key},
@@ -140,6 +143,7 @@ class SignaturesRepository:
 
 def _row_to_signature(r: Any) -> Signature:  # noqa: ANN401 -- SQLite Row
     raw_label = r.label  # pyright: ignore[reportAttributeAccessIssue]
+    raw_fss = r.first_seen_severity  # pyright: ignore[reportAttributeAccessIssue]
     return Signature(
         template_hash=str(r.template_hash),  # pyright: ignore[reportAttributeAccessIssue]
         service_key=str(r.service_key),  # pyright: ignore[reportAttributeAccessIssue]
@@ -147,6 +151,7 @@ def _row_to_signature(r: Any) -> Signature:  # noqa: ANN401 -- SQLite Row
         label=(None if raw_label is None else str(raw_label)),
         status=str(r.status),  # pyright: ignore[reportAttributeAccessIssue]
         first_seen_at=int(r.first_seen_at),  # pyright: ignore[reportAttributeAccessIssue]
+        first_seen_severity=(None if raw_fss is None else str(raw_fss)),
         last_seen_at=int(r.last_seen_at),  # pyright: ignore[reportAttributeAccessIssue]
         total_count=int(r.total_count),  # pyright: ignore[reportAttributeAccessIssue]
     )

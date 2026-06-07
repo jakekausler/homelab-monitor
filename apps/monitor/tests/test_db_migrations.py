@@ -1012,3 +1012,95 @@ async def test_migration_0033_round_trip(db_url: str) -> None:
         assert "drain_models" not in tables_at_0032
     finally:
         await engine.dispose()
+
+
+async def test_migration_0039_first_seen_severity_column(db_url: str) -> None:
+    """Migration 0039 adds log_signatures.first_seen_severity column (STAGE-004-035).
+
+    - Upgrade to head: column is present.
+    - Downgrade to 0038: column is gone, indexes exist, data preserved.
+    - Re-upgrade to head: column is back.
+    """
+    cfg = Config()
+    cfg.set_main_option("script_location", str(ALEMBIC_DIR))
+    cfg.set_main_option("sqlalchemy.url", db_url)
+
+    # Start at head
+    command.upgrade(cfg, "head")
+
+    engine = get_engine(url=db_url)
+    try:
+
+        def _cols(sync_conn: object) -> set[str]:
+            inspector = inspect(sync_conn)
+            if inspector is None:
+                return set()
+            return {c["name"] for c in inspector.get_columns("log_signatures")}
+
+        def _indexes(sync_conn: object) -> set[str]:
+            inspector = inspect(sync_conn)
+            if inspector is None:
+                return set()
+            return {idx["name"] for idx in inspector.get_indexes("log_signatures")}
+
+        # Verify column exists at head
+        async with engine.connect() as conn:
+            cols_at_head = await conn.run_sync(_cols)
+        assert "first_seen_severity" in cols_at_head
+
+        # Seed a row with known data (all columns)
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "INSERT INTO log_signatures "
+                    "  (template_hash, service_key, template_str, label, status, "
+                    "   first_seen_at, first_seen_severity, last_seen_at, total_count) "
+                    "VALUES "
+                    "  (:h, :s, :tstr, :l, :st, :fst, :fss, :lst, :tc)"
+                ),
+                {
+                    "h": "test_hash",
+                    "s": "test_service",
+                    "tstr": "test <*> template",
+                    "l": None,
+                    "st": "active",
+                    "fst": 1000,
+                    "fss": "error",
+                    "lst": 2000,
+                    "tc": 5,
+                },
+            )
+
+        # Downgrade to 0038 (before first_seen_severity)
+        command.downgrade(cfg, "0038")
+
+        # Verify column is gone but indexes exist
+        async with engine.connect() as conn:
+            cols_at_0038 = await conn.run_sync(_cols)
+            indexes_at_0038 = await conn.run_sync(_indexes)
+        assert "first_seen_severity" not in cols_at_0038
+        assert "ix_log_signatures_service_key" in indexes_at_0038
+        assert "ix_log_signatures_status" in indexes_at_0038
+        assert "ix_log_signatures_last_seen_at" in indexes_at_0038
+
+        # Verify data survived the rebuild
+        async with engine.connect() as conn:
+            row = (
+                await conn.execute(
+                    text("SELECT template_hash, service_key, total_count FROM log_signatures")
+                )
+            ).first()
+        assert row is not None
+        assert row[0] == "test_hash"
+        assert row[1] == "test_service"
+        assert row[2] == 5  # noqa: PLR2004
+
+        # Re-upgrade to head
+        command.upgrade(cfg, "head")
+
+        # Verify column is back
+        async with engine.connect() as conn:
+            cols_at_head_again = await conn.run_sync(_cols)
+        assert "first_seen_severity" in cols_at_head_again
+    finally:
+        await engine.dispose()

@@ -676,3 +676,111 @@ def test_load_drain_config_bad_int_raises(monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setenv("HOMELAB_MONITOR_DRAIN_INTERVAL_S", "not-a-number")
     with pytest.raises(ValueError):
         load_drain_config()
+
+
+# --- NewSignatureConfig (STAGE-004-035) ------------------------------------------
+
+
+def test_load_new_signature_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    """load_new_signature_config returns documented defaults when no env vars set."""
+    from homelab_monitor.kernel.config import (  # noqa: PLC0415
+        NewSignatureConfig,
+        load_new_signature_config,
+    )
+
+    monkeypatch.delenv("HOMELAB_MONITOR_NEW_SIGNATURE_WINDOW_S", raising=False)
+    monkeypatch.delenv("HOMELAB_MONITOR_NEW_SIGNATURE_SEVERITIES", raising=False)
+
+    cfg = load_new_signature_config()
+    defaults = NewSignatureConfig()
+    assert cfg.window_seconds == defaults.window_seconds
+    assert cfg.severities == defaults.severities
+
+    # Verify the documented values per spec
+    assert cfg.window_seconds == 300  # noqa: PLR2004
+    assert cfg.severities == frozenset({"error", "critical", "warning"})
+
+
+def test_load_new_signature_config_window_clamp(monkeypatch: pytest.MonkeyPatch) -> None:
+    """window_seconds of 0 or negative is clamped to 1."""
+    from homelab_monitor.kernel.config import load_new_signature_config  # noqa: PLC0415
+
+    monkeypatch.setenv("HOMELAB_MONITOR_NEW_SIGNATURE_WINDOW_S", "0")
+    monkeypatch.delenv("HOMELAB_MONITOR_NEW_SIGNATURE_SEVERITIES", raising=False)
+
+    cfg = load_new_signature_config()
+    assert cfg.window_seconds == 1
+
+
+def test_load_new_signature_config_window_negative_clamp(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Negative window_seconds is clamped to 1."""
+    from homelab_monitor.kernel.config import load_new_signature_config  # noqa: PLC0415
+
+    monkeypatch.setenv("HOMELAB_MONITOR_NEW_SIGNATURE_WINDOW_S", "-100")
+    monkeypatch.delenv("HOMELAB_MONITOR_NEW_SIGNATURE_SEVERITIES", raising=False)
+
+    cfg = load_new_signature_config()
+    assert cfg.window_seconds == 1
+
+
+def test_load_new_signature_config_severities_parse_and_lowercase(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Severities are lowercased, stripped, and split on comma."""
+    from homelab_monitor.kernel.config import load_new_signature_config  # noqa: PLC0415
+
+    monkeypatch.delenv("HOMELAB_MONITOR_NEW_SIGNATURE_WINDOW_S", raising=False)
+    monkeypatch.setenv("HOMELAB_MONITOR_NEW_SIGNATURE_SEVERITIES", "error, INFO ,debug")
+
+    cfg = load_new_signature_config()
+    assert cfg.severities == frozenset({"error", "info", "debug"})
+
+
+def test_load_new_signature_config_severities_empty_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Empty or whitespace-only severities fall back to default."""
+    from homelab_monitor.kernel.config import load_new_signature_config  # noqa: PLC0415
+
+    monkeypatch.delenv("HOMELAB_MONITOR_NEW_SIGNATURE_WINDOW_S", raising=False)
+    monkeypatch.setenv("HOMELAB_MONITOR_NEW_SIGNATURE_SEVERITIES", " , ")
+
+    cfg = load_new_signature_config()
+    # Should fall back to the default set (error, critical, warning)
+    assert cfg.severities == frozenset({"error", "critical", "warning"})
+
+
+def test_load_new_signature_config_severities_custom_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Custom severities override the default set."""
+    from homelab_monitor.kernel.config import load_new_signature_config  # noqa: PLC0415
+
+    monkeypatch.delenv("HOMELAB_MONITOR_NEW_SIGNATURE_WINDOW_S", raising=False)
+    monkeypatch.setenv("HOMELAB_MONITOR_NEW_SIGNATURE_SEVERITIES", "critical,error")
+
+    cfg = load_new_signature_config()
+    assert cfg.severities == frozenset({"critical", "error"})
+
+
+def test_load_new_signature_config_window_non_numeric_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Non-numeric window_seconds env value raises ValueError."""
+    from homelab_monitor.kernel.config import load_new_signature_config  # noqa: PLC0415
+
+    monkeypatch.setenv("HOMELAB_MONITOR_NEW_SIGNATURE_WINDOW_S", "not-a-number")
+    monkeypatch.delenv("HOMELAB_MONITOR_NEW_SIGNATURE_SEVERITIES", raising=False)
+
+    with pytest.raises(ValueError):
+        load_new_signature_config()
+
+
+def test_load_new_signature_config_all_env_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Both env vars override both fields simultaneously."""
+    from homelab_monitor.kernel.config import load_new_signature_config  # noqa: PLC0415
+
+    monkeypatch.setenv("HOMELAB_MONITOR_NEW_SIGNATURE_WINDOW_S", "600")
+    monkeypatch.setenv("HOMELAB_MONITOR_NEW_SIGNATURE_SEVERITIES", "warning,notice")
+
+    cfg = load_new_signature_config()
+    assert cfg.window_seconds == 600  # noqa: PLR2004
+    assert cfg.severities == frozenset({"warning", "notice"})

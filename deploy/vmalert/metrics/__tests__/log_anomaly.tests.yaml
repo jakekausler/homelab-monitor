@@ -1,0 +1,43 @@
+# Rule unit-test fixtures for deploy/vmalert/metrics/log_anomaly.yaml.
+# Schema: Prometheus / vmalert rule unit-test format.
+# Run manually: vmalert -rule.config=log_anomaly.yaml -rule.testFile=...
+# (No make target wires this yet — forward-compatible static fixture.)
+
+rule_files:
+  - ../log_anomaly.yaml
+
+evaluation_interval: 30s
+
+tests:
+  # A new-signature gauge present -> NewLogSignature fires immediately (for: 0m).
+  - interval: 30s
+    input_series:
+      - series: 'homelab_log_signature_new{service_key="svcA",template_hash="h1",severity="error"}'
+        values: '1x5'
+    alert_rule_test:
+      - eval_time: 60s
+        alertname: NewLogSignature
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              source_tool: vmalert-metrics
+              category: log-anomaly
+              anomaly_kind: new_signature
+              target_kind: log_signature
+              service_key: svcA
+              template_hash: h1
+              # NOTE: the line-severity label is "severity" on the input series but
+              # the rule sets its own severity=warning label, which OVERRIDES the
+              # series label. So the firing alert's severity label is "warning".
+            exp_annotations:
+              summary: "New log signature in svcA (warning)"
+
+  # No gauge series at all -> no alert.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_log_signature_new{service_key="svcB",template_hash="h2",severity="error"}'
+        values: '0x5'
+    alert_rule_test:
+      - eval_time: 60s
+        alertname: NewLogSignature
+        exp_alerts: []

@@ -598,6 +598,46 @@ def load_healthcheck_log_config() -> HealthcheckLogConfig:
     )
 
 
+@dataclass(frozen=True, slots=True)
+class NewSignatureConfig:
+    """Tunables for NewSignatureCollector (STAGE-004-035).
+
+    ``window_seconds`` — a signature counts as "new" when
+    ``now_ms - first_seen_at <= window_seconds * 1000``. Default 300 (5 min);
+    catches up if a drain cycle was delayed. Clamped >= 1.
+    ``severities`` — the in-scope severity set; a signature alerts only when its
+    ``first_seen_severity`` is in this set. Default {error, critical, warning};
+    info/debug signatures still get a catalog row but never trip the new-signature
+    alert. Empty / all-unknown env input falls back to the default set (an empty
+    set would mute the feature entirely — a foot-gun).
+    """
+
+    window_seconds: int = 300
+    severities: frozenset[str] = frozenset({"error", "critical", "warning"})
+
+
+def load_new_signature_config() -> NewSignatureConfig:
+    """Load NewSignatureCollector tunables from env (HOMELAB_MONITOR_NEW_SIGNATURE_*).
+
+    HOMELAB_MONITOR_NEW_SIGNATURE_WINDOW_S -> window_seconds (clamped >= 1).
+    HOMELAB_MONITOR_NEW_SIGNATURE_SEVERITIES -> comma-separated severities,
+    lowercased + stripped; empty result falls back to the default set.
+    """
+    defaults = NewSignatureConfig()
+    window_seconds = defaults.window_seconds
+    severities = defaults.severities
+    raw_window = os.environ.get("HOMELAB_MONITOR_NEW_SIGNATURE_WINDOW_S")
+    if raw_window is not None:
+        window_seconds = int(raw_window)
+    raw_sev = os.environ.get("HOMELAB_MONITOR_NEW_SIGNATURE_SEVERITIES")
+    if raw_sev is not None:
+        parsed = frozenset(s.strip().lower() for s in raw_sev.split(",") if s.strip())
+        if parsed:
+            severities = parsed
+    window_seconds = max(window_seconds, 1)
+    return NewSignatureConfig(window_seconds=window_seconds, severities=severities)
+
+
 # ---------------------------------------------------------------------------
 # STAGE-004-006: log redaction patterns (logs.redact:)
 # ---------------------------------------------------------------------------
@@ -767,6 +807,7 @@ __all__ = [
     "DrainConfig",
     "HealthcheckLogConfig",
     "LogStreamBudgetConfig",
+    "NewSignatureConfig",
     "RedactPattern",
     "TailConfig",
     "VlDiskWarningConfig",
@@ -779,6 +820,7 @@ __all__ = [
     "load_drain_config",
     "load_healthcheck_log_config",
     "load_log_stream_budget_config",
+    "load_new_signature_config",
     "load_redact_patterns",
     "load_tail_config",
     "load_vl_disk_warning_config",

@@ -1,0 +1,41 @@
+# vmalert rules for log-signature anomaly detection (STAGE-004-035).
+# Anomaly Type A — "new signature detected". DUMB rule: NewSignatureCollector
+# (kernel/metrics/new_signature_collector.py) makes the entire decision in
+# Python (first-seen window AND not-suppressed AND in-scope severity) and emits
+# homelab_log_signature_new{service_key, template_hash, severity}=1. This rule
+# just surfaces that gauge as an alert. Suppression is folded into the gauge, so
+# a suppressed signature emits no series -> no alert (D-SUPPRESSED-SIGNATURES-
+# NEVER-ALERT).
+#
+# Severity vocabulary: info / warning / error / critical (spec §8.2). The ALERT
+# severity is `warning` (the operational severity of "a new pattern showed up");
+# the originating log line's severity is carried separately in the `severity`
+# label.
+#
+# `for: 0m` — fire as soon as the gauge is present (the collector already applied
+# the window). Won't fire inside the fast `make test-fast` rig.
+
+groups:
+  - name: log_anomaly
+    interval: 30s
+    rules:
+      - alert: NewLogSignature
+        expr: homelab_log_signature_new == 1
+        for: 0m
+        labels:
+          severity: warning
+          source_tool: vmalert-metrics
+          category: log-anomaly
+          anomaly_kind: new_signature
+          target_kind: log_signature
+        annotations:
+          summary: "New log signature in {{ $labels.service_key }} ({{ $labels.severity }})"
+          description: |
+            A previously-unseen log template appeared.
+
+            Service: {{ $labels.service_key }}
+            Template hash: {{ $labels.template_hash }}
+            First-seen severity: {{ $labels.severity }}
+
+            Signature catalog: /logs/signatures#{{ $labels.template_hash }}/{{ $labels.service_key }}
+            Recent lines (Explorer): /logs?q={{ $labels.service_key }}

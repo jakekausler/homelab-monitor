@@ -465,6 +465,30 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
         )
         degraded.append("local_build_update_checker")
 
+    # ------------------------------------------------------------------
+    # STAGE-004-035: NewSignatureCollector (anomaly type A — new signature)
+    # ------------------------------------------------------------------
+    try:
+        from homelab_monitor.kernel.metrics.new_signature_collector import (  # noqa: PLC0415
+            NewSignatureCollector,
+        )
+
+        loader.register(
+            NewSignatureCollector,
+            {
+                "name": "new_signature",
+                "interval_seconds": int(NewSignatureCollector.interval.total_seconds()),
+                "timeout_seconds": int(NewSignatureCollector.timeout.total_seconds()),
+            },
+        )
+    except Exception as exc:  # pragma: no cover -- defensive
+        log.warning(
+            "lifespan.collector_register_failed",
+            name="new_signature",
+            error=str(exc),
+        )
+        degraded.append("new_signature")
+
     plugins_env = os.environ.get("HOMELAB_MONITOR_PLUGINS_DIR")
     if plugins_env is not None:
         plugins_dir: Path | None = Path(plugins_env)
@@ -749,6 +773,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
             compose_runner = getattr(app.state, "compose_action_runner", None)
             if compose_runner is not None:  # pragma: no branch -- always set before plugin loop
                 compose_runner.set_local_build_refresher(c.refresh_container)
+        from homelab_monitor.kernel.metrics.new_signature_collector import (  # noqa: PLC0415
+            NewSignatureCollector,
+        )
+
+        if isinstance(c, NewSignatureCollector):
+            from homelab_monitor.kernel.config import load_new_signature_config  # noqa: PLC0415
+
+            c._config = load_new_signature_config()  # pyright: ignore[reportPrivateUsage]
     scheduler = Scheduler(
         collectors,
         ctx_factory,

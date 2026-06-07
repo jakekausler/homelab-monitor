@@ -31,6 +31,7 @@ async def _insert_sig(  # noqa: PLR0913
     label: str | None = None,
     status: str = "active",
     first_seen_at: int = 1000,
+    first_seen_severity: str | None = None,
     last_seen_at: int = 2000,
     total_count: int = 5,
 ) -> None:
@@ -39,9 +40,9 @@ async def _insert_sig(  # noqa: PLR0913
             text(
                 "INSERT INTO log_signatures "
                 "  (template_hash, service_key, template_str, label, status, "
-                "   first_seen_at, last_seen_at, total_count) "
+                "   first_seen_at, first_seen_severity, last_seen_at, total_count) "
                 "VALUES "
-                "  (:h, :s, :tstr, :label, :status, :first, :last, :cnt)"
+                "  (:h, :s, :tstr, :label, :status, :first, :fss, :last, :cnt)"
             ),
             {
                 "h": template_hash,
@@ -50,6 +51,7 @@ async def _insert_sig(  # noqa: PLR0913
                 "label": label,
                 "status": status,
                 "first": first_seen_at,
+                "fss": first_seen_severity,
                 "last": last_seen_at,
                 "cnt": total_count,
             },
@@ -309,6 +311,7 @@ async def test_get_returns_matching_row(repo: SqliteRepository) -> None:
         label="network-errors",
         status="suppressed",
         first_seen_at=500,
+        first_seen_severity="error",
         last_seen_at=9999,
         total_count=42,
     )
@@ -322,6 +325,7 @@ async def test_get_returns_matching_row(repo: SqliteRepository) -> None:
     assert result.label == "network-errors"
     assert result.status == "suppressed"
     assert result.first_seen_at == 500  # noqa: PLR2004
+    assert result.first_seen_severity == "error"
     assert result.last_seen_at == 9999  # noqa: PLR2004
     assert result.total_count == 42  # noqa: PLR2004
 
@@ -452,3 +456,62 @@ async def test_list_sort_by_total_count_descending(repo: SqliteRepository) -> No
     )
     assert rows[0].template_hash == "high"
     assert rows[1].template_hash == "low"
+
+
+# ===========================================================================
+# first_seen_severity — round-trip persistence (STAGE-004-035)
+# ===========================================================================
+
+
+async def test_get_returns_first_seen_severity(repo: SqliteRepository) -> None:
+    """get() returns first_seen_severity field correctly."""
+    sig_repo = SignaturesRepository(repo)
+    await _insert_sig(
+        repo,
+        template_hash="h1",
+        service_key="svc",
+        first_seen_severity="error",
+    )
+
+    result = await sig_repo.get("h1", "svc")
+    assert result is not None
+    assert result.first_seen_severity == "error"
+
+
+async def test_get_returns_null_first_seen_severity(repo: SqliteRepository) -> None:
+    """get() returns None for first_seen_severity when NULL in DB."""
+    sig_repo = SignaturesRepository(repo)
+    await _insert_sig(
+        repo,
+        template_hash="h2",
+        service_key="svc",
+        first_seen_severity=None,
+    )
+
+    result = await sig_repo.get("h2", "svc")
+    assert result is not None
+    assert result.first_seen_severity is None
+
+
+async def test_list_returns_first_seen_severity(repo: SqliteRepository) -> None:
+    """list() returns first_seen_severity field for all rows."""
+    sig_repo = SignaturesRepository(repo)
+    await _insert_sig(
+        repo,
+        template_hash="h3",
+        service_key="svc",
+        first_seen_severity="warning",
+    )
+    await _insert_sig(
+        repo,
+        template_hash="h4",
+        service_key="svc",
+        first_seen_severity=None,
+    )
+
+    rows, _ = await sig_repo.list(filter=SignatureFilter(), limit=100, offset=0)
+    assert len(rows) == 2  # noqa: PLR2004
+    h3_row = next(r for r in rows if r.template_hash == "h3")
+    h4_row = next(r for r in rows if r.template_hash == "h4")
+    assert h3_row.first_seen_severity == "warning"
+    assert h4_row.first_seen_severity is None
