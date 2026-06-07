@@ -382,3 +382,11 @@
 - Metric homelab_cron_run_failure_total{cron_fingerprint,run_id,name,host} emitted once per newly-failure-enriched run (counter). Degraded VL at enrich time still inserts a degraded row + emits the counter so the alert fires.
 - vmalert rule CronRunFailed (deploy/vmalert/metrics/heartbeats.yaml) loads + fires on increase(homelab_cron_run_failure_total[5m]) > 0 with labels severity:error, source_tool:vmalert-metrics, category:cron; annotation deep-links to /inventory/crons/{cron_fingerprint}/runs/{run_id}. Confirm migration 0038 round-trips cleanly (downgrade drops the cron_run_failure_enrichments table + indexes).
 - Endpoint auth: /failure-enrichment returns 401 without a session; 404 for a run with no failure enrichment or an unknown run.
+
+## STAGE-004-035 — Anomaly Type A: New signature detected rules
+
+- vmalert rule `NewLogSignature` must load with health=ok (expr `homelab_log_signature_new == 1`; labels category=log-anomaly, anomaly_kind=new_signature, source_tool=vmalert-metrics, target_kind=log_signature). Check: `docker exec <vmalert-metrics> wget -qO- http://127.0.0.1:8880/api/v1/rules | grep NewLogSignature`.
+- Migration 0039 (`first_seen_severity` column on `log_signatures`) must remain at head with a working table-rebuild downgrade (round-trip in test_db_migrations.py::test_migration_0039_first_seen_severity_column).
+- NewSignatureCollector decision table (re-verify via tests/test_new_signature_collector.py, 100% coverage): new+in-scope+unsuppressed+in-window → emits `homelab_log_signature_new=1`; suppressed → absent; out-of-scope severity → absent; outside 300s window → absent; null first_seen_severity → absent.
+- Suppression is folded into the collector (no separate gauge): a signature flipped to status='suppressed' stops emitting within one collector tick (replace_family self-resolution).
+- signature_sync persists first_seen_severity on INSERT only, preserved on UPDATE (highest-severity-wins rank).
