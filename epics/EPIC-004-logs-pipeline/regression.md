@@ -390,3 +390,10 @@
 - NewSignatureCollector decision table (re-verify via tests/test_new_signature_collector.py, 100% coverage): new+in-scope+unsuppressed+in-window → emits `homelab_log_signature_new=1`; suppressed → absent; out-of-scope severity → absent; outside 300s window → absent; null first_seen_severity → absent.
 - Suppression is folded into the collector (no separate gauge): a signature flipped to status='suppressed' stops emitting within one collector tick (replace_family self-resolution).
 - signature_sync persists first_seen_severity on INSERT only, preserved on UPDATE (highest-severity-wins rank).
+
+## STAGE-004-036 — Anomaly Type B: Signature count spike vs baseline
+
+- `render_signature_spike_rule(...)` must render a vmalert metrics rule that vmalert ACCEPTS (loads with health=ok — PromQL syntactically valid). Re-verify via `tests/test_signature_spike_rule.py` (15 tests, 100% coverage of signature_spike_render.py): render+parse, label block (category=log-anomaly, anomaly_kind=signature_spike, source_tool=vmalert-metrics, target_kind=log_signature, severity=warning), for:1m, Go-template `{{ $labels. }}`/`{{ $value }}` survive un-substituted (collision regression), both cold-start guards (`>= 604800` + `< 604800`) + `/1e9` + `[7d:` + `[1h:`, min-baseline floor `max(..., N)`, and all validation-rejection paths (quote/backslash/multiplier<1/min_baseline<1/bad window).
+- The `.tmpl` file must remain byte-identical to the embedded `_TEMPLATE` constant (drift-guard test `test_tmpl_file_matches_embedded_constant`).
+- The `.tmpl` must stay OUT of vmalert's live rule glob (`*.yaml`/`*.yml`); `signature_spike.yml.tmpl` is structurally excluded — it must NOT be renamed to `.yml`/`.yaml` (that would load an un-rendered template with `__TOKEN__` sentinels into vmalert).
+- Spike-detection invariant: current volume = `sum_over_time(homelab_log_signature_count[window])` (NOT increase() — it's a per-cycle gauge); baseline = `avg_over_time(sum_over_time(...)[7d:window])` with a `max(baseline, min_baseline)` floor for gap-robustness; cold-start gated on `first_seen_ts/1e9` (nanoseconds) vs 604800.
