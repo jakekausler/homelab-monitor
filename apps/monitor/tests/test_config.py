@@ -20,6 +20,7 @@ from homelab_monitor.kernel.config import (
     SeverityFloor,
     SilenceDetectionConfig,
     TailConfig,
+    VlHealthConfig,
     VlQueryLimits,
     load_cron_anomaly_config,
     load_cron_run_reconciler_config,
@@ -30,6 +31,7 @@ from homelab_monitor.kernel.config import (
     load_new_signature_config,
     load_silence_detection_config,
     load_tail_config,
+    load_vl_health_config,
     load_vl_query_limits,
     load_vl_retention_days,
 )
@@ -1208,3 +1210,38 @@ def test_load_silence_detection_config_clamp_below_one(monkeypatch: pytest.Monke
     assert cfg.silent_min_seconds == 1
     assert cfg.silent_max_seconds == 1
     assert cfg.cron_grace_seconds == 1
+
+
+# STAGE-004-041: VlHealthConfig + load_vl_health_config
+def test_load_vl_health_config_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """load_vl_health_config returns 5.0s default when env var is absent."""
+    monkeypatch.delenv("HOMELAB_MONITOR_VL_HEALTH_TIMEOUT_S", raising=False)
+    cfg = load_vl_health_config()
+    assert cfg.timeout_s == 5.0  # noqa: PLR2004
+
+
+def test_load_vl_health_config_env_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """HOMELAB_MONITOR_VL_HEALTH_TIMEOUT_S overrides the default."""
+    monkeypatch.setenv("HOMELAB_MONITOR_VL_HEALTH_TIMEOUT_S", "10.0")
+    cfg = load_vl_health_config()
+    assert cfg.timeout_s == 10.0  # noqa: PLR2004
+
+
+def test_load_vl_health_config_malformed_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Malformed env value propagates ValueError (mirrors VlDiskWarningConfig pattern)."""
+    monkeypatch.setenv("HOMELAB_MONITOR_VL_HEALTH_TIMEOUT_S", "not-a-float")
+    with pytest.raises(ValueError):
+        load_vl_health_config()
+
+
+def test_vl_health_config_is_frozen() -> None:
+    """VlHealthConfig instances are frozen (immutable)."""
+    cfg = VlHealthConfig()
+    with pytest.raises((AttributeError, TypeError)):
+        cfg.timeout_s = 99.0  # type: ignore[misc]

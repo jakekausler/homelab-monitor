@@ -445,6 +445,24 @@ def load_vl_disk_warning_config() -> VlDiskWarningConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class VlHealthConfig:
+    """Probe timeout for VlHealthCollector. Env-only.
+
+    ``timeout_s`` — HTTP GET timeout in seconds for the /health probe.
+    """
+
+    timeout_s: float = 5.0
+
+
+def load_vl_health_config() -> VlHealthConfig:
+    """Load VL health probe timeout from env (HOMELAB_MONITOR_VL_HEALTH_TIMEOUT_S)."""
+    raw = os.environ.get("HOMELAB_MONITOR_VL_HEALTH_TIMEOUT_S")
+    if raw is None:
+        return VlHealthConfig()
+    return VlHealthConfig(timeout_s=float(raw))
+
+
+@dataclass(frozen=True, slots=True)
 class DrainConfig:
     """Runtime tunables for the periodic DrainConsumer (STAGE-004-026).
 
@@ -1187,6 +1205,7 @@ __all__ = [
     "SilenceDetectionConfig",
     "TailConfig",
     "VlDiskWarningConfig",
+    "VlHealthConfig",
     "VlQueryLimits",
     "get_public_url",
     "load_crash_log_config",
@@ -1202,6 +1221,7 @@ __all__ = [
     "load_silence_detection_config",
     "load_tail_config",
     "load_vl_disk_warning_config",
+    "load_vl_health_config",
     "load_vl_query_limits",
     "load_vl_retention_days",
 ]

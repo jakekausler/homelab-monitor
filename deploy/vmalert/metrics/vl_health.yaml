@@ -1,0 +1,81 @@
+# vmalert METRICS rules for VictoriaLogs backend health (STAGE-004-041).
+#
+# DESIGN NOTES:
+# (a) Disk warn/crit thresholds (70/85%) are baked here. VlDiskWarningConfig in
+#     kernel/config.py is the source of truth for the /settings/logs UI display.
+#     Keep in sync when changing thresholds.
+# (b) homelab:vl_disk_used_pct is a recording rule over self_disk collector's
+#     slot="vl" bytes — NO separate VL-disk collector needed.
+# (c) homelab_vl_response_time_seconds is a GAUGE (last-probe latency), NOT a
+#     histogram. Use quantile_over_time() for percentile over a time window,
+#     NOT histogram_quantile(). This is MetricsQL syntax (VictoriaMetrics instance).
+# (d) VlHealthCollector probes every 30s; rules group interval matches.
+
+groups:
+  - name: vl_health
+    interval: 30s
+    rules:
+      - record: homelab:vl_disk_used_pct
+        # `> 0` guard: drop the series (no +Inf) if the VL slot budget is ever 0
+        # (misconfigured total_gb / vl_ratio) rather than spuriously firing both
+        # disk alerts on a divide-by-zero.
+        expr: >-
+          100 * homelab_self_disk_used_bytes{slot="vl"}
+          / (homelab_self_disk_budget_bytes{slot="vl"} > 0)
+
+      - alert: VictoriaLogsDown
+        expr: homelab_vl_up == 0 or absent(homelab_vl_up)
+        for: 1m
+        labels:
+          severity: critical
+          source_tool: vmalert-metrics
+          category: ops
+          anomaly_kind: log_backend_health
+        annotations:
+          summary: "VictoriaLogs is down or unreachable"
+          description: >-
+            VictoriaLogs health probe returned down (homelab_vl_up=0) or the
+            metric is absent. Log ingestion and querying may be unavailable.
+            Check VL container: /settings/logs
+
+      - alert: VictoriaLogsHighLatency
+        expr: quantile_over_time(0.95, homelab_vl_response_time_seconds[5m]) > 2
+        for: 5m
+        labels:
+          severity: warning
+          source_tool: vmalert-metrics
+          category: ops
+          anomaly_kind: log_backend_health
+        annotations:
+          summary: "VictoriaLogs response latency is elevated"
+          description: >-
+            VictoriaLogs /health p95 response time over the last 5m exceeds 2s.
+            Current p95: {{ $value }}s. Check VL load: /settings/logs
+
+      - alert: VictoriaLogsDiskWarning
+        expr: homelab:vl_disk_used_pct > 70
+        for: 10m
+        labels:
+          severity: warning
+          source_tool: vmalert-metrics
+          category: ops
+          anomaly_kind: log_backend_health
+        annotations:
+          summary: "VictoriaLogs disk usage warning"
+          description: >-
+            VL disk usage is {{ $value }}% of budget (warn threshold: 70%).
+            Review retention settings: /settings/logs
+
+      - alert: VictoriaLogsDiskCritical
+        expr: homelab:vl_disk_used_pct > 85
+        for: 5m
+        labels:
+          severity: critical
+          source_tool: vmalert-metrics
+          category: ops
+          anomaly_kind: log_backend_health
+        annotations:
+          summary: "VictoriaLogs disk usage critical"
+          description: >-
+            VL disk usage is {{ $value }}% of budget (crit threshold: 85%).
+            Immediate action required: /settings/logs

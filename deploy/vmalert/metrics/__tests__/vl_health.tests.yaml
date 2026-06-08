@@ -1,0 +1,134 @@
+# Rule unit-test fixtures for deploy/vmalert/metrics/vl_health.yaml.
+# Schema: Prometheus / vmalert rule unit-test format.
+# Run manually: promtool test rules --test-rules-file=vl_health.tests.yaml vl_health.yaml
+# (No make target wires this yet — forward-compatible static fixture, NOT CI-run.)
+#
+# NOTE: The recording rule homelab:vl_disk_used_pct is evaluated by promtool
+# from the same rule_files entry, so we plant the self_disk INPUT series
+# (homelab_self_disk_used_bytes / homelab_self_disk_budget_bytes) and the
+# recording rule computes the derived pct that feeds the disk alerts.
+
+rule_files:
+  - ../vl_health.yaml
+
+evaluation_interval: 30s
+
+tests:
+  # VictoriaLogsDown — fires when homelab_vl_up == 0 (for 1m = 2 evals at 30s)
+  - interval: 30s
+    input_series:
+      - series: 'homelab_vl_up'
+        values: '0+0x10'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: VictoriaLogsDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              source_tool: vmalert-metrics
+              category: ops
+              anomaly_kind: log_backend_health
+            exp_annotations:
+              summary: "VictoriaLogs is down or unreachable"
+
+  # VictoriaLogsDown — does NOT fire when homelab_vl_up == 1.0
+  - interval: 30s
+    input_series:
+      - series: 'homelab_vl_up'
+        values: '1+0x10'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: VictoriaLogsDown
+        exp_alerts: []
+
+  # VictoriaLogsHighLatency — fires when p95 over 5m > 2s (for 5m = 10 evals at 30s)
+  # Plant response_time values consistently above 3s so p95 of the window > 2.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_vl_response_time_seconds'
+        values: '3+0x30'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: VictoriaLogsHighLatency
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              source_tool: vmalert-metrics
+              category: ops
+              anomaly_kind: log_backend_health
+            exp_annotations:
+              summary: "VictoriaLogs response latency is elevated"
+
+  # VictoriaLogsHighLatency — does NOT fire when p95 < 2s
+  - interval: 30s
+    input_series:
+      - series: 'homelab_vl_response_time_seconds'
+        values: '0.1+0x30'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: VictoriaLogsHighLatency
+        exp_alerts: []
+
+  # VictoriaLogsDiskWarning — fires when vl disk > 70% (for 10m = 20 evals at 30s)
+  # Plant used=75 GiB, budget=100 GiB -> pct=75 > 70.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_self_disk_used_bytes{slot="vl"}'
+        values: '80530636800+0x40'   # 75 GiB
+      - series: 'homelab_self_disk_budget_bytes{slot="vl"}'
+        values: '107374182400+0x40'  # 100 GiB
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: VictoriaLogsDiskWarning
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              source_tool: vmalert-metrics
+              category: ops
+              anomaly_kind: log_backend_health
+            exp_annotations:
+              summary: "VictoriaLogs disk usage warning"
+
+  # VictoriaLogsDiskWarning — does NOT fire when disk < 70%
+  - interval: 30s
+    input_series:
+      - series: 'homelab_self_disk_used_bytes{slot="vl"}'
+        values: '53687091200+0x40'   # 50 GiB
+      - series: 'homelab_self_disk_budget_bytes{slot="vl"}'
+        values: '107374182400+0x40'  # 100 GiB -> 50% < 70
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: VictoriaLogsDiskWarning
+        exp_alerts: []
+
+  # VictoriaLogsDiskCritical — fires when vl disk > 85% (for 5m = 10 evals at 30s)
+  # Plant used=90 GiB, budget=100 GiB -> pct=90 > 85.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_self_disk_used_bytes{slot="vl"}'
+        values: '96636764160+0x30'   # 90 GiB
+      - series: 'homelab_self_disk_budget_bytes{slot="vl"}'
+        values: '107374182400+0x30'  # 100 GiB
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: VictoriaLogsDiskCritical
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              source_tool: vmalert-metrics
+              category: ops
+              anomaly_kind: log_backend_health
+            exp_annotations:
+              summary: "VictoriaLogs disk usage critical"
+
+  # VictoriaLogsDiskCritical — does NOT fire when disk < 85%
+  - interval: 30s
+    input_series:
+      - series: 'homelab_self_disk_used_bytes{slot="vl"}'
+        values: '80530636800+0x30'   # 75 GiB -> 75% < 85
+      - series: 'homelab_self_disk_budget_bytes{slot="vl"}'
+        values: '107374182400+0x30'  # 100 GiB
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: VictoriaLogsDiskCritical
+        exp_alerts: []

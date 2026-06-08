@@ -60,6 +60,7 @@ from homelab_monitor.plugins.collectors.builtin.log_stream_budget import (
     LogStreamState,
 )
 from homelab_monitor.plugins.collectors.builtin.tail_metrics import TailMetricsCollector
+from homelab_monitor.plugins.collectors.builtin.vl_health import VlHealthCollector
 
 
 class _StubSshFactory:
@@ -230,6 +231,23 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
             error=str(exc),
         )
         degraded.append("log_error_rate")
+
+    try:
+        loader.register(
+            VlHealthCollector,
+            {
+                "name": "vl_health",
+                "interval_seconds": int(VlHealthCollector.interval.total_seconds()),
+                "timeout_seconds": int(VlHealthCollector.timeout.total_seconds()),
+            },
+        )
+    except Exception as exc:  # pragma: no cover -- defensive
+        log.warning(
+            "lifespan.collector_register_failed",
+            name="vl_health",
+            error=str(exc),
+        )
+        degraded.append("vl_health")
 
     try:
         loader.register(
@@ -678,6 +696,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
         # only fires when LogStreamBudgetCollector is loaded (integration-only)
         if isinstance(c, LogStreamBudgetCollector):  # pragma: no cover
             c._state = log_stream_state  # pyright: ignore[reportPrivateUsage]
+            c._vl_url = vl_url.rstrip("/")  # pyright: ignore[reportPrivateUsage]
+            c._http_client = http_client  # pyright: ignore[reportPrivateUsage]
+        if isinstance(c, VlHealthCollector):  # pragma: no cover
             c._vl_url = vl_url.rstrip("/")  # pyright: ignore[reportPrivateUsage]
             c._http_client = http_client  # pyright: ignore[reportPrivateUsage]
         if isinstance(c, TailMetricsCollector):
