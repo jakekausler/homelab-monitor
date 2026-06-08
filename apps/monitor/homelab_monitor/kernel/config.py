@@ -713,6 +713,17 @@ class ErrorRateOverride:
     multiplier: float | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class SeverityFloor:
+    """Per-service severity-escalation floor override.
+
+    Reserved for STAGE-042; parsed but UNUSED in v1.
+    """
+
+    service: str
+    floor: str
+
+
 #: The v1 default error-rate patterns (ships with the public release; used when
 #: homelab-monitor.yaml omits ``logs.error_patterns``). These catch error-like
 #: lines for languages whose ``severity`` field isn't normalized to error
@@ -726,21 +737,31 @@ DEFAULT_ERROR_PATTERNS: tuple[ErrorPattern, ...] = (
 
 @dataclass(frozen=True, slots=True)
 class LogsConfig:
-    """Operator-tunable error-rate config (logs.error_patterns / logs.error_rate_overrides).
+    """Operator-tunable error-rate config (logs.error_patterns / logs.error_rate_overrides /
+    logs.severity_escalation).
 
     ``error_patterns`` — folded into the collector's single LogsQL query (OR'd
     with the severity union). Defaults to DEFAULT_ERROR_PATTERNS.
     ``error_rate_overrides`` — per-service tuning, reserved for STAGE-042 (parsed
     here but UNUSED in v1).
+    ``severity_escalation_excluded_services`` — services excluded from the
+    CriticalLogLine alert, reserved for STAGE-042 (parsed but UNUSED in v1).
+    ``severity_escalation_floors`` — per-service minimum severity floors,
+    reserved for STAGE-042 (parsed but UNUSED in v1).
     """
 
     error_patterns: tuple[ErrorPattern, ...] = DEFAULT_ERROR_PATTERNS
     error_rate_overrides: tuple[ErrorRateOverride, ...] = ()
+    severity_escalation_excluded_services: tuple[str, ...] = ()
+    severity_escalation_floors: tuple[SeverityFloor, ...] = ()
 
 
 _LOGS_KEY = "logs"
 _ERROR_PATTERNS_SUBKEY = "error_patterns"
 _ERROR_RATE_OVERRIDES_SUBKEY = "error_rate_overrides"
+_SEVERITY_ESCALATION_SUBKEY = "severity_escalation"
+_SEVERITY_ESCALATION_EXCLUDED_SERVICES_SUBKEY = "excluded_services"
+_SEVERITY_ESCALATION_FLOORS_SUBKEY = "severity_floors"
 
 
 def load_logs_config() -> LogsConfig:
@@ -784,7 +805,13 @@ def load_logs_config() -> LogsConfig:
 
     error_patterns = _load_error_patterns(logs)
     error_rate_overrides = _load_error_rate_overrides(logs)
-    return LogsConfig(error_patterns=error_patterns, error_rate_overrides=error_rate_overrides)
+    sev_exc, sev_floors = _load_severity_escalation(logs)
+    return LogsConfig(
+        error_patterns=error_patterns,
+        error_rate_overrides=error_rate_overrides,
+        severity_escalation_excluded_services=sev_exc,
+        severity_escalation_floors=sev_floors,
+    )
 
 
 def _load_error_patterns(logs: dict[str, Any]) -> tuple[ErrorPattern, ...]:
@@ -857,6 +884,105 @@ def _load_error_rate_overrides(logs: dict[str, Any]) -> tuple[ErrorRateOverride,
             ErrorRateOverride(service=service, static_floor=static_floor, multiplier=multiplier)
         )
     return tuple(overrides)
+
+
+def _load_severity_escalation(
+    logs: dict[str, Any],
+) -> tuple[tuple[str, ...], tuple[SeverityFloor, ...]]:
+    """Parse logs.severity_escalation.excluded_services and .severity_floors.
+
+    Reserved for STAGE-042; parsed but UNUSED in v1. Mirrors _load_error_rate_overrides.
+
+    Returns:
+        (excluded_services, severity_floors) — both empty tuples when the
+        sub-section is absent or null.
+
+    Raises:
+        ValueError: severity_escalation not a mapping; excluded_services not a list
+            or contains a non-string entry; severity_floors not a list, contains a
+            non-mapping entry, or an entry is missing/has a non-string 'service' or
+            'floor'.
+    """
+    if _SEVERITY_ESCALATION_SUBKEY not in logs:
+        return (), ()
+    sev_obj: object = logs.get(_SEVERITY_ESCALATION_SUBKEY)
+    if sev_obj is None:
+        return (), ()
+    if not isinstance(sev_obj, dict):
+        msg = (
+            f"{_LOGS_KEY}.{_SEVERITY_ESCALATION_SUBKEY} must be a mapping, "
+            f"got {type(sev_obj).__name__}"
+        )
+        raise ValueError(msg)
+    sev = cast(dict[str, Any], sev_obj)
+
+    excluded = _load_severity_escalation_excluded(sev)
+    floors = _load_severity_escalation_floors(sev)
+    return excluded, floors
+
+
+def _load_severity_escalation_excluded(sev: dict[str, Any]) -> tuple[str, ...]:
+    """Parse logs.severity_escalation.excluded_services."""
+    subkey = _SEVERITY_ESCALATION_EXCLUDED_SERVICES_SUBKEY
+    if subkey not in sev:
+        return ()
+    raw_obj: object = sev.get(subkey)
+    if raw_obj is None:
+        return ()
+    if not isinstance(raw_obj, list):
+        msg = (
+            f"{_LOGS_KEY}.{_SEVERITY_ESCALATION_SUBKEY}.{subkey} must be a list, "
+            f"got {type(raw_obj).__name__}"
+        )
+        raise ValueError(msg)
+    raw_list = cast(list[object], raw_obj)
+    result: list[str] = []
+    for idx, entry_obj in enumerate(raw_list):
+        if not isinstance(entry_obj, str) or not entry_obj:
+            msg = (
+                f"{_LOGS_KEY}.{_SEVERITY_ESCALATION_SUBKEY}.{subkey}[{idx}] "
+                f"must be a non-empty string, got {entry_obj!r}"
+            )
+            raise ValueError(msg)
+        result.append(entry_obj)
+    return tuple(result)
+
+
+def _load_severity_escalation_floors(sev: dict[str, Any]) -> tuple[SeverityFloor, ...]:
+    """Parse logs.severity_escalation.severity_floors."""
+    subkey = _SEVERITY_ESCALATION_FLOORS_SUBKEY
+    if subkey not in sev:
+        return ()
+    raw_obj: object = sev.get(subkey)
+    if raw_obj is None:
+        return ()
+    if not isinstance(raw_obj, list):
+        msg = (
+            f"{_LOGS_KEY}.{_SEVERITY_ESCALATION_SUBKEY}.{subkey} must be a list, "
+            f"got {type(raw_obj).__name__}"
+        )
+        raise ValueError(msg)
+    raw_list = cast(list[object], raw_obj)
+    floors: list[SeverityFloor] = []
+    for idx, entry_obj in enumerate(raw_list):
+        if not isinstance(entry_obj, dict):
+            msg = (
+                f"{_LOGS_KEY}.{_SEVERITY_ESCALATION_SUBKEY}.{subkey}[{idx}] "
+                f"must be a mapping, got {type(entry_obj).__name__}"
+            )
+            raise ValueError(msg)
+        entry = cast(dict[str, Any], entry_obj)
+        service = entry.get("service")
+        floor = entry.get("floor")
+        for field_name, value in (("service", service), ("floor", floor)):
+            if not isinstance(value, str) or not value:
+                msg = (
+                    f"{_LOGS_KEY}.{_SEVERITY_ESCALATION_SUBKEY}.{subkey}[{idx}] "
+                    f"field {field_name!r} must be a non-empty string, got {value!r}"
+                )
+                raise ValueError(msg)
+        floors.append(SeverityFloor(service=cast(str, service), floor=cast(str, floor)))
+    return tuple(floors)
 
 
 def _coerce_opt_float(entry: dict[str, Any], key: str, idx: int, subkey: str) -> float | None:
@@ -1045,6 +1171,7 @@ __all__ = [
     "LogsConfig",
     "NewSignatureConfig",
     "RedactPattern",
+    "SeverityFloor",
     "SilenceDetectionConfig",
     "TailConfig",
     "VlDiskWarningConfig",

@@ -1,0 +1,34 @@
+# vmalert-logs rule: CriticalLogLine — fires when any log line at severity
+# critical, emergency, or alert (word OR numeric syslog PRIORITY) appears
+# in the last 5m, grouped by service.
+#
+# Dual-vocabulary rationale:
+#   Docker/container lines carry WORD severities: critical, emergency, alert.
+#   Journald/systemd lines carry NUMERIC syslog PRIORITY: 0=emergency,
+#   1=alert, 2=critical. Both forms must be matched; omitting the numeric
+#   set would silently miss all journald critical lines.
+#
+# Per-service overrides (excluded_services, severity_floors) are DEFERRED to
+# STAGE-042. v1 is a single global rule covering all services.
+# Config schema is parsed-but-unused (see LogsConfig.severity_escalation_*
+# in kernel/config.py). Mirrors the error_rate_spike DEFERRED comment.
+
+groups:
+  - name: severity_escalation
+    type: vlogs
+    interval: 30s
+    rules:
+      - alert: CriticalLogLine
+        expr: '_time:5m severity:(critical OR emergency OR alert OR "0" OR "1" OR "2") | stats by (service) count() as crit_count | filter crit_count:>0'
+        # for: 0m — fire on the first matching critical line (safety net, no debounce).
+        for: 0m
+        labels:
+          severity: critical
+          source_tool: vmalert-logs
+          category: log-anomaly
+          anomaly_kind: severity_escalation
+          target_kind: container
+        annotations:
+          summary: "Critical-severity log line from {{ $labels.service }}"
+          description: '{{ $value }} critical-severity log line(s) in 5m from service {{ $labels.service }} (severity: critical/emergency/alert or syslog priority 0/1/2)'
+          explorer: '/logs?logsql=service:"{{ $labels.service }}" AND severity:(critical OR emergency OR alert OR "0" OR "1" OR "2")'

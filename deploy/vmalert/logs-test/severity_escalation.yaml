@@ -1,0 +1,31 @@
+# Test-window counterpart of deploy/vmalert/logs/severity_escalation.yaml.
+# Used ONLY by docker-compose.test.yml (vmalert-logs-test service).
+#
+# Differences vs production:
+#   - _time:30s vs _time:5m (faster firing for integration tests)
+#   - interval: 5s vs interval: 30s
+#   - Description text reflects 30s window.
+#   - threshold crit_count:>0 is unchanged (fire on first matching line).
+#
+# Production rule at deploy/vmalert/logs/severity_escalation.yaml — keep BOTH
+# files in sync for label/annotation changes; only _time: may diverge.
+
+groups:
+  - name: severity_escalation
+    type: vlogs
+    interval: 5s
+    rules:
+      - alert: CriticalLogLine
+        expr: '_time:30s severity:(critical OR emergency OR alert OR "0" OR "1" OR "2") | stats by (service) count() as crit_count | filter crit_count:>0'
+        # for: 0m — fire on the first matching critical line (safety net, no debounce).
+        for: 0m
+        labels:
+          severity: critical
+          source_tool: vmalert-logs
+          category: log-anomaly
+          anomaly_kind: severity_escalation
+          target_kind: container
+        annotations:
+          summary: "Critical-severity log line from {{ $labels.service }}"
+          description: '{{ $value }} critical-severity log line(s) in 30s from service {{ $labels.service }} (severity: critical/emergency/alert or syslog priority 0/1/2)'
+          explorer: '/logs?logsql=service:"{{ $labels.service }}" AND severity:(critical OR emergency OR alert OR "0" OR "1" OR "2")'

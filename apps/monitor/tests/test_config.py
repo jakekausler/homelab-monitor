@@ -17,6 +17,7 @@ from homelab_monitor.kernel.config import (
     LogsConfig,
     LogStreamBudgetConfig,
     NewSignatureConfig,
+    SeverityFloor,
     SilenceDetectionConfig,
     TailConfig,
     VlQueryLimits,
@@ -960,6 +961,191 @@ def test_load_logs_config_override_entry_not_mapping_raises(
     cfg_file.write_text("logs:\n  error_rate_overrides:\n    - just a string\n")
     monkeypatch.setenv("HOMELAB_MONITOR_CONFIG", str(cfg_file))
     with pytest.raises(ValueError, match="must be a mapping"):
+        load_logs_config()
+
+
+# --- severity_escalation config (STAGE-004-039) ----------------------------------
+
+
+def test_load_logs_config_severity_escalation_parsed(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """severity_escalation.excluded_services and severity_floors are parsed."""
+    cfg_file = tmp_path / "homelab-monitor.yaml"
+    cfg_file.write_text(
+        "logs:\n"
+        "  severity_escalation:\n"
+        "    excluded_services:\n"
+        "      - noisy-svc\n"
+        "      - dev-debug\n"
+        "    severity_floors:\n"
+        "      - service: my-svc\n"
+        "        floor: error\n"
+        "      - service: other-svc\n"
+        "        floor: warning\n"
+    )
+    monkeypatch.setenv("HOMELAB_MONITOR_CONFIG", str(cfg_file))
+    cfg = load_logs_config()
+    assert cfg.severity_escalation_excluded_services == ("noisy-svc", "dev-debug")
+    assert cfg.severity_escalation_floors == (
+        SeverityFloor(service="my-svc", floor="error"),
+        SeverityFloor(service="other-svc", floor="warning"),
+    )
+
+
+def test_load_logs_config_severity_escalation_absent_defaults_empty(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """severity_escalation absent -> both fields default to empty tuples."""
+    cfg_file = tmp_path / "homelab-monitor.yaml"
+    cfg_file.write_text("logs:\n  error_patterns: []\n")
+    monkeypatch.setenv("HOMELAB_MONITOR_CONFIG", str(cfg_file))
+    cfg = load_logs_config()
+    assert cfg.severity_escalation_excluded_services == ()
+    assert cfg.severity_escalation_floors == ()
+
+
+def test_load_logs_config_severity_escalation_null_defaults_empty(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """severity_escalation: null -> both fields default to empty tuples."""
+    cfg_file = tmp_path / "homelab-monitor.yaml"
+    cfg_file.write_text("logs:\n  severity_escalation:\n")
+    monkeypatch.setenv("HOMELAB_MONITOR_CONFIG", str(cfg_file))
+    cfg = load_logs_config()
+    assert cfg.severity_escalation_excluded_services == ()
+    assert cfg.severity_escalation_floors == ()
+
+
+def test_load_logs_config_severity_escalation_excluded_only(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """excluded_services present, severity_floors absent -> floors defaults to empty."""
+    cfg_file = tmp_path / "homelab-monitor.yaml"
+    cfg_file.write_text("logs:\n  severity_escalation:\n    excluded_services:\n      - svc-a\n")
+    monkeypatch.setenv("HOMELAB_MONITOR_CONFIG", str(cfg_file))
+    cfg = load_logs_config()
+    assert cfg.severity_escalation_excluded_services == ("svc-a",)
+    assert cfg.severity_escalation_floors == ()
+
+
+def test_load_logs_config_severity_escalation_excluded_null_defaults_empty(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """excluded_services present but null -> defaults to empty tuple."""
+    cfg_file = tmp_path / "homelab-monitor.yaml"
+    cfg_file.write_text("logs:\n  severity_escalation:\n    excluded_services:\n")
+    monkeypatch.setenv("HOMELAB_MONITOR_CONFIG", str(cfg_file))
+    cfg = load_logs_config()
+    assert cfg.severity_escalation_excluded_services == ()
+    assert cfg.severity_escalation_floors == ()
+
+
+def test_load_logs_config_severity_floors_null_defaults_empty(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """severity_floors present but null -> defaults to empty tuple."""
+    cfg_file = tmp_path / "homelab-monitor.yaml"
+    cfg_file.write_text("logs:\n  severity_escalation:\n    severity_floors:\n")
+    monkeypatch.setenv("HOMELAB_MONITOR_CONFIG", str(cfg_file))
+    cfg = load_logs_config()
+    assert cfg.severity_escalation_excluded_services == ()
+    assert cfg.severity_escalation_floors == ()
+
+
+def test_load_logs_config_severity_escalation_not_mapping_raises(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """severity_escalation that is not a mapping raises ValueError."""
+    cfg_file = tmp_path / "homelab-monitor.yaml"
+    cfg_file.write_text("logs:\n  severity_escalation: [a, b]\n")
+    monkeypatch.setenv("HOMELAB_MONITOR_CONFIG", str(cfg_file))
+    with pytest.raises(ValueError, match="must be a mapping"):
+        load_logs_config()
+
+
+def test_load_logs_config_severity_escalation_excluded_not_list_raises(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """excluded_services that is not a list raises ValueError."""
+    cfg_file = tmp_path / "homelab-monitor.yaml"
+    cfg_file.write_text("logs:\n  severity_escalation:\n    excluded_services: not-a-list\n")
+    monkeypatch.setenv("HOMELAB_MONITOR_CONFIG", str(cfg_file))
+    with pytest.raises(ValueError, match="must be a list"):
+        load_logs_config()
+
+
+def test_load_logs_config_severity_escalation_excluded_non_string_raises(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """excluded_services entry that is not a non-empty string raises ValueError."""
+    cfg_file = tmp_path / "homelab-monitor.yaml"
+    cfg_file.write_text("logs:\n  severity_escalation:\n    excluded_services:\n      - 42\n")
+    monkeypatch.setenv("HOMELAB_MONITOR_CONFIG", str(cfg_file))
+    with pytest.raises(ValueError, match="must be a non-empty string"):
+        load_logs_config()
+
+
+def test_load_logs_config_severity_floors_not_list_raises(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """severity_floors that is not a list raises ValueError."""
+    cfg_file = tmp_path / "homelab-monitor.yaml"
+    cfg_file.write_text("logs:\n  severity_escalation:\n    severity_floors: foo\n")
+    monkeypatch.setenv("HOMELAB_MONITOR_CONFIG", str(cfg_file))
+    with pytest.raises(ValueError, match="must be a list"):
+        load_logs_config()
+
+
+def test_load_logs_config_severity_floors_entry_not_mapping_raises(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """severity_floors list entry that is not a mapping raises ValueError."""
+    cfg_file = tmp_path / "homelab-monitor.yaml"
+    cfg_file.write_text(
+        "logs:\n  severity_escalation:\n    severity_floors:\n      - just a string\n"
+    )
+    monkeypatch.setenv("HOMELAB_MONITOR_CONFIG", str(cfg_file))
+    with pytest.raises(ValueError, match="must be a mapping"):
+        load_logs_config()
+
+
+def test_load_logs_config_severity_floors_missing_service_raises(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """severity_floors entry missing service raises ValueError."""
+    cfg_file = tmp_path / "homelab-monitor.yaml"
+    cfg_file.write_text(
+        "logs:\n  severity_escalation:\n    severity_floors:\n      - floor: error\n"
+    )
+    monkeypatch.setenv("HOMELAB_MONITOR_CONFIG", str(cfg_file))
+    with pytest.raises(ValueError, match="service"):
+        load_logs_config()
+
+
+def test_load_logs_config_severity_floors_missing_floor_raises(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """severity_floors entry missing floor raises ValueError."""
+    cfg_file = tmp_path / "homelab-monitor.yaml"
+    cfg_file.write_text(
+        "logs:\n  severity_escalation:\n    severity_floors:\n      - service: my-svc\n"
+    )
+    monkeypatch.setenv("HOMELAB_MONITOR_CONFIG", str(cfg_file))
+    with pytest.raises(ValueError, match="floor"):
         load_logs_config()
 
 
