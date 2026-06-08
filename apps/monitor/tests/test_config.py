@@ -192,6 +192,28 @@ def test_log_stream_budget_empty_section(monkeypatch: pytest.MonkeyPatch, tmp_pa
     assert cfg == LogStreamBudgetConfig()
 
 
+def test_log_stream_budget_rejects_malformed_lines_per_sec(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Non-numeric lines_per_sec_per_stream raises ValueError with context."""
+    cfg_file = tmp_path / "bad.yaml"
+    cfg_file.write_text("log_stream_budget:\n  lines_per_sec_per_stream: not-a-number\n")
+    monkeypatch.setenv("HOMELAB_MONITOR_CONFIG", str(cfg_file))
+    with pytest.raises(ValueError, match="lines_per_sec_per_stream must be a number"):
+        load_log_stream_budget_config()
+
+
+def test_log_stream_budget_rejects_malformed_bytes_per_day(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Non-integer bytes_per_day_per_stream raises ValueError with context."""
+    cfg_file = tmp_path / "bad.yaml"
+    cfg_file.write_text("log_stream_budget:\n  bytes_per_day_per_stream: not-an-int\n")
+    monkeypatch.setenv("HOMELAB_MONITOR_CONFIG", str(cfg_file))
+    with pytest.raises(ValueError, match="bytes_per_day_per_stream must be an integer"):
+        load_log_stream_budget_config()
+
+
 # --- VlQueryLimits ---------------------------------------------------------------
 
 

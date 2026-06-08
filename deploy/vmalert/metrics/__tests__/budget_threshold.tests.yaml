@@ -1,0 +1,128 @@
+# Rule unit-test fixtures for deploy/vmalert/metrics/budget_threshold.yaml.
+# Schema: Prometheus / vmalert rule unit-test format.
+# Run manually: vmalert -rule.config=budget_threshold.yaml -rule.testFile=...
+# (No make target wires this yet — forward-compatible static fixture, NOT CI-run.)
+#
+# NOTE: LogStreamThrottling now uses received-minus-sent for the throttle
+# transform. The throttle series use component_id="throttle" matching
+# [transforms.throttle] in deploy/vector/vector.toml.template.
+
+rule_files:
+  - ../budget_threshold.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # --- LogStreamApproachingBudget: FIRE ---
+  # bytes_today/budget = 450Mi/500Mi = 0.9 > 0.8; held for >5m.
+  - interval: 1m
+    input_series:
+      - series: 'homelab_log_stream_bytes_today{host="nuc",service="nginx"}'
+        # Flat at 450 MiB (471859200 bytes) for 10 minutes
+        values: '471859200+0x10'
+      - series: 'homelab_log_stream_bytes_budget{host="nuc",service="nginx"}'
+        # Flat at 500 MiB (524288000 bytes)
+        values: '524288000+0x10'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: LogStreamApproachingBudget
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              source_tool: vmalert-metrics
+              category: log-anomaly
+              anomaly_kind: log_budget_warning
+              target_kind: log_stream
+              host: nuc
+              service: nginx
+            exp_annotations:
+              summary: "Log stream nuc/nginx approaching daily byte budget"
+
+  # --- LogStreamApproachingBudget: NO FIRE ---
+  # bytes_today/budget = 100Mi/500Mi = 0.2 < 0.8
+  - interval: 1m
+    input_series:
+      - series: 'homelab_log_stream_bytes_today{host="nuc",service="syslog"}'
+        values: '104857600+0x10'
+      - series: 'homelab_log_stream_bytes_budget{host="nuc",service="syslog"}'
+        values: '524288000+0x10'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: LogStreamApproachingBudget
+        exp_alerts: []
+
+  # --- LogStreamThrottling: FIRE ---
+  # received grows +2/min, sent grows +1/min => received-sent diff = +1/min > 0.
+  # increase([5m]) of received - sent > 0 at every eval after t=5m;
+  # for: 2m means alert fires at t=7m.
+  - interval: 1m
+    input_series:
+      - series: 'vector_component_received_events_total{component_id="throttle",component_type="throttle",component_kind="transform"}'
+        # Counter starts at 0, increments by 2 each minute for 10 minutes
+        values: '0+2x10'
+      - series: 'vector_component_sent_events_total{component_id="throttle",component_type="throttle",component_kind="transform"}'
+        # Counter starts at 0, increments by 1 each minute for 10 minutes
+        values: '0+1x10'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: LogStreamThrottling
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              source_tool: vmalert-metrics
+              category: log-anomaly
+              anomaly_kind: log_budget_warning
+              target_kind: log_stream
+              component_id: throttle
+              component_type: throttle
+              component_kind: transform
+            exp_annotations:
+              summary: "Vector log throttle is actively discarding events"
+
+  # --- LogStreamThrottling: NO FIRE ---
+  # received and sent grow at the same rate => diff is 0 (nothing throttled).
+  - interval: 1m
+    input_series:
+      - series: 'vector_component_received_events_total{component_id="throttle",component_type="throttle",component_kind="transform"}'
+        values: '0+1x10'
+      - series: 'vector_component_sent_events_total{component_id="throttle",component_type="throttle",component_kind="transform"}'
+        values: '0+1x10'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: LogStreamThrottling
+        exp_alerts: []
+
+  # --- LogStreamUnusualLineRate: FIRE ---
+  # Baseline ~2 lines/sec for 60m, then spike to 20 for 10m.
+  # avg_over_time([1h]) at t=70m ≈ 2 (baseline dominated); clamp_min(5*2, 1)=10; 20>10.
+  # for: 5m means alert fires at t=65m+5m=70m (spike must hold >=5 evals).
+  - interval: 1m
+    input_series:
+      - series: 'homelab_log_stream_lines_per_sec{host="nuc",service="app"}'
+        # 2 lines/sec baseline for 60 min, then 20 lines/sec spike
+        values: '2+0x60 20+0x15'
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: LogStreamUnusualLineRate
+        exp_alerts:
+          - exp_labels:
+              severity: info
+              source_tool: vmalert-metrics
+              category: log-anomaly
+              anomaly_kind: log_budget_warning
+              target_kind: log_stream
+              host: nuc
+              service: app
+            exp_annotations:
+              summary: "Unusual log line rate for nuc/app"
+
+  # --- LogStreamUnusualLineRate: NO FIRE ---
+  # Flat at 2 lines/sec — never exceeds clamp_min(5*2, 1)=10.
+  - interval: 1m
+    input_series:
+      - series: 'homelab_log_stream_lines_per_sec{host="nuc",service="stable"}'
+        values: '2+0x75'
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: LogStreamUnusualLineRate
+        exp_alerts: []

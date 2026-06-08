@@ -69,6 +69,13 @@ current_boot_only = true
 # applies ONLY to the docker_logs source. If journald-side stitching is ever
 # required, do it via a downstream `reduce` transform, not a source codec.
 
+# STAGE-004-040: expose Vector's own internal metrics (component counters,
+# including vector_component_received_events_total / vector_component_sent_events_total
+# used by the LogStreamThrottling vmalert rule (received-minus-sent))
+# via the existing prometheus_exporter sink.
+[sources.internal_metrics]
+type = "internal_metrics"
+
 [transforms.add_labels]
 type = "remap"
 inputs = ["docker_logs", "journald"]
@@ -490,5 +497,5 @@ ${VECTOR_REDACT_METRICS}
 
 [sinks.redaction_metrics]
 type = "prometheus_exporter"
-inputs = ["redaction_metric"]
+inputs = ["redaction_metric", "internal_metrics"]
 address = "0.0.0.0:9598"

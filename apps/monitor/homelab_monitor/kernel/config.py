@@ -151,10 +151,22 @@ def load_log_stream_budget_config() -> LogStreamBudgetConfig:
         section = cast(dict[str, Any], section_obj)
         lps = section.get("lines_per_sec_per_stream")
         if lps is not None:
-            lines_per_sec = float(lps)
+            try:
+                lines_per_sec = float(lps)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"{_LOG_STREAM_BUDGET_KEY}.lines_per_sec_per_stream must be a "
+                    f"number, got {lps!r}"
+                ) from exc
         bpd = section.get("bytes_per_day_per_stream")
         if bpd is not None:
-            bytes_per_day = int(bpd)
+            try:
+                bytes_per_day = int(bpd)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"{_LOG_STREAM_BUDGET_KEY}.bytes_per_day_per_stream must be an "
+                    f"integer, got {bpd!r}"
+                ) from exc
 
     return LogStreamBudgetConfig(
         lines_per_sec_per_stream=lines_per_sec,

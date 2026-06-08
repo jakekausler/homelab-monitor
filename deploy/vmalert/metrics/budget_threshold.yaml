@@ -1,0 +1,85 @@
+# vmalert METRICS rules for log-stream throttle and byte-budget alerts (STAGE-004-040).
+# Rules query VictoriaMetrics (MetricsQL syntax).
+#
+# NOTES:
+#   (a) Per-service budget overrides DEFERRED to STAGE-042.
+#   (b) LogStreamThrottling uses {component_id="throttle"} — matches
+#       [transforms.throttle] in deploy/vector/vector.toml.template (Vector
+#       derives component_id from the TOML table name).
+#   (c) LogStreamUnusualLineRate uses clamp_min (NOT max): max() is an
+#       aggregation that collapses labels to {}; clamp_min() is element-wise
+#       and preserves {host,service} label sets for the per-series > comparison.
+#   (d) LogStreamThrottling fires on received-minus-sent for the throttle
+#       transform (increase(received[5m]) - increase(sent[5m]) > 0). This is
+#       version-independent (does not depend on vector_component_discarded_events_total,
+#       whose presence/labels vary by Vector version) and avoids the
+#       intentional="true" label leak on the discarded series. The throttle
+#       series are labeled {component_id,component_type,component_kind} — NOT
+#       {host,service} — so the annotation is a global message without a
+#       per-service Explorer link. Note: a Vector restart resets the counters;
+#       a brief counter-reset window can produce a transient false positive,
+#       smoothed by the for:2m hold-duration.
+
+groups:
+  - name: budget_threshold
+    interval: 60s
+    rules:
+
+      - alert: LogStreamApproachingBudget
+        expr: |
+          homelab_log_stream_bytes_today / homelab_log_stream_bytes_budget > 0.80
+        for: 5m
+        labels:
+          severity: warning
+          source_tool: vmalert-metrics
+          category: log-anomaly
+          anomaly_kind: log_budget_warning
+          target_kind: log_stream
+        annotations:
+          summary: "Log stream {{ $labels.host }}/{{ $labels.service }} approaching daily byte budget"
+          description: |
+            Stream {{ $labels.service }} on {{ $labels.host }} has used
+            {{ $value | humanizePercentage }} of its daily byte budget.
+            Budget usage has been above 80% for at least 5 minutes.
+
+            Recent logs (Explorer): /logs?logsql=host:"{{ $labels.host }}" AND service:"{{ $labels.service }}"
+
+      - alert: LogStreamThrottling
+        expr: |
+          increase(vector_component_received_events_total{component_id="throttle"}[5m])
+            - increase(vector_component_sent_events_total{component_id="throttle"}[5m]) > 0
+        for: 2m
+        labels:
+          severity: warning
+          source_tool: vmalert-metrics
+          category: log-anomaly
+          anomaly_kind: log_budget_warning
+          target_kind: log_stream
+        annotations:
+          summary: "Vector log throttle has events received but not forwarded"
+          description: |
+            Vector's throttle transform (50 lines/sec/service) has events received
+            but not forwarded (throttle backlog/drops) in the last 5 minutes. One
+            or more services are generating logs faster than the throttle limit.
+
+            Check recent throttled services (Explorer): /logs
+
+      - alert: LogStreamUnusualLineRate
+        expr: |
+          homelab_log_stream_lines_per_sec
+            > clamp_min(5 * avg_over_time(homelab_log_stream_lines_per_sec[1h]), 1)
+        for: 5m
+        labels:
+          severity: info
+          source_tool: vmalert-metrics
+          category: log-anomaly
+          anomaly_kind: log_budget_warning
+          target_kind: log_stream
+        annotations:
+          summary: "Unusual log line rate for {{ $labels.host }}/{{ $labels.service }}"
+          description: |
+            Stream {{ $labels.service }} on {{ $labels.host }} is producing
+            {{ $value }} lines/sec, which exceeds 5x its 1-hour rolling average
+            (floor: 1 line/sec). Sustained for at least 5 minutes.
+
+            Recent logs (Explorer): /logs?logsql=host:"{{ $labels.host }}" AND service:"{{ $labels.service }}"
