@@ -52,6 +52,9 @@ from homelab_monitor.kernel.scheduler.scheduler import Scheduler, SchedulerConfi
 from homelab_monitor.kernel.secrets.master_key import MasterKeyError, load_master_key
 from homelab_monitor.kernel.secrets.repository import AsyncSecretsRepository
 from homelab_monitor.kernel.secrets.ttl_resolver import TtlCachingSecretsResolver
+from homelab_monitor.plugins.collectors.builtin.log_error_rate import (
+    LogErrorRateCollector,
+)
 from homelab_monitor.plugins.collectors.builtin.log_stream_budget import (
     LogStreamBudgetCollector,
     LogStreamState,
@@ -210,6 +213,23 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
             error=str(exc),
         )
         degraded.append("log_stream_budget")
+
+    try:
+        loader.register(
+            LogErrorRateCollector,
+            {
+                "name": "log_error_rate",
+                "interval_seconds": int(LogErrorRateCollector.interval.total_seconds()),
+                "timeout_seconds": int(LogErrorRateCollector.timeout.total_seconds()),
+            },
+        )
+    except Exception as exc:  # pragma: no cover -- defensive
+        log.warning(
+            "lifespan.collector_register_failed",
+            name="log_error_rate",
+            error=str(exc),
+        )
+        degraded.append("log_error_rate")
 
     try:
         loader.register(

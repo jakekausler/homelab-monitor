@@ -1,0 +1,41 @@
+# Rule unit-test fixtures for deploy/vmalert/metrics/error_rate_spike.yaml.
+# Schema: Prometheus / vmalert rule unit-test format.
+# Run manually: vmalert -rule.config=error_rate_spike.yaml -rule.testFile=...
+# (No make target wires this yet — forward-compatible static fixture, NOT CI-run.)
+
+rule_files:
+  - ../error_rate_spike.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # Sustained spike: svcA holds a flat ~2/window baseline, then jumps to 40/window.
+  # 40 > clamp_min(5*~2, 10) = clamp_min(~10, 10) clears both; `for: 2m` requires it held >= 2m.
+  - interval: 1m
+    input_series:
+      - series: 'homelab_container_error_rate{name="svcA"}'
+        # ~2/window baseline for a long stretch, then 40/window sustained.
+        values: '2+0x60 40+0x10'
+    alert_rule_test:
+      - eval_time: 65m
+        alertname: ServiceErrorRateSpike
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              source_tool: vmalert-metrics
+              category: log-anomaly
+              anomaly_kind: error_rate_spike
+              target_kind: container
+              name: svcA
+            exp_annotations:
+              summary: "Error-rate spike in svcA"
+
+  # Steady service below the 10/window floor never fires, even at 5x its tiny baseline.
+  - interval: 1m
+    input_series:
+      - series: 'homelab_container_error_rate{name="svcB"}'
+        values: '1+0x60 5+0x10'   # 5 > 5*1 baseline but 5 < 10 floor -> NO fire
+    alert_rule_test:
+      - eval_time: 65m
+        alertname: ServiceErrorRateSpike
+        exp_alerts: []

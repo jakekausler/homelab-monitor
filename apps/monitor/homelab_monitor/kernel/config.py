@@ -639,6 +639,192 @@ def load_new_signature_config() -> NewSignatureConfig:
 
 
 # ---------------------------------------------------------------------------
+# STAGE-004-037: error-rate patterns + overrides (logs.error_patterns /
+# logs.error_rate_overrides). Mirrors the RedactPattern / DEFAULT_REDACT_PATTERNS
+# / load_redact_patterns() precedent above.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class ErrorPattern:
+    """One error-rate pattern folded into the collector's LogsQL query.
+
+    ``kind`` is a stable identifier carried for the (deferred) per-pattern
+    ``homelab_container_error_rate_pattern{name, pattern_kind}`` breakdown.
+    ``regex`` is a LogsQL ``_msg:~`` regex fragment (OR-joined with the others).
+    """
+
+    kind: str
+    regex: str
+
+
+@dataclass(frozen=True, slots=True)
+class ErrorRateOverride:
+    """Per-service error-rate override (reserved for STAGE-042; parsed but UNUSED in v1)."""
+
+    service: str
+    static_floor: float | None = None
+    multiplier: float | None = None
+
+
+#: The v1 default error-rate patterns (ships with the public release; used when
+#: homelab-monitor.yaml omits ``logs.error_patterns``). These catch error-like
+#: lines for languages whose ``severity`` field isn't normalized to error
+#: (e.g. Python tracebacks). Folded into the collector's single LogsQL query.
+DEFAULT_ERROR_PATTERNS: tuple[ErrorPattern, ...] = (
+    ErrorPattern(kind="panic", regex="panic"),
+    ErrorPattern(kind="traceback", regex="[Tt]raceback"),
+    ErrorPattern(kind="exception", regex="[Ee]xception"),
+)
+
+
+@dataclass(frozen=True, slots=True)
+class LogsConfig:
+    """Operator-tunable error-rate config (logs.error_patterns / logs.error_rate_overrides).
+
+    ``error_patterns`` — folded into the collector's single LogsQL query (OR'd
+    with the severity union). Defaults to DEFAULT_ERROR_PATTERNS.
+    ``error_rate_overrides`` — per-service tuning, reserved for STAGE-042 (parsed
+    here but UNUSED in v1).
+    """
+
+    error_patterns: tuple[ErrorPattern, ...] = DEFAULT_ERROR_PATTERNS
+    error_rate_overrides: tuple[ErrorRateOverride, ...] = ()
+
+
+_LOGS_KEY = "logs"
+_ERROR_PATTERNS_SUBKEY = "error_patterns"
+_ERROR_RATE_OVERRIDES_SUBKEY = "error_rate_overrides"
+
+
+def load_logs_config() -> LogsConfig:
+    """Load error-rate config from YAML ``logs.error_patterns`` / ``logs.error_rate_overrides``.
+
+    Sources:
+      - ``logs.error_patterns`` present → parse + validate that list.
+      - ``logs`` absent OR ``logs.error_patterns`` absent → DEFAULT_ERROR_PATTERNS.
+      - ``logs.error_patterns: []`` (explicit empty list) → empty tuple
+        (NOT defaults; mirrors redact precedent but for patterns this means
+        "severity union only").
+      - ``logs.error_patterns:`` (null value) → DEFAULT_ERROR_PATTERNS.
+      - ``logs.error_rate_overrides`` parsed (UNUSED in v1; reserved for 042).
+
+    Validation (raises ValueError):
+      - root not a mapping; ``logs`` not a mapping.
+      - ``error_patterns`` present but not a list; any entry not a mapping;
+        any entry missing ``kind`` / ``regex`` or with a non-string/empty value.
+      - ``error_rate_overrides`` present but not a list; any entry not a mapping;
+        any entry missing ``service`` or with a non-numeric ``static_floor`` /
+        ``multiplier``.
+    """
+    config_path = Path(os.environ.get("HOMELAB_MONITOR_CONFIG", _DEFAULT_CONFIG_PATH))
+    if not config_path.is_file():
+        return LogsConfig()
+
+    with config_path.open(encoding="utf-8") as f:
+        raw_obj: object = yaml.safe_load(f) or {}
+    if not isinstance(raw_obj, dict):
+        msg = f"config root must be a mapping, got {type(raw_obj).__name__}"
+        raise ValueError(msg)
+    raw = cast(dict[str, Any], raw_obj)
+
+    if _LOGS_KEY not in raw:
+        return LogsConfig()
+    logs_obj: object = raw.get(_LOGS_KEY) or {}
+    if not isinstance(logs_obj, dict):
+        msg = f"{_LOGS_KEY} must be a mapping, got {type(logs_obj).__name__}"
+        raise ValueError(msg)
+    logs = cast(dict[str, Any], logs_obj)
+
+    error_patterns = _load_error_patterns(logs)
+    error_rate_overrides = _load_error_rate_overrides(logs)
+    return LogsConfig(error_patterns=error_patterns, error_rate_overrides=error_rate_overrides)
+
+
+def _load_error_patterns(logs: dict[str, Any]) -> tuple[ErrorPattern, ...]:
+    """Parse logs.error_patterns; default when absent, empty tuple when [] given."""
+    if _ERROR_PATTERNS_SUBKEY not in logs:
+        return DEFAULT_ERROR_PATTERNS
+    raw_obj: object = logs.get(_ERROR_PATTERNS_SUBKEY)
+    if raw_obj is None:
+        # `error_patterns:` with empty value → defaults (mirror redact precedent).
+        return DEFAULT_ERROR_PATTERNS
+    if not isinstance(raw_obj, list):
+        msg = f"{_LOGS_KEY}.{_ERROR_PATTERNS_SUBKEY} must be a list, got {type(raw_obj).__name__}"
+        raise ValueError(msg)
+    raw_list = cast(list[object], raw_obj)
+    patterns: list[ErrorPattern] = []
+    for idx, entry_obj in enumerate(raw_list):
+        if not isinstance(entry_obj, dict):
+            msg = (
+                f"{_LOGS_KEY}.{_ERROR_PATTERNS_SUBKEY}[{idx}] must be a mapping, "
+                f"got {type(entry_obj).__name__}"
+            )
+            raise ValueError(msg)
+        entry = cast(dict[str, Any], entry_obj)
+        kind = entry.get("kind")
+        regex = entry.get("regex")
+        for field_name, value in (("kind", kind), ("regex", regex)):
+            if not isinstance(value, str) or not value:
+                msg = (
+                    f"{_LOGS_KEY}.{_ERROR_PATTERNS_SUBKEY}[{idx}] field "
+                    f"{field_name!r} must be a non-empty string, got {value!r}"
+                )
+                raise ValueError(msg)
+        patterns.append(ErrorPattern(kind=cast(str, kind), regex=cast(str, regex)))
+    return tuple(patterns)
+
+
+def _load_error_rate_overrides(logs: dict[str, Any]) -> tuple[ErrorRateOverride, ...]:
+    """Parse logs.error_rate_overrides (reserved for STAGE-042; v1 carries it unused)."""
+    if _ERROR_RATE_OVERRIDES_SUBKEY not in logs:
+        return ()
+    raw_obj: object = logs.get(_ERROR_RATE_OVERRIDES_SUBKEY)
+    if raw_obj is None:
+        return ()
+    if not isinstance(raw_obj, list):
+        msg = (
+            f"{_LOGS_KEY}.{_ERROR_RATE_OVERRIDES_SUBKEY} must be a list, "
+            f"got {type(raw_obj).__name__}"
+        )
+        raise ValueError(msg)
+    raw_list = cast(list[object], raw_obj)
+    overrides: list[ErrorRateOverride] = []
+    for idx, entry_obj in enumerate(raw_list):
+        if not isinstance(entry_obj, dict):
+            msg = (
+                f"{_LOGS_KEY}.{_ERROR_RATE_OVERRIDES_SUBKEY}[{idx}] must be a mapping, "
+                f"got {type(entry_obj).__name__}"
+            )
+            raise ValueError(msg)
+        entry = cast(dict[str, Any], entry_obj)
+        service = entry.get("service")
+        if not isinstance(service, str) or not service:
+            msg = (
+                f"{_LOGS_KEY}.{_ERROR_RATE_OVERRIDES_SUBKEY}[{idx}] field 'service' "
+                f"must be a non-empty string, got {service!r}"
+            )
+            raise ValueError(msg)
+        static_floor = _coerce_opt_float(entry, "static_floor", idx, _ERROR_RATE_OVERRIDES_SUBKEY)
+        multiplier = _coerce_opt_float(entry, "multiplier", idx, _ERROR_RATE_OVERRIDES_SUBKEY)
+        overrides.append(
+            ErrorRateOverride(service=service, static_floor=static_floor, multiplier=multiplier)
+        )
+    return tuple(overrides)
+
+
+def _coerce_opt_float(entry: dict[str, Any], key: str, idx: int, subkey: str) -> float | None:
+    """Read an optional numeric field; None when absent, ValueError when present-but-non-numeric."""
+    value = entry.get(key)
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        msg = f"{_LOGS_KEY}.{subkey}[{idx}] field {key!r} must be numeric, got {value!r}"
+        raise ValueError(msg)
+    return float(value)
+
+
+# ---------------------------------------------------------------------------
 # STAGE-004-006: log redaction patterns (logs.redact:)
 # ---------------------------------------------------------------------------
 
@@ -799,14 +985,18 @@ def _validate_redact_entry(idx: int, entry_obj: object, seen: set[str]) -> Redac
 
 
 __all__ = [
+    "DEFAULT_ERROR_PATTERNS",
     "DEFAULT_REDACT_PATTERNS",
     "CrashLogConfig",
     "CronAnomalyConfig",
     "CronRunReconcilerConfig",
     "DiskBudgetConfig",
     "DrainConfig",
+    "ErrorPattern",
+    "ErrorRateOverride",
     "HealthcheckLogConfig",
     "LogStreamBudgetConfig",
+    "LogsConfig",
     "NewSignatureConfig",
     "RedactPattern",
     "TailConfig",
@@ -820,6 +1010,7 @@ __all__ = [
     "load_drain_config",
     "load_healthcheck_log_config",
     "load_log_stream_budget_config",
+    "load_logs_config",
     "load_new_signature_config",
     "load_redact_patterns",
     "load_tail_config",

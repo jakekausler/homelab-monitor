@@ -7,10 +7,28 @@ from pathlib import Path
 import pytest
 
 from homelab_monitor.kernel.config import (
+    DEFAULT_ERROR_PATTERNS,
+    CronAnomalyConfig,
+    CronRunReconcilerConfig,
     DiskBudgetConfig,
+    DrainConfig,
+    ErrorPattern,
+    ErrorRateOverride,
+    LogsConfig,
     LogStreamBudgetConfig,
+    NewSignatureConfig,
+    TailConfig,
+    VlQueryLimits,
+    load_cron_anomaly_config,
+    load_cron_run_reconciler_config,
     load_disk_budget_config,
+    load_drain_config,
     load_log_stream_budget_config,
+    load_logs_config,
+    load_new_signature_config,
+    load_tail_config,
+    load_vl_query_limits,
+    load_vl_retention_days,
 )
 
 
@@ -176,8 +194,6 @@ def test_log_stream_budget_empty_section(monkeypatch: pytest.MonkeyPatch, tmp_pa
 
 def test_vl_query_limits_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     """load_vl_query_limits returns built-in defaults when no env vars are set."""
-    from homelab_monitor.kernel.config import VlQueryLimits, load_vl_query_limits  # noqa: PLC0415
-
     monkeypatch.delenv("HOMELAB_MONITOR_VL_QUERY_MAX_LINES", raising=False)
     monkeypatch.delenv("HOMELAB_MONITOR_VL_QUERY_MAX_BYTES", raising=False)
     monkeypatch.delenv("HOMELAB_MONITOR_VL_QUERY_TIMEOUT_SECONDS", raising=False)
@@ -190,8 +206,6 @@ def test_vl_query_limits_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_vl_query_limits_env_max_lines(monkeypatch: pytest.MonkeyPatch) -> None:
     """HOMELAB_MONITOR_VL_QUERY_MAX_LINES overrides max_lines."""
-    from homelab_monitor.kernel.config import load_vl_query_limits  # noqa: PLC0415
-
     monkeypatch.setenv("HOMELAB_MONITOR_VL_QUERY_MAX_LINES", "500")
     monkeypatch.delenv("HOMELAB_MONITOR_VL_QUERY_MAX_BYTES", raising=False)
     monkeypatch.delenv("HOMELAB_MONITOR_VL_QUERY_TIMEOUT_SECONDS", raising=False)
@@ -201,8 +215,6 @@ def test_vl_query_limits_env_max_lines(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_vl_query_limits_env_max_bytes(monkeypatch: pytest.MonkeyPatch) -> None:
     """HOMELAB_MONITOR_VL_QUERY_MAX_BYTES overrides max_bytes."""
-    from homelab_monitor.kernel.config import load_vl_query_limits  # noqa: PLC0415
-
     monkeypatch.delenv("HOMELAB_MONITOR_VL_QUERY_MAX_LINES", raising=False)
     monkeypatch.setenv("HOMELAB_MONITOR_VL_QUERY_MAX_BYTES", "123456")
     monkeypatch.delenv("HOMELAB_MONITOR_VL_QUERY_TIMEOUT_SECONDS", raising=False)
@@ -212,8 +224,6 @@ def test_vl_query_limits_env_max_bytes(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_vl_query_limits_env_timeout_seconds(monkeypatch: pytest.MonkeyPatch) -> None:
     """HOMELAB_MONITOR_VL_QUERY_TIMEOUT_SECONDS overrides timeout_seconds."""
-    from homelab_monitor.kernel.config import load_vl_query_limits  # noqa: PLC0415
-
     monkeypatch.delenv("HOMELAB_MONITOR_VL_QUERY_MAX_LINES", raising=False)
     monkeypatch.delenv("HOMELAB_MONITOR_VL_QUERY_MAX_BYTES", raising=False)
     monkeypatch.setenv("HOMELAB_MONITOR_VL_QUERY_TIMEOUT_SECONDS", "3.5")
@@ -223,8 +233,6 @@ def test_vl_query_limits_env_timeout_seconds(monkeypatch: pytest.MonkeyPatch) ->
 
 def test_vl_query_limits_all_env_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
     """All three VL query limit env vars override all fields simultaneously."""
-    from homelab_monitor.kernel.config import load_vl_query_limits  # noqa: PLC0415
-
     monkeypatch.setenv("HOMELAB_MONITOR_VL_QUERY_MAX_LINES", "25")
     monkeypatch.setenv("HOMELAB_MONITOR_VL_QUERY_MAX_BYTES", "9999")
     monkeypatch.setenv("HOMELAB_MONITOR_VL_QUERY_TIMEOUT_SECONDS", "1.0")
@@ -239,11 +247,6 @@ def test_vl_query_limits_all_env_overrides(monkeypatch: pytest.MonkeyPatch) -> N
 
 def test_cron_run_reconciler_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     """load_cron_run_reconciler_config returns built-in defaults when no env vars are set."""
-    from homelab_monitor.kernel.config import (  # noqa: PLC0415
-        CronRunReconcilerConfig,
-        load_cron_run_reconciler_config,
-    )
-
     monkeypatch.delenv("HOMELAB_MONITOR_CRON_RUN_RETENTION_DAYS", raising=False)
     monkeypatch.delenv("HOMELAB_MONITOR_CRON_RUN_MAX_ROWS_PER_CRON", raising=False)
     monkeypatch.delenv("HOMELAB_MONITOR_CRON_RUN_BMODE_TIMEOUT_HOURS", raising=False)
@@ -262,8 +265,6 @@ def test_cron_run_reconciler_config_defaults(monkeypatch: pytest.MonkeyPatch) ->
 
 def test_cron_run_reconciler_config_env_retention_days(monkeypatch: pytest.MonkeyPatch) -> None:
     """HOMELAB_MONITOR_CRON_RUN_RETENTION_DAYS overrides retention_days."""
-    from homelab_monitor.kernel.config import load_cron_run_reconciler_config  # noqa: PLC0415
-
     monkeypatch.setenv("HOMELAB_MONITOR_CRON_RUN_RETENTION_DAYS", "7")
     monkeypatch.delenv("HOMELAB_MONITOR_CRON_RUN_MAX_ROWS_PER_CRON", raising=False)
     monkeypatch.delenv("HOMELAB_MONITOR_CRON_RUN_BMODE_TIMEOUT_HOURS", raising=False)
@@ -274,8 +275,6 @@ def test_cron_run_reconciler_config_env_retention_days(monkeypatch: pytest.Monke
 
 def test_cron_run_reconciler_config_env_max_rows(monkeypatch: pytest.MonkeyPatch) -> None:
     """HOMELAB_MONITOR_CRON_RUN_MAX_ROWS_PER_CRON overrides max_rows_per_cron."""
-    from homelab_monitor.kernel.config import load_cron_run_reconciler_config  # noqa: PLC0415
-
     monkeypatch.delenv("HOMELAB_MONITOR_CRON_RUN_RETENTION_DAYS", raising=False)
     monkeypatch.setenv("HOMELAB_MONITOR_CRON_RUN_MAX_ROWS_PER_CRON", "1000")
     monkeypatch.delenv("HOMELAB_MONITOR_CRON_RUN_BMODE_TIMEOUT_HOURS", raising=False)
@@ -286,8 +285,6 @@ def test_cron_run_reconciler_config_env_max_rows(monkeypatch: pytest.MonkeyPatch
 
 def test_cron_run_reconciler_config_env_bmode_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
     """HOMELAB_MONITOR_CRON_RUN_BMODE_TIMEOUT_HOURS overrides bmode_timeout_hours."""
-    from homelab_monitor.kernel.config import load_cron_run_reconciler_config  # noqa: PLC0415
-
     monkeypatch.delenv("HOMELAB_MONITOR_CRON_RUN_RETENTION_DAYS", raising=False)
     monkeypatch.delenv("HOMELAB_MONITOR_CRON_RUN_MAX_ROWS_PER_CRON", raising=False)
     monkeypatch.setenv("HOMELAB_MONITOR_CRON_RUN_BMODE_TIMEOUT_HOURS", "12")
@@ -298,8 +295,6 @@ def test_cron_run_reconciler_config_env_bmode_timeout(monkeypatch: pytest.Monkey
 
 def test_cron_run_reconciler_config_env_enrich_grace(monkeypatch: pytest.MonkeyPatch) -> None:
     """HOMELAB_MONITOR_CRON_RUN_ENRICH_GRACE_SECONDS overrides enrich_grace_seconds."""
-    from homelab_monitor.kernel.config import load_cron_run_reconciler_config  # noqa: PLC0415
-
     monkeypatch.delenv("HOMELAB_MONITOR_CRON_RUN_RETENTION_DAYS", raising=False)
     monkeypatch.delenv("HOMELAB_MONITOR_CRON_RUN_MAX_ROWS_PER_CRON", raising=False)
     monkeypatch.delenv("HOMELAB_MONITOR_CRON_RUN_BMODE_TIMEOUT_HOURS", raising=False)
@@ -310,8 +305,6 @@ def test_cron_run_reconciler_config_env_enrich_grace(monkeypatch: pytest.MonkeyP
 
 def test_cron_run_reconciler_config_all_env_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
     """All six reconciler env vars override all fields simultaneously."""
-    from homelab_monitor.kernel.config import load_cron_run_reconciler_config  # noqa: PLC0415
-
     monkeypatch.setenv("HOMELAB_MONITOR_CRON_RUN_RETENTION_DAYS", "14")
     monkeypatch.setenv("HOMELAB_MONITOR_CRON_RUN_MAX_ROWS_PER_CRON", "200")
     monkeypatch.setenv("HOMELAB_MONITOR_CRON_RUN_BMODE_TIMEOUT_HOURS", "2")
@@ -331,8 +324,6 @@ def test_load_cron_run_reconciler_config_enrich_max_per_tick_default_and_overrid
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Default and env override for enrich_max_per_tick."""
-    from homelab_monitor.kernel.config import load_cron_run_reconciler_config  # noqa: PLC0415
-
     # Test default: env var not set
     monkeypatch.delenv("HOMELAB_MONITOR_CRON_RUN_ENRICH_MAX_PER_TICK", raising=False)
     monkeypatch.delenv("HOMELAB_MONITOR_CRON_RUN_RETENTION_DAYS", raising=False)
@@ -352,8 +343,6 @@ def test_load_cron_run_reconciler_config_enrich_window_slack_seconds_default_and
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Default and env override for enrich_window_slack_seconds."""
-    from homelab_monitor.kernel.config import load_cron_run_reconciler_config  # noqa: PLC0415
-
     # Test default: env var not set
     monkeypatch.delenv("HOMELAB_MONITOR_CRON_RUN_ENRICH_WINDOW_SLACK_SECONDS", raising=False)
     monkeypatch.delenv("HOMELAB_MONITOR_CRON_RUN_RETENTION_DAYS", raising=False)
@@ -379,8 +368,6 @@ def test_cron_run_reconciler_config_failure_enrich_defaults(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """New failure-enrich fields have correct defaults when no env vars are set."""
-    from homelab_monitor.kernel.config import load_cron_run_reconciler_config  # noqa: PLC0415
-
     monkeypatch.delenv("HOMELAB_MONITOR_CRON_ENRICHMENT_RETENTION_DAYS", raising=False)
     monkeypatch.delenv("HOMELAB_MONITOR_CRON_FAILURE_ENRICH_MAX_LINES", raising=False)
     monkeypatch.delenv("HOMELAB_MONITOR_CRON_FAILURE_ENRICH_MAX_ROWS_PER_CRON", raising=False)
@@ -395,8 +382,6 @@ def test_cron_run_reconciler_config_failure_enrich_env_overrides(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Env vars for new failure-enrich fields override defaults."""
-    from homelab_monitor.kernel.config import load_cron_run_reconciler_config  # noqa: PLC0415
-
     monkeypatch.setenv("HOMELAB_MONITOR_CRON_ENRICHMENT_RETENTION_DAYS", "14")
     monkeypatch.setenv("HOMELAB_MONITOR_CRON_FAILURE_ENRICH_MAX_LINES", "25")
     monkeypatch.setenv("HOMELAB_MONITOR_CRON_FAILURE_ENRICH_MAX_ROWS_PER_CRON", "200")
@@ -411,8 +396,6 @@ def test_cron_run_reconciler_config_failure_enrich_clamping_ge_1(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Values of 0 or negative are clamped to 1 for all three failure-enrich fields."""
-    from homelab_monitor.kernel.config import load_cron_run_reconciler_config  # noqa: PLC0415
-
     monkeypatch.setenv("HOMELAB_MONITOR_CRON_ENRICHMENT_RETENTION_DAYS", "0")
     monkeypatch.setenv("HOMELAB_MONITOR_CRON_FAILURE_ENRICH_MAX_LINES", "-5")
     monkeypatch.setenv("HOMELAB_MONITOR_CRON_FAILURE_ENRICH_MAX_ROWS_PER_CRON", "0")
@@ -430,11 +413,6 @@ def test_cron_run_reconciler_config_failure_enrich_clamping_ge_1(
 
 def test_load_cron_anomaly_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     """load_cron_anomaly_config returns documented defaults when no env vars set."""
-    from homelab_monitor.kernel.config import (  # noqa: PLC0415
-        CronAnomalyConfig,
-        load_cron_anomaly_config,
-    )
-
     for var in (
         "HOMELAB_MONITOR_CRON_ANOMALY_MIN_HISTORY",
         "HOMELAB_MONITOR_CRON_ANOMALY_ROLLING_WINDOW",
@@ -459,8 +437,6 @@ def test_load_cron_anomaly_config_defaults(monkeypatch: pytest.MonkeyPatch) -> N
 
 def test_load_cron_anomaly_config_min_history_override(monkeypatch: pytest.MonkeyPatch) -> None:
     """HOMELAB_MONITOR_CRON_ANOMALY_MIN_HISTORY overrides min_history only."""
-    from homelab_monitor.kernel.config import load_cron_anomaly_config  # noqa: PLC0415
-
     monkeypatch.setenv("HOMELAB_MONITOR_CRON_ANOMALY_MIN_HISTORY", "5")
     monkeypatch.delenv("HOMELAB_MONITOR_CRON_ANOMALY_ROLLING_WINDOW", raising=False)
     monkeypatch.delenv("HOMELAB_MONITOR_CRON_ANOMALY_DURATION_K", raising=False)
@@ -473,8 +449,6 @@ def test_load_cron_anomaly_config_min_history_override(monkeypatch: pytest.Monke
 
 def test_load_cron_anomaly_config_rolling_window_override(monkeypatch: pytest.MonkeyPatch) -> None:
     """HOMELAB_MONITOR_CRON_ANOMALY_ROLLING_WINDOW overrides rolling_window only."""
-    from homelab_monitor.kernel.config import load_cron_anomaly_config  # noqa: PLC0415
-
     monkeypatch.delenv("HOMELAB_MONITOR_CRON_ANOMALY_MIN_HISTORY", raising=False)
     monkeypatch.setenv("HOMELAB_MONITOR_CRON_ANOMALY_ROLLING_WINDOW", "50")
     monkeypatch.delenv("HOMELAB_MONITOR_CRON_ANOMALY_DURATION_K", raising=False)
@@ -487,8 +461,6 @@ def test_load_cron_anomaly_config_rolling_window_override(monkeypatch: pytest.Mo
 
 def test_load_cron_anomaly_config_duration_k_override(monkeypatch: pytest.MonkeyPatch) -> None:
     """HOMELAB_MONITOR_CRON_ANOMALY_DURATION_K overrides duration_k only."""
-    from homelab_monitor.kernel.config import load_cron_anomaly_config  # noqa: PLC0415
-
     monkeypatch.delenv("HOMELAB_MONITOR_CRON_ANOMALY_MIN_HISTORY", raising=False)
     monkeypatch.delenv("HOMELAB_MONITOR_CRON_ANOMALY_ROLLING_WINDOW", raising=False)
     monkeypatch.setenv("HOMELAB_MONITOR_CRON_ANOMALY_DURATION_K", "2.5")
@@ -501,8 +473,6 @@ def test_load_cron_anomaly_config_duration_k_override(monkeypatch: pytest.Monkey
 
 def test_load_cron_anomaly_config_output_band_override(monkeypatch: pytest.MonkeyPatch) -> None:
     """HOMELAB_MONITOR_CRON_ANOMALY_OUTPUT_BAND overrides output_band only."""
-    from homelab_monitor.kernel.config import load_cron_anomaly_config  # noqa: PLC0415
-
     monkeypatch.delenv("HOMELAB_MONITOR_CRON_ANOMALY_MIN_HISTORY", raising=False)
     monkeypatch.delenv("HOMELAB_MONITOR_CRON_ANOMALY_ROLLING_WINDOW", raising=False)
     monkeypatch.delenv("HOMELAB_MONITOR_CRON_ANOMALY_DURATION_K", raising=False)
@@ -515,8 +485,6 @@ def test_load_cron_anomaly_config_output_band_override(monkeypatch: pytest.Monke
 
 def test_load_cron_anomaly_config_all_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
     """All four CRON_ANOMALY env vars override all four fields simultaneously."""
-    from homelab_monitor.kernel.config import load_cron_anomaly_config  # noqa: PLC0415
-
     monkeypatch.setenv("HOMELAB_MONITOR_CRON_ANOMALY_MIN_HISTORY", "3")
     monkeypatch.setenv("HOMELAB_MONITOR_CRON_ANOMALY_ROLLING_WINDOW", "15")
     monkeypatch.setenv("HOMELAB_MONITOR_CRON_ANOMALY_DURATION_K", "3.0")
@@ -531,16 +499,12 @@ def test_load_cron_anomaly_config_all_overrides(monkeypatch: pytest.MonkeyPatch)
 
 def test_load_vl_retention_days_default(monkeypatch: pytest.MonkeyPatch) -> None:
     """load_vl_retention_days returns 30 when env var is absent."""
-    from homelab_monitor.kernel.config import load_vl_retention_days  # noqa: PLC0415
-
     monkeypatch.delenv("HOMELAB_MONITOR_VL_RETENTION_DAYS", raising=False)
     assert load_vl_retention_days() == 30  # noqa: PLR2004
 
 
 def test_load_vl_retention_days_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
     """HOMELAB_MONITOR_VL_RETENTION_DAYS overrides the default."""
-    from homelab_monitor.kernel.config import load_vl_retention_days  # noqa: PLC0415
-
     monkeypatch.setenv("HOMELAB_MONITOR_VL_RETENTION_DAYS", "14")
     assert load_vl_retention_days() == 14  # noqa: PLR2004
 
@@ -550,8 +514,6 @@ def test_load_vl_retention_days_env_override(monkeypatch: pytest.MonkeyPatch) ->
 
 def test_load_tail_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     """load_tail_config returns built-in defaults when no env vars are set."""
-    from homelab_monitor.kernel.config import TailConfig, load_tail_config  # noqa: PLC0415
-
     monkeypatch.delenv("HOMELAB_MONITOR_TAIL_POLL_MS", raising=False)
     monkeypatch.delenv("HOMELAB_MONITOR_TAIL_MAX_CONNECTIONS", raising=False)
     monkeypatch.delenv("HOMELAB_MONITOR_TAIL_MAX_LINES_PER_SEC", raising=False)
@@ -566,8 +528,6 @@ def test_load_tail_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_load_tail_config_env_max_connections(monkeypatch: pytest.MonkeyPatch) -> None:
     """HOMELAB_MONITOR_TAIL_MAX_CONNECTIONS overrides max_connections (line 235)."""
-    from homelab_monitor.kernel.config import load_tail_config  # noqa: PLC0415
-
     monkeypatch.delenv("HOMELAB_MONITOR_TAIL_POLL_MS", raising=False)
     monkeypatch.setenv("HOMELAB_MONITOR_TAIL_MAX_CONNECTIONS", "10")
     monkeypatch.delenv("HOMELAB_MONITOR_TAIL_MAX_LINES_PER_SEC", raising=False)
@@ -578,8 +538,6 @@ def test_load_tail_config_env_max_connections(monkeypatch: pytest.MonkeyPatch) -
 
 def test_load_tail_config_env_max_lines_per_sec(monkeypatch: pytest.MonkeyPatch) -> None:
     """HOMELAB_MONITOR_TAIL_MAX_LINES_PER_SEC overrides max_lines_per_sec (line 238)."""
-    from homelab_monitor.kernel.config import load_tail_config  # noqa: PLC0415
-
     monkeypatch.delenv("HOMELAB_MONITOR_TAIL_POLL_MS", raising=False)
     monkeypatch.delenv("HOMELAB_MONITOR_TAIL_MAX_CONNECTIONS", raising=False)
     monkeypatch.setenv("HOMELAB_MONITOR_TAIL_MAX_LINES_PER_SEC", "500")
@@ -590,8 +548,6 @@ def test_load_tail_config_env_max_lines_per_sec(monkeypatch: pytest.MonkeyPatch)
 
 def test_load_tail_config_all_env_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
     """All four TAIL env vars override all four fields simultaneously."""
-    from homelab_monitor.kernel.config import load_tail_config  # noqa: PLC0415
-
     monkeypatch.setenv("HOMELAB_MONITOR_TAIL_POLL_MS", "500")
     monkeypatch.setenv("HOMELAB_MONITOR_TAIL_MAX_CONNECTIONS", "10")
     monkeypatch.setenv("HOMELAB_MONITOR_TAIL_MAX_LINES_PER_SEC", "500")
@@ -605,8 +561,6 @@ def test_load_tail_config_all_env_overrides(monkeypatch: pytest.MonkeyPatch) -> 
 
 def test_load_tail_config_clamps_zero_to_one(monkeypatch: pytest.MonkeyPatch) -> None:
     """All four TAIL env vars set to 0 are clamped up to the floor of 1."""
-    from homelab_monitor.kernel.config import load_tail_config  # noqa: PLC0415
-
     monkeypatch.setenv("HOMELAB_MONITOR_TAIL_POLL_MS", "0")
     monkeypatch.setenv("HOMELAB_MONITOR_TAIL_MAX_CONNECTIONS", "0")
     monkeypatch.setenv("HOMELAB_MONITOR_TAIL_MAX_LINES_PER_SEC", "0")
@@ -619,8 +573,6 @@ def test_load_tail_config_clamps_zero_to_one(monkeypatch: pytest.MonkeyPatch) ->
 
 
 def test_load_drain_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
-    from homelab_monitor.kernel.config import DrainConfig, load_drain_config  # noqa: PLC0415
-
     monkeypatch.delenv("HOMELAB_MONITOR_DRAIN_INTERVAL_S", raising=False)
     monkeypatch.delenv("HOMELAB_MONITOR_DRAIN_BATCH_MAX_LINES", raising=False)
     monkeypatch.delenv("HOMELAB_MONITOR_DRAIN_INGEST_LAG_GRACE_S", raising=False)
@@ -634,8 +586,6 @@ def test_load_drain_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_load_drain_config_all_env_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
-    from homelab_monitor.kernel.config import load_drain_config  # noqa: PLC0415
-
     monkeypatch.setenv("HOMELAB_MONITOR_DRAIN_INTERVAL_S", "60")
     monkeypatch.setenv("HOMELAB_MONITOR_DRAIN_BATCH_MAX_LINES", "1000")
     monkeypatch.setenv("HOMELAB_MONITOR_DRAIN_INGEST_LAG_GRACE_S", "5")
@@ -650,8 +600,6 @@ def test_load_drain_config_all_env_overrides(monkeypatch: pytest.MonkeyPatch) ->
 
 
 def test_load_drain_config_clamps(monkeypatch: pytest.MonkeyPatch) -> None:
-    from homelab_monitor.kernel.config import load_drain_config  # noqa: PLC0415
-
     monkeypatch.setenv("HOMELAB_MONITOR_DRAIN_INTERVAL_S", "0")
     monkeypatch.setenv("HOMELAB_MONITOR_DRAIN_BATCH_MAX_LINES", "0")
     monkeypatch.setenv("HOMELAB_MONITOR_DRAIN_INGEST_LAG_GRACE_S", "-5")
@@ -663,16 +611,12 @@ def test_load_drain_config_clamps(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_load_drain_config_enabled_truthy_variants(monkeypatch: pytest.MonkeyPatch) -> None:
-    from homelab_monitor.kernel.config import load_drain_config  # noqa: PLC0415
-
     for raw, expected in (("1", True), ("yes", True), ("TRUE", True), ("0", False), ("off", False)):
         monkeypatch.setenv("HOMELAB_MONITOR_DRAIN_ENABLED", raw)
         assert load_drain_config().enabled is expected
 
 
 def test_load_drain_config_bad_int_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    from homelab_monitor.kernel.config import load_drain_config  # noqa: PLC0415
-
     monkeypatch.setenv("HOMELAB_MONITOR_DRAIN_INTERVAL_S", "not-a-number")
     with pytest.raises(ValueError):
         load_drain_config()
@@ -683,11 +627,6 @@ def test_load_drain_config_bad_int_raises(monkeypatch: pytest.MonkeyPatch) -> No
 
 def test_load_new_signature_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     """load_new_signature_config returns documented defaults when no env vars set."""
-    from homelab_monitor.kernel.config import (  # noqa: PLC0415
-        NewSignatureConfig,
-        load_new_signature_config,
-    )
-
     monkeypatch.delenv("HOMELAB_MONITOR_NEW_SIGNATURE_WINDOW_S", raising=False)
     monkeypatch.delenv("HOMELAB_MONITOR_NEW_SIGNATURE_SEVERITIES", raising=False)
 
@@ -703,8 +642,6 @@ def test_load_new_signature_config_defaults(monkeypatch: pytest.MonkeyPatch) -> 
 
 def test_load_new_signature_config_window_clamp(monkeypatch: pytest.MonkeyPatch) -> None:
     """window_seconds of 0 or negative is clamped to 1."""
-    from homelab_monitor.kernel.config import load_new_signature_config  # noqa: PLC0415
-
     monkeypatch.setenv("HOMELAB_MONITOR_NEW_SIGNATURE_WINDOW_S", "0")
     monkeypatch.delenv("HOMELAB_MONITOR_NEW_SIGNATURE_SEVERITIES", raising=False)
 
@@ -714,8 +651,6 @@ def test_load_new_signature_config_window_clamp(monkeypatch: pytest.MonkeyPatch)
 
 def test_load_new_signature_config_window_negative_clamp(monkeypatch: pytest.MonkeyPatch) -> None:
     """Negative window_seconds is clamped to 1."""
-    from homelab_monitor.kernel.config import load_new_signature_config  # noqa: PLC0415
-
     monkeypatch.setenv("HOMELAB_MONITOR_NEW_SIGNATURE_WINDOW_S", "-100")
     monkeypatch.delenv("HOMELAB_MONITOR_NEW_SIGNATURE_SEVERITIES", raising=False)
 
@@ -727,8 +662,6 @@ def test_load_new_signature_config_severities_parse_and_lowercase(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Severities are lowercased, stripped, and split on comma."""
-    from homelab_monitor.kernel.config import load_new_signature_config  # noqa: PLC0415
-
     monkeypatch.delenv("HOMELAB_MONITOR_NEW_SIGNATURE_WINDOW_S", raising=False)
     monkeypatch.setenv("HOMELAB_MONITOR_NEW_SIGNATURE_SEVERITIES", "error, INFO ,debug")
 
@@ -740,8 +673,6 @@ def test_load_new_signature_config_severities_empty_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Empty or whitespace-only severities fall back to default."""
-    from homelab_monitor.kernel.config import load_new_signature_config  # noqa: PLC0415
-
     monkeypatch.delenv("HOMELAB_MONITOR_NEW_SIGNATURE_WINDOW_S", raising=False)
     monkeypatch.setenv("HOMELAB_MONITOR_NEW_SIGNATURE_SEVERITIES", " , ")
 
@@ -752,8 +683,6 @@ def test_load_new_signature_config_severities_empty_fallback(
 
 def test_load_new_signature_config_severities_custom_set(monkeypatch: pytest.MonkeyPatch) -> None:
     """Custom severities override the default set."""
-    from homelab_monitor.kernel.config import load_new_signature_config  # noqa: PLC0415
-
     monkeypatch.delenv("HOMELAB_MONITOR_NEW_SIGNATURE_WINDOW_S", raising=False)
     monkeypatch.setenv("HOMELAB_MONITOR_NEW_SIGNATURE_SEVERITIES", "critical,error")
 
@@ -765,8 +694,6 @@ def test_load_new_signature_config_window_non_numeric_raises(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Non-numeric window_seconds env value raises ValueError."""
-    from homelab_monitor.kernel.config import load_new_signature_config  # noqa: PLC0415
-
     monkeypatch.setenv("HOMELAB_MONITOR_NEW_SIGNATURE_WINDOW_S", "not-a-number")
     monkeypatch.delenv("HOMELAB_MONITOR_NEW_SIGNATURE_SEVERITIES", raising=False)
 
@@ -776,11 +703,259 @@ def test_load_new_signature_config_window_non_numeric_raises(
 
 def test_load_new_signature_config_all_env_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
     """Both env vars override both fields simultaneously."""
-    from homelab_monitor.kernel.config import load_new_signature_config  # noqa: PLC0415
-
     monkeypatch.setenv("HOMELAB_MONITOR_NEW_SIGNATURE_WINDOW_S", "600")
     monkeypatch.setenv("HOMELAB_MONITOR_NEW_SIGNATURE_SEVERITIES", "warning,notice")
 
     cfg = load_new_signature_config()
     assert cfg.window_seconds == 600  # noqa: PLR2004
     assert cfg.severities == frozenset({"warning", "notice"})
+
+
+# --- LogsConfig (error-rate config) ---------------------------------------------------
+
+
+def test_load_logs_config_defaults_no_file(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """No config file -> defaults (DEFAULT_ERROR_PATTERNS, no overrides)."""
+    monkeypatch.setenv("HOMELAB_MONITOR_CONFIG", str(tmp_path / "missing.yaml"))
+    cfg = load_logs_config()
+    assert cfg == LogsConfig(
+        error_patterns=DEFAULT_ERROR_PATTERNS,
+        error_rate_overrides=(),
+    )
+
+
+def test_load_logs_config_logs_section_absent(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """YAML without logs section -> defaults."""
+    cfg_file = tmp_path / "homelab-monitor.yaml"
+    cfg_file.write_text("disk_budget:\n  total_gb: 50\n")
+    monkeypatch.setenv("HOMELAB_MONITOR_CONFIG", str(cfg_file))
+    cfg = load_logs_config()
+    assert cfg.error_patterns == DEFAULT_ERROR_PATTERNS
+    assert cfg.error_rate_overrides == ()
+
+
+def test_load_logs_config_error_patterns_absent(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """logs: present but error_patterns absent -> defaults."""
+    cfg_file = tmp_path / "homelab-monitor.yaml"
+    cfg_file.write_text("logs:\n  redact: []\n")
+    monkeypatch.setenv("HOMELAB_MONITOR_CONFIG", str(cfg_file))
+    cfg = load_logs_config()
+    assert cfg.error_patterns == DEFAULT_ERROR_PATTERNS
+
+
+def test_load_logs_config_error_patterns_parsed(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """error_patterns entries are parsed into ErrorPattern instances."""
+    cfg_file = tmp_path / "homelab-monitor.yaml"
+    cfg_file.write_text(
+        "logs:\n  error_patterns:\n    - kind: http5xx\n      regex: 'status[:=]\\s*5\\d{2}'\n"
+    )
+    monkeypatch.setenv("HOMELAB_MONITOR_CONFIG", str(cfg_file))
+    cfg = load_logs_config()
+    assert cfg.error_patterns == (ErrorPattern(kind="http5xx", regex="status[:=]\\s*5\\d{2}"),)
+
+
+def test_load_logs_config_error_patterns_empty_list(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """error_patterns: [] (explicit empty) -> empty tuple (NOT defaults)."""
+    cfg_file = tmp_path / "homelab-monitor.yaml"
+    cfg_file.write_text("logs:\n  error_patterns: []\n")
+    monkeypatch.setenv("HOMELAB_MONITOR_CONFIG", str(cfg_file))
+    cfg = load_logs_config()
+    assert cfg.error_patterns == ()
+
+
+def test_load_logs_config_error_patterns_empty_value(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """error_patterns: (null value) -> defaults."""
+    cfg_file = tmp_path / "homelab-monitor.yaml"
+    cfg_file.write_text("logs:\n  error_patterns:\n")
+    monkeypatch.setenv("HOMELAB_MONITOR_CONFIG", str(cfg_file))
+    cfg = load_logs_config()
+    assert cfg.error_patterns == DEFAULT_ERROR_PATTERNS
+
+
+def test_load_logs_config_error_pattern_missing_field_raises(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """error_patterns entry missing regex field raises ValueError."""
+    cfg_file = tmp_path / "homelab-monitor.yaml"
+    cfg_file.write_text("logs:\n  error_patterns:\n    - kind: panic\n")
+    monkeypatch.setenv("HOMELAB_MONITOR_CONFIG", str(cfg_file))
+    with pytest.raises(ValueError, match="regex"):
+        load_logs_config()
+
+
+def test_load_logs_config_error_pattern_not_mapping_raises(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """error_patterns entry that is not a mapping raises ValueError."""
+    cfg_file = tmp_path / "homelab-monitor.yaml"
+    cfg_file.write_text("logs:\n  error_patterns: ['panic']\n")
+    monkeypatch.setenv("HOMELAB_MONITOR_CONFIG", str(cfg_file))
+    with pytest.raises(ValueError, match="must be a mapping"):
+        load_logs_config()
+
+
+def test_load_logs_config_error_patterns_not_list_raises(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """error_patterns that is not a list raises ValueError."""
+    cfg_file = tmp_path / "homelab-monitor.yaml"
+    cfg_file.write_text("logs:\n  error_patterns: foo\n")
+    monkeypatch.setenv("HOMELAB_MONITOR_CONFIG", str(cfg_file))
+    with pytest.raises(ValueError, match="must be a list"):
+        load_logs_config()
+
+
+def test_load_logs_config_overrides_parsed(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """error_rate_overrides entries are parsed."""
+    cfg_file = tmp_path / "homelab-monitor.yaml"
+    cfg_file.write_text(
+        "logs:\n"
+        "  error_patterns: []\n"
+        "  error_rate_overrides:\n"
+        "    - service: noisy\n"
+        "      static_floor: 100\n"
+        "    - service: critical\n"
+        "      multiplier: 2\n"
+    )
+    monkeypatch.setenv("HOMELAB_MONITOR_CONFIG", str(cfg_file))
+    cfg = load_logs_config()
+    assert cfg.error_rate_overrides == (
+        ErrorRateOverride(service="noisy", static_floor=100.0, multiplier=None),
+        ErrorRateOverride(service="critical", static_floor=None, multiplier=2.0),
+    )
+
+
+def test_load_logs_config_overrides_absent(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """error_rate_overrides absent -> empty tuple."""
+    cfg_file = tmp_path / "homelab-monitor.yaml"
+    cfg_file.write_text("logs:\n  error_patterns: []\n")
+    monkeypatch.setenv("HOMELAB_MONITOR_CONFIG", str(cfg_file))
+    cfg = load_logs_config()
+    assert cfg.error_rate_overrides == ()
+
+
+def test_load_logs_config_override_missing_service_raises(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """error_rate_overrides entry missing service raises ValueError."""
+    cfg_file = tmp_path / "homelab-monitor.yaml"
+    cfg_file.write_text("logs:\n  error_rate_overrides:\n    - static_floor: 5\n")
+    monkeypatch.setenv("HOMELAB_MONITOR_CONFIG", str(cfg_file))
+    with pytest.raises(ValueError, match="service"):
+        load_logs_config()
+
+
+def test_load_logs_config_override_non_numeric_floor_raises(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """error_rate_overrides entry with non-numeric static_floor raises ValueError."""
+    cfg_file = tmp_path / "homelab-monitor.yaml"
+    cfg_file.write_text(
+        "logs:\n  error_rate_overrides:\n    - service: x\n      static_floor: big\n"
+    )
+    monkeypatch.setenv("HOMELAB_MONITOR_CONFIG", str(cfg_file))
+    with pytest.raises(ValueError, match="must be numeric"):
+        load_logs_config()
+
+
+def test_load_logs_config_override_bool_floor_raises(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A boolean static_floor raises ValueError (bool is an int subclass — must be rejected)."""
+    cfg_file = tmp_path / "homelab-monitor.yaml"
+    cfg_file.write_text(
+        "logs:\n  error_rate_overrides:\n    - service: svc\n      static_floor: true\n"
+    )
+    monkeypatch.setenv("HOMELAB_MONITOR_CONFIG", str(cfg_file))
+    with pytest.raises(ValueError, match="must be numeric"):
+        load_logs_config()
+
+
+def test_load_logs_config_logs_not_mapping_raises(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """logs: value that is not a mapping raises ValueError."""
+    cfg_file = tmp_path / "homelab-monitor.yaml"
+    cfg_file.write_text("logs: [a, b]\n")
+    monkeypatch.setenv("HOMELAB_MONITOR_CONFIG", str(cfg_file))
+    with pytest.raises(ValueError, match="logs must be a mapping"):
+        load_logs_config()
+
+
+def test_load_logs_config_root_not_mapping_raises(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """YAML root that is not a mapping raises ValueError."""
+    cfg_file = tmp_path / "homelab-monitor.yaml"
+    cfg_file.write_text("- a\n- b\n")
+    monkeypatch.setenv("HOMELAB_MONITOR_CONFIG", str(cfg_file))
+    with pytest.raises(ValueError, match="config root must be a mapping"):
+        load_logs_config()
+
+
+def test_load_logs_config_overrides_null_returns_empty(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """error_rate_overrides: null (explicit null value) -> empty tuple."""
+    cfg_file = tmp_path / "homelab-monitor.yaml"
+    cfg_file.write_text("logs:\n  error_rate_overrides:\n")
+    monkeypatch.setenv("HOMELAB_MONITOR_CONFIG", str(cfg_file))
+    cfg = load_logs_config()
+    assert cfg.error_rate_overrides == ()
+
+
+def test_load_logs_config_overrides_not_list_raises(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """error_rate_overrides that is not a list raises ValueError."""
+    cfg_file = tmp_path / "homelab-monitor.yaml"
+    cfg_file.write_text("logs:\n  error_rate_overrides:\n    foo: bar\n")
+    monkeypatch.setenv("HOMELAB_MONITOR_CONFIG", str(cfg_file))
+    with pytest.raises(ValueError, match="must be a list"):
+        load_logs_config()
+
+
+def test_load_logs_config_override_entry_not_mapping_raises(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """error_rate_overrides list entry that is not a mapping raises ValueError."""
+    cfg_file = tmp_path / "homelab-monitor.yaml"
+    cfg_file.write_text("logs:\n  error_rate_overrides:\n    - just a string\n")
+    monkeypatch.setenv("HOMELAB_MONITOR_CONFIG", str(cfg_file))
+    with pytest.raises(ValueError, match="must be a mapping"):
+        load_logs_config()

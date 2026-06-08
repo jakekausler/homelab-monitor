@@ -1,0 +1,53 @@
+# vmalert METRICS rules for service-wide error-rate spike (STAGE-004-037).
+# Anomaly Type C — "service-wide error rate spike".
+#
+# DUMB direct-comparison rule on a GAUGE. LogErrorRateCollector
+# (plugins/collectors/builtin/log_error_rate.py) emits
+#   homelab_container_error_rate{name} — a per-60s-window error-COUNT GAUGE
+#   (NOT a counter): the count of error-like lines for that service in the last
+#   60s, refreshed every 60s. Because it is a gauge we compare it DIRECTLY; we
+#   do NOT use rate() (rate() is counter-only) and we do NOT use increase().
+#
+# Threshold (D-STATIC-FLOOR-AND-BASELINE): fire when the current window value
+# exceeds the HIGHER of (5x the 7-day rolling baseline) AND (the 10/min static
+# floor). `> clamp_min(5*baseline, 10)` encodes BOTH-must-hold: the value must
+# clear whichever threshold is larger, so it satisfies both simultaneously.
+# clamp_min (NOT max) is REQUIRED: max(vector, 10) is an AGGREGATION that
+# collapses every series to a single value with empty labels {}, so the binary
+# `>` against the labeled gauge matches NOTHING and the rule never fires.
+# clamp_min(v, 10) is ELEMENT-WISE — it floors each series' 5x-baseline at 10 and
+# PRESERVES the {name} label, so `>` matches the gauge 1:1 per service.
+#
+# The 10 absolute floor DOUBLES as gap-robustness: the gauge is gappy (a service
+# with no errors in a window emits no sample, so avg_over_time averages only
+# windows-with-errors -> a slightly inflated baseline), but a quiet/gappy
+# service can never false-fire because it must ALSO clear 10 absolute
+# errors/window. So NO separate min_baseline parameter is needed (unlike
+# signature_spike.yml.tmpl) — the locked floor provides it for free.
+#
+# DEFERRED (STAGE-042+): per-service overrides (logs.error_rate_overrides) and
+# per-service 1h cold-start fallback. v1 is ONE global rule with the default
+# 5x / 10-floor for every service.
+groups:
+  - name: error_rate_spike
+    interval: 60s
+    rules:
+      - alert: ServiceErrorRateSpike
+        expr: |
+          homelab_container_error_rate
+            > clamp_min(5 * avg_over_time(homelab_container_error_rate[7d:5m]), 10)
+        for: 2m
+        labels:
+          severity: warning
+          source_tool: vmalert-metrics
+          category: log-anomaly
+          anomaly_kind: error_rate_spike
+          target_kind: container
+        annotations:
+          summary: "Error-rate spike in {{ $labels.name }}"
+          description: |
+            Service {{ $labels.name }} emitted {{ $value }} error-like log lines
+            in the last 60s window, exceeding both its 5x 7-day baseline and the
+            10/window static floor.
+
+            Recent errors (Explorer): /logs?logsql=service:"{{ $labels.name }}" AND severity:error
