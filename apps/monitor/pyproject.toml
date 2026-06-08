@@ -60,6 +60,10 @@ select = ["E", "F", "I", "B", "UP", "ANN", "SIM", "PL", "RUF"]
 
 [tool.ruff.lint.per-file-ignores]
 "alembic/versions/*" = ["E501"]
+# signature_spike_render.py embeds a vmalert rule template whose PromQL
+# expression lines are inherently long (and cannot be wrapped without changing
+# the rendered output) — a data/template-holding module, like the migrations.
+"homelab_monitor/kernel/logs/signature_spike_render.py" = ["E501"]
 # test_coverage_gaps.py needs:
 # - PLC0415: inline imports inside each test (prevents cross-test namespace
 #   pollution; tests private functions across many modules).

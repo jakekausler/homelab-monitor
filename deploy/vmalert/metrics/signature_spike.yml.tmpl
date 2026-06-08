@@ -1,0 +1,60 @@
+# Rendered per-signature by STAGE-004-042 (persistence) on user demand via
+# STAGE-004-044 (UI). This is a TEMPLATE (.tmpl) — vmalert globs only *.yaml in
+# this dir, so this file is never loaded live. Each rendered instance is one
+# concrete signature ({service_key, template_hash}); the `and on(...)` 1:1 match
+# is correct because the instance pins both labels.
+#
+# Suppression is STRUCTURAL, not a PromQL clause: a suppressed signature has no
+# rendered instance (STAGE-042/044 own not-rendering / deleting instances for
+# suppressed signatures), so there is nothing to fire. Do NOT add an
+# `unless ... homelab_log_signature_suppressed` clause here — that metric does
+# not exist (STAGE-035 folded suppression into a collector decision).
+#
+# Metric facts (from drain_consumer._emit_cycle_metrics):
+#   homelab_log_signature_count{service_key,template_hash,severity} — per-cycle
+#     line-count GAUGE (gappy: zero-line cycles emit no sample). We sum_over_time
+#     it (NOT increase() — it is a gauge, not a counter).
+#   homelab_log_signature_first_seen_ts{service_key,template_hash} — first-seen
+#     timestamp in NANOSECONDS (hence /1e9 to compare against an age in seconds).
+groups:
+  - name: log_anomaly_signature_spike
+    interval: 30s
+    rules:
+      - alert: __ALERT_SLUG__
+        expr: |
+          (
+            sum_over_time(homelab_log_signature_count{service_key="__SERVICE_KEY__",template_hash="__TEMPLATE_HASH__"}[__WINDOW__])
+              > __MULTIPLIER__ * max(
+                  avg_over_time(sum_over_time(homelab_log_signature_count{service_key="__SERVICE_KEY__",template_hash="__TEMPLATE_HASH__"}[__WINDOW__])[7d:__WINDOW__]),
+                  __MIN_BASELINE__
+                )
+          )
+          and on (service_key, template_hash)
+            (time() - homelab_log_signature_first_seen_ts{service_key="__SERVICE_KEY__",template_hash="__TEMPLATE_HASH__"} / 1e9 >= 604800)
+          or
+          (
+            sum_over_time(homelab_log_signature_count{service_key="__SERVICE_KEY__",template_hash="__TEMPLATE_HASH__"}[__WINDOW__])
+              > __MULTIPLIER__ * max(
+                  avg_over_time(sum_over_time(homelab_log_signature_count{service_key="__SERVICE_KEY__",template_hash="__TEMPLATE_HASH__"}[__WINDOW__])[1h:__WINDOW__]),
+                  __MIN_BASELINE__
+                )
+          )
+          and on (service_key, template_hash)
+            (time() - homelab_log_signature_first_seen_ts{service_key="__SERVICE_KEY__",template_hash="__TEMPLATE_HASH__"} / 1e9 < 604800)
+        for: 1m
+        labels:
+          severity: warning
+          source_tool: vmalert-metrics
+          category: log-anomaly
+          anomaly_kind: signature_spike
+          target_kind: log_signature
+          template_hash: "__TEMPLATE_HASH__"
+          service_key: "__SERVICE_KEY__"
+        annotations:
+          summary: "Log signature spike in {{ $labels.service_key }}"
+          description: |
+            Signature {{ $labels.template_hash }} in {{ $labels.service_key }}
+            fired {{ $value }} times in window __WINDOW__, exceeding __MULTIPLIER__x
+            its rolling baseline (floor __MIN_BASELINE__).
+
+            Signature catalog: /logs/signatures#{{ $labels.template_hash }}/{{ $labels.service_key }}

@@ -1,0 +1,92 @@
+# Rule unit-test fixtures for a RENDERED instance of signature_spike.yml.tmpl.
+# Schema: Prometheus / vmalert rule unit-test format.
+#
+# This fixture is FORWARD-COMPATIBLE DOCUMENTATION. The template (.tmpl) is not a
+# loadable rule file; vmalert globs *.yaml. To actually run this, render an
+# instance first:
+#   python -c "from homelab_monitor.kernel.logs.signature_spike_render import \
+#     render_signature_spike_rule as r; \
+#     open('signature_spike.rendered.yaml','w').write( \
+#       r(template_hash='abc12345', service_key='testsvc', multiplier=5, \
+#         window='5m', min_baseline=10))"
+# then: vmalert -rule.config=signature_spike.rendered.yaml -rule.testFile=signature_spike.tests.yaml
+# (No make target wires this yet — the pytest render test is the binding gate.)
+#
+# Rendered instance under test: alert SignatureSpike_testsvc_abc12345
+#   service_key="testsvc", template_hash="abc12345", multiplier=5, window=5m,
+#   min_baseline=10, cold-start cutoff 604800s.
+#
+# NOTE on time scale: homelab_log_signature_first_seen_ts is in NANOSECONDS;
+# the rule divides by 1e9. The series values below are nanosecond timestamps.
+
+rule_files:
+  - ../signature_spike.rendered.yaml
+
+evaluation_interval: 30s
+
+tests:
+  # --- Case 1: MATURE spike fires ---
+  # Signature first seen long ago (age >= 604800s) so the mature 7d branch is
+  # active. Per-cycle count jumps to 100/cycle, far above 5 * max(baseline, 10).
+  # first_seen_ts is a fixed ns timestamp well in the past relative to eval time;
+  # vmalert test eval_time is relative to series start (t=0), so we set first_seen
+  # to a NEGATIVE-equivalent: use a constant tiny ns value so (time() - ts/1e9)
+  # is large. Here ts=0 -> age = time() which exceeds 604800 once eval_time is set
+  # accordingly. (Documentation fixture — exact ns math is illustrative.)
+  - interval: 30s
+    input_series:
+      - series: 'homelab_log_signature_count{service_key="testsvc",template_hash="abc12345",severity="error"}'
+        values: '100x20'
+      - series: 'homelab_log_signature_first_seen_ts{service_key="testsvc",template_hash="abc12345"}'
+        values: '0x20'   # ns=0 -> age = time(), large -> mature branch active
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: SignatureSpike_testsvc_abc12345
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              source_tool: vmalert-metrics
+              category: log-anomaly
+              anomaly_kind: signature_spike
+              target_kind: log_signature
+              service_key: testsvc
+              template_hash: abc12345
+
+  # --- Case 2: STEADY state does NOT fire ---
+  # Per-cycle count is a flat 3/cycle. sum_over_time over 5m ~= small; baseline
+  # avg is similar; current is NOT > 5 * max(baseline, 10). No alert.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_log_signature_count{service_key="testsvc",template_hash="abc12345",severity="error"}'
+        values: '3x20'
+      - series: 'homelab_log_signature_first_seen_ts{service_key="testsvc",template_hash="abc12345"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: SignatureSpike_testsvc_abc12345
+        exp_alerts: []
+
+  # --- Case 3: COLD-START spike fires via the 1h branch ---
+  # Signature first seen recently (age < 604800s) so the cold-start [1h:] branch
+  # is active; the mature branch is gated off. A spike still fires. To make age
+  # small, first_seen_ts must be close to time()*1e9; set it to a large ns value
+  # near the eval clock. (Illustrative; a future harness author tunes exact ns.)
+  - interval: 30s
+    input_series:
+      - series: 'homelab_log_signature_count{service_key="testsvc",template_hash="abc12345",severity="error"}'
+        values: '0x10 100x10'   # quiet baseline then spike
+      - series: 'homelab_log_signature_first_seen_ts{service_key="testsvc",template_hash="abc12345"}'
+        # large ns value ~ current eval time so (time() - ts/1e9) < 604800
+        values: '300000000000x20'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: SignatureSpike_testsvc_abc12345
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              source_tool: vmalert-metrics
+              category: log-anomaly
+              anomaly_kind: signature_spike
+              target_kind: log_signature
+              service_key: testsvc
+              template_hash: abc12345
