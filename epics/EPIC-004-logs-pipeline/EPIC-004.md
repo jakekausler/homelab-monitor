@@ -2,11 +2,11 @@
 
 ## Status: In Progress
 
-## Stages Counter: 46 / 50 Complete
+## Stages Counter: 47 / 50 Complete
 
-## Current Stage: STAGE-004-042
+## Current Stage: STAGE-004-043
 
-## Current Phase: STAGE-004-042 Design / Not Started
+## Current Phase: STAGE-004-043 Design
 
 ## Overview
 
@@ -158,7 +158,7 @@ Stages MUST be implemented in order. No parallelization. Each stage lands a sing
 
 | # | Stage | Theme |
 |---|---|---|
-| STAGE-004-042 | Rule persistence model | SQLite `log_user_rules` + render-on-boot into vmalert directories. |
+| STAGE-004-042 | Rule persistence model | SQLite `log_user_rules` + render-on-boot into vmalert directories. Design ✅ Build ✅ Refinement ✅ Finalize ✅ |
 | STAGE-004-043 | Create-alert-from-query UX | Guided form with YAML preview launching from Explorer. |
 | STAGE-004-044 | Create-alert-from-signature + saved-query shortcuts | L8 merged in; both pre-fill the shared modal. |
 

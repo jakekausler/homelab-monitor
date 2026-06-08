@@ -439,3 +439,13 @@
 - "VL disk: recording rule homelab:vl_disk_used_pct = 100 * homelab_self_disk_used_bytes{slot=\"vl\"} / homelab_self_disk_budget_bytes{slot=\"vl\"} (reuses self_disk's slot bytes; no separate VL-disk collector). DiskWarning>70 / DiskCritical>85."
 - "VL health: latency rule uses quantile_over_time(0.95, homelab_vl_response_time_seconds[5m]) > 2 (gauge, not histogram). VictoriaLogsHighLatency."
 - "VL health self-metric: homelab_collector_run_success_total{name=\"vl_health\"} present (scheduler label-based scheme — NOT homelab_collector_run_vl_health)."
+
+## STAGE-004-042 — Rule persistence model (SQLite schema + render-on-boot)
+
+- **Volume permissions on the prod rig:** The `data_vmalert_user_logs`/`data_vmalert_user_metrics` named volumes must be `3777 root:amconfig` (writable by the monitor uid 995). If a fresh deploy shows `root:root 0755`, config-init (prod) / shared-init (test) failed to prepare them → renders silently fail. Check: `docker exec homelab-monitor ls -ldn /var/vmalert-user-logs /var/vmalert-user-metrics`.
+
+- **LogSQL group must have `type: vlogs` line:** A user LOGSQL rule must render with a group-level `type: vlogs` line (under `name: user-rules-logs`); a user METRICSQL rule must NOT have a `type:` line. Without `type: vlogs`, vmalert-logs reports `health=err` (queries VL's unsupported `/api/v1/query`). Check: create a logsql rule, `docker exec homelab-vmalert-logs wget -qO- http://127.0.0.1:8880/api/v1/rules` shows the rule `health=ok` with `datasourceType: vlogs`.
+
+- **Valid vmalert vlogs ALERTING exprs require a `| stats ...` pipe:** Bare filters are rejected by vmalert at parse time (e.g. `_msg:error` fails; `_msg:error | stats count() as c | filter c:>0` loads). 042 does NOT validate this (out of scope) — a future stage may add expr-validity validation. Regression: this is expected current behavior, not a bug.
+
+- **Restart round-trip:** Rules persisted in SQLite must re-render to the vmalert-user volumes on monitor boot (render-on-boot block 8d). Verify: create a rule, restart the monitor container, confirm `docker exec homelab-vmalert-logs wget -qO- http://127.0.0.1:8880/api/v1/rules` still shows the rule with `health=ok`.
