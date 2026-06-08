@@ -414,3 +414,11 @@
 - **Signature autocomplete picker:** On SilenceAllowlistTab, clicking the signature field opens a dropdown fetching from `GET /api/logs/signatures` (all signatures); selecting a signature autofills `service_key` and `template_hash` (shown as "Signature" label).
 - **Description blocks:** Silence Allowlist, Signatures, and Models tabs each display an informational description block at the top (Query tab intentionally omitted for clarity).
 - **No horizontal scroll on mobile:** Mobile (≤767px) Logs viewer maintains responsive behavior; SilenceAllowlistTab form + list stack vertically with no horizontal overflow.
+
+## STAGE-004-039 — Severity escalation rules (L1)
+
+- Severity escalation: vmalert-logs loads CriticalLogLine rule from deploy/vmalert/logs/severity_escalation.yaml (.yaml not .yml); /api/v1/rules shows health=ok.
+- Severity escalation: a log line with severity=critical (word) fires CriticalLogLine within ~1 eval cycle.
+- Severity escalation: a log line with severity="2" (numeric syslog PRIORITY, journald representation) ALSO fires CriticalLogLine — guards the dual word+numeric match against regression (a regression here silently drops all journald-origin critical alerts).
+- Severity escalation: a severity=info line does NOT fire CriticalLogLine.
+- Config: logs.severity_escalation.excluded_services and severity_floors parse into LogsConfig (parsed-but-unused until STAGE-042); malformed entries raise ValueError, present-but-null defaults to empty tuple.
