@@ -3249,6 +3249,262 @@
         "title": "LogLine",
         "type": "object"
       },
+      "LogUserRuleCreateRequest": {
+        "additionalProperties": false,
+        "description": "Body for POST /api/logs/user-rules.\n\nrule_name MUST be a Prometheus alertname identifier (^[A-Za-z_][A-Za-z0-9_]*$).\nexpr is the LogsQL (logsql) or MetricsQL (metricsql) expression. for_duration\nis a vmalert duration ('5m'/'30s'/...) or '0s'. Deeper validation (incl. a\nrender dry-run) happens in the repo; bad input there -> 400.",
+        "properties": {
+          "description": {
+            "default": "",
+            "maxLength": 4000,
+            "title": "Description",
+            "type": "string"
+          },
+          "expr": {
+            "maxLength": 8192,
+            "minLength": 1,
+            "title": "Expr",
+            "type": "string"
+          },
+          "expr_kind": {
+            "enum": [
+              "logsql",
+              "metricsql"
+            ],
+            "title": "Expr Kind",
+            "type": "string"
+          },
+          "for_duration": {
+            "default": "0s",
+            "maxLength": 16,
+            "title": "For Duration",
+            "type": "string"
+          },
+          "rule_name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Rule Name",
+            "type": "string"
+          },
+          "severity": {
+            "enum": [
+              "info",
+              "warning",
+              "critical"
+            ],
+            "title": "Severity",
+            "type": "string"
+          },
+          "summary": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Summary",
+            "type": "string"
+          }
+        },
+        "required": [
+          "rule_name",
+          "expr",
+          "expr_kind",
+          "severity",
+          "summary"
+        ],
+        "title": "LogUserRuleCreateRequest",
+        "type": "object"
+      },
+      "LogUserRuleListResponse": {
+        "additionalProperties": false,
+        "description": "Response for GET /api/logs/user-rules.",
+        "properties": {
+          "rules": {
+            "items": {
+              "$ref": "#/components/schemas/LogUserRuleResponse"
+            },
+            "title": "Rules",
+            "type": "array"
+          }
+        },
+        "required": [
+          "rules"
+        ],
+        "title": "LogUserRuleListResponse",
+        "type": "object"
+      },
+      "LogUserRulePatchRequest": {
+        "additionalProperties": false,
+        "description": "Body for PATCH /api/logs/user-rules/{id}. All fields optional (partial update).\n\nrule_name and expr_kind are immutable and NOT accepted here.",
+        "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "maxLength": 4000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enabled"
+          },
+          "expr": {
+            "anyOf": [
+              {
+                "maxLength": 8192,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expr"
+          },
+          "for_duration": {
+            "anyOf": [
+              {
+                "maxLength": 16,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "For Duration"
+          },
+          "severity": {
+            "anyOf": [
+              {
+                "enum": [
+                  "info",
+                  "warning",
+                  "critical"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Severity"
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "maxLength": 1000,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Summary"
+          }
+        },
+        "title": "LogUserRulePatchRequest",
+        "type": "object"
+      },
+      "LogUserRuleResponse": {
+        "additionalProperties": false,
+        "description": "One user-authored vmalert rule.",
+        "properties": {
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "expr": {
+            "title": "Expr",
+            "type": "string"
+          },
+          "expr_kind": {
+            "enum": [
+              "logsql",
+              "metricsql"
+            ],
+            "title": "Expr Kind",
+            "type": "string"
+          },
+          "for_duration": {
+            "title": "For Duration",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "rule_name": {
+            "title": "Rule Name",
+            "type": "string"
+          },
+          "severity": {
+            "enum": [
+              "info",
+              "warning",
+              "critical"
+            ],
+            "title": "Severity",
+            "type": "string"
+          },
+          "source_kind": {
+            "title": "Source Kind",
+            "type": "string"
+          },
+          "source_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Ref"
+          },
+          "summary": {
+            "title": "Summary",
+            "type": "string"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "rule_name",
+          "expr",
+          "expr_kind",
+          "severity",
+          "summary",
+          "description",
+          "for_duration",
+          "source_kind",
+          "source_ref",
+          "enabled",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "LogUserRuleResponse",
+        "type": "object"
+      },
       "LogWindowResponse": {
         "additionalProperties": false,
         "description": "Response for GET /api/logs/window (STAGE-004-031A).\n\nThe anchor-centered surrounding-logs window: N lines before + N after the\nselected line's timestamp, merged + deduped + sorted ascending. `lines`\nreuses the converged LogLine shape (same as /logs/query). All fields except\n`anchor_index` are ALWAYS populated \u2192 required (non-optional FE types).\n`anchor_index` is genuinely nullable (anchor may not be locatable).",
@@ -9492,6 +9748,291 @@
           }
         },
         "summary": "Logs Tail"
+      }
+    },
+    "/api/logs/user-rules": {
+      "get": {
+        "description": "List user rules sorted by rule_name.\n\nQuery param `enabled=true` filters to enabled rules only; omitting it (or any\nother value) returns all rules. Auth: session required; GET (no CSRF).",
+        "operationId": "list_user_rules_api_logs_user_rules_get",
+        "parameters": [
+          {
+            "description": "Filter to enabled rules when true",
+            "in": "query",
+            "name": "enabled",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter to enabled rules when true",
+              "title": "Enabled"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogUserRuleListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List User Rules"
+      },
+      "post": {
+        "description": "Create a user rule. 201 on success; 409 on duplicate rule_name; 400 on\nvalidation/render failure. The rule is rendered to the aggregate YAML and\nbecomes active in vmalert within ~30s. Auth: session required; CSRF enforced.",
+        "operationId": "create_user_rule_api_logs_user_rules_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LogUserRuleCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogUserRuleResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create User Rule"
+      }
+    },
+    "/api/logs/user-rules/{rule_id}": {
+      "delete": {
+        "description": "Delete a user rule. 204 on success, 404 if absent. Re-renders. CSRF enforced.",
+        "operationId": "delete_user_rule_api_logs_user_rules__rule_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "rule_id",
+            "required": true,
+            "schema": {
+              "title": "Rule Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete User Rule"
+      },
+      "get": {
+        "description": "Get one user rule by id. 404 if absent. GET (no CSRF).",
+        "operationId": "get_user_rule_api_logs_user_rules__rule_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "rule_id",
+            "required": true,
+            "schema": {
+              "title": "Rule Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogUserRuleResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get User Rule"
+      },
+      "patch": {
+        "description": "Partial update (expr/severity/summary/description/for_duration/enabled).\n404 if absent; 400 on validation/render failure. Re-renders. CSRF enforced.",
+        "operationId": "patch_user_rule_api_logs_user_rules__rule_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "rule_id",
+            "required": true,
+            "schema": {
+              "title": "Rule Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LogUserRulePatchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogUserRuleResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Patch User Rule"
+      }
+    },
+    "/api/logs/user-rules/{rule_id}/disable": {
+      "post": {
+        "description": "Disable a rule. 404 if absent. Re-renders. CSRF enforced.",
+        "operationId": "disable_user_rule_api_logs_user_rules__rule_id__disable_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "rule_id",
+            "required": true,
+            "schema": {
+              "title": "Rule Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogUserRuleResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Disable User Rule"
+      }
+    },
+    "/api/logs/user-rules/{rule_id}/enable": {
+      "post": {
+        "description": "Enable a rule. 404 if absent. Re-renders. CSRF enforced.",
+        "operationId": "enable_user_rule_api_logs_user_rules__rule_id__enable_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "rule_id",
+            "required": true,
+            "schema": {
+              "title": "Rule Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogUserRuleResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Enable User Rule"
       }
     },
     "/api/logs/window": {

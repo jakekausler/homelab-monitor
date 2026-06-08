@@ -1230,6 +1230,30 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
     if cron_events_token is not None:
         app.state.cron_events_token = cron_events_token
 
+    # 8d. User-rules render-on-boot (STAGE-004-042). Mirrors 8c (no reload):
+    # vmalert globs the rendered *.yaml within -configCheckInterval (30s). Reads
+    # log_user_rules.list_enabled() and rewrites BOTH aggregate files atomically.
+    # Failures are logged + swallowed inside render_all; lifespan continues.
+    from homelab_monitor.kernel.logs.user_rules_render import (  # noqa: PLC0415
+        render_all as render_user_rules_on_boot,
+    )
+    from homelab_monitor.kernel.logs.user_rules_render import (  # noqa: PLC0415
+        render_paths_from_env as user_rules_paths_from_env,
+    )
+    from homelab_monitor.kernel.logs.user_rules_repo import (  # noqa: PLC0415
+        LogUserRulesRepository,
+    )
+
+    user_rules_logs_path, user_rules_metrics_path = user_rules_paths_from_env()
+    try:
+        await render_user_rules_on_boot(
+            LogUserRulesRepository(repo),
+            user_rules_logs_path,
+            user_rules_metrics_path,
+        )
+    except Exception as exc:  # pragma: no cover -- render_all swallows OSError; defensive
+        log.warning("lifespan.user_rules_render_failed", error=str(exc))
+
     app.state.started_at = utc_now_iso()
 
     try:

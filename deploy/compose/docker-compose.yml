@@ -71,6 +71,8 @@ services:
       - data_alertmanager_config:/var/alertmanager-config
       - ../vector/vector.toml.template:/etc/vector-template/vector.toml.template:ro
       - data_vector_config:/var/vector-config
+      - data_vmalert_user_logs:/var/vmalert-user-logs
+      - data_vmalert_user_metrics:/var/vmalert-user-metrics
       # Host crontab locations are mounted READ-ONLY: the monitor container
       # (uid 995) only READS crontabs for discovery. EVERY host write — crontab
       # rewrites, the wrapper script, the token file — goes through the
@@ -171,13 +173,15 @@ services:
       - sh
       - -c
       - >
-        chown 0:2000 /var/vector-config /var/alertmanager-config &&
-        chmod 3777 /var/vector-config /var/alertmanager-config &&
+        chown 0:2000 /var/vector-config /var/alertmanager-config /var/vmalert-user-logs /var/vmalert-user-metrics &&
+        chmod 3777 /var/vector-config /var/alertmanager-config /var/vmalert-user-logs /var/vmalert-user-metrics &&
         if [ -f /var/alertmanager-config/alertmanager.yml ]; then chown ${HM_CRON_HOST_UID:-1000}:2000 /var/alertmanager-config/alertmanager.yml; fi &&
         echo "config-init: render-config volumes set to root:amconfig 3777, am seed reowned to monitor uid"
     volumes:
       - data_vector_config:/var/vector-config
       - data_alertmanager_config:/var/alertmanager-config
+      - data_vmalert_user_logs:/var/vmalert-user-logs
+      - data_vmalert_user_metrics:/var/vmalert-user-metrics
     restart: "no"
     networks:
       - homelab-monitor-net
@@ -406,11 +410,13 @@ services:
       - "-notifier.url=http://alertmanager:9093"
       - "-remoteWrite.url=http://victoriametrics:8428"
       - "-rule=/etc/vmalert/metrics/*.yaml"
+      - "-rule=/etc/vmalert/metrics-user/*.yaml"
       - "-evaluationInterval=30s"
       - "-configCheckInterval=30s"
       - "-httpListenAddr=:8880"
     volumes:
       - ../vmalert/metrics:/etc/vmalert/metrics:ro
+      - data_vmalert_user_metrics:/etc/vmalert/metrics-user:ro
     depends_on:
       alertmanager:
         condition: service_healthy
@@ -434,11 +440,13 @@ services:
       - "-datasource.url=http://victorialogs:9428"
       - "-notifier.url=http://alertmanager:9093"
       - "-rule=/etc/vmalert/logs/*.yaml"
+      - "-rule=/etc/vmalert/logs-user/*.yaml"
       - "-evaluationInterval=30s"
       - "-configCheckInterval=30s"
       - "-httpListenAddr=:8880"
     volumes:
       - ../vmalert/logs:/etc/vmalert/logs:ro
+      - data_vmalert_user_logs:/etc/vmalert/logs-user:ro
     depends_on:
       alertmanager:
         condition: service_healthy
@@ -514,3 +522,5 @@ volumes:
   data_backup:
   data_alertmanager_config:
   data_grafana:
+  data_vmalert_user_logs:
+  data_vmalert_user_metrics:

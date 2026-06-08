@@ -736,7 +736,7 @@ class ErrorPattern:
 
 @dataclass(frozen=True, slots=True)
 class ErrorRateOverride:
-    """Per-service error-rate override (reserved for STAGE-042; parsed but UNUSED in v1)."""
+    """Per-service error-rate override (future stage; v1 unused)."""
 
     service: str
     static_floor: float | None = None
@@ -747,7 +747,7 @@ class ErrorRateOverride:
 class SeverityFloor:
     """Per-service severity-escalation floor override.
 
-    Reserved for STAGE-042; parsed but UNUSED in v1.
+    Reserved for a future per-service-override stage; parsed but UNUSED in v1.
     """
 
     service: str
@@ -767,17 +767,18 @@ DEFAULT_ERROR_PATTERNS: tuple[ErrorPattern, ...] = (
 
 @dataclass(frozen=True, slots=True)
 class LogsConfig:
-    """Operator-tunable error-rate config (logs.error_patterns / logs.error_rate_overrides /
-    logs.severity_escalation).
+    """Operator-tunable error-rate config (logs.error_patterns /
+    logs.error_rate_overrides / logs.severity_escalation).
 
-    ``error_patterns`` — folded into the collector's single LogsQL query (OR'd
-    with the severity union). Defaults to DEFAULT_ERROR_PATTERNS.
-    ``error_rate_overrides`` — per-service tuning, reserved for STAGE-042 (parsed
-    here but UNUSED in v1).
+    ``error_patterns`` — folded into the collector's single LogsQL query
+    (OR'd with the severity union). Defaults to DEFAULT_ERROR_PATTERNS.
+    ``error_rate_overrides`` — per-service tuning, reserved for future
+    per-service-override stage (parsed here but UNUSED in v1).
     ``severity_escalation_excluded_services`` — services excluded from the
-    CriticalLogLine alert, reserved for STAGE-042 (parsed but UNUSED in v1).
+    CriticalLogLine alert, reserved for future per-service-override stage
+    (parsed but UNUSED in v1).
     ``severity_escalation_floors`` — per-service minimum severity floors,
-    reserved for STAGE-042 (parsed but UNUSED in v1).
+    reserved for future per-service-override stage (parsed but UNUSED in v1).
     """
 
     error_patterns: tuple[ErrorPattern, ...] = DEFAULT_ERROR_PATTERNS
@@ -804,7 +805,8 @@ def load_logs_config() -> LogsConfig:
         (NOT defaults; mirrors redact precedent but for patterns this means
         "severity union only").
       - ``logs.error_patterns:`` (null value) → DEFAULT_ERROR_PATTERNS.
-      - ``logs.error_rate_overrides`` parsed (UNUSED in v1; reserved for 042).
+      - ``logs.error_rate_overrides`` parsed (UNUSED in v1; reserved for
+        future per-service-override stage).
 
     Validation (raises ValueError):
       - root not a mapping; ``logs`` not a mapping.
@@ -879,7 +881,7 @@ def _load_error_patterns(logs: dict[str, Any]) -> tuple[ErrorPattern, ...]:
 
 
 def _load_error_rate_overrides(logs: dict[str, Any]) -> tuple[ErrorRateOverride, ...]:
-    """Parse logs.error_rate_overrides (reserved for STAGE-042; v1 carries it unused)."""
+    """Parse logs.error_rate_overrides (future stage; v1 carries it unused)."""
     if _ERROR_RATE_OVERRIDES_SUBKEY not in logs:
         return ()
     raw_obj: object = logs.get(_ERROR_RATE_OVERRIDES_SUBKEY)
@@ -921,7 +923,8 @@ def _load_severity_escalation(
 ) -> tuple[tuple[str, ...], tuple[SeverityFloor, ...]]:
     """Parse logs.severity_escalation.excluded_services and .severity_floors.
 
-    Reserved for STAGE-042; parsed but UNUSED in v1. Mirrors _load_error_rate_overrides.
+    Reserved for future per-service-override stage; parsed but UNUSED in v1.
+    Mirrors _load_error_rate_overrides.
 
     Returns:
         (excluded_services, severity_floors) — both empty tuples when the

@@ -92,11 +92,11 @@ COPY apps/ui/dist /app/ui
 # The render dirs keep the setgid bit + amconfig group so files created inside
 # inherit gid 2000 — the vector/alertmanager sidecars join that group via
 # compose `group_add` to READ the 0640 rendered configs (3777 = setgid+sticky+rwx-all).
-RUN mkdir -p /data /var/alertmanager-config /var/vector-config /storage/backup/homelab-monitor \
+RUN mkdir -p /data /var/alertmanager-config /var/vector-config /var/vmalert-user-logs /var/vmalert-user-metrics /storage/backup/homelab-monitor \
  && chown -R homelab:homelab /data /storage/backup/homelab-monitor \
- && chown homelab:amconfig /var/alertmanager-config /var/vector-config \
+ && chown homelab:amconfig /var/alertmanager-config /var/vector-config /var/vmalert-user-logs /var/vmalert-user-metrics \
  && chmod 1777 /data /storage/backup/homelab-monitor \
- && chmod 3777 /var/alertmanager-config /var/vector-config
+ && chmod 3777 /var/alertmanager-config /var/vector-config /var/vmalert-user-logs /var/vmalert-user-metrics
 
 USER homelab
 

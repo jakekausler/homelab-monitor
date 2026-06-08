@@ -44,6 +44,10 @@ from homelab_monitor.kernel.api.schemas import (
     LogsQueryResponse,
     LogsServicesResponse,
     LogsStreamsResponse,
+    LogUserRuleCreateRequest,
+    LogUserRuleListResponse,
+    LogUserRulePatchRequest,
+    LogUserRuleResponse,
     LogWindowResponse,
     ModelDetailResponse,
     ModelListResponse,
@@ -121,6 +125,18 @@ from homelab_monitor.kernel.logs.tail_service import (
     TailSession,
 )
 from homelab_monitor.kernel.logs.time_window import parse_and_validate_window
+from homelab_monitor.kernel.logs.user_rules_render import (
+    render_all as render_user_rules,
+)
+from homelab_monitor.kernel.logs.user_rules_render import (
+    render_paths_from_env,
+)
+from homelab_monitor.kernel.logs.user_rules_repo import (
+    DuplicateRuleNameError,
+    LogUserRule,
+    LogUserRulesRepository,
+    UserRuleValidationError,
+)
 from homelab_monitor.kernel.logs.victorialogs_client import (
     VictoriaLogsClient,
     VictoriaLogsClientError,
@@ -1446,3 +1462,174 @@ async def delete_saved_query(
     deleted = await repo.delete(query_id)
     if not deleted:
         raise NotFoundProblem(message=f"saved query not found: {query_id}")
+
+
+def _get_user_rules_repo(
+    repo: Annotated[SqliteRepository, Depends(get_repo)],
+) -> LogUserRulesRepository:
+    return LogUserRulesRepository(repo)
+
+
+def _user_rule_to_response(r: LogUserRule) -> LogUserRuleResponse:
+    return LogUserRuleResponse(
+        id=r.id,
+        rule_name=r.rule_name,
+        expr=r.expr,
+        expr_kind=cast(Literal["logsql", "metricsql"], r.expr_kind),
+        severity=cast(Literal["info", "warning", "critical"], r.severity),
+        summary=r.summary,
+        description=r.description,
+        for_duration=r.for_duration,
+        source_kind=r.source_kind,
+        source_ref=r.source_ref,
+        enabled=r.enabled,
+        created_at=r.created_at,
+        updated_at=r.updated_at,
+    )
+
+
+async def _render_user_rules(repo: LogUserRulesRepository) -> None:
+    """Reconcile both aggregate YAML files after a mutation. Never raises."""
+    logs_path, metrics_path = render_paths_from_env()
+    rendered_ok = await render_user_rules(repo, logs_path, metrics_path)
+    if not rendered_ok:
+        log: BoundLogger = cast(
+            BoundLogger,
+            structlog.get_logger().bind(component="logs_user_rules"),
+        )
+        log.warning(
+            "user_rules.render.partial_failure",
+            detail="rule persisted but vmalert YAML write was swallowed; "
+            "next boot reconcile or rule mutation will retry",
+        )
+
+
+@router.get("/logs/user-rules", response_model=LogUserRuleListResponse)
+async def list_user_rules(
+    _user: Annotated[User, Depends(require_session())],
+    repo: Annotated[LogUserRulesRepository, Depends(_get_user_rules_repo)],
+    enabled: bool | None = Query(None, description="Filter to enabled rules when true"),
+) -> LogUserRuleListResponse:
+    """List user rules sorted by rule_name.
+
+    Query param `enabled=true` filters to enabled rules only; omitting it (or any
+    other value) returns all rules. Auth: session required; GET (no CSRF).
+    """
+    rows = await (repo.list_enabled() if enabled else repo.list_all())
+    return LogUserRuleListResponse(rules=[_user_rule_to_response(r) for r in rows])
+
+
+@router.get("/logs/user-rules/{rule_id}", response_model=LogUserRuleResponse)
+async def get_user_rule(
+    rule_id: int,
+    _user: Annotated[User, Depends(require_session())],
+    repo: Annotated[LogUserRulesRepository, Depends(_get_user_rules_repo)],
+) -> LogUserRuleResponse:
+    """Get one user rule by id. 404 if absent. GET (no CSRF)."""
+    rule = await repo.get(rule_id)
+    if rule is None:
+        raise NotFoundProblem(message=f"user rule not found: {rule_id}")
+    return _user_rule_to_response(rule)
+
+
+@router.post(
+    "/logs/user-rules",
+    response_model=LogUserRuleResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_user_rule(
+    body: LogUserRuleCreateRequest,
+    _user: Annotated[User, Depends(require_session())],
+    repo: Annotated[LogUserRulesRepository, Depends(_get_user_rules_repo)],
+) -> LogUserRuleResponse:
+    """Create a user rule. 201 on success; 409 on duplicate rule_name; 400 on
+    validation/render failure. The rule is rendered to the aggregate YAML and
+    becomes active in vmalert within ~30s. Auth: session required; CSRF enforced.
+    """
+    try:
+        created = await repo.create(
+            rule_name=body.rule_name,
+            expr=body.expr,
+            expr_kind=body.expr_kind,
+            severity=body.severity,
+            summary=body.summary,
+            description=body.description,
+            for_duration=body.for_duration,
+        )
+    except DuplicateRuleNameError as exc:
+        raise ConflictProblem(message=f"rule_name already exists: {body.rule_name}") from exc
+    except UserRuleValidationError as exc:
+        raise HttpProblem(status_code=400, code="invalid_rule", message=str(exc)) from exc
+    await _render_user_rules(repo)
+    return _user_rule_to_response(created)
+
+
+@router.patch("/logs/user-rules/{rule_id}", response_model=LogUserRuleResponse)
+async def patch_user_rule(
+    rule_id: int,
+    body: LogUserRulePatchRequest,
+    _user: Annotated[User, Depends(require_session())],
+    repo: Annotated[LogUserRulesRepository, Depends(_get_user_rules_repo)],
+) -> LogUserRuleResponse:
+    """Partial update (expr/severity/summary/description/for_duration/enabled).
+    404 if absent; 400 on validation/render failure. Re-renders. CSRF enforced.
+    """
+    try:
+        updated = await repo.update(
+            rule_id,
+            expr=body.expr,
+            severity=body.severity,
+            summary=body.summary,
+            description=body.description,
+            for_duration=body.for_duration,
+            enabled=body.enabled,
+        )
+    except UserRuleValidationError as exc:  # pragma: no cover -- pydantic validates before repo
+        raise HttpProblem(  # pragma: no cover
+            status_code=400, code="invalid_rule", message=str(exc)
+        ) from exc
+    if updated is None:
+        raise NotFoundProblem(message=f"user rule not found: {rule_id}")
+    await _render_user_rules(repo)
+    return _user_rule_to_response(updated)
+
+
+@router.delete("/logs/user-rules/{rule_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_user_rule(
+    rule_id: int,
+    _user: Annotated[User, Depends(require_session())],
+    repo: Annotated[LogUserRulesRepository, Depends(_get_user_rules_repo)],
+) -> None:
+    """Delete a user rule. 204 on success, 404 if absent. Re-renders. CSRF enforced."""
+    deleted = await repo.delete(rule_id)
+    if not deleted:
+        raise NotFoundProblem(message=f"user rule not found: {rule_id}")
+    await _render_user_rules(repo)
+
+
+@router.post("/logs/user-rules/{rule_id}/enable", response_model=LogUserRuleResponse)
+async def enable_user_rule(
+    rule_id: int,
+    _user: Annotated[User, Depends(require_session())],
+    repo: Annotated[LogUserRulesRepository, Depends(_get_user_rules_repo)],
+) -> LogUserRuleResponse:
+    """Enable a rule. 404 if absent. Re-renders. CSRF enforced."""
+    rule = await repo.set_enabled(rule_id, enabled=True)
+    if rule is None:
+        raise NotFoundProblem(message=f"user rule not found: {rule_id}")
+    await _render_user_rules(repo)
+    return _user_rule_to_response(rule)
+
+
+@router.post("/logs/user-rules/{rule_id}/disable", response_model=LogUserRuleResponse)
+async def disable_user_rule(
+    rule_id: int,
+    _user: Annotated[User, Depends(require_session())],
+    repo: Annotated[LogUserRulesRepository, Depends(_get_user_rules_repo)],
+) -> LogUserRuleResponse:
+    """Disable a rule. 404 if absent. Re-renders. CSRF enforced."""
+    rule = await repo.set_enabled(rule_id, enabled=False)
+    if rule is None:
+        raise NotFoundProblem(message=f"user rule not found: {rule_id}")
+    await _render_user_rules(repo)
+    return _user_rule_to_response(rule)

@@ -60,6 +60,7 @@ EXPECTED_TABLES = {
     "container_crash_enrichments",
     "container_healthcheck_enrichments",
     "cron_run_failure_enrichments",
+    "log_user_rules",
 }
 
 
@@ -1135,5 +1136,35 @@ async def test_migration_0040_round_trip(db_url: str) -> None:
         async with engine.connect() as conn:
             tables_at_0039 = await conn.run_sync(_list_tables)
         assert "log_signature_silence_allowlist" not in tables_at_0039
+    finally:
+        await engine.dispose()
+
+
+async def test_migration_0041_round_trip(db_url: str) -> None:
+    """Migration 0041 creates log_user_rules + its unique index; downgrade drops them."""
+    engine = get_engine(url=db_url)
+    try:
+        await run_migrations(engine)
+
+        def _list_tables(sync_conn: object) -> set[str]:
+            inspector = inspect(sync_conn)
+            return set(inspector.get_table_names()) if inspector is not None else set()
+
+        async with engine.connect() as conn:
+            tables_at_head = await conn.run_sync(_list_tables)
+        assert "log_user_rules" in tables_at_head
+
+        async with engine.connect() as conn:
+            idx_rows = (await conn.execute(text("PRAGMA index_list('log_user_rules')"))).fetchall()
+        assert any(r[1] == "ix_log_user_rules_rule_name" for r in idx_rows)
+
+        cfg = Config()
+        cfg.set_main_option("script_location", str(ALEMBIC_DIR))
+        cfg.set_main_option("sqlalchemy.url", db_url)
+        command.downgrade(cfg, "0040")
+
+        async with engine.connect() as conn:
+            tables_at_0040 = await conn.run_sync(_list_tables)
+        assert "log_user_rules" not in tables_at_0040
     finally:
         await engine.dispose()

@@ -1,4 +1,4 @@
-.PHONY: setup verify verify-ci lint format format-check typecheck test test-fast test-nocov dev dev-clean dev-prod dev-down backend-dev openapi-export clean crg-init ui-verify ui-dev ui-build ui-test _verify-parallel compose-up compose-down compose-build compose-logs integration uv
+.PHONY: setup verify verify-ci lint format format-check typecheck test test-fast test-nocov verify-rules dev dev-clean dev-prod dev-down backend-dev openapi-export clean crg-init ui-verify ui-dev ui-build ui-test _verify-parallel compose-up compose-down compose-build compose-logs integration uv
 
 .DEFAULT_GOAL := verify
 
@@ -55,6 +55,15 @@ test-fast:
 .PHONY: test-nocov
 test-nocov:
 	uv run --directory $(MONITOR_DIR) pytest --no-cov
+
+.PHONY: verify-rules
+verify-rules:
+	# STAGE-004-042: user-rules migration round-trip + render + repo + API tests.
+	uv run --directory $(MONITOR_DIR) pytest --no-cov \
+		tests/test_db_migrations.py::test_migration_0041_round_trip \
+		tests/test_log_user_rules_repo.py \
+		tests/test_user_rules_render.py \
+		tests/test_log_user_rules_api.py
 
 backend-dev:
 	uv run --directory $(MONITOR_DIR) uvicorn homelab_monitor.kernel.api.app:create_app \

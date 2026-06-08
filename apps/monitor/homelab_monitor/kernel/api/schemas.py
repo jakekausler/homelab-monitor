@@ -33,6 +33,10 @@ __all__ = [
     "HistogramBucket",
     "IngestResponse",
     "LastCycleResponse",
+    "LogUserRuleCreateRequest",
+    "LogUserRuleListResponse",
+    "LogUserRulePatchRequest",
+    "LogUserRuleResponse",
     "LogWindowResponse",
     "LogsFieldsResponse",
     "LogsHistogramResponse",
@@ -481,6 +485,66 @@ class SilenceAllowlistCreateRequest(BaseModel):
         if end < start:
             msg = "window end must be >= start"
             raise ValueError(msg)
+
+
+class LogUserRuleResponse(BaseModel):
+    """One user-authored vmalert rule."""
+
+    model_config = ConfigDict(extra="forbid")
+    id: int
+    rule_name: str
+    expr: str
+    expr_kind: Literal["logsql", "metricsql"]
+    severity: Literal["info", "warning", "critical"]
+    summary: str
+    description: str
+    for_duration: str
+    source_kind: str
+    source_ref: str | None
+    enabled: bool
+    created_at: str  # ISO-8601 UTC
+    updated_at: str  # ISO-8601 UTC
+
+
+class LogUserRuleListResponse(BaseModel):
+    """Response for GET /api/logs/user-rules."""
+
+    model_config = ConfigDict(extra="forbid")
+    rules: list[LogUserRuleResponse]
+
+
+class LogUserRuleCreateRequest(BaseModel):
+    """Body for POST /api/logs/user-rules.
+
+    rule_name MUST be a Prometheus alertname identifier (^[A-Za-z_][A-Za-z0-9_]*$).
+    expr is the LogsQL (logsql) or MetricsQL (metricsql) expression. for_duration
+    is a vmalert duration ('5m'/'30s'/...) or '0s'. Deeper validation (incl. a
+    render dry-run) happens in the repo; bad input there -> 400.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    rule_name: str = Field(min_length=1, max_length=200)
+    expr: str = Field(min_length=1, max_length=8192)
+    expr_kind: Literal["logsql", "metricsql"]
+    severity: Literal["info", "warning", "critical"]
+    summary: str = Field(min_length=1, max_length=1000)
+    description: str = Field(default="", max_length=4000)
+    for_duration: str = Field(default="0s", max_length=16)
+
+
+class LogUserRulePatchRequest(BaseModel):
+    """Body for PATCH /api/logs/user-rules/{id}. All fields optional (partial update).
+
+    rule_name and expr_kind are immutable and NOT accepted here.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    expr: str | None = Field(default=None, min_length=1, max_length=8192)
+    severity: Literal["info", "warning", "critical"] | None = None
+    summary: str | None = Field(default=None, min_length=1, max_length=1000)
+    description: str | None = Field(default=None, max_length=4000)
+    for_duration: str | None = Field(default=None, max_length=16)
+    enabled: bool | None = None
 
 
 class LogsStreamSummary(BaseModel):

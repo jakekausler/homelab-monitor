@@ -149,11 +149,13 @@ services:
       - "-notifier.url=http://alertmanager:9093"
       - "-remoteWrite.url=http://victoriametrics:8428"
       - "-rule=/etc/vmalert/metrics/*.yaml"
+      - "-rule=/etc/vmalert/metrics-user/*.yaml"
       - "-evaluationInterval=5s"
       - "-configCheckInterval=10s"
       - "-httpListenAddr=:8880"
     volumes:
       - ../vmalert/metrics:/etc/vmalert/metrics:ro
+      - data_vmalert_user_metrics:/etc/vmalert/metrics-user:ro
     depends_on:
       alertmanager:
         condition: service_healthy
@@ -175,11 +177,13 @@ services:
       - "-datasource.url=http://victorialogs:9428"
       - "-notifier.url=http://alertmanager:9093"
       - "-rule=/etc/vmalert/logs/*.yaml"
+      - "-rule=/etc/vmalert/logs-user/*.yaml"
       - "-evaluationInterval=5s"
       - "-configCheckInterval=10s"
       - "-httpListenAddr=:8880"
     volumes:
       - ../vmalert/logs-test:/etc/vmalert/logs:ro
+      - data_vmalert_user_logs:/etc/vmalert/logs-user:ro
     depends_on:
       alertmanager:
         condition: service_healthy
@@ -313,7 +317,9 @@ services:
     container_name: homelab-shared-init
     volumes:
       - shared_rig_secrets:/shared
-    command: ["sh", "-c", "chown 1000:1000 /shared && chmod 0770 /shared && sleep infinity"]
+      - data_vmalert_user_logs:/var/vmalert-user-logs
+      - data_vmalert_user_metrics:/var/vmalert-user-metrics
+    command: ["sh", "-c", "chown 1000:1000 /shared && chmod 0770 /shared && chown 0:2000 /var/vmalert-user-logs /var/vmalert-user-metrics && chmod 3777 /var/vmalert-user-logs /var/vmalert-user-metrics && sleep infinity"]
     healthcheck:
       test: ["CMD", "test", "-d", "/shared"]
       interval: 5s
@@ -355,6 +361,8 @@ services:
       - ./test-fixtures/alertmanager.yml.template:/etc/alertmanager-template/alertmanager.yml.template:ro
       - ./test-fixtures/am-config-seed/alertmanager.bootstrap.yml:/etc/alertmanager-template/alertmanager.bootstrap.yml:ro
       - ./test-fixtures/am-config-seed:/etc/alertmanager
+      - data_vmalert_user_logs:/var/vmalert-user-logs
+      - data_vmalert_user_metrics:/var/vmalert-user-metrics
     user: "1000:1000"
     group_add:
       - "2000"
@@ -456,3 +464,5 @@ volumes:
   # tmpfs-backed shared volume for the rig token. Anonymous => recreated
   # every `up`. Permissions: container default (root rw, others read).
   shared_rig_secrets:
+  data_vmalert_user_logs:
+  data_vmalert_user_metrics:
