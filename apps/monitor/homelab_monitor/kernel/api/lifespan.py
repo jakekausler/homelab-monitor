@@ -509,6 +509,30 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
         )
         degraded.append("new_signature")
 
+    # ------------------------------------------------------------------
+    # STAGE-004-038: SilenceDetectionCollector (anomaly type D — signature silent)
+    # ------------------------------------------------------------------
+    try:
+        from homelab_monitor.kernel.metrics.silence_detection_collector import (  # noqa: PLC0415
+            SilenceDetectionCollector,
+        )
+
+        loader.register(
+            SilenceDetectionCollector,
+            {
+                "name": "silence_detection",
+                "interval_seconds": int(SilenceDetectionCollector.interval.total_seconds()),
+                "timeout_seconds": int(SilenceDetectionCollector.timeout.total_seconds()),
+            },
+        )
+    except Exception as exc:  # pragma: no cover -- defensive
+        log.warning(
+            "lifespan.collector_register_failed",
+            name="silence_detection",
+            error=str(exc),
+        )
+        degraded.append("silence_detection")
+
     plugins_env = os.environ.get("HOMELAB_MONITOR_PLUGINS_DIR")
     if plugins_env is not None:
         plugins_dir: Path | None = Path(plugins_env)
@@ -801,6 +825,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
             from homelab_monitor.kernel.config import load_new_signature_config  # noqa: PLC0415
 
             c._config = load_new_signature_config()  # pyright: ignore[reportPrivateUsage]
+        from homelab_monitor.kernel.metrics.silence_detection_collector import (  # noqa: PLC0415
+            SilenceDetectionCollector,
+        )
+
+        if isinstance(c, SilenceDetectionCollector):
+            from homelab_monitor.kernel.config import (  # noqa: PLC0415
+                load_silence_detection_config,
+            )
+
+            c._config = load_silence_detection_config()  # pyright: ignore[reportPrivateUsage]
     scheduler = Scheduler(
         collectors,
         ctx_factory,

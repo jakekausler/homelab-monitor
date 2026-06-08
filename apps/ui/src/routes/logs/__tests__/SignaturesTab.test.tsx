@@ -253,4 +253,15 @@ describe('SignaturesTab', () => {
     // The navigate search must OMIT the cleared service key (not retain the old value).
     expect(navigateSpy).toHaveBeenCalledWith({ to: '/logs/signatures', search: {} })
   })
+
+  it('renders the signatures description block', () => {
+    mockUseSignaturesQuery.mockReturnValue({
+      data: { signatures: [], total: 0 },
+      isLoading: false,
+      error: null,
+    } as unknown as ReturnType<typeof useSignaturesQuery>)
+
+    render(<SignaturesTab />)
+    expect(screen.getByTestId('signatures-description')).toBeInTheDocument()
+  })
 })

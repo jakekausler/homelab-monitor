@@ -26,6 +26,7 @@ import { LogsLayout } from '@/routes/logs/LogsLayout'
 import { ModelsDebugPage } from '@/routes/logs/ModelsDebugPage'
 import { SignaturesTab } from '@/routes/logs/SignaturesTab'
 import { SignatureDetailPage } from '@/routes/logs/SignatureDetailPage'
+import { SilenceAllowlistTab } from '@/routes/logs/SilenceAllowlistTab'
 import { SettingsLayout } from '@/routes/settings/SettingsLayout'
 import { SettingsLogsPage } from '@/routes/settings/SettingsLogsPage'
 import { AppShell } from '@/components/AppShell'
@@ -219,6 +220,12 @@ const logsModelsDebugRoute = createRoute({
   }),
 })
 
+const logsSilenceAllowlistRoute = createRoute({
+  getParentRoute: () => logsLayoutRoute,
+  path: 'silence-allowlist',
+  component: SilenceAllowlistTab,
+})
+
 const inventoryLayoutRoute = createRoute({
   getParentRoute: () => protectedLayoutRoute,
   path: '/inventory',
@@ -408,6 +415,7 @@ const routeTree = rootRoute.addChildren([
       logsQueryRoute,
       logsSignaturesRoute,
       logsSignatureDetailRoute,
+      logsSilenceAllowlistRoute,
       logsModelsDebugRoute,
     ]),
     inventoryLayoutRoute.addChildren([

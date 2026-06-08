@@ -60,6 +60,9 @@ from homelab_monitor.kernel.api.schemas import (
     SignaturePatchRequest,
     SignatureResponse,
     SignatureSamplesResponse,
+    SilenceAllowlistCreateRequest,
+    SilenceAllowlistListResponse,
+    SilenceAllowlistResponse,
 )
 from homelab_monitor.kernel.auth.models import User
 from homelab_monitor.kernel.config import load_tail_config, load_vl_query_limits
@@ -105,6 +108,10 @@ from homelab_monitor.kernel.logs.signatures_repo import (
     Signature,
     SignatureFilter,
     SignaturesRepository,
+)
+from homelab_monitor.kernel.logs.silence_allowlist_repo import (
+    SilenceAllowlistEntry,
+    SilenceAllowlistRepository,
 )
 from homelab_monitor.kernel.logs.tail_service import (
     DroppedEvent,
@@ -939,6 +946,83 @@ def _annotation_to_response(a: Annotation) -> AnnotationResponse:
         author=a.author,
         created_at=a.created_at,
     )
+
+
+def _get_silence_allowlist_repo(
+    repo: Annotated[SqliteRepository, Depends(get_repo)],
+) -> SilenceAllowlistRepository:
+    return SilenceAllowlistRepository(repo)
+
+
+def _silence_entry_to_response(e: SilenceAllowlistEntry) -> SilenceAllowlistResponse:
+    return SilenceAllowlistResponse(
+        id=e.id,
+        template_hash=e.template_hash,
+        service_key=e.service_key,
+        schedule_kind=cast(Literal["always", "cron", "window"], e.schedule_kind),
+        schedule_value=e.schedule_value,
+        reason=e.reason,
+        created_at=e.created_at,
+        expires_at=e.expires_at,
+    )
+
+
+@router.get(
+    "/logs/signatures/silence-allowlist",
+    response_model=SilenceAllowlistListResponse,
+)
+async def list_silence_allowlist(
+    _user: Annotated[User, Depends(require_session())],
+    repo: Annotated[SilenceAllowlistRepository, Depends(_get_silence_allowlist_repo)],
+) -> SilenceAllowlistListResponse:
+    """List all expected-silence allowlist entries, newest first.
+
+    Auth: session required; GET (no CSRF).
+    """
+    rows = await repo.list_all()
+    return SilenceAllowlistListResponse(entries=[_silence_entry_to_response(r) for r in rows])
+
+
+@router.post(
+    "/logs/signatures/silence-allowlist",
+    response_model=SilenceAllowlistResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_silence_allowlist_entry(
+    body: SilenceAllowlistCreateRequest,
+    _user: Annotated[User, Depends(require_session())],
+    repo: Annotated[SilenceAllowlistRepository, Depends(_get_silence_allowlist_repo)],
+) -> SilenceAllowlistResponse:
+    """Create an expected-silence allowlist entry. 201 on success.
+
+    schedule_value is canonicalized (cron) / range-validated (window) / empty-checked
+    (always) by the request model — bad input -> 422. Auth: session required; CSRF
+    enforced (POST) by require_session().
+    """
+    created = await repo.create(
+        template_hash=body.template_hash,
+        service_key=body.service_key,
+        schedule_kind=body.schedule_kind,
+        schedule_value=body.schedule_value,
+        reason=body.reason,
+        expires_at=body.expires_at,
+    )
+    return _silence_entry_to_response(created)
+
+
+@router.delete(
+    "/logs/signatures/silence-allowlist/{entry_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_silence_allowlist_entry(
+    entry_id: int,
+    _user: Annotated[User, Depends(require_session())],
+    repo: Annotated[SilenceAllowlistRepository, Depends(_get_silence_allowlist_repo)],
+) -> None:
+    """Delete an allowlist entry by id. 204 on success, 404 if absent. CSRF enforced (DELETE)."""
+    deleted = await repo.delete(entry_id)
+    if not deleted:
+        raise NotFoundProblem(message=f"silence allowlist entry not found: {entry_id}")
 
 
 @router.get("/logs/signatures", response_model=SignatureListResponse)

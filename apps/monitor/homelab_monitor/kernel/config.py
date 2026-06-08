@@ -638,6 +638,52 @@ def load_new_signature_config() -> NewSignatureConfig:
     return NewSignatureConfig(window_seconds=window_seconds, severities=severities)
 
 
+@dataclass(frozen=True, slots=True)
+class SilenceDetectionConfig:
+    """Tunables for SilenceDetectionCollector (STAGE-004-038).
+
+    A signature is alertable-silent when
+    ``silent_min_seconds * 1000 <= now_ms - last_seen_at <= silent_max_seconds * 1000``
+    (default 15min..1h) AND not suppressed AND not covered by an active allowlist entry.
+    ``cron_grace_seconds`` is passed to is_silence_allowed for cron entries (the
+    post-fire active window in which silence is NOT expected). All clamped >= 1.
+    """
+
+    silent_min_seconds: int = 900
+    silent_max_seconds: int = 3600
+    cron_grace_seconds: int = 900
+
+
+def load_silence_detection_config() -> SilenceDetectionConfig:
+    """Load SilenceDetectionCollector tunables from env (HOMELAB_MONITOR_SILENCE_*).
+
+    HOMELAB_MONITOR_SILENCE_MIN_S -> silent_min_seconds (clamped >= 1).
+    HOMELAB_MONITOR_SILENCE_MAX_S -> silent_max_seconds (clamped >= 1).
+    HOMELAB_MONITOR_SILENCE_CRON_GRACE_S -> cron_grace_seconds (clamped >= 1).
+    """
+    defaults = SilenceDetectionConfig()
+    silent_min_seconds = defaults.silent_min_seconds
+    silent_max_seconds = defaults.silent_max_seconds
+    cron_grace_seconds = defaults.cron_grace_seconds
+    raw_min = os.environ.get("HOMELAB_MONITOR_SILENCE_MIN_S")
+    if raw_min is not None:
+        silent_min_seconds = int(raw_min)
+    raw_max = os.environ.get("HOMELAB_MONITOR_SILENCE_MAX_S")
+    if raw_max is not None:
+        silent_max_seconds = int(raw_max)
+    raw_grace = os.environ.get("HOMELAB_MONITOR_SILENCE_CRON_GRACE_S")
+    if raw_grace is not None:
+        cron_grace_seconds = int(raw_grace)
+    silent_min_seconds = max(silent_min_seconds, 1)
+    silent_max_seconds = max(silent_max_seconds, 1)
+    cron_grace_seconds = max(cron_grace_seconds, 1)
+    return SilenceDetectionConfig(
+        silent_min_seconds=silent_min_seconds,
+        silent_max_seconds=silent_max_seconds,
+        cron_grace_seconds=cron_grace_seconds,
+    )
+
+
 # ---------------------------------------------------------------------------
 # STAGE-004-037: error-rate patterns + overrides (logs.error_patterns /
 # logs.error_rate_overrides). Mirrors the RedactPattern / DEFAULT_REDACT_PATTERNS
@@ -999,6 +1045,7 @@ __all__ = [
     "LogsConfig",
     "NewSignatureConfig",
     "RedactPattern",
+    "SilenceDetectionConfig",
     "TailConfig",
     "VlDiskWarningConfig",
     "VlQueryLimits",
@@ -1013,6 +1060,7 @@ __all__ = [
     "load_logs_config",
     "load_new_signature_config",
     "load_redact_patterns",
+    "load_silence_detection_config",
     "load_tail_config",
     "load_vl_disk_warning_config",
     "load_vl_query_limits",

@@ -535,4 +535,27 @@ describe('ModelsDebugPage', () => {
     expect(captions.length).toBeGreaterThan(0)
     expect(captions[0]).toHaveTextContent('Counts reflect log lines ingested by drain')
   })
+
+  it('renders the models description block', () => {
+    mockUseModelsList.mockReturnValue({
+      data: {
+        models: [
+          {
+            model_key: 'docker:nginx',
+            template_count: 1,
+            line_count: 10,
+            last_processed_ts: 1000,
+            updated_at: 2000,
+          },
+        ],
+      },
+      isLoading: false,
+      isSuccess: true,
+      isError: false,
+      error: null,
+    } as unknown as ReturnType<typeof useModelsList>)
+
+    render(<ModelsDebugPage />)
+    expect(screen.getByTestId('models-description')).toBeInTheDocument()
+  })
 })

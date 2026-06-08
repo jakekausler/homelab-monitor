@@ -1,0 +1,39 @@
+# Rule unit-test fixtures for deploy/vmalert/metrics/signature_silent.yaml.
+# Schema: Prometheus / vmalert rule unit-test format. Forward-compatible static
+# fixture (no make target wires this yet).
+
+rule_files:
+  - ../signature_silent.yaml
+
+evaluation_interval: 30s
+
+tests:
+  # Silent gauge present -> SignatureWentSilent fires immediately (for: 0m).
+  - interval: 30s
+    input_series:
+      - series: 'homelab_log_signature_silent{service_key="svcA",template_hash="h1"}'
+        values: '1x5'
+    alert_rule_test:
+      - eval_time: 60s
+        alertname: SignatureWentSilent
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              source_tool: vmalert-metrics
+              category: log-anomaly
+              anomaly_kind: signature_silent
+              target_kind: log_signature
+              service_key: svcA
+              template_hash: h1
+            exp_annotations:
+              summary: "Log signature went silent in svcA"
+
+  # Gauge == 0 (or absent) -> no alert.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_log_signature_silent{service_key="svcB",template_hash="h2"}'
+        values: '0x5'
+    alert_rule_test:
+      - eval_time: 60s
+        alertname: SignatureWentSilent
+        exp_alerts: []

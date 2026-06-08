@@ -56,6 +56,7 @@ EXPECTED_TABLES = {
     "drain_models",
     "log_signatures",
     "log_signature_annotations",
+    "log_signature_silence_allowlist",
     "container_crash_enrichments",
     "container_healthcheck_enrichments",
     "cron_run_failure_enrichments",
@@ -1102,5 +1103,37 @@ async def test_migration_0039_first_seen_severity_column(db_url: str) -> None:
         async with engine.connect() as conn:
             cols_at_head_again = await conn.run_sync(_cols)
         assert "first_seen_severity" in cols_at_head_again
+    finally:
+        await engine.dispose()
+
+
+async def test_migration_0040_round_trip(db_url: str) -> None:
+    """Migration 0040 creates log_signature_silence_allowlist + its index; downgrade drops them."""
+    engine = get_engine(url=db_url)
+    try:
+        await run_migrations(engine)
+
+        def _list_tables(sync_conn: object) -> set[str]:
+            inspector = inspect(sync_conn)
+            return set(inspector.get_table_names()) if inspector is not None else set()
+
+        async with engine.connect() as conn:
+            tables_at_head = await conn.run_sync(_list_tables)
+        assert "log_signature_silence_allowlist" in tables_at_head
+
+        async with engine.connect() as conn:
+            idx_rows = (
+                await conn.execute(text("PRAGMA index_list('log_signature_silence_allowlist')"))
+            ).fetchall()
+        assert any(r[1] == "ix_log_signature_silence_allowlist_service_key" for r in idx_rows)
+
+        cfg = Config()
+        cfg.set_main_option("script_location", str(ALEMBIC_DIR))
+        cfg.set_main_option("sqlalchemy.url", db_url)
+        command.downgrade(cfg, "0039")
+
+        async with engine.connect() as conn:
+            tables_at_0039 = await conn.run_sync(_list_tables)
+        assert "log_signature_silence_allowlist" not in tables_at_0039
     finally:
         await engine.dispose()

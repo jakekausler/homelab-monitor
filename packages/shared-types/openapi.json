@@ -4752,6 +4752,155 @@
         "title": "SignatureSamplesResponse",
         "type": "object"
       },
+      "SilenceAllowlistCreateRequest": {
+        "additionalProperties": false,
+        "description": "Body for POST /api/logs/signatures/silence-allowlist.\n\nschedule_value semantics by kind:\n  - always: MUST be empty ('') \u2014 any value is rejected (422).\n  - cron:   a cron expression; canonicalized via canonicalize_schedule (422 if invalid).\n  - window: '<start-iso>/<end-iso>'; both ends valid ISO, start <= end (422 otherwise).\nexpires_at, when present, MUST be a valid ISO-8601 datetime (422 otherwise).\ntemplate_hash omitted/None => per-service entry (covers all signatures of service_key).",
+        "properties": {
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "reason": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          },
+          "schedule_kind": {
+            "enum": [
+              "always",
+              "cron",
+              "window"
+            ],
+            "title": "Schedule Kind",
+            "type": "string"
+          },
+          "schedule_value": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Schedule Value",
+            "type": "string"
+          },
+          "service_key": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Service Key",
+            "type": "string"
+          },
+          "template_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Template Hash"
+          }
+        },
+        "required": [
+          "service_key",
+          "schedule_kind",
+          "reason"
+        ],
+        "title": "SilenceAllowlistCreateRequest",
+        "type": "object"
+      },
+      "SilenceAllowlistListResponse": {
+        "additionalProperties": false,
+        "description": "Response for GET /api/logs/signatures/silence-allowlist.",
+        "properties": {
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/SilenceAllowlistResponse"
+            },
+            "title": "Entries",
+            "type": "array"
+          }
+        },
+        "required": [
+          "entries"
+        ],
+        "title": "SilenceAllowlistListResponse",
+        "type": "object"
+      },
+      "SilenceAllowlistResponse": {
+        "additionalProperties": false,
+        "description": "One expected-silence allowlist entry.",
+        "properties": {
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "schedule_kind": {
+            "enum": [
+              "always",
+              "cron",
+              "window"
+            ],
+            "title": "Schedule Kind",
+            "type": "string"
+          },
+          "schedule_value": {
+            "title": "Schedule Value",
+            "type": "string"
+          },
+          "service_key": {
+            "title": "Service Key",
+            "type": "string"
+          },
+          "template_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Template Hash"
+          }
+        },
+        "required": [
+          "id",
+          "template_hash",
+          "service_key",
+          "schedule_kind",
+          "schedule_value",
+          "reason",
+          "created_at",
+          "expires_at"
+        ],
+        "title": "SilenceAllowlistResponse",
+        "type": "object"
+      },
       "SuggestionAcceptRequest": {
         "additionalProperties": false,
         "properties": {
@@ -8853,6 +9002,95 @@
           }
         },
         "summary": "Get Refresh Status"
+      }
+    },
+    "/api/logs/signatures/silence-allowlist": {
+      "get": {
+        "description": "List all expected-silence allowlist entries, newest first.\n\nAuth: session required; GET (no CSRF).",
+        "operationId": "list_silence_allowlist_api_logs_signatures_silence_allowlist_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SilenceAllowlistListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Silence Allowlist"
+      },
+      "post": {
+        "description": "Create an expected-silence allowlist entry. 201 on success.\n\nschedule_value is canonicalized (cron) / range-validated (window) / empty-checked\n(always) by the request model \u2014 bad input -> 422. Auth: session required; CSRF\nenforced (POST) by require_session().",
+        "operationId": "create_silence_allowlist_entry_api_logs_signatures_silence_allowlist_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SilenceAllowlistCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SilenceAllowlistResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Silence Allowlist Entry"
+      }
+    },
+    "/api/logs/signatures/silence-allowlist/{entry_id}": {
+      "delete": {
+        "description": "Delete an allowlist entry by id. 204 on success, 404 if absent. CSRF enforced (DELETE).",
+        "operationId": "delete_silence_allowlist_entry_api_logs_signatures_silence_allowlist__entry_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "entry_id",
+            "required": true,
+            "schema": {
+              "title": "Entry Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Silence Allowlist Entry"
       }
     },
     "/api/logs/signatures/{template_hash}/{service_key}": {

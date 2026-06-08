@@ -4,6 +4,7 @@ import type { JSX } from 'react'
 const TABS = [
   { path: '/logs/query', label: 'Query' },
   { path: '/logs/signatures', label: 'Signatures' },
+  { path: '/logs/silence-allowlist', label: 'Silence Allowlist' },
   { path: '/logs/models-debug', label: 'Models' },
 ] as const
 

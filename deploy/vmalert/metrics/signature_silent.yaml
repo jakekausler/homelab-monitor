@@ -1,0 +1,37 @@
+# vmalert rules for log-signature SILENCE anomaly detection (STAGE-004-038).
+# Anomaly Type D — "signature went silent". DUMB rule: SilenceDetectionCollector
+# (kernel/metrics/silence_detection_collector.py) makes the entire decision in
+# Python (15m..1h silent AND not-suppressed AND not allowlist-covered) and emits
+# homelab_log_signature_silent{service_key, template_hash}=1. This rule just
+# surfaces that gauge as an alert. Suppression + the expected-silence allowlist are
+# folded into the gauge, so a covered/suppressed signature emits no series -> no
+# alert. The series is re-emitted every tick while the alert should be live (VM-
+# staleness-proof); when the signature recovers / ages out / is allow-listed it
+# stops being emitted -> replace_family drops it -> the alert self-resolves.
+#
+# `for: 0m` — fire as soon as the gauge is present (the collector applied the window).
+
+groups:
+  - name: signature_silent
+    interval: 30s
+    rules:
+      - alert: SignatureWentSilent
+        expr: homelab_log_signature_silent == 1
+        for: 0m
+        labels:
+          severity: warning
+          source_tool: vmalert-metrics
+          category: log-anomaly
+          anomaly_kind: signature_silent
+          target_kind: log_signature
+        annotations:
+          summary: "Log signature went silent in {{ $labels.service_key }}"
+          description: |
+            A previously-active log signature stopped appearing (silent 15m–1h)
+            and is not in the expected-silence allowlist.
+
+            Service: {{ $labels.service_key }}
+            Template hash: {{ $labels.template_hash }}
+
+            Signature catalog: /logs/signatures#{{ $labels.template_hash }}/{{ $labels.service_key }}
+            Mark expected: /logs/silence-allowlist

@@ -107,6 +107,15 @@ export function SignaturesTab(): JSX.Element {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
+      {/* Description block */}
+      <div data-testid="signatures-description" className="px-4 pt-4">
+        <h1 className="text-2xl font-semibold tracking-tight">Log Signatures</h1>
+        <p className="text-sm text-muted-foreground">
+          Recurring log-line templates extracted from your services. Each signature tracks when it
+          was first and last seen and how often it occurs.
+        </p>
+      </div>
+
       {/* Filters */}
       <div className="flex flex-wrap gap-3 border-b border-border bg-muted/50 p-4">
         <input

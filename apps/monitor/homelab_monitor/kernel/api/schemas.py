@@ -63,6 +63,9 @@ __all__ = [
     "SignaturePatchRequest",
     "SignatureResponse",
     "SignatureSamplesResponse",
+    "SilenceAllowlistCreateRequest",
+    "SilenceAllowlistListResponse",
+    "SilenceAllowlistResponse",
     "VMRangeData",
     "VMRangeResult",
     "VersionResponse",
@@ -374,6 +377,110 @@ class AnnotationCreateRequest(BaseModel):
             msg = "note must not be empty or whitespace-only"
             raise ValueError(msg)
         return stripped
+
+
+class SilenceAllowlistResponse(BaseModel):
+    """One expected-silence allowlist entry."""
+
+    model_config = ConfigDict(extra="forbid")
+    id: int
+    template_hash: str | None
+    service_key: str
+    schedule_kind: Literal["always", "cron", "window"]
+    schedule_value: str
+    reason: str
+    created_at: str  # ISO-8601 UTC
+    expires_at: str | None
+
+
+class SilenceAllowlistListResponse(BaseModel):
+    """Response for GET /api/logs/signatures/silence-allowlist."""
+
+    model_config = ConfigDict(extra="forbid")
+    entries: list[SilenceAllowlistResponse]
+
+
+class SilenceAllowlistCreateRequest(BaseModel):
+    """Body for POST /api/logs/signatures/silence-allowlist.
+
+    schedule_value semantics by kind:
+      - always: MUST be empty ('') — any value is rejected (422).
+      - cron:   a cron expression; canonicalized via canonicalize_schedule (422 if invalid).
+      - window: '<start-iso>/<end-iso>'; both ends valid ISO, start <= end (422 otherwise).
+    expires_at, when present, MUST be a valid ISO-8601 datetime (422 otherwise).
+    template_hash omitted/None => per-service entry (covers all signatures of service_key).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    template_hash: str | None = None
+    service_key: str = Field(min_length=1, max_length=200)
+    schedule_kind: Literal["always", "cron", "window"]
+    schedule_value: str = Field(default="", max_length=200)
+    reason: str = Field(min_length=1, max_length=2000)
+    expires_at: str | None = None
+
+    @field_validator("expires_at")
+    @classmethod
+    def _validate_expires_at(cls, v: str | None) -> str | None:
+        # A naive (timezone-less) value is interpreted as UTC by the
+        # silence-detection collector (exp.replace(tzinfo=UTC)).
+        if v is None:
+            return None
+        try:
+            datetime.fromisoformat(v)
+        except ValueError as exc:
+            msg = f"expires_at must be a valid ISO-8601 datetime: {v!r}"
+            raise ValueError(msg) from exc
+        return v
+
+    @model_validator(mode="after")
+    def _validate_schedule(self) -> SilenceAllowlistCreateRequest:
+        from homelab_monitor.kernel.cron.schedule import (  # noqa: PLC0415
+            InvalidCronExpression,
+            canonicalize_schedule,
+        )
+
+        kind = self.schedule_kind
+        val = self.schedule_value
+        if kind == "always":
+            if val != "":
+                msg = "schedule_value must be empty for schedule_kind='always'"
+                raise ValueError(msg)
+        elif kind == "cron":
+            if not val.strip():
+                msg = "schedule_value (cron expression) is required for schedule_kind='cron'"
+                raise ValueError(msg)
+            try:
+                canonical = canonicalize_schedule(val)
+            except InvalidCronExpression as exc:
+                raise ValueError(str(exc)) from exc
+            if canonical == "@reboot":
+                msg = (
+                    "schedule_value '@reboot' is not supported for silence cron "
+                    "entries; use a recurring cron expression"
+                )
+                raise ValueError(msg)
+            object.__setattr__(self, "schedule_value", canonical)
+        else:
+            # schedule_kind is Literal[always|cron|window]; not-always + not-cron => window.
+            self._validate_window(val)
+        return self
+
+    @staticmethod
+    def _validate_window(val: str) -> None:
+        parts = val.split("/")
+        if len(parts) != 2:  # noqa: PLR2004
+            msg = "window schedule_value must be '<start-iso>/<end-iso>'"
+            raise ValueError(msg)
+        try:
+            start = datetime.fromisoformat(parts[0])
+            end = datetime.fromisoformat(parts[1])
+        except ValueError as exc:
+            msg = f"window schedule_value has invalid ISO datetime: {val!r}"
+            raise ValueError(msg) from exc
+        if end < start:
+            msg = "window end must be >= start"
+            raise ValueError(msg)
 
 
 class LogsStreamSummary(BaseModel):

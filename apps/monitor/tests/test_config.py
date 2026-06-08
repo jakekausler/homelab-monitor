@@ -17,6 +17,7 @@ from homelab_monitor.kernel.config import (
     LogsConfig,
     LogStreamBudgetConfig,
     NewSignatureConfig,
+    SilenceDetectionConfig,
     TailConfig,
     VlQueryLimits,
     load_cron_anomaly_config,
@@ -26,6 +27,7 @@ from homelab_monitor.kernel.config import (
     load_log_stream_budget_config,
     load_logs_config,
     load_new_signature_config,
+    load_silence_detection_config,
     load_tail_config,
     load_vl_query_limits,
     load_vl_retention_days,
@@ -959,3 +961,42 @@ def test_load_logs_config_override_entry_not_mapping_raises(
     monkeypatch.setenv("HOMELAB_MONITOR_CONFIG", str(cfg_file))
     with pytest.raises(ValueError, match="must be a mapping"):
         load_logs_config()
+
+
+# --- SilenceDetectionConfig (STAGE-004-038) -------------------------------------------
+
+
+def test_load_silence_detection_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    """load_silence_detection_config returns documented defaults when no env vars set."""
+    monkeypatch.delenv("HOMELAB_MONITOR_SILENCE_MIN_S", raising=False)
+    monkeypatch.delenv("HOMELAB_MONITOR_SILENCE_MAX_S", raising=False)
+    monkeypatch.delenv("HOMELAB_MONITOR_SILENCE_CRON_GRACE_S", raising=False)
+    cfg = load_silence_detection_config()
+    defaults = SilenceDetectionConfig()
+    assert cfg.silent_min_seconds == defaults.silent_min_seconds == 900  # noqa: PLR2004
+    assert cfg.silent_max_seconds == defaults.silent_max_seconds == 3600  # noqa: PLR2004
+    assert cfg.cron_grace_seconds == defaults.cron_grace_seconds == 900  # noqa: PLR2004
+
+
+def test_load_silence_detection_config_env_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
+    """All three env vars override their fields."""
+    monkeypatch.setenv("HOMELAB_MONITOR_SILENCE_MIN_S", "600")
+    monkeypatch.setenv("HOMELAB_MONITOR_SILENCE_MAX_S", "7200")
+    monkeypatch.setenv("HOMELAB_MONITOR_SILENCE_CRON_GRACE_S", "300")
+
+    cfg = load_silence_detection_config()
+    assert cfg.silent_min_seconds == 600  # noqa: PLR2004
+    assert cfg.silent_max_seconds == 7200  # noqa: PLR2004
+    assert cfg.cron_grace_seconds == 300  # noqa: PLR2004
+
+
+def test_load_silence_detection_config_clamp_below_one(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Each field clamped to >= 1 when env sets to 0."""
+    monkeypatch.setenv("HOMELAB_MONITOR_SILENCE_MIN_S", "0")
+    monkeypatch.setenv("HOMELAB_MONITOR_SILENCE_MAX_S", "0")
+    monkeypatch.setenv("HOMELAB_MONITOR_SILENCE_CRON_GRACE_S", "0")
+
+    cfg = load_silence_detection_config()
+    assert cfg.silent_min_seconds == 1
+    assert cfg.silent_max_seconds == 1
+    assert cfg.cron_grace_seconds == 1
