@@ -430,3 +430,12 @@
 - vmalert budget_threshold.yaml loads 3 rules health=ok: `LogStreamApproachingBudget` (bytes_today/bytes_budget>0.80), `LogStreamThrottling` (received-sent>0 for throttle component), `LogStreamUnusualLineRate` (>5× clamp_min 1h baseline).
 - `LogStreamThrottling` uses received-minus-sent (`increase(vector_component_received_events_total{component_id="throttle"}[5m]) - increase(vector_component_sent_events_total{...}[5m]) > 0`), NOT `vector_component_discarded_events_total` (version-dependent). Both vector internal_metrics series must reach VM via the vector:9598 scrape.
 - `vector.toml.template` includes `[sources.internal_metrics]` routed into the prometheus_exporter sink (inputs include internal_metrics) — required for the throttle rule's series to exist.
+
+## STAGE-004-041 — VL backend health alerts (L3)
+
+- "VL health: vl_health collector emits homelab_vl_up (1 when VL /health returns 200) + homelab_vl_response_time_seconds (last probe latency) every 30s. Regression guard: query VM for homelab_vl_up=1 when VL is up."
+- "VL health: vl_health.yaml loads 5 rules health=ok in vmalert-metrics (recording rule homelab:vl_disk_used_pct + VictoriaLogsDown/HighLatency/DiskWarning/DiskCritical). .yaml not .yml."
+- "VL health (KEY): stopping the VictoriaLogs container flips homelab_vl_up to 0 and fires VictoriaLogsDown (for:1m, critical); restarting recovers homelab_vl_up=1 and resolves the alert."
+- "VL disk: recording rule homelab:vl_disk_used_pct = 100 * homelab_self_disk_used_bytes{slot=\"vl\"} / homelab_self_disk_budget_bytes{slot=\"vl\"} (reuses self_disk's slot bytes; no separate VL-disk collector). DiskWarning>70 / DiskCritical>85."
+- "VL health: latency rule uses quantile_over_time(0.95, homelab_vl_response_time_seconds[5m]) > 2 (gauge, not histogram). VictoriaLogsHighLatency."
+- "VL health self-metric: homelab_collector_run_success_total{name=\"vl_health\"} present (scheduler label-based scheme — NOT homelab_collector_run_vl_health)."
