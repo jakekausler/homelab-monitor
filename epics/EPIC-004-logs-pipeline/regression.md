@@ -360,7 +360,7 @@
 - Crash a container with a non-zero exit (`docker run --name X busybox sh -c 'echo hi; exit 7'`); within ~90s `GET /api/integrations/docker/containers/X/crashes` returns a crash with exit_code=7, line_count>0, degraded=false.
 - The crash detail `GET .../crashes/{crash_id}` returns a `lines` array populated with the container's real log lines (the LogsQL `container_name:"X" AND source_type:docker` must match real docker log fields in VictoriaLogs).
 - Metric `homelab_container_crash_total{container_name,exit_code,...}` is emitted once per newly-enriched crash (counter — re-detect of the same crash does NOT double-increment; deduped on UNIQUE (logical_key, finished_at)).
-- vmalert rule ContainerCrashed (deploy/vmalert/metrics/container_crash.yml) loads and fires on `increase(homelab_container_crash_total[5m]) > 0` with labels severity/source_tool:vmalert-metrics/category:container.
+- vmalert rule ContainerCrashed (deploy/vmalert/metrics/container_crash.yaml) loads and fires on `increase(homelab_container_crash_total[5m]) > 0` with labels severity/source_tool:vmalert-metrics/category:container.
 - UI: ContainerOverviewTab "Recent crashes" section lists crashes and expands to show the captured log window via the unified <LogViewer> WITH timestamps; on mobile the log lines WRAP (no horizontal overflow). Confirm migration 0036 round-trips cleanly (downgrade restores targets_docker to pre-0036 shape, dropping finished_at).
 - Endpoint auth: /crashes returns 401 without a session; 404 for an unknown container or a crash_id belonging to a different container.
 
@@ -370,7 +370,7 @@
 - The incident detail `GET .../healthcheck-incidents/{incident_id}` returns a `lines` array populated with the container's REAL log lines (LogsQL container_name:"X" AND source_type:docker matched real docker fields in VictoriaLogs).
 - The docker_socket_collector stamps targets_docker.healthcheck_changed_at + previous_healthcheck on a transition INTO unhealthy (healthy→unhealthy, starting→unhealthy, or first-sight-unhealthy with previous=null); staying unhealthy across ticks does NOT re-stamp; unhealthy→healthy does not stamp.
 - Metric homelab_container_healthcheck_unhealthy_total{container_name,...} is emitted once per NEW episode (counter; re-detect of the same episode does NOT double-increment — deduped on UNIQUE (logical_key, healthcheck_changed_at)). An unhealthy→healthy→unhealthy sequence is a NEW episode (new stamp → new incident).
-- vmalert rule ContainerUnhealthy (deploy/vmalert/metrics/container_healthcheck.yml) loads + fires on increase(homelab_container_healthcheck_unhealthy_total[5m]) > 0 with labels severity/source_tool:vmalert-metrics/category:container.
+- vmalert rule ContainerUnhealthy (deploy/vmalert/metrics/container_healthcheck.yaml) loads + fires on increase(homelab_container_healthcheck_unhealthy_total[5m]) > 0 with labels severity/source_tool:vmalert-metrics/category:container.
 - UI: ContainerOverviewTab "Recent healthcheck incidents" section lists incidents (transition string previous→unhealthy) and expands to the captured log window via the unified <LogViewer> with timestamps; on mobile the log lines WRAP. Confirm migration 0037 round-trips cleanly (downgrade rebuilds targets_docker dropping healthcheck_changed_at + previous_healthcheck).
 - Endpoint auth: /healthcheck-incidents returns 401 without a session; 404 for unknown container or an incident_id belonging to a different container.
 

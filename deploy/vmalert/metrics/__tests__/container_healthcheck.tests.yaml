@@ -1,0 +1,40 @@
+# Rule unit-test fixtures for deploy/vmalert/metrics/container_healthcheck.yaml.
+# Schema: Prometheus / vmalert rule unit-test format.
+# (No make target wires this yet — forward-compatible static fixture, NOT CI-run.)
+
+rule_files:
+  - ../container_healthcheck.yaml
+
+evaluation_interval: 30s
+
+tests:
+  # Counter increments → increase() > 0 → ContainerUnhealthy fires immediately (for: 0m).
+  - interval: 30s
+    input_series:
+      - series: 'homelab_container_healthcheck_unhealthy_total{container_name="testc",compose_project="proj",compose_service="svc"}'
+        values: '0 0 1 1 1'
+    alert_rule_test:
+      - eval_time: 60s
+        alertname: ContainerUnhealthy
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              source_tool: vmalert-metrics
+              category: container
+              integration: docker
+              container_name: testc
+              compose_project: proj
+              compose_service: svc
+            exp_annotations:
+              summary: "Container testc became unhealthy"
+              description: "Docker container testc transitioned to unhealthy. Correlated healthcheck logs: /integrations/docker/containers/testc/overview"
+
+  # Flat counter (no increase) → no alert.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_container_healthcheck_unhealthy_total{container_name="stablec",compose_project="proj",compose_service="svc"}'
+        values: '3+0x5'
+    alert_rule_test:
+      - eval_time: 60s
+        alertname: ContainerUnhealthy
+        exp_alerts: []

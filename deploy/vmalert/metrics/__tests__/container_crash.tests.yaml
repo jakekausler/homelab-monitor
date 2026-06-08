@@ -1,0 +1,41 @@
+# Rule unit-test fixtures for deploy/vmalert/metrics/container_crash.yaml.
+# Schema: Prometheus / vmalert rule unit-test format.
+# (No make target wires this yet — forward-compatible static fixture, NOT CI-run.)
+
+rule_files:
+  - ../container_crash.yaml
+
+evaluation_interval: 30s
+
+tests:
+  # Counter increments → increase() > 0 → ContainerCrashed fires immediately (for: 0m).
+  - interval: 30s
+    input_series:
+      - series: 'homelab_container_crash_total{container_name="testc",exit_code="1",compose_project="proj",compose_service="svc"}'
+        values: '0 0 1 1 1'
+    alert_rule_test:
+      - eval_time: 60s
+        alertname: ContainerCrashed
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              source_tool: vmalert-metrics
+              category: container
+              integration: docker
+              container_name: testc
+              exit_code: "1"
+              compose_project: proj
+              compose_service: svc
+            exp_annotations:
+              summary: "Container testc crashed (exit code 1)"
+              description: "Docker container testc exited with code 1. Correlated crash logs: /integrations/docker/containers/testc/overview"
+
+  # Flat counter (no increase) → no alert.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_container_crash_total{container_name="stablec",exit_code="0",compose_project="proj",compose_service="svc"}'
+        values: '3+0x5'
+    alert_rule_test:
+      - eval_time: 60s
+        alertname: ContainerCrashed
+        exp_alerts: []
