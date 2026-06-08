@@ -2,11 +2,11 @@
 
 ## Status: In Progress
 
-## Stages Counter: 42 / 50 Complete
+## Stages Counter: 43 / 50 Complete
 
-## Current Stage: STAGE-004-038
+## Current Stage: STAGE-004-039
 
-## Current Phase: STAGE-004-038 Design / Not Started
+## Current Phase: STAGE-004-039 Design / Not Started
 
 ## Overview
 
@@ -144,7 +144,7 @@ Stages MUST be implemented in order. No parallelization. Each stage lands a sing
 | STAGE-004-035 | Anomaly Type A: New signature detected | Rules + first_seen metric + suppression integration. Design ✅ Build ✅ Refinement ✅ Finalize ✅ |
 | STAGE-004-036 | Anomaly Type B: Signature count spike vs baseline | 7d rolling baseline + 1h cold-start fallback; template rendered per signature via STAGE-004-044. Design ✅ Build ✅ Refinement ✅ Finalize ✅ |
 | STAGE-004-037 | Anomaly Type C: Service-wide error rate spike | `homelab_container_error_rate` metric + rule; satisfies docker req #4. Design ✅ Build ✅ Refinement ✅ Finalize ✅ |
-| STAGE-004-038 | Anomaly Type D: Signature went silent | Expected-silence allowlist (always / cron / window kinds). |
+| STAGE-004-038 | Anomaly Type D: Signature went silent | Expected-silence allowlist (always / cron / window kinds). Design ✅ Build ✅ Refinement ✅ Finalize ✅ |
 | STAGE-004-039 | Severity escalation rules (L1) | Any critical-severity line triggers alert; per-service exclude overrides. |
 
 ### Operational alerts (S40-S41)
