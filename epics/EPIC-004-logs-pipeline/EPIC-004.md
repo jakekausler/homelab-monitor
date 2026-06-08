@@ -2,11 +2,11 @@
 
 ## Status: In Progress
 
-## Stages Counter: 44 / 50 Complete
+## Stages Counter: 45 / 50 Complete
 
-## Current Stage: STAGE-004-040
+## Current Stage: STAGE-004-041
 
-## Current Phase: STAGE-004-040 Design / Not Started
+## Current Phase: STAGE-004-041 Design / Not Started
 
 ## Overview
 
@@ -151,7 +151,7 @@ Stages MUST be implemented in order. No parallelization. Each stage lands a sing
 
 | # | Stage | Theme |
 |---|---|---|
-| STAGE-004-040 | Throttle/budget alerts (L2) | Approaching budget / vector throttling / unusual rate. |
+| STAGE-004-040 | Throttle/budget alerts (L2) | Approaching budget / vector throttling / unusual rate. Design ✅ Build ✅ Refinement ✅ Finalize ✅ |
 | STAGE-004-041 | VL backend health alerts (L3) | VL down / latency / disk-warn / disk-crit; mirrors per-store threshold pattern. |
 
 ### Alert authoring (S42-S44)

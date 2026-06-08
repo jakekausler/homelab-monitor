@@ -422,3 +422,11 @@
 - Severity escalation: a log line with severity="2" (numeric syslog PRIORITY, journald representation) ALSO fires CriticalLogLine — guards the dual word+numeric match against regression (a regression here silently drops all journald-origin critical alerts).
 - Severity escalation: a severity=info line does NOT fire CriticalLogLine.
 - Config: logs.severity_escalation.excluded_services and severity_floors parse into LogsConfig (parsed-but-unused until STAGE-042); malformed entries raise ValueError, present-but-null defaults to empty tuple.
+
+## STAGE-004-040 — Throttle/budget alerts (L2)
+
+- `log_stream_budget` collector: queries VL `/select/logsql/stats_query` (NOT the fictional `/select/logsql/stats`); emits `homelab_log_stream_bytes_today` / `homelab_log_stream_lines_per_sec` / `homelab_log_stream_bytes_budget` per stream. Regression guard: confirm these 3 gauges have series in VM (the collector silently emitted ZERO before the STAGE-040 fix due to a wrong VL endpoint).
+- `homelab_log_stream_bytes_budget` = configured bytes_per_day_per_stream (default 524288000 = 500 MiB), constant per stream.
+- vmalert budget_threshold.yaml loads 3 rules health=ok: `LogStreamApproachingBudget` (bytes_today/bytes_budget>0.80), `LogStreamThrottling` (received-sent>0 for throttle component), `LogStreamUnusualLineRate` (>5× clamp_min 1h baseline).
+- `LogStreamThrottling` uses received-minus-sent (`increase(vector_component_received_events_total{component_id="throttle"}[5m]) - increase(vector_component_sent_events_total{...}[5m]) > 0`), NOT `vector_component_discarded_events_total` (version-dependent). Both vector internal_metrics series must reach VM via the vector:9598 scrape.
+- `vector.toml.template` includes `[sources.internal_metrics]` routed into the prometheus_exporter sink (inputs include internal_metrics) — required for the throttle rule's series to exist.
