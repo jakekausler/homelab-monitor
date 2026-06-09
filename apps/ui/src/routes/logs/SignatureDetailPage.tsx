@@ -1,6 +1,6 @@
 import { useCallback, useState } from 'react'
 import { Link, useNavigate, useParams } from '@tanstack/react-router'
-import { ArrowLeft, Save } from 'lucide-react'
+import { ArrowLeft, Bell, Save } from 'lucide-react'
 import type { JSX } from 'react'
 
 import {
@@ -12,7 +12,9 @@ import {
 import { Button } from '@/components/ui/button'
 import { LogLineList } from '@/components/logs/LogLineList'
 import { OpenInExplorerButton } from '@/components/logs/OpenInExplorerButton'
+import { CreateAlertModal } from '@/components/logs/CreateAlertModal'
 import { templateToLogsQl } from '@/lib/logsQlTranslate'
+import { prefillFromSignature, type AlertPrefill } from '@/routes/logs/alertPrefill'
 import { SignatureAnnotations } from './SignatureAnnotations'
 
 export function SignatureDetailPage(): JSX.Element {
@@ -30,6 +32,8 @@ export function SignatureDetailPage(): JSX.Element {
   const [activeStatus, setActiveStatus] = useState<'active' | 'suppressed' | 'expected'>(
     sig?.status ?? 'active',
   )
+  const [createAlertOpen, setCreateAlertOpen] = useState(false)
+  const [alertPrefill, setAlertPrefill] = useState<AlertPrefill | null>(null)
 
   // Re-seed local edit state from the loaded signature when it first arrives and
   // whenever a different signature is selected. React-official "adjust state
@@ -56,6 +60,12 @@ export function SignatureDetailPage(): JSX.Element {
     },
     [templateHash, serviceKey, updateMut],
   )
+
+  const handleCreateAlert = useCallback(() => {
+    if (!sig) return
+    setAlertPrefill(prefillFromSignature(sig))
+    setCreateAlertOpen(true)
+  }, [sig])
 
   // Open in Explorer: anchor on the single LONGEST literal run of the template
   // (templateToLogsQl). AND-chaining every inter-wildcard segment over-constrains
@@ -169,6 +179,21 @@ export function SignatureDetailPage(): JSX.Element {
         </div>
       )}
 
+      {/* Create alert button */}
+      {sig && logsQl.length > 0 && (
+        <div>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={handleCreateAlert}
+            data-testid="signature-create-alert"
+          >
+            <Bell className="mr-1 size-4" />
+            Create alert
+          </Button>
+        </div>
+      )}
+
       {/* View model button */}
       {sig && (
         <div>
@@ -186,6 +211,17 @@ export function SignatureDetailPage(): JSX.Element {
             Open in Models
           </button>
         </div>
+      )}
+
+      {alertPrefill && (
+        <CreateAlertModal
+          open={createAlertOpen}
+          onOpenChange={setCreateAlertOpen}
+          initialMode={alertPrefill.initialMode}
+          initialValues={alertPrefill.initialValues}
+          sourceKind={alertPrefill.sourceKind}
+          sourceRef={alertPrefill.sourceRef}
+        />
       )}
     </div>
   )

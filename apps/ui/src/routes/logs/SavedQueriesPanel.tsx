@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Trash2, Edit2, Save, Copy } from 'lucide-react'
+import { Trash2, Edit2, Save, Copy, Bell } from 'lucide-react'
 
 import { ApiError } from '@/api/client'
 import {
@@ -12,6 +12,8 @@ import {
   type SavedQuery,
 } from '@/api/savedLogQueries'
 import { Button } from '@/components/ui/button'
+import { CreateAlertModal } from '@/components/logs/CreateAlertModal'
+import { prefillFromSavedQuery, type AlertPrefill } from '@/routes/logs/alertPrefill'
 
 interface SavedQueriesPanelProps {
   /** Click a row to load it into the Explorer (page reconstructs state). */
@@ -29,6 +31,8 @@ export function SavedQueriesPanel({ onLoad, onUpdate }: SavedQueriesPanelProps) 
   const [editingId, setEditingId] = useState<number | null>(null)
   const [editName, setEditName] = useState('')
   const [editError, setEditError] = useState<string | null>(null)
+  const [createAlertOpen, setCreateAlertOpen] = useState<boolean>(false)
+  const [alertPrefill, setAlertPrefill] = useState<AlertPrefill | null>(null)
 
   const queries = data?.saved_queries ?? []
 
@@ -79,6 +83,11 @@ export function SavedQueriesPanel({ onLoad, onUpdate }: SavedQueriesPanelProps) 
     const newName = computeCopyName(query.name, existingNames)
     const body = savedRowToCreateRequest(query, newName)
     createMut.mutate(body)
+  }
+
+  const handleCreateAlert = (query: SavedQuery) => {
+    setAlertPrefill(prefillFromSavedQuery(query))
+    setCreateAlertOpen(true)
   }
 
   if (isLoading) {
@@ -185,6 +194,16 @@ export function SavedQueriesPanel({ onLoad, onUpdate }: SavedQueriesPanelProps) 
                 <Button
                   size="sm"
                   variant="ghost"
+                  data-testid="saved-query-create-alert"
+                  onClick={() => handleCreateAlert(query)}
+                  className="h-6 w-6 p-0"
+                  aria-label={`Create alert from ${query.name}`}
+                >
+                  <Bell className="size-3" />
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
                   data-testid="saved-query-rename"
                   onClick={() => handleRenameStart(query)}
                   className="h-6 w-6 p-0"
@@ -207,6 +226,17 @@ export function SavedQueriesPanel({ onLoad, onUpdate }: SavedQueriesPanelProps) 
           )}
         </div>
       ))}
+
+      {alertPrefill && (
+        <CreateAlertModal
+          open={createAlertOpen}
+          onOpenChange={setCreateAlertOpen}
+          initialMode={alertPrefill.initialMode}
+          initialValues={alertPrefill.initialValues}
+          sourceKind={alertPrefill.sourceKind}
+          sourceRef={alertPrefill.sourceRef}
+        />
+      )}
     </div>
   )
 }

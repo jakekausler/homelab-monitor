@@ -46,6 +46,30 @@ vi.mock('@/api/savedLogQueries', () => ({
   })),
 }))
 
+vi.mock('@/components/logs/CreateAlertModal', () => ({
+  CreateAlertModal: vi.fn(
+    ({
+      open,
+      sourceKind,
+      initialMode,
+    }: {
+      open: boolean
+      sourceKind?: string
+      initialMode?: string
+      onOpenChange: (v: boolean) => void
+    }) =>
+      open ? (
+        <div
+          data-testid="create-alert-modal-stub"
+          data-source-kind={sourceKind ?? ''}
+          data-initial-mode={initialMode ?? ''}
+        >
+          Create alert modal
+        </div>
+      ) : null,
+  ),
+}))
+
 import {
   useSavedLogQueriesQuery,
   useRenameSavedLogQuery,
@@ -191,12 +215,13 @@ describe('SavedQueriesPanel', () => {
       expect(onLoad).toHaveBeenCalledWith(expect.objectContaining({ id: 1, name: 'My Query' }))
     })
 
-    it('renders update, duplicate, rename, and delete action buttons', () => {
+    it('renders update, duplicate, create-alert, rename, and delete action buttons', () => {
       render(<SavedQueriesPanel onLoad={vi.fn()} onUpdate={vi.fn()} />, {
         wrapper: makeWrapper(),
       })
       expect(screen.getByTestId('saved-query-update')).toBeInTheDocument()
       expect(screen.getByTestId('saved-query-duplicate')).toBeInTheDocument()
+      expect(screen.getByTestId('saved-query-create-alert')).toBeInTheDocument()
       expect(screen.getByTestId('saved-query-rename')).toBeInTheDocument()
       expect(screen.getByTestId('saved-query-delete')).toBeInTheDocument()
     })
@@ -349,6 +374,48 @@ describe('SavedQueriesPanel', () => {
       await waitFor(() => {
         expect(screen.getByText('A query with that name already exists.')).toBeInTheDocument()
       })
+    })
+  })
+
+  describe('Create alert action', () => {
+    beforeEach(() => {
+      mockQueryList([
+        makeQuery({ id: 1, name: 'Simple Query', advanced_mode: false }),
+        makeQuery({ id: 2, name: 'Advanced Query', advanced_mode: true }),
+      ])
+      mockMutations()
+    })
+
+    it('renders create-alert button for each query row', () => {
+      render(<SavedQueriesPanel onLoad={vi.fn()} onUpdate={vi.fn()} />, {
+        wrapper: makeWrapper(),
+      })
+      const buttons = screen.getAllByTestId('saved-query-create-alert')
+      expect(buttons).toHaveLength(2)
+    })
+
+    it('opens CreateAlertModal with sourceKind=saved_query and initialMode=simple for simple query', () => {
+      render(<SavedQueriesPanel onLoad={vi.fn()} onUpdate={vi.fn()} />, {
+        wrapper: makeWrapper(),
+      })
+      const buttons = screen.getAllByTestId('saved-query-create-alert')
+      fireEvent.click(buttons[0] as HTMLElement) // Click first (simple) query's create-alert button
+      const stub = screen.getByTestId('create-alert-modal-stub')
+      expect(stub).toBeInTheDocument()
+      expect(stub.getAttribute('data-source-kind')).toBe('saved_query')
+      expect(stub.getAttribute('data-initial-mode')).toBe('simple')
+    })
+
+    it('opens CreateAlertModal with initialMode=advanced for advanced_mode=true query', () => {
+      render(<SavedQueriesPanel onLoad={vi.fn()} onUpdate={vi.fn()} />, {
+        wrapper: makeWrapper(),
+      })
+      const buttons = screen.getAllByTestId('saved-query-create-alert')
+      fireEvent.click(buttons[1] as HTMLElement) // Click second (advanced) query's create-alert button
+      const stub = screen.getByTestId('create-alert-modal-stub')
+      expect(stub).toBeInTheDocument()
+      expect(stub.getAttribute('data-source-kind')).toBe('saved_query')
+      expect(stub.getAttribute('data-initial-mode')).toBe('advanced')
     })
   })
 })

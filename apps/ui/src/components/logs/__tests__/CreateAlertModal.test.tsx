@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, cleanup, waitFor, act } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 import { ApiError } from '@/api/client'
@@ -71,23 +71,25 @@ describe('CreateAlertModal', () => {
   })
 
   it('updates the YAML preview when a field changes (debounced)', async () => {
-    const { act } = await import('@testing-library/react')
     vi.useFakeTimers()
-    renderWithClient(
-      <CreateAlertModal
-        open
-        onOpenChange={vi.fn()}
-        initialMode="advanced"
-        initialValues={baseInitial}
-      />,
-    )
-    fireEvent.change(screen.getByTestId('create-alert-name'), { target: { value: 'NewName' } })
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(350)
-    })
-    const preview = screen.getByTestId('yaml-preview-textarea')
-    expect((preview as HTMLTextAreaElement).value).toContain('alert: NewName')
-    vi.useRealTimers()
+    try {
+      renderWithClient(
+        <CreateAlertModal
+          open
+          onOpenChange={vi.fn()}
+          initialMode="advanced"
+          initialValues={baseInitial}
+        />,
+      )
+      fireEvent.change(screen.getByTestId('create-alert-name'), { target: { value: 'NewName' } })
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(350)
+      })
+      const preview = screen.getByTestId('yaml-preview-textarea')
+      expect((preview as HTMLTextAreaElement).value).toContain('alert: NewName')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('shows a regex error for an invalid rule_name on submit', async () => {
@@ -127,20 +129,27 @@ describe('CreateAlertModal', () => {
       data: { rules: [{ id: 1, rule_name: 'Taken' }] },
     } as never)
     vi.useFakeTimers()
-    renderWithClient(
-      <CreateAlertModal
-        open
-        onOpenChange={vi.fn()}
-        initialMode="advanced"
-        initialValues={baseInitial}
-      />,
-    )
-    fireEvent.change(screen.getByTestId('create-alert-name'), { target: { value: 'Taken' } })
-    vi.advanceTimersByTime(350)
-    vi.useRealTimers()
-    expect(await screen.findByTestId('create-alert-name-conflict')).toHaveTextContent(
-      'A rule with that name already exists',
-    )
+    try {
+      renderWithClient(
+        <CreateAlertModal
+          open
+          onOpenChange={vi.fn()}
+          initialMode="advanced"
+          initialValues={baseInitial}
+        />,
+      )
+      fireEvent.change(screen.getByTestId('create-alert-name'), { target: { value: 'Taken' } })
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(350)
+      })
+      // The debounced conflict state has flushed synchronously under fake timers;
+      // assert with a sync query so findBy* polling never switches timer modes.
+      expect(screen.getByTestId('create-alert-name-conflict')).toHaveTextContent(
+        'A rule with that name already exists',
+      )
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('submits successfully → toast.success + onOpenChange(false)', async () => {
@@ -155,7 +164,10 @@ describe('CreateAlertModal', () => {
         initialValues={baseInitial}
       />,
     )
-    fireEvent.click(screen.getByTestId('create-alert-submit'))
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('create-alert-submit'))
+      await Promise.resolve()
+    })
     await waitFor(() => expect(mutate).toHaveBeenCalled())
     // The POST body must NOT include source_kind/source_ref or simple_* fields.
     const body = mutate.mock.calls[0]![0] as Record<string, unknown>
@@ -190,8 +202,22 @@ describe('CreateAlertModal', () => {
         initialValues={baseInitial}
       />,
     )
-    fireEvent.click(screen.getByTestId('create-alert-submit'))
-    expect(await screen.findByTestId('create-alert-name-conflict')).toBeInTheDocument()
+    // Wrap the submit click in async act() so the FULL async chain
+    // (zod resolver → mutateAsync rejection → catch → setNameError → re-render)
+    // flushes inside the act boundary for the common (fast) case. The act flush
+    // handles a single microtask hop, but the rejection chain crosses several
+    // promise hops; under full-suite microtask/GC contention the setState +
+    // re-render may not have committed by the time act() returns. waitFor
+    // retries on a real-timer interval (default 1000ms window), giving the
+    // multi-hop chain bounded time to commit. A bare synchronous getByTestId
+    // has ZERO retry tolerance and raced under full-suite load.
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('create-alert-submit'))
+      await Promise.resolve()
+    })
+    await waitFor(() => {
+      expect(screen.getByTestId('create-alert-name-conflict')).toBeInTheDocument()
+    })
     expect(onOpenChange).not.toHaveBeenCalledWith(false)
   })
 
@@ -215,8 +241,15 @@ describe('CreateAlertModal', () => {
         initialValues={baseInitial}
       />,
     )
-    fireEvent.click(screen.getByTestId('create-alert-submit'))
-    expect(await screen.findByTestId('create-alert-expr-error')).toHaveTextContent('| stats')
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('create-alert-submit'))
+      await Promise.resolve()
+    })
+    // waitFor (not a bare getByTestId) so the multi-hop reject→catch→setState
+    // chain has bounded time to commit under full-suite contention.
+    await waitFor(() => {
+      expect(screen.getByTestId('create-alert-expr-error')).toHaveTextContent('| stats')
+    })
     expect(onOpenChange).not.toHaveBeenCalledWith(false)
   })
 
@@ -240,10 +273,17 @@ describe('CreateAlertModal', () => {
         initialValues={baseInitial}
       />,
     )
-    fireEvent.click(screen.getByTestId('create-alert-submit'))
-    expect(await screen.findByTestId('create-alert-form-error')).toHaveTextContent(
-      'for_duration must match',
-    )
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('create-alert-submit'))
+      await Promise.resolve()
+    })
+    // waitFor (not a bare getByTestId) so the multi-hop reject→catch→setState
+    // chain has bounded time to commit under full-suite contention.
+    await waitFor(() => {
+      expect(screen.getByTestId('create-alert-form-error')).toHaveTextContent(
+        'for_duration must match',
+      )
+    })
     expect(onOpenChange).not.toHaveBeenCalledWith(false)
   })
 
@@ -267,7 +307,10 @@ describe('CreateAlertModal', () => {
         initialValues={baseInitial}
       />,
     )
-    fireEvent.click(screen.getByTestId('create-alert-submit'))
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('create-alert-submit'))
+      await Promise.resolve()
+    })
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith('boom'))
     expect(onOpenChange).not.toHaveBeenCalledWith(false)
   })
@@ -389,21 +432,23 @@ describe('CreateAlertModal modes', () => {
   })
 
   it('recompiles expr into the YAML preview when Simple fields change', async () => {
-    const { act } = await import('@testing-library/react')
     vi.useFakeTimers()
-    renderWithClient(<CreateAlertModal open onOpenChange={vi.fn()} />)
-    fireEvent.change(screen.getByTestId('create-alert-contains'), {
-      target: { value: 'Out of memory' },
-    })
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(350)
-    })
-    const preview = screen.getByTestId('yaml-preview-textarea')
-    expect((preview as HTMLTextAreaElement).value).toContain('"Out of memory"')
-    expect((preview as HTMLTextAreaElement).value).toContain(
-      '| stats count() as match_count | filter match_count:>10',
-    )
-    vi.useRealTimers()
+    try {
+      renderWithClient(<CreateAlertModal open onOpenChange={vi.fn()} />)
+      fireEvent.change(screen.getByTestId('create-alert-contains'), {
+        target: { value: 'Out of memory' },
+      })
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(350)
+      })
+      const preview = screen.getByTestId('yaml-preview-textarea')
+      expect((preview as HTMLTextAreaElement).value).toContain('"Out of memory"')
+      expect((preview as HTMLTextAreaElement).value).toContain(
+        '| stats count() as match_count | filter match_count:>10',
+      )
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('opens in Advanced mode when initialMode=advanced and shows the expr editor + doc link', () => {
@@ -626,7 +671,10 @@ describe('CreateAlertModal edit mode', () => {
       />,
     )
 
-    fireEvent.click(screen.getByTestId('create-alert-submit'))
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('create-alert-submit'))
+      await Promise.resolve()
+    })
     await waitFor(() => expect(patchMutFn).toHaveBeenCalled())
 
     const callArgs = patchMutFn.mock.calls[0]![0] as {
@@ -672,7 +720,10 @@ describe('CreateAlertModal edit mode', () => {
     expect(screen.getByText('Create alert from query')).toBeInTheDocument()
     expect(screen.getByTestId('create-alert-submit')).toHaveTextContent('Create alert')
 
-    fireEvent.click(screen.getByTestId('create-alert-submit'))
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('create-alert-submit'))
+      await Promise.resolve()
+    })
     await waitFor(() => expect(createMutFn).toHaveBeenCalled())
     expect(patchMutFn).not.toHaveBeenCalled()
   })

@@ -28,6 +28,34 @@ vi.mock('@/components/logs/OpenInExplorerButton', () => ({
   OpenInExplorerButton: () => <button type="button">Open in Explorer</button>,
 }))
 
+vi.mock('@/components/logs/CreateAlertModal', () => ({
+  CreateAlertModal: vi.fn(
+    ({
+      open,
+      sourceKind,
+      initialMode,
+    }: {
+      open: boolean
+      sourceKind?: string
+      initialMode?: string
+      onOpenChange: (v: boolean) => void
+    }) =>
+      open ? (
+        <div
+          data-testid="create-alert-modal-stub"
+          data-source-kind={sourceKind ?? ''}
+          data-initial-mode={initialMode ?? ''}
+        >
+          Create alert modal
+        </div>
+      ) : null,
+  ),
+}))
+
+vi.mock('@/lib/logsQlTranslate', () => ({
+  templateToLogsQl: vi.fn((s: string) => s),
+}))
+
 import { useSignature, useSignatureSamples, useUpdateSignature } from '@/api/signatures'
 import { SignatureDetailPage } from '../SignatureDetailPage'
 
@@ -227,5 +255,23 @@ describe('SignatureDetailPage', () => {
     fireEvent.click(btn)
     // After navigation, models-debug page renders (router navigated)
     expect(await screen.findByTestId('models-debug-page')).toBeInTheDocument()
+  })
+
+  describe('Create alert button', () => {
+    it('shows Create alert button when sig is loaded and logsQl is non-empty', async () => {
+      setMocks(baseSig, { data: { lines: [], reason: null }, isLoading: false })
+      renderPage()
+      expect(await screen.findByTestId('signature-create-alert')).toBeInTheDocument()
+    })
+
+    it('opens CreateAlertModal with sourceKind=signature and initialMode=advanced on click', async () => {
+      setMocks(baseSig, { data: { lines: [], reason: null }, isLoading: false })
+      renderPage()
+      fireEvent.click(await screen.findByTestId('signature-create-alert'))
+      const stub = await screen.findByTestId('create-alert-modal-stub')
+      expect(stub).toBeInTheDocument()
+      expect(stub.getAttribute('data-source-kind')).toBe('signature')
+      expect(stub.getAttribute('data-initial-mode')).toBe('advanced')
+    })
   })
 })

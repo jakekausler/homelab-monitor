@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type JSX } from 'react'
+import { useEffect, useMemo, useRef, useState, type JSX } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -24,22 +24,9 @@ import { YamlPreview } from '@/components/logs/YamlPreview'
 import { buildAlertRuleYaml } from '@/components/logs/alertRuleYaml'
 import { escapeLogsQlPhrase } from '@/lib/logsQlTranslate'
 import { toIsoZ } from '@/lib/timeRange'
+import { scaffoldLogsqlExpr } from '@/components/logs/alertExpr'
 
-/**
- * Wrap a bare LogsQL query into a count-threshold alert expr. If the query
- * already contains a `| stats` pipe (case-insensitive, with or without spaces),
- * it is returned unchanged (the user already authored a stats pipe). The
- * threshold (10) lives inside the string and is editable by editing the expr.
- */
-export function scaffoldLogsqlExpr(query: string): string {
-  const trimmed = query.trim()
-  if (trimmed.length === 0) return ''
-  // Match `| stats` or `|stats` (case-insensitive) anywhere in the query.
-  if (/\|\s*stats/i.test(trimmed)) {
-    return trimmed
-  }
-  return `${trimmed} | stats count() as match_count | filter match_count:>10`
-}
+export { scaffoldLogsqlExpr }
 
 /** Reserved LogsQL words that must not be a bare `| filter` field (mirror of the
  * backend _RESERVED_FILTER_WORDS; advisory only — backend is authoritative). */
@@ -362,6 +349,14 @@ export function CreateAlertModal({
     [rulesQuery.data, editRuleId],
   )
   const watchedName = form.watch('rule_name')
+  // Holds the pending uniqueness-debounce timer so the submit path can cancel it.
+  // Without this, a debounce timer scheduled BEFORE submit (carrying pre-submit
+  // state, e.g. nameError=null) can fire AFTER the submit catch sets the
+  // server-authoritative 409 conflict error and silently clobber it back to null.
+  // This race is timing-dependent and only surfaces under load (e.g. `make verify`
+  // running backend pytest + vitest concurrently), where the catch lands inside
+  // the 300ms debounce window. See STAGE-004-043A debugging.
+  const uniqDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => {
     const handle = setTimeout(() => {
       // eslint-disable-next-line react-hooks/set-state-in-effect -- debounced uniqueness check
@@ -371,7 +366,11 @@ export function CreateAlertModal({
           : null,
       )
     }, 300)
-    return () => clearTimeout(handle)
+    uniqDebounceRef.current = handle
+    return () => {
+      clearTimeout(handle)
+      if (uniqDebounceRef.current === handle) uniqDebounceRef.current = null
+    }
   }, [watchedName, existingNames])
 
   const handleOpenChange = (next: boolean): void => {
@@ -417,10 +416,20 @@ export function CreateAlertModal({
     )
   }
 
+  // Set an authoritative name error from the submit path, cancelling any pending
+  // uniqueness-debounce timer so a stale timer cannot clobber it back to null.
+  const setAuthoritativeNameError = (msg: string): void => {
+    if (uniqDebounceRef.current !== null) {
+      clearTimeout(uniqDebounceRef.current)
+      uniqDebounceRef.current = null
+    }
+    setNameError(msg)
+  }
+
   const submit = form.handleSubmit(async (vals: CreateAlertFormValues) => {
     // Client-side uniqueness backstop before POST (create only; name immutable on edit).
     if (editRuleId === undefined && existingNames.has(vals.rule_name)) {
-      setNameError('A rule with that name already exists')
+      setAuthoritativeNameError('A rule with that name already exists')
       return
     }
     try {
@@ -455,7 +464,7 @@ export function CreateAlertModal({
       if (err instanceof ApiError) {
         if (err.status === 409) {
           // Authoritative backstop: same inline name error, keep modal open.
-          setNameError('A rule with that name already exists')
+          setAuthoritativeNameError('A rule with that name already exists')
         } else if (err.status === 400 && err.code === 'invalid_expr') {
           // Surface the backend reason inline on the expr field; keep modal open.
           setExprError(err.message || 'Invalid expression')

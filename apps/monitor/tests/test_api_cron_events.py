@@ -821,9 +821,12 @@ async def test_bmode_two_cmds_exit_closes_most_recent(
     client, repo = cron_events_client
     fp = await _insert_cron_with_log_key(repo)
 
-    ts1 = "2026-05-19T00:00:00+00:00"
-    ts2 = "2026-05-19T00:01:00+00:00"
-    ts_exit = "2026-05-19T00:01:30+00:00"
+    from datetime import UTC, datetime, timedelta  # noqa: PLC0415
+
+    _base = datetime.now(UTC).replace(microsecond=0)
+    ts1 = (_base - timedelta(minutes=2)).isoformat()
+    ts2 = (_base - timedelta(minutes=1)).isoformat()
+    ts_exit = (_base - timedelta(seconds=30)).isoformat()
 
     await client.post(_URL, json=[_event(exit_code=None, cursor="two-cmd-1", timestamp=ts1)])
     await client.post(_URL, json=[_event(exit_code=None, cursor="two-cmd-2", timestamp=ts2)])
@@ -905,7 +908,10 @@ async def test_close_bmode_run_normalizes_naive_timestamps(
 
     # Seed a running cron_runs row whose started_at is a NAIVE ISO-8601 string
     # (no +00:00 offset) — exercises the `started_dt.tzinfo is None` branch.
-    naive_started_at = "2026-05-19T00:00:00"
+    from datetime import UTC, datetime, timedelta  # noqa: PLC0415
+
+    _base = datetime.now(UTC).replace(microsecond=0)
+    naive_started_at = (_base - timedelta(seconds=10)).strftime("%Y-%m-%dT%H:%M:%S")
     from homelab_monitor.kernel.cron.run_repository import CronRunRepository  # noqa: PLC0415
 
     run_repo = CronRunRepository(repo)
@@ -923,7 +929,7 @@ async def test_close_bmode_run_normalizes_naive_timestamps(
     # layer. To exercise the _close_bmode_run code path we use an aware timestamp
     # that is 10 seconds after the naive started_at (the validator accepts it).
     # The started_at stored in the DB is naive, which is what triggers the branch.
-    ts_end = "2026-05-19T00:00:10+00:00"
+    ts_end = _base.isoformat()
     resp = await client.post(
         _URL,
         json=[_event(exit_code=0, cursor="naive-ts-exit", timestamp=ts_end)],
