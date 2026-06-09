@@ -449,3 +449,12 @@
 - **Valid vmalert vlogs ALERTING exprs require a `| stats ...` pipe:** Bare filters are rejected by vmalert at parse time (e.g. `_msg:error` fails; `_msg:error | stats count() as c | filter c:>0` loads). 042 does NOT validate this (out of scope) — a future stage may add expr-validity validation. Regression: this is expected current behavior, not a bug.
 
 - **Restart round-trip:** Rules persisted in SQLite must re-render to the vmalert-user volumes on monitor boot (render-on-boot block 8d). Verify: create a rule, restart the monitor container, confirm `docker exec homelab-vmalert-logs wget -qO- http://127.0.0.1:8880/api/v1/rules` still shows the rule with `health=ok`.
+
+## STAGE-004-043 — Create-alert-from-query UX (guided form + YAML preview)
+
+- Create-alert modal opens from the Logs Explorer "Create alert from this query" button (Simple mode default; Advanced for a LogsQL-mode query).
+- Simple mode builds safe LogsQL from structured inputs (service/contains/threshold/window); special chars in "contains" are escaped and produce a loadable rule.
+- A logsql expr WITHOUT a `| stats` pipe is rejected at POST with 400 `invalid_expr` (not persisted). A `| filter <reserved>` (e.g. `filter count:`) is rejected. Unbalanced quotes rejected.
+- A VALID rule (e.g. `<filter> | stats count() as match_count | filter match_count:>N`) persists, renders to a per-rule `<rule_name>.yaml`, and loads in vmalert health=ok.
+- The stats alias must be a non-reserved word (`match_count`), NOT `count` (vmalert rejects reserved-word filter fields).
+- Models tab detail pane scrolls horizontally (min-w-0) instead of clipping wide content.
