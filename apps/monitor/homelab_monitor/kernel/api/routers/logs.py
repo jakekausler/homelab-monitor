@@ -81,6 +81,7 @@ from homelab_monitor.kernel.logs.drain_consumer import (
 )
 from homelab_monitor.kernel.logs.drain_persistence import ModelSummaryRow
 from homelab_monitor.kernel.logs.export import stream_export
+from homelab_monitor.kernel.logs.expr_validate import ExprValidationError
 from homelab_monitor.kernel.logs.fields import (
     FieldsCache,
     fetch_fields,
@@ -129,7 +130,7 @@ from homelab_monitor.kernel.logs.user_rules_render import (
     render_all as render_user_rules,
 )
 from homelab_monitor.kernel.logs.user_rules_render import (
-    render_paths_from_env,
+    render_dirs_from_env,
 )
 from homelab_monitor.kernel.logs.user_rules_repo import (
     DuplicateRuleNameError,
@@ -1489,9 +1490,12 @@ def _user_rule_to_response(r: LogUserRule) -> LogUserRuleResponse:
 
 
 async def _render_user_rules(repo: LogUserRulesRepository) -> None:
-    """Reconcile both aggregate YAML files after a mutation. Never raises."""
-    logs_path, metrics_path = render_paths_from_env()
-    rendered_ok = await render_user_rules(repo, logs_path, metrics_path)
+    """Reconcile per-rule YAML files in both user-rule dirs after a mutation.
+
+    Never raises.
+    """
+    logs_dir, metrics_dir = render_dirs_from_env()
+    rendered_ok = await render_user_rules(repo, logs_dir, metrics_dir)
     if not rendered_ok:
         log: BoundLogger = cast(
             BoundLogger,
@@ -1558,6 +1562,13 @@ async def create_user_rule(
         )
     except DuplicateRuleNameError as exc:
         raise ConflictProblem(message=f"rule_name already exists: {body.rule_name}") from exc
+    except ExprValidationError as exc:
+        raise HttpProblem(
+            status_code=400,
+            code="invalid_expr",
+            message=str(exc),
+            details={"check": exc.check, "reason": str(exc)},
+        ) from exc
     except UserRuleValidationError as exc:
         raise HttpProblem(status_code=400, code="invalid_rule", message=str(exc)) from exc
     await _render_user_rules(repo)
@@ -1584,7 +1595,14 @@ async def patch_user_rule(
             for_duration=body.for_duration,
             enabled=body.enabled,
         )
-    except UserRuleValidationError as exc:  # pragma: no cover -- pydantic validates before repo
+    except ExprValidationError as exc:
+        raise HttpProblem(
+            status_code=400,
+            code="invalid_expr",
+            message=str(exc),
+            details={"check": exc.check, "reason": str(exc)},
+        ) from exc
+    except UserRuleValidationError as exc:  # pragma: no cover -- pydantic validates other fields
         raise HttpProblem(  # pragma: no cover
             status_code=400, code="invalid_rule", message=str(exc)
         ) from exc

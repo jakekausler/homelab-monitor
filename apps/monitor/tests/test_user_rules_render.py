@@ -8,11 +8,13 @@ import pytest
 import structlog
 import yaml
 
+import homelab_monitor.kernel.logs.user_rules_render as _user_rules_render_mod
 from homelab_monitor.kernel.db.repository import SqliteRepository
 from homelab_monitor.kernel.logs.user_rules_render import (
     _atomic_write,  # pyright: ignore[reportPrivateUsage]
+    _render_kind_dir,  # pyright: ignore[reportPrivateUsage]
     render_all,
-    render_paths_from_env,
+    render_dirs_from_env,
     render_yaml,
 )
 from homelab_monitor.kernel.logs.user_rules_repo import LogUserRule, LogUserRulesRepository
@@ -134,12 +136,12 @@ def test_render_yaml_forbidden_control_char_in_description_raises() -> None:
         render_yaml([rule])
 
 
-async def test_render_all_writes_both_files(repo: SqliteRepository, tmp_path: Path) -> None:
-    """render_all writes both logs.yaml and metrics.yaml."""
+async def test_render_all_writes_per_rule_files(repo: SqliteRepository, tmp_path: Path) -> None:
+    """render_all writes one file per rule, named <rule_name>.yaml, per dir."""
     user_repo = LogUserRulesRepository(repo)
     await user_repo.create(
         rule_name="LogsRule",
-        expr="_msg:error",
+        expr="_msg:error | stats count() as match_count | filter match_count:>0",
         expr_kind="logsql",
         severity="warning",
         summary="Logs",
@@ -151,19 +153,22 @@ async def test_render_all_writes_both_files(repo: SqliteRepository, tmp_path: Pa
         severity="critical",
         summary="Metrics",
     )
-    logs_path = tmp_path / "logs.yaml"
-    metrics_path = tmp_path / "metrics.yaml"
-    await render_all(user_repo, logs_path, metrics_path)
-    assert logs_path.exists()
-    assert metrics_path.exists()
+    logs_dir = tmp_path / "logs"
+    metrics_dir = tmp_path / "metrics"
+    await render_all(user_repo, logs_dir, metrics_dir)
+    assert (logs_dir / "LogsRule.yaml").exists()
+    assert (metrics_dir / "MetricsRule.yaml").exists()
+    # No aggregate files remain.
+    assert not (logs_dir / "logs.yaml").exists()
+    assert not (metrics_dir / "metrics.yaml").exists()
 
 
 async def test_render_all_correct_rules_in_files(repo: SqliteRepository, tmp_path: Path) -> None:
-    """render_all writes only enabled rules of the correct kind to each file."""
+    """render_all writes a file only for enabled rules of the correct kind."""
     user_repo = LogUserRulesRepository(repo)
     await user_repo.create(
         rule_name="EnabledLogs",
-        expr="_msg:error",
+        expr="_msg:error | stats count() as match_count | filter match_count:>0",
         expr_kind="logsql",
         severity="warning",
         summary="Enabled logs",
@@ -171,7 +176,7 @@ async def test_render_all_correct_rules_in_files(repo: SqliteRepository, tmp_pat
     )
     await user_repo.create(
         rule_name="DisabledLogs",
-        expr="_msg:error",
+        expr="_msg:error | stats count() as match_count | filter match_count:>0",
         expr_kind="logsql",
         severity="info",
         summary="Disabled logs",
@@ -185,77 +190,105 @@ async def test_render_all_correct_rules_in_files(repo: SqliteRepository, tmp_pat
         summary="Enabled metrics",
         enabled=True,
     )
-    logs_path = tmp_path / "logs.yaml"
-    metrics_path = tmp_path / "metrics.yaml"
-    await render_all(user_repo, logs_path, metrics_path)
-    logs_doc = yaml.safe_load(logs_path.read_text())
-    metrics_doc = yaml.safe_load(metrics_path.read_text())
-    logs_alerts = [r["alert"] for r in logs_doc["groups"][0]["rules"]] if logs_doc["groups"] else []
-    metrics_alerts = (
-        [r["alert"] for r in metrics_doc["groups"][0]["rules"]] if metrics_doc["groups"] else []
-    )
-    assert "EnabledLogs" in logs_alerts
-    assert "DisabledLogs" not in logs_alerts
-    assert "EnabledMetrics" in metrics_alerts
+    logs_dir = tmp_path / "logs"
+    metrics_dir = tmp_path / "metrics"
+    await render_all(user_repo, logs_dir, metrics_dir)
+    assert (logs_dir / "EnabledLogs.yaml").exists()
+    assert not (logs_dir / "DisabledLogs.yaml").exists()
+    assert (metrics_dir / "EnabledMetrics.yaml").exists()
+    # Each file is a valid one-rule group.
+    logs_doc = yaml.safe_load((logs_dir / "EnabledLogs.yaml").read_text())
+    assert logs_doc["groups"][0]["name"] == "user-rules-logs"
+    assert [r["alert"] for r in logs_doc["groups"][0]["rules"]] == ["EnabledLogs"]
+    metrics_doc = yaml.safe_load((metrics_dir / "EnabledMetrics.yaml").read_text())
+    assert metrics_doc["groups"][0]["name"] == "user-rules-metrics"
+    assert [r["alert"] for r in metrics_doc["groups"][0]["rules"]] == ["EnabledMetrics"]
 
 
-async def test_render_all_empty_kind_becomes_groups_empty_list(
+async def test_render_all_empty_kind_leaves_dir_without_files(
     repo: SqliteRepository, tmp_path: Path
 ) -> None:
-    """render_all with no enabled rules of a kind writes 'groups: []'."""
+    """render_all with no enabled rules of a kind leaves that dir with no *.yaml."""
     user_repo = LogUserRulesRepository(repo)
     await user_repo.create(
         rule_name="OnlyLogs",
-        expr="_msg:error",
+        expr="_msg:error | stats count() as match_count | filter match_count:>0",
         expr_kind="logsql",
         severity="warning",
         summary="Only logs",
     )
-    logs_path = tmp_path / "logs.yaml"
-    metrics_path = tmp_path / "metrics.yaml"
-    await render_all(user_repo, logs_path, metrics_path)
-    logs_doc = yaml.safe_load(logs_path.read_text())
-    metrics_doc = yaml.safe_load(metrics_path.read_text())
-    assert logs_doc["groups"] and len(logs_doc["groups"][0]["rules"]) > 0
-    assert metrics_doc["groups"] == []
+    logs_dir = tmp_path / "logs"
+    metrics_dir = tmp_path / "metrics"
+    await render_all(user_repo, logs_dir, metrics_dir)
+    assert (logs_dir / "OnlyLogs.yaml").exists()
+    # metrics_dir exists (mkdir) but has no rule files.
+    assert metrics_dir.is_dir()
+    assert list(metrics_dir.glob("*.yaml")) == []
 
 
-async def test_render_all_delete_then_re_render_clears_file(
+async def test_render_all_delete_then_re_render_removes_file(
     repo: SqliteRepository, tmp_path: Path
 ) -> None:
-    """render_all with no enabled rules clears the file (writes 'groups: []')."""
+    """render_all unlinks a rule's file once the rule is deleted (orphan reconcile)."""
     user_repo = LogUserRulesRepository(repo)
     rule = await user_repo.create(
         rule_name="Ephemeral",
-        expr="_msg:error",
+        expr="_msg:error | stats count() as match_count | filter match_count:>0",
         expr_kind="logsql",
         severity="warning",
         summary="Ephemeral",
     )
-    logs_path = tmp_path / "logs.yaml"
-    metrics_path = tmp_path / "metrics.yaml"
-    await render_all(user_repo, logs_path, metrics_path)
-    initial = yaml.safe_load(logs_path.read_text())
-    assert len(initial["groups"][0]["rules"]) > 0
+    logs_dir = tmp_path / "logs"
+    metrics_dir = tmp_path / "metrics"
+    await render_all(user_repo, logs_dir, metrics_dir)
+    assert (logs_dir / "Ephemeral.yaml").exists()
     await user_repo.delete(rule.id)
-    await render_all(user_repo, logs_path, metrics_path)
-    cleared = yaml.safe_load(logs_path.read_text())
-    assert cleared["groups"] == []
+    await render_all(user_repo, logs_dir, metrics_dir)
+    assert not (logs_dir / "Ephemeral.yaml").exists()
+    assert list(logs_dir.glob("*.yaml")) == []
+
+
+async def test_render_all_removes_orphan_and_old_aggregate_files(
+    repo: SqliteRepository, tmp_path: Path
+) -> None:
+    """render_all unlinks pre-existing *.yaml that are not desired rule files.
+
+    Covers the migration case: a stale aggregate `logs.yaml` from the previous
+    scheme (and an orphan from a renamed rule) is removed on re-render.
+    """
+    user_repo = LogUserRulesRepository(repo)
+    await user_repo.create(
+        rule_name="Keeper",
+        expr="_msg:error | stats count() as match_count | filter match_count:>0",
+        expr_kind="logsql",
+        severity="warning",
+        summary="Keeper",
+    )
+    logs_dir = tmp_path / "logs"
+    metrics_dir = tmp_path / "metrics"
+    logs_dir.mkdir(parents=True)
+    # Simulate leftovers from the old aggregate scheme + a renamed rule.
+    (logs_dir / "logs.yaml").write_text("groups: []\n")
+    (logs_dir / "OldName.yaml").write_text("groups: []\n")
+    await render_all(user_repo, logs_dir, metrics_dir)
+    assert (logs_dir / "Keeper.yaml").exists()
+    assert not (logs_dir / "logs.yaml").exists()
+    assert not (logs_dir / "OldName.yaml").exists()
 
 
 async def test_render_all_returns_true_on_success(repo: SqliteRepository, tmp_path: Path) -> None:
-    """render_all returns True when both files are written successfully."""
+    """render_all returns True when all per-rule files are written successfully."""
     user_repo = LogUserRulesRepository(repo)
     await user_repo.create(
         rule_name="LogsRule",
-        expr="_msg:test",
+        expr="_msg:test | stats count() as match_count | filter match_count:>0",
         expr_kind="logsql",
         severity="warning",
         summary="Test rule",
     )
-    logs_path = tmp_path / "logs.yaml"
-    metrics_path = tmp_path / "metrics.yaml"
-    result = await render_all(user_repo, logs_path, metrics_path)
+    logs_dir = tmp_path / "logs"
+    metrics_dir = tmp_path / "metrics"
+    result = await render_all(user_repo, logs_dir, metrics_dir)
     assert result is True
 
 
@@ -267,48 +300,44 @@ def test_atomic_write_rejects_non_yaml_extension() -> None:
 
 
 async def test_render_all_round_trip_semantics(repo: SqliteRepository, tmp_path: Path) -> None:
-    """Round-trip: create rule -> render_all -> parse YAML -> verify alert matches."""
+    """Round-trip: create rule -> render_all -> parse per-rule file -> verify alert."""
     user_repo = LogUserRulesRepository(repo)
     await user_repo.create(
         rule_name="RoundTripAlert",
-        expr="_msg:test",
+        expr="_msg:test | stats count() as match_count | filter match_count:>0",
         expr_kind="logsql",
         severity="critical",
         summary="Round trip test",
         description="Testing round-trip",
     )
-    logs_path = tmp_path / "logs.yaml"
-    metrics_path = tmp_path / "metrics.yaml"
-    await render_all(user_repo, logs_path, metrics_path)
-    doc = yaml.safe_load(logs_path.read_text())
-    assert doc["groups"] and len(doc["groups"]) > 0
-    rendered_alert = None
-    for rule in doc["groups"][0]["rules"]:
-        if rule["alert"] == "RoundTripAlert":
-            rendered_alert = rule
-            break
-    assert rendered_alert is not None
+    logs_dir = tmp_path / "logs"
+    metrics_dir = tmp_path / "metrics"
+    await render_all(user_repo, logs_dir, metrics_dir)
+    doc = yaml.safe_load((logs_dir / "RoundTripAlert.yaml").read_text())
+    assert len(doc["groups"]) == 1
+    rendered_alert = doc["groups"][0]["rules"][0]
+    assert rendered_alert["alert"] == "RoundTripAlert"
     assert rendered_alert["labels"]["severity"] == "critical"
 
 
-def test_render_paths_from_env_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
-    """render_paths_from_env with no env set returns defaults."""
+def test_render_dirs_from_env_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    """render_dirs_from_env with no env set returns the default dirs."""
     monkeypatch.delenv("HOMELAB_MONITOR_VMALERT_USER_LOGS_DIR", raising=False)
     monkeypatch.delenv("HOMELAB_MONITOR_VMALERT_USER_METRICS_DIR", raising=False)
-    logs_path, metrics_path = render_paths_from_env()
-    assert str(logs_path) == "/var/vmalert-user-logs/logs.yaml"
-    assert str(metrics_path) == "/var/vmalert-user-metrics/metrics.yaml"
+    logs_dir, metrics_dir = render_dirs_from_env()
+    assert str(logs_dir) == "/var/vmalert-user-logs"
+    assert str(metrics_dir) == "/var/vmalert-user-metrics"
 
 
-def test_render_paths_from_env_overrides(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """render_paths_from_env with env overrides uses the custom dirs."""
+def test_render_dirs_from_env_overrides(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """render_dirs_from_env with env overrides returns the custom dirs."""
     logs_dir = tmp_path / "custom-logs"
     metrics_dir = tmp_path / "custom-metrics"
     monkeypatch.setenv("HOMELAB_MONITOR_VMALERT_USER_LOGS_DIR", str(logs_dir))
     monkeypatch.setenv("HOMELAB_MONITOR_VMALERT_USER_METRICS_DIR", str(metrics_dir))
-    logs_path, metrics_path = render_paths_from_env()
-    assert str(logs_path) == str(logs_dir / "logs.yaml")
-    assert str(metrics_path) == str(metrics_dir / "metrics.yaml")
+    got_logs, got_metrics = render_dirs_from_env()
+    assert str(got_logs) == str(logs_dir)
+    assert str(got_metrics) == str(metrics_dir)
 
 
 def test_render_yaml_unknown_expr_kind_raises() -> None:
@@ -344,6 +373,67 @@ def test_render_yaml_description_with_forbidden_char_raises() -> None:
     rule = _rule("TestAlert", description="A description\x00with null byte")
     with pytest.raises(ValueError, match="description contains a forbidden control character"):
         render_yaml([rule])
+
+
+def test_render_kind_dir_skips_unsafe_rule_name(tmp_path: Path) -> None:
+    """_render_kind_dir skips a rule whose name is not a safe identifier and returns False."""
+    log = structlog.get_logger()
+    bad = _rule("../escape")  # not matched by the identifier guard
+    ok = _render_kind_dir(tmp_path, [bad], log)  # pyright: ignore[reportPrivateUsage]
+    assert ok is False
+    # No file was written under the dir (and no traversal escaped it).
+    assert list(tmp_path.glob("*.yaml")) == []
+
+
+def test_render_kind_dir_unlink_failure_returns_false(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """_render_kind_dir returns False when unlinking an orphan raises OSError."""
+    log = structlog.get_logger()
+    orphan = tmp_path / "Stale.yaml"
+    orphan.write_text("groups: []\n")
+
+    def _boom(self: Path) -> None:
+        raise OSError("unlink denied")
+
+    monkeypatch.setattr(Path, "unlink", _boom)
+    # No desired rules -> the orphan is targeted for removal -> unlink raises.
+    ok = _render_kind_dir(tmp_path, [], log)  # pyright: ignore[reportPrivateUsage]
+    assert ok is False
+
+
+def test_render_kind_dir_write_failure_returns_false(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """_render_kind_dir returns False when _atomic_write raises OSError for a rule."""
+    log = structlog.get_logger()
+
+    def _boom(output_path: Path, content: str, log: object) -> None:
+        raise OSError("write denied")
+
+    monkeypatch.setattr(_user_rules_render_mod, "_atomic_write", _boom)
+    rule = _rule("WriteFailRule")
+    ok = _render_kind_dir(tmp_path, [rule], log)  # pyright: ignore[reportPrivateUsage]
+    assert ok is False
+
+
+def test_render_kind_dir_mkdir_failure_returns_false(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """_render_kind_dir returns False immediately when out_dir.mkdir raises OSError."""
+    log = structlog.get_logger()
+    unwritable = tmp_path / "no_perms"
+    original_mkdir = Path.mkdir
+
+    def _boom(self: Path, mode: int = 0o777, parents: bool = False, exist_ok: bool = False) -> None:
+        if self == unwritable:
+            raise OSError("mkdir denied")
+        original_mkdir(self, mode=mode, parents=parents, exist_ok=exist_ok)
+
+    monkeypatch.setattr(Path, "mkdir", _boom)
+    rule = _rule("SomeRule")
+    ok = _render_kind_dir(unwritable, [rule], log)  # pyright: ignore[reportPrivateUsage]
+    assert ok is False
 
 
 __all__: list[str] = []

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { Activity, Filter, RefreshCw, Save, Search, X } from 'lucide-react'
+import { Activity, BellPlus, Filter, RefreshCw, Save, Search, X } from 'lucide-react'
 
 import { ApiError } from '@/api/client'
 import {
@@ -95,6 +95,8 @@ interface LogsExplorerBodyProps {
   onDeselectIdentities: (identities: ServiceIdentity[]) => void
   /** Open the save-query modal (page owns the modal + payload builder). */
   onOpenSave: () => void
+  /** Open the create-alert modal (page owns the modal + initial values). */
+  onOpenCreateAlert: () => void
   /** Load a saved query into the Explorer (page reconstructs state). */
   onLoadSavedQuery: (saved: SavedQuery) => void
   /** Overwrite a saved query's payload with the current Explorer state. */
@@ -136,6 +138,7 @@ export function LogsExplorerBody({
   onSelectIdentities,
   onDeselectIdentities,
   onOpenSave,
+  onOpenCreateAlert,
   onLoadSavedQuery,
   onUpdateSavedQuery,
   onLoadHistoryEntry,
@@ -210,6 +213,10 @@ export function LogsExplorerBody({
       ? committedLogsQl
       : '*'
     : translateSearchToLogsQl(committedPlainText)
+
+  // Check if the effective query is non-empty for the "Create alert" button
+  const effectiveQueryNonEmpty =
+    (advancedMode ? committedLogsQl : committedPlainText).trim().length > 0
 
   // Resolve the committed range to absolute [startIso, endIso]. `now` must stay
   // STABLE across renders (else the open-end window re-reads new Date() each
@@ -729,6 +736,24 @@ export function LogsExplorerBody({
             </Button>
           </TooltipTrigger>
           <TooltipContent>Save query</TooltipContent>
+        </Tooltip>
+
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="h-8 w-8 p-0"
+              data-testid="logs-create-alert"
+              aria-label="Create alert from this query"
+              disabled={!effectiveQueryNonEmpty}
+              onClick={onOpenCreateAlert}
+            >
+              <BellPlus />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Create alert from this query</TooltipContent>
         </Tooltip>
 
         <ExportButton expr={expr} startIso={startIso} endIso={endIso} servicesCsv={servicesCsv} />

@@ -115,7 +115,7 @@ export function ModelsDebugPage(): JSX.Element {
           </div>
 
           {/* Right panel: detail view */}
-          <div className="flex min-h-0 flex-1 flex-col">
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
             {selectedKey === null ? (
               <div className="flex items-center justify-center p-4">
                 <EmptyState>Select a model to view templates</EmptyState>

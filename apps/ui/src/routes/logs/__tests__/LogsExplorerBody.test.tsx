@@ -198,6 +198,7 @@ describe('LogsExplorerBody (surrounding mode)', () => {
             onSelectIdentities={() => {}}
             onDeselectIdentities={() => {}}
             onOpenSave={() => {}}
+            onOpenCreateAlert={() => {}}
             onLoadSavedQuery={() => {}}
             onUpdateSavedQuery={() => {}}
             onLoadHistoryEntry={() => {}}

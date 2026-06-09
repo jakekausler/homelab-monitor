@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from homelab_monitor.kernel.db.repository import SqliteRepository
+from homelab_monitor.kernel.logs.expr_validate import ExprValidationError
 from homelab_monitor.kernel.logs.user_rules_repo import (
     DuplicateRuleNameError,
     LogUserRulesRepository,
@@ -17,14 +18,14 @@ async def test_create_returns_row_with_defaults(repo: SqliteRepository) -> None:
     user_repo = LogUserRulesRepository(repo)
     rule = await user_repo.create(
         rule_name="TestAlert",
-        expr="_msg:error",
+        expr="_msg:error | stats count() as match_count | filter match_count:>0",
         expr_kind="logsql",
         severity="warning",
         summary="A test alert",
     )
     assert rule.id > 0
     assert rule.rule_name == "TestAlert"
-    assert rule.expr == "_msg:error"
+    assert rule.expr == "_msg:error | stats count() as match_count | filter match_count:>0"
     assert rule.expr_kind == "logsql"
     assert rule.enabled is True
     assert rule.source_kind == "manual"
@@ -53,7 +54,7 @@ async def test_get_by_name_finds_rule(repo: SqliteRepository) -> None:
     user_repo = LogUserRulesRepository(repo)
     created = await user_repo.create(
         rule_name="FindMe",
-        expr="_msg:error",
+        expr="_msg:error | stats count() as match_count | filter match_count:>0",
         expr_kind="logsql",
         severity="warning",
         summary="Find me",
@@ -69,7 +70,7 @@ async def test_get_by_id_finds_rule(repo: SqliteRepository) -> None:
     user_repo = LogUserRulesRepository(repo)
     created = await user_repo.create(
         rule_name="ById",
-        expr="_msg:boom",
+        expr="_msg:boom | stats count() as match_count | filter match_count:>0",
         expr_kind="logsql",
         severity="info",
         summary="By ID",
@@ -91,7 +92,7 @@ async def test_duplicate_rule_name_raises(repo: SqliteRepository) -> None:
     user_repo = LogUserRulesRepository(repo)
     await user_repo.create(
         rule_name="Duplicate",
-        expr="_msg:error",
+        expr="_msg:error | stats count() as match_count | filter match_count:>0",
         expr_kind="logsql",
         severity="warning",
         summary="First",
@@ -99,7 +100,7 @@ async def test_duplicate_rule_name_raises(repo: SqliteRepository) -> None:
     with pytest.raises(DuplicateRuleNameError):
         await user_repo.create(
             rule_name="Duplicate",
-            expr="_msg:different",
+            expr="_msg:different | stats count() as match_count | filter match_count:>0",
             expr_kind="logsql",
             severity="info",
             summary="Second",
@@ -160,12 +161,12 @@ async def test_invalid_for_duration_raises(repo: SqliteRepository) -> None:
 
 
 async def test_valid_durations_accepted(repo: SqliteRepository) -> None:
-    """create() accepts '0s', '5m', '1h', '1d' durations."""
+    """create() accepts '0s', '5m', '1h', '1d', and compound durations like '2h30m'."""
     user_repo = LogUserRulesRepository(repo)
-    for i, duration in enumerate(["0s", "5m", "1h", "1d"]):
+    for i, duration in enumerate(["0s", "5m", "1h", "1d", "2h30m", "1h30m45s"]):
         rule = await user_repo.create(
-            rule_name=f"Duration{i}_{duration}",
-            expr="_msg:error",
+            rule_name=f"Duration{i}_{duration.replace(':', '_')}",
+            expr="_msg:error | stats count() as match_count | filter match_count:>0",
             expr_kind="logsql",
             severity="warning",
             summary=f"Duration {duration}",
@@ -206,7 +207,7 @@ async def test_list_all_orders_by_rule_name(repo: SqliteRepository) -> None:
     for name in ["Zebra", "Alpha", "Beta"]:
         await user_repo.create(
             rule_name=name,
-            expr="_msg:error",
+            expr="_msg:error | stats count() as match_count | filter match_count:>0",
             expr_kind="logsql",
             severity="warning",
             summary=f"{name} alert",
@@ -221,7 +222,7 @@ async def test_list_enabled_excludes_disabled(repo: SqliteRepository) -> None:
     user_repo = LogUserRulesRepository(repo)
     await user_repo.create(
         rule_name="Enabled",
-        expr="_msg:error",
+        expr="_msg:error | stats count() as match_count | filter match_count:>0",
         expr_kind="logsql",
         severity="warning",
         summary="Enabled",
@@ -229,7 +230,7 @@ async def test_list_enabled_excludes_disabled(repo: SqliteRepository) -> None:
     )
     await user_repo.create(
         rule_name="Disabled",
-        expr="_msg:error",
+        expr="_msg:error | stats count() as match_count | filter match_count:>0",
         expr_kind="logsql",
         severity="warning",
         summary="Disabled",
@@ -245,15 +246,17 @@ async def test_update_partial_changes_fields(repo: SqliteRepository) -> None:
     user_repo = LogUserRulesRepository(repo)
     created = await user_repo.create(
         rule_name="UpdateTest",
-        expr="_msg:original",
+        expr="_msg:original | stats count() as match_count | filter match_count:>0",
         expr_kind="logsql",
         severity="warning",
         summary="Original",
     )
     original_created_at = created.created_at
-    updated = await user_repo.update(created.id, expr="_msg:modified")
+    updated = await user_repo.update(
+        created.id, expr="_msg:modified | stats count() as match_count | filter match_count:>0"
+    )
     assert updated is not None
-    assert updated.expr == "_msg:modified"
+    assert updated.expr == "_msg:modified | stats count() as match_count | filter match_count:>0"
     assert updated.rule_name == "UpdateTest"  # Unchanged
     assert updated.expr_kind == "logsql"  # Unchanged
     assert updated.severity == "warning"  # Unchanged
@@ -273,7 +276,7 @@ async def test_update_with_invalid_value_raises(repo: SqliteRepository) -> None:
     user_repo = LogUserRulesRepository(repo)
     rule = await user_repo.create(
         rule_name="UpdateValidation",
-        expr="_msg:error",
+        expr="_msg:error | stats count() as match_count | filter match_count:>0",
         expr_kind="logsql",
         severity="warning",
         summary="Test",
@@ -287,7 +290,7 @@ async def test_set_enabled_false_then_list_enabled_omits_it(repo: SqliteReposito
     user_repo = LogUserRulesRepository(repo)
     rule = await user_repo.create(
         rule_name="DisableTest",
-        expr="_msg:error",
+        expr="_msg:error | stats count() as match_count | filter match_count:>0",
         expr_kind="logsql",
         severity="warning",
         summary="Test",
@@ -312,7 +315,7 @@ async def test_delete_hit_returns_true_then_absent(repo: SqliteRepository) -> No
     user_repo = LogUserRulesRepository(repo)
     rule = await user_repo.create(
         rule_name="DeleteTest",
-        expr="_msg:error",
+        expr="_msg:error | stats count() as match_count | filter match_count:>0",
         expr_kind="logsql",
         severity="warning",
         summary="Test",
@@ -369,6 +372,23 @@ async def test_expr_too_long_raises(repo: SqliteRepository) -> None:
         )
 
 
+async def test_create_expr_with_quotes_and_match_operator_accepted(repo: SqliteRepository) -> None:
+    """expr with double quotes + ':=' (real LogsQL alerting shape) is accepted and round-trips."""
+    user_repo = LogUserRulesRepository(repo)
+    expr = '_time:5m service:="kernel" "Out of memory" | stats by (host) count() as c | filter c:>0'
+    rule = await user_repo.create(
+        rule_name="KernelOOMUser",
+        expr=expr,
+        expr_kind="logsql",
+        severity="warning",
+        summary="OOM",
+    )
+    assert rule.expr == expr
+    fetched = await user_repo.get(rule.id)
+    assert fetched is not None
+    assert fetched.expr == expr
+
+
 async def test_summary_too_long_raises(repo: SqliteRepository) -> None:
     """create() with summary > 1000 chars raises UserRuleValidationError."""
     user_repo = LogUserRulesRepository(repo)
@@ -380,6 +400,54 @@ async def test_summary_too_long_raises(repo: SqliteRepository) -> None:
             severity="warning",
             summary="x" * 1001,
         )
+
+
+async def test_create_logsql_without_stats_raises(repo: SqliteRepository) -> None:
+    """create() with logsql expr missing | stats pipe raises ExprValidationError."""
+    user_repo = LogUserRulesRepository(repo)
+    with pytest.raises(ExprValidationError) as exc_info:
+        await user_repo.create(
+            rule_name="NoStats",
+            expr="_msg:error",
+            expr_kind="logsql",
+            severity="warning",
+            summary="No stats",
+        )
+    assert exc_info.value.check == "missing_stats_pipe"
+
+
+async def test_create_metricsql_without_stats_ok(repo: SqliteRepository) -> None:
+    """create() with metricsql (no | stats requirement) succeeds."""
+    user_repo = LogUserRulesRepository(repo)
+    rule = await user_repo.create(
+        rule_name="MetricsNoStats",
+        expr="up == 0",
+        expr_kind="metricsql",
+        severity="critical",
+        summary="Metrics alert",
+    )
+    assert rule.expr_kind == "metricsql"
+    assert rule.expr == "up == 0"
+
+
+async def test_update_to_invalid_expr_raises(repo: SqliteRepository) -> None:
+    """update() with invalid expr raises ExprValidationError."""
+    user_repo = LogUserRulesRepository(repo)
+    # Create a valid rule first
+    rule = await user_repo.create(
+        rule_name="UpdateTest",
+        expr="_msg:original | stats count() as match_count | filter match_count:>0",
+        expr_kind="logsql",
+        severity="warning",
+        summary="Update test",
+    )
+    # Update to invalid expr
+    with pytest.raises(ExprValidationError) as exc_info:
+        await user_repo.update(
+            rule.id,
+            expr="_msg:bare",
+        )
+    assert exc_info.value.check == "missing_stats_pipe"
 
 
 __all__: list[str] = []

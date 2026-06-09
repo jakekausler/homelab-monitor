@@ -38,7 +38,7 @@ async def test_create_user_rule_201(
         "/api/logs/user-rules",
         json={
             "rule_name": "TestRule",
-            "expr": "_msg:error",
+            "expr": "_msg:error | stats count() as match_count | filter match_count:>0",
             "expr_kind": "logsql",
             "severity": "warning",
             "summary": "Test alert",
@@ -49,26 +49,30 @@ async def test_create_user_rule_201(
     data = response.json()
     assert data["id"] > 0
     assert data["rule_name"] == "TestRule"
-    assert data["expr"] == "_msg:error"
+    assert data["expr"] == "_msg:error | stats count() as match_count | filter match_count:>0"
     assert data["expr_kind"] == "logsql"
     assert data["enabled"] is True
     assert data["source_kind"] == "manual"
-    # Verify render_all was called: logs.yaml should exist
-    logs_file = tmp_path / "logs" / "logs.yaml"
+    # Verify render_all wrote the per-rule file for this rule.
+    logs_file = tmp_path / "logs" / "TestRule.yaml"
     assert logs_file.exists()
     doc = yaml.safe_load(logs_file.read_text())
-    assert any(r["alert"] == "TestRule" for r in doc["groups"][0]["rules"] if doc["groups"])
+    assert any(r["alert"] == "TestRule" for r in doc["groups"][0]["rules"])
 
 
-async def test_create_user_rule_duplicate_409(authenticated_client: AsyncClient) -> None:
+async def test_create_user_rule_duplicate_409(
+    authenticated_client: AsyncClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """POST /api/logs/user-rules with duplicate rule_name returns 409."""
+    monkeypatch.setenv("HOMELAB_MONITOR_VMALERT_USER_LOGS_DIR", str(tmp_path / "logs"))
+    monkeypatch.setenv("HOMELAB_MONITOR_VMALERT_USER_METRICS_DIR", str(tmp_path / "metrics"))
     csrf = _csrf(authenticated_client)
     # Create first
     await authenticated_client.post(
         "/api/logs/user-rules",
         json={
             "rule_name": "Duplicate",
-            "expr": "_msg:error",
+            "expr": "_msg:error | stats count() as match_count | filter match_count:>0",
             "expr_kind": "logsql",
             "severity": "warning",
             "summary": "First",
@@ -80,7 +84,7 @@ async def test_create_user_rule_duplicate_409(authenticated_client: AsyncClient)
         "/api/logs/user-rules",
         json={
             "rule_name": "Duplicate",
-            "expr": "_msg:other",
+            "expr": "_msg:other | stats count() as match_count | filter match_count:>0",
             "expr_kind": "logsql",
             "severity": "info",
             "summary": "Second",
@@ -108,14 +112,43 @@ async def test_create_user_rule_invalid_name_400(authenticated_client: AsyncClie
     assert "invalid_rule" in response.json()["error"]["code"]
 
 
-async def test_get_user_rule_200(authenticated_client: AsyncClient) -> None:
+async def test_create_user_rule_render_failure_still_201(
+    authenticated_client: AsyncClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A render failure (unwritable dir) is swallowed: POST still returns 201."""
+    # Make the logs render dir uncreatable: its parent is a regular file.
+    blocker = tmp_path / "blocker"
+    blocker.write_text("not a dir")
+    monkeypatch.setenv("HOMELAB_MONITOR_VMALERT_USER_LOGS_DIR", str(blocker / "logs"))
+    monkeypatch.setenv("HOMELAB_MONITOR_VMALERT_USER_METRICS_DIR", str(tmp_path / "metrics"))
+    response = await authenticated_client.post(
+        "/api/logs/user-rules",
+        json={
+            "rule_name": "RenderFailRule",
+            "expr": "_msg:error | stats count() as match_count | filter match_count:>0",
+            "expr_kind": "logsql",
+            "severity": "warning",
+            "summary": "render fail test",
+        },
+        headers=_csrf(authenticated_client),
+    )
+    assert response.status_code == 201  # noqa: PLR2004
+
+
+async def test_get_user_rule_200(
+    authenticated_client: AsyncClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """GET /api/logs/user-rules/{id} returns 200 with rule data."""
+    monkeypatch.setenv("HOMELAB_MONITOR_VMALERT_USER_LOGS_DIR", str(tmp_path / "logs"))
+    monkeypatch.setenv("HOMELAB_MONITOR_VMALERT_USER_METRICS_DIR", str(tmp_path / "metrics"))
     csrf = _csrf(authenticated_client)
     created = await authenticated_client.post(
         "/api/logs/user-rules",
         json={
             "rule_name": "GetTest",
-            "expr": "_msg:boom",
+            "expr": "_msg:boom | stats count() as match_count | filter match_count:>0",
             "expr_kind": "logsql",
             "severity": "critical",
             "summary": "Get test",
@@ -148,7 +181,7 @@ async def test_patch_user_rule_200(
         "/api/logs/user-rules",
         json={
             "rule_name": "PatchTest",
-            "expr": "_msg:original",
+            "expr": "_msg:original | stats count() as match_count | filter match_count:>0",
             "expr_kind": "logsql",
             "severity": "warning",
             "summary": "Original",
@@ -164,9 +197,11 @@ async def test_patch_user_rule_200(
     assert response.status_code == 200  # noqa: PLR2004
     data = response.json()
     assert data["severity"] == "critical"
-    assert data["expr"] == "_msg:original"  # Unchanged
-    # Verify render_all was called
-    logs_file = tmp_path / "logs" / "logs.yaml"
+    assert (
+        data["expr"] == "_msg:original | stats count() as match_count | filter match_count:>0"
+    )  # Unchanged
+    # Verify render_all rewrote the per-rule file with the patched severity.
+    logs_file = tmp_path / "logs" / "PatchTest.yaml"
     doc = yaml.safe_load(logs_file.read_text())
     rendered = next((r for r in doc["groups"][0]["rules"] if r["alert"] == "PatchTest"), None)
     assert rendered is not None
@@ -194,7 +229,7 @@ async def test_delete_user_rule_204(
         "/api/logs/user-rules",
         json={
             "rule_name": "DeleteTest",
-            "expr": "_msg:error",
+            "expr": "_msg:error | stats count() as match_count | filter match_count:>0",
             "expr_kind": "logsql",
             "severity": "warning",
             "summary": "Delete test",
@@ -210,10 +245,9 @@ async def test_delete_user_rule_204(
     # Verify deleted
     get_response = await authenticated_client.get(f"/api/logs/user-rules/{rule_id}")
     assert get_response.status_code == 404  # noqa: PLR2004
-    # Verify file cleared
-    logs_file = tmp_path / "logs" / "logs.yaml"
-    doc = yaml.safe_load(logs_file.read_text())
-    assert doc["groups"] == []
+    # Verify the rule's per-rule file was removed (orphan reconcile).
+    logs_file = tmp_path / "logs" / "DeleteTest.yaml"
+    assert not logs_file.exists()
 
 
 async def test_delete_user_rule_404(authenticated_client: AsyncClient) -> None:
@@ -236,7 +270,7 @@ async def test_enable_user_rule_200(
         "/api/logs/user-rules",
         json={
             "rule_name": "EnableTest",
-            "expr": "_msg:error",
+            "expr": "_msg:error | stats count() as match_count | filter match_count:>0",
             "expr_kind": "logsql",
             "severity": "warning",
             "summary": "Enable test",
@@ -269,7 +303,7 @@ async def test_disable_user_rule_200(
         "/api/logs/user-rules",
         json={
             "rule_name": "DisableTest",
-            "expr": "_msg:error",
+            "expr": "_msg:error | stats count() as match_count | filter match_count:>0",
             "expr_kind": "logsql",
             "severity": "warning",
             "summary": "Disable test",
@@ -283,10 +317,9 @@ async def test_disable_user_rule_200(
     )
     assert response.status_code == 200  # noqa: PLR2004
     assert response.json()["enabled"] is False
-    # Verify file shows no rules
-    logs_file = tmp_path / "logs" / "logs.yaml"
-    doc = yaml.safe_load(logs_file.read_text())
-    assert doc["groups"] == [] or len(doc["groups"][0]["rules"]) == 0
+    # Verify the disabled rule's per-rule file was removed.
+    logs_file = tmp_path / "logs" / "DisableTest.yaml"
+    assert not logs_file.exists()
 
 
 async def test_csrf_protection_post_without_token(authenticated_client: AsyncClient) -> None:
@@ -307,15 +340,19 @@ async def test_csrf_protection_post_without_token(authenticated_client: AsyncCli
     assert response.status_code == 403  # noqa: PLR2004
 
 
-async def test_list_enabled_filter(authenticated_client: AsyncClient) -> None:
+async def test_list_enabled_filter(
+    authenticated_client: AsyncClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """GET /api/logs/user-rules?enabled=true filters to enabled only."""
+    monkeypatch.setenv("HOMELAB_MONITOR_VMALERT_USER_LOGS_DIR", str(tmp_path / "logs"))
+    monkeypatch.setenv("HOMELAB_MONITOR_VMALERT_USER_METRICS_DIR", str(tmp_path / "metrics"))
     csrf = _csrf(authenticated_client)
     # Create enabled rule
     await authenticated_client.post(
         "/api/logs/user-rules",
         json={
             "rule_name": "EnabledRule",
-            "expr": "_msg:error",
+            "expr": "_msg:error | stats count() as match_count | filter match_count:>0",
             "expr_kind": "logsql",
             "severity": "warning",
             "summary": "Enabled",
@@ -327,7 +364,7 @@ async def test_list_enabled_filter(authenticated_client: AsyncClient) -> None:
         "/api/logs/user-rules",
         json={
             "rule_name": "DisabledRule",
-            "expr": "_msg:error",
+            "expr": "_msg:error | stats count() as match_count | filter match_count:>0",
             "expr_kind": "logsql",
             "severity": "info",
             "summary": "Disabled",
@@ -367,6 +404,110 @@ async def test_disable_user_rule_404(authenticated_client: AsyncClient) -> None:
     )
     assert response.status_code == 404  # noqa: PLR2004
     assert "not found" in response.json()["error"]["message"]
+
+
+async def test_create_user_rule_invalid_expr_400_not_persisted(
+    authenticated_client: AsyncClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """POST logsql without | stats pipe returns 400 invalid_expr, not persisted."""
+    monkeypatch.setenv("HOMELAB_MONITOR_VMALERT_USER_LOGS_DIR", str(tmp_path / "logs"))
+    monkeypatch.setenv("HOMELAB_MONITOR_VMALERT_USER_METRICS_DIR", str(tmp_path / "metrics"))
+    response = await authenticated_client.post(
+        "/api/logs/user-rules",
+        json={
+            "rule_name": "BadExpr",
+            "expr": "_msg:error",
+            "expr_kind": "logsql",
+            "severity": "warning",
+            "summary": "Bad expr",
+        },
+        headers=_csrf(authenticated_client),
+    )
+    assert response.status_code == 400  # noqa: PLR2004
+    error = response.json()["error"]
+    assert error["code"] == "invalid_expr"
+    assert error["details"]["check"] == "missing_stats_pipe"
+    # Verify rule was NOT persisted.
+    list_resp = await authenticated_client.get("/api/logs/user-rules")
+    rule_names = [r["rule_name"] for r in list_resp.json()["rules"]]
+    assert "BadExpr" not in rule_names
+
+
+async def test_create_user_rule_reserved_filter_field_400(
+    authenticated_client: AsyncClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """POST logsql with reserved | filter field returns 400 invalid_expr."""
+    monkeypatch.setenv("HOMELAB_MONITOR_VMALERT_USER_LOGS_DIR", str(tmp_path / "logs"))
+    monkeypatch.setenv("HOMELAB_MONITOR_VMALERT_USER_METRICS_DIR", str(tmp_path / "metrics"))
+    response = await authenticated_client.post(
+        "/api/logs/user-rules",
+        json={
+            "rule_name": "ReservedFilter",
+            "expr": "_msg:error | stats count() as c | filter count:>0",
+            "expr_kind": "logsql",
+            "severity": "warning",
+            "summary": "Reserved filter",
+        },
+        headers=_csrf(authenticated_client),
+    )
+    assert response.status_code == 400  # noqa: PLR2004
+    error = response.json()["error"]
+    assert error["code"] == "invalid_expr"
+    assert error["details"]["check"] == "reserved_filter_field"
+
+
+async def test_create_user_rule_valid_stats_expr_201(
+    authenticated_client: AsyncClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """POST logsql with valid stats expr returns 201 (positive guard)."""
+    monkeypatch.setenv("HOMELAB_MONITOR_VMALERT_USER_LOGS_DIR", str(tmp_path / "logs"))
+    monkeypatch.setenv("HOMELAB_MONITOR_VMALERT_USER_METRICS_DIR", str(tmp_path / "metrics"))
+    response = await authenticated_client.post(
+        "/api/logs/user-rules",
+        json={
+            "rule_name": "ValidExpr",
+            "expr": "_msg:error | stats count() as match_count | filter match_count:>0",
+            "expr_kind": "logsql",
+            "severity": "warning",
+            "summary": "Valid expr",
+        },
+        headers=_csrf(authenticated_client),
+    )
+    assert response.status_code == 201  # noqa: PLR2004
+    data = response.json()
+    assert data["rule_name"] == "ValidExpr"
+
+
+async def test_patch_user_rule_invalid_expr_400(
+    authenticated_client: AsyncClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PATCH to invalid expr returns 400 invalid_expr."""
+    monkeypatch.setenv("HOMELAB_MONITOR_VMALERT_USER_LOGS_DIR", str(tmp_path / "logs"))
+    monkeypatch.setenv("HOMELAB_MONITOR_VMALERT_USER_METRICS_DIR", str(tmp_path / "metrics"))
+    csrf = _csrf(authenticated_client)
+    # Create a valid rule first
+    created = await authenticated_client.post(
+        "/api/logs/user-rules",
+        json={
+            "rule_name": "PatchTest",
+            "expr": "_msg:original | stats count() as match_count | filter match_count:>0",
+            "expr_kind": "logsql",
+            "severity": "warning",
+            "summary": "Original",
+        },
+        headers=csrf,
+    )
+    rule_id = created.json()["id"]
+    # PATCH with invalid expr
+    response = await authenticated_client.patch(
+        f"/api/logs/user-rules/{rule_id}",
+        json={"expr": "_msg:bare"},
+        headers=csrf,
+    )
+    assert response.status_code == 400  # noqa: PLR2004
+    error = response.json()["error"]
+    assert error["code"] == "invalid_expr"
+    assert error["details"]["check"] == "missing_stats_pipe"
 
 
 __all__: list[str] = []

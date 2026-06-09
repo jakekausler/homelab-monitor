@@ -7,8 +7,9 @@
 // quote ('"' -> '\\"'). Escaping the quote first would leave the inserted
 // backslash unescaped.
 
-/** Escape a raw string for use inside a LogsQL quoted phrase. */
-function escapeLogsQlPhrase(raw: string): string {
+/** Escape a raw string for use inside a LogsQL quoted phrase.
+ *  Backslash FIRST (it is the escape introducer), THEN the double quote. */
+export function escapeLogsQlPhrase(raw: string): string {
   return raw.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
 }
 

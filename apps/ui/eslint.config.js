@@ -30,6 +30,10 @@ export default tseslint.config(
     rules: {
       ...(reactHooksPlugin.configs['recommended-latest']?.rules ??
         reactHooksPlugin.configs.recommended.rules),
+      // React Compiler advisory (form.watch is non-memoizable); the code is correct,
+      // the compiler just skips optimizing the component. Pin to warn so the effective
+      // severity does not float with the eslint-plugin-react-hooks ^7.x caret range.
+      'react-hooks/incompatible-library': 'warn',
       '@typescript-eslint/no-unused-vars': [
         'error',
         { argsIgnorePattern: '^_', varsIgnorePattern: '^_' },

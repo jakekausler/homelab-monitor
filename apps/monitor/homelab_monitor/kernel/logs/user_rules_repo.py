@@ -25,8 +25,8 @@ from homelab_monitor.kernel.db.time import utc_now_iso
 
 #: Valid vmalert/Prometheus alertname identifier.
 _RULE_NAME_RE: Final[re.Pattern[str]] = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
-#: vmalert simple duration, OR the literal '0s'.
-_DURATION_RE: Final[re.Pattern[str]] = re.compile(r"^\d+[smhd]$")
+#: vmalert compound duration (one or more unit segments), OR the literal '0s'.
+_DURATION_RE: Final[re.Pattern[str]] = re.compile(r"^(\d+[smhd])+$|^0s$")
 #: Chars that break a double-quoted PromQL/YAML inline value (quote, backslash,
 #: ASCII control). Reused to guard label-bound values (rule_name, severity).
 _FORBIDDEN_INLINE: Final[re.Pattern[str]] = re.compile(r'["\\]|[\x00-\x1f\x7f]')
@@ -113,7 +113,7 @@ def _validate_fields(  # noqa: PLR0913
     if not expr.strip():
         msg = "expr must be non-empty"
         raise UserRuleValidationError(msg)
-    _validate_text_length_and_control("expr", expr, _MAX_EXPR)
+    _validate_text_length_and_control("expr", expr, _MAX_EXPR, allow_newlines=True)
     if expr_kind not in VALID_EXPR_KINDS:
         msg = f"expr_kind must be one of {sorted(VALID_EXPR_KINDS)}, got {expr_kind!r}"
         raise UserRuleValidationError(msg)
@@ -123,8 +123,8 @@ def _validate_fields(  # noqa: PLR0913
     if severity not in VALID_SEVERITIES:
         msg = f"severity must be one of {sorted(VALID_SEVERITIES)}, got {severity!r}"
         raise UserRuleValidationError(msg)
-    if for_duration != "0s" and not _DURATION_RE.match(for_duration):
-        msg = f"for_duration must be '0s' or match {_DURATION_RE.pattern!r}, got {for_duration!r}"
+    if not _DURATION_RE.match(for_duration):
+        msg = f"for_duration must match {_DURATION_RE.pattern!r}, got {for_duration!r}"
         raise UserRuleValidationError(msg)
     _validate_text_length_and_control("summary", summary, _MAX_SUMMARY, allow_newlines=True)
     _validate_text_length_and_control(
@@ -133,9 +133,13 @@ def _validate_fields(  # noqa: PLR0913
 
 
 def _validate_and_render_check(rule: LogUserRule) -> None:
-    """Validate fields AND ensure the single rule renders (D-VALIDATION-BEFORE-PERSIST).
+    """Validate fields, heuristically validate the expr, AND ensure the single
+    rule renders (D-VALIDATION-BEFORE-PERSIST).
 
-    Imported lazily to avoid an import cycle (render imports the repo dataclass).
+    Order: field-shape validation -> heuristic expr loadability check
+    (ExprValidationError -> router 400 invalid_expr) -> render check. Imports are
+    lazy to avoid an import cycle (render + expr_validate both reference this
+    module).
     """
     _validate_fields(
         rule_name=rule.rule_name,
@@ -146,6 +150,13 @@ def _validate_and_render_check(rule: LogUserRule) -> None:
         description=rule.description,
         for_duration=rule.for_duration,
     )
+
+    # Heuristic expr loadability pre-filter (STAGE-004-043). Lazy import to avoid
+    # a module-level cycle: expr_validate imports UserRuleValidationError from us.
+    from homelab_monitor.kernel.logs.expr_validate import validate_expr  # noqa: PLC0415
+
+    validate_expr(rule.expr, rule.expr_kind)
+
     from homelab_monitor.kernel.logs.user_rules_render import render_yaml  # noqa: PLC0415
 
     try:

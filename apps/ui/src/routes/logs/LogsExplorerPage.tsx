@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate, useSearch } from '@tanstack/react-router'
 
 import { identitiesToServicesCsv, type ServiceIdentity } from '@/api/logs'
@@ -17,6 +17,11 @@ import {
 import { fieldFilterClause, msgFilterClause, translateSearchToLogsQl } from '@/lib/logsQlTranslate'
 import { LogsExplorerBody } from './LogsExplorerBody'
 import { SaveQueryModal } from './SaveQueryModal'
+import {
+  CreateAlertModal,
+  scaffoldLogsqlExpr,
+  type CreateAlertFormValues,
+} from '@/components/logs/CreateAlertModal'
 import {
   ALL_PRESETS,
   parseIso,
@@ -71,6 +76,7 @@ export function LogsExplorerPage() {
 
   // Modal state for saving a query
   const [saveOpen, setSaveOpen] = useState(false)
+  const [createAlertOpen, setCreateAlertOpen] = useState(false)
 
   const updateMut = useUpdateSavedLogQuery()
 
@@ -388,6 +394,36 @@ export function LogsExplorerPage() {
     reconstructFromPayload(entry)
   }
 
+  // STAGE-043B — launch the alert modal in Simple or Advanced mode based on the
+  // Explorer's current mode. Labels (rule_name/summary) are kept clean — the raw
+  // query is NEVER echoed into them (messy text contaminated fields previously).
+  const createAlertLaunch = useMemo<{
+    initialMode: 'simple' | 'advanced'
+    initialValues: Partial<CreateAlertFormValues>
+  }>(() => {
+    if (advancedMode) {
+      // Advanced/LogsQL Explorer mode: the committed query is already valid LogsQL.
+      // Append the count-threshold suffix only if there's no | stats pipe (safe —
+      // no escaping needed; the Explorer query is already valid LogsQL).
+      return {
+        initialMode: 'advanced',
+        initialValues: {
+          expr: scaffoldLogsqlExpr(committedLogsQl),
+          expr_kind: 'logsql',
+        },
+      }
+    }
+    // Plain-text Explorer mode: pre-fill Simple `contains` from the raw committed
+    // text (the Simple builder escapes it). Defaults for threshold/window/severity.
+    return {
+      initialMode: 'simple',
+      initialValues: {
+        simple_contains: committedPlainText,
+        expr_kind: 'logsql',
+      },
+    }
+  }, [advancedMode, committedLogsQl, committedPlainText])
+
   return (
     <div className="flex h-full min-h-0 flex-col">
       <LogsExplorerBody
@@ -409,6 +445,7 @@ export function LogsExplorerPage() {
         onSelectIdentities={handleSelectIdentities}
         onDeselectIdentities={handleDeselectIdentities}
         onOpenSave={() => setSaveOpen(true)}
+        onOpenCreateAlert={() => setCreateAlertOpen(true)}
         onLoadSavedQuery={handleLoadSavedQuery}
         onUpdateSavedQuery={handleUpdateSavedQuery}
         onLoadHistoryEntry={handleLoadHistoryEntry}
@@ -418,6 +455,13 @@ export function LogsExplorerPage() {
         onNarrowRange={handleNarrowRange}
       />
       <SaveQueryModal open={saveOpen} onOpenChange={setSaveOpen} buildPayload={buildSavePayload} />
+      <CreateAlertModal
+        open={createAlertOpen}
+        onOpenChange={setCreateAlertOpen}
+        initialMode={createAlertLaunch.initialMode}
+        initialValues={createAlertLaunch.initialValues}
+        sourceKind="query"
+      />
     </div>
   )
 }
