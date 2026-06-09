@@ -1,12 +1,12 @@
 # EPIC-004: Logs pipeline (Drain clustering + Logs Explorer + signature anomaly alerts + per-store thresholds)
 
-## Status: In Progress
+## Status: Complete (50 / 52; STAGE-004-018A and STAGE-004-018B intentionally deferred)
 
-## Stages Counter: 49 / 51 Complete
+## Stages Counter: 50 / 52 Complete
 
-## Current Stage: STAGE-004-044
+## Current Stage: — (EPIC-004 stage list complete)
 
-## Current Phase: STAGE-004-044 Design
+## Current Phase: Complete
 
 ## Overview
 
@@ -161,7 +161,7 @@ Stages MUST be implemented in order. No parallelization. Each stage lands a sing
 | STAGE-004-042 | Rule persistence model | SQLite `log_user_rules` + render-on-boot into vmalert directories. Design ✅ Build ✅ Refinement ✅ Finalize ✅ |
 | STAGE-004-043 | Create-alert-from-query UX | Guided form with YAML preview launching from Explorer. Design ✅ Build ✅ Refinement ✅ Finalize ✅ |
 | STAGE-004-043A | User-rules management UI + prod vmalert dry-run validation | Management tab (list/enable/disable/edit/delete) + exact-parser dry-run. Design ✅ Build ✅ Refinement ✅ Finalize ✅ |
-| STAGE-004-044 | Create-alert-from-signature + saved-query shortcuts | L8 merged in; both pre-fill the shared modal. |
+| STAGE-004-044 | Create-alert-from-signature + saved-query shortcuts | L8 merged in; both pre-fill the shared modal. Design ✅ Build ✅ Refinement ✅ Finalize ✅ |
 
 ## Cross-stage acceptance criteria
 
