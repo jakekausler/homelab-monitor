@@ -3311,6 +3311,31 @@
         "title": "LogUserRuleCreateRequest",
         "type": "object"
       },
+      "LogUserRuleHealth": {
+        "additionalProperties": false,
+        "description": "vmalert-reported health for one user rule.",
+        "properties": {
+          "health": {
+            "enum": [
+              "ok",
+              "err",
+              "unknown"
+            ],
+            "title": "Health",
+            "type": "string"
+          },
+          "last_error": {
+            "default": "",
+            "title": "Last Error",
+            "type": "string"
+          }
+        },
+        "required": [
+          "health"
+        ],
+        "title": "LogUserRuleHealth",
+        "type": "object"
+      },
       "LogUserRuleListResponse": {
         "additionalProperties": false,
         "description": "Response for GET /api/logs/user-rules.",
@@ -3503,6 +3528,24 @@
           "updated_at"
         ],
         "title": "LogUserRuleResponse",
+        "type": "object"
+      },
+      "LogUserRulesHealthResponse": {
+        "additionalProperties": false,
+        "description": "Response for GET /api/logs/user-rules-health.\n\nMaps rule_name -> health. Rules present in the DB but absent here (e.g. a\nvmalert instance was unreachable, or vmalert has not yet loaded the rule)\nare NOT included; the UI defaults missing entries to \"unknown\".",
+        "properties": {
+          "rules": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/LogUserRuleHealth"
+            },
+            "title": "Rules",
+            "type": "object"
+          }
+        },
+        "required": [
+          "rules"
+        ],
+        "title": "LogUserRulesHealthResponse",
         "type": "object"
       },
       "LogWindowResponse": {
@@ -9834,6 +9877,25 @@
           }
         },
         "summary": "Create User Rule"
+      }
+    },
+    "/api/logs/user-rules-health": {
+      "get": {
+        "description": "Per-rule vmalert health for all user rules.\n\nFans out to both vmalert instances (logs + metrics), filtering to the\nuser-rule groups. An unreachable instance is SKIPPED (degraded-200; never\n500). Rules absent here are reported by the UI as 'unknown'. Auth: session\nrequired; GET (no CSRF).",
+        "operationId": "get_user_rules_health_api_logs_user_rules_health_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogUserRulesHealthResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get User Rules Health"
       }
     },
     "/api/logs/user-rules/{rule_id}": {

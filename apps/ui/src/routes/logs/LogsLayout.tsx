@@ -5,6 +5,7 @@ const TABS = [
   { path: '/logs/query', label: 'Query' },
   { path: '/logs/signatures', label: 'Signatures' },
   { path: '/logs/silence-allowlist', label: 'Silence Allowlist' },
+  { path: '/logs/user-rules', label: 'Alert Rules' },
   { path: '/logs/models-debug', label: 'Models' },
 ] as const
 

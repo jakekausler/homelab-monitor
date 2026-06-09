@@ -18,6 +18,7 @@ vi.mock('sonner', () => ({
 vi.mock('@/api/userRules', () => ({
   useUserRules: vi.fn(),
   useCreateUserRule: vi.fn(),
+  usePatchUserRule: vi.fn(),
 }))
 
 vi.mock('@/api/logs', () => ({
@@ -30,7 +31,7 @@ import {
   buildSimpleExpr,
   advancedExprWarnings,
 } from '../CreateAlertModal'
-import { useUserRules, useCreateUserRule } from '@/api/userRules'
+import { useUserRules, useCreateUserRule, usePatchUserRule } from '@/api/userRules'
 import { useLogsServicesQuery } from '@/api/logs'
 
 function renderWithClient(ui: React.ReactNode) {
@@ -51,6 +52,10 @@ describe('CreateAlertModal', () => {
     vi.clearAllMocks()
     vi.mocked(useUserRules).mockReturnValue({ data: { rules: [] } } as never)
     vi.mocked(useCreateUserRule).mockReturnValue({
+      mutateAsync: vi.fn().mockResolvedValue({}),
+      isPending: false,
+    } as never)
+    vi.mocked(usePatchUserRule).mockReturnValue({
       mutateAsync: vi.fn().mockResolvedValue({}),
       isPending: false,
     } as never)
@@ -119,7 +124,7 @@ describe('CreateAlertModal', () => {
 
   it('shows inline uniqueness error when the name matches an existing rule', async () => {
     vi.mocked(useUserRules).mockReturnValue({
-      data: { rules: [{ rule_name: 'Taken' }] },
+      data: { rules: [{ id: 1, rule_name: 'Taken' }] },
     } as never)
     vi.useFakeTimers()
     renderWithClient(
@@ -366,6 +371,10 @@ describe('CreateAlertModal modes', () => {
       mutateAsync: vi.fn().mockResolvedValue({}),
       isPending: false,
     } as never)
+    vi.mocked(usePatchUserRule).mockReturnValue({
+      mutateAsync: vi.fn().mockResolvedValue({}),
+      isPending: false,
+    } as never)
     vi.mocked(useLogsServicesQuery).mockReturnValue({
       data: { services: [], truncated: false },
     } as never)
@@ -522,5 +531,149 @@ describe('scaffoldLogsqlExpr', () => {
   })
   it('returns empty string for empty/whitespace input', () => {
     expect(scaffoldLogsqlExpr('   ')).toBe('')
+  })
+})
+
+// --- Edit mode (STAGE-004-043A) ---
+
+const editInitial = {
+  rule_name: 'ExistingRule',
+  expr: 'service:foo | stats count() as match_count | filter match_count:>5',
+  expr_kind: 'logsql' as const,
+  severity: 'warning' as const,
+  for_duration: '5m',
+  summary: 'Existing summary',
+  description: 'Existing description',
+}
+
+describe('CreateAlertModal edit mode', () => {
+  beforeEach(() => {
+    vi.useRealTimers()
+    cleanup()
+    vi.clearAllMocks()
+    vi.mocked(useUserRules).mockReturnValue({ data: { rules: [] } } as never)
+    vi.mocked(useCreateUserRule).mockReturnValue({
+      mutateAsync: vi.fn().mockResolvedValue({}),
+      isPending: false,
+    } as never)
+    vi.mocked(usePatchUserRule).mockReturnValue({
+      mutateAsync: vi.fn().mockResolvedValue({}),
+      isPending: false,
+    } as never)
+    vi.mocked(useLogsServicesQuery).mockReturnValue({
+      data: { services: [], truncated: false },
+    } as never)
+  })
+
+  it('shows "Edit alert rule" as the dialog title in edit mode', () => {
+    renderWithClient(
+      <CreateAlertModal
+        open
+        onOpenChange={vi.fn()}
+        editRuleId={1}
+        initialValues={editInitial}
+        initialMode="advanced"
+      />,
+    )
+    expect(screen.getByText('Edit alert rule')).toBeInTheDocument()
+  })
+
+  it('shows "Save changes" as the submit button label in edit mode', () => {
+    renderWithClient(
+      <CreateAlertModal
+        open
+        onOpenChange={vi.fn()}
+        editRuleId={1}
+        initialValues={editInitial}
+        initialMode="advanced"
+      />,
+    )
+    expect(screen.getByTestId('create-alert-submit')).toHaveTextContent('Save changes')
+  })
+
+  it('rule_name input is disabled in edit mode', () => {
+    renderWithClient(
+      <CreateAlertModal
+        open
+        onOpenChange={vi.fn()}
+        editRuleId={1}
+        initialValues={editInitial}
+        initialMode="advanced"
+      />,
+    )
+    expect(screen.getByTestId('create-alert-name')).toBeDisabled()
+  })
+
+  it('submitting in edit mode calls patchMut.mutateAsync with the 5 mutable fields and NOT createMut', async () => {
+    const patchMutFn = vi.fn().mockResolvedValue({})
+    const createMutFn = vi.fn().mockResolvedValue({})
+    vi.mocked(usePatchUserRule).mockReturnValue({
+      mutateAsync: patchMutFn,
+      isPending: false,
+    } as never)
+    vi.mocked(useCreateUserRule).mockReturnValue({
+      mutateAsync: createMutFn,
+      isPending: false,
+    } as never)
+
+    renderWithClient(
+      <CreateAlertModal
+        open
+        onOpenChange={vi.fn()}
+        editRuleId={42}
+        initialValues={editInitial}
+        initialMode="advanced"
+      />,
+    )
+
+    fireEvent.click(screen.getByTestId('create-alert-submit'))
+    await waitFor(() => expect(patchMutFn).toHaveBeenCalled())
+
+    const callArgs = patchMutFn.mock.calls[0]![0] as {
+      rule_id: number
+      body: Record<string, unknown>
+    }
+    expect(callArgs.rule_id).toBe(42)
+    // Only the 5 mutable fields.
+    expect(callArgs.body).toHaveProperty('expr')
+    expect(callArgs.body).toHaveProperty('severity')
+    expect(callArgs.body).toHaveProperty('summary')
+    expect(callArgs.body).toHaveProperty('description')
+    expect(callArgs.body).toHaveProperty('for_duration')
+    // Immutable fields must NOT be in the PATCH body.
+    expect(callArgs.body).not.toHaveProperty('rule_name')
+    expect(callArgs.body).not.toHaveProperty('expr_kind')
+
+    // Create mutation must NOT have been called.
+    expect(createMutFn).not.toHaveBeenCalled()
+  })
+
+  it('create mode: title is "Create alert from query" and submit calls createMut (unchanged path)', async () => {
+    const createMutFn = vi.fn().mockResolvedValue({})
+    const patchMutFn = vi.fn().mockResolvedValue({})
+    vi.mocked(useCreateUserRule).mockReturnValue({
+      mutateAsync: createMutFn,
+      isPending: false,
+    } as never)
+    vi.mocked(usePatchUserRule).mockReturnValue({
+      mutateAsync: patchMutFn,
+      isPending: false,
+    } as never)
+
+    renderWithClient(
+      <CreateAlertModal
+        open
+        onOpenChange={vi.fn()}
+        initialMode="advanced"
+        initialValues={baseInitial}
+      />,
+    )
+
+    expect(screen.getByText('Create alert from query')).toBeInTheDocument()
+    expect(screen.getByTestId('create-alert-submit')).toHaveTextContent('Create alert')
+
+    fireEvent.click(screen.getByTestId('create-alert-submit'))
+    await waitFor(() => expect(createMutFn).toHaveBeenCalled())
+    expect(patchMutFn).not.toHaveBeenCalled()
   })
 })

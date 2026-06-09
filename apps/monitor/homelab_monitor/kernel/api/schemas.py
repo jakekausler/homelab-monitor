@@ -34,9 +34,11 @@ __all__ = [
     "IngestResponse",
     "LastCycleResponse",
     "LogUserRuleCreateRequest",
+    "LogUserRuleHealth",
     "LogUserRuleListResponse",
     "LogUserRulePatchRequest",
     "LogUserRuleResponse",
+    "LogUserRulesHealthResponse",
     "LogWindowResponse",
     "LogsFieldsResponse",
     "LogsHistogramResponse",
@@ -545,6 +547,26 @@ class LogUserRulePatchRequest(BaseModel):
     description: str | None = Field(default=None, max_length=4000)
     for_duration: str | None = Field(default=None, max_length=16)
     enabled: bool | None = None
+
+
+class LogUserRuleHealth(BaseModel):
+    """vmalert-reported health for one user rule."""
+
+    model_config = ConfigDict(extra="forbid")
+    health: Literal["ok", "err", "unknown"]
+    last_error: str = ""
+
+
+class LogUserRulesHealthResponse(BaseModel):
+    """Response for GET /api/logs/user-rules-health.
+
+    Maps rule_name -> health. Rules present in the DB but absent here (e.g. a
+    vmalert instance was unreachable, or vmalert has not yet loaded the rule)
+    are NOT included; the UI defaults missing entries to "unknown".
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    rules: dict[str, LogUserRuleHealth]
 
 
 class LogsStreamSummary(BaseModel):

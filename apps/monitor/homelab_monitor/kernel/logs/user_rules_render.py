@@ -61,6 +61,8 @@ _SAFE_RULE_NAME: Final[re.Pattern[str]] = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$"
 #: Fixed group names per file (collision-safety / distinguishability).
 _GROUP_LOGS: Final[str] = "user-rules-logs"
 _GROUP_METRICS: Final[str] = "user-rules-metrics"
+GROUP_LOGS_NAME: Final[str] = _GROUP_LOGS
+GROUP_METRICS_NAME: Final[str] = _GROUP_METRICS
 _GROUP_INTERVAL: Final[str] = "60s"
 
 _EXPR_KIND_LOGS: Final[str] = "logsql"
@@ -317,4 +319,10 @@ def render_dirs_from_env() -> tuple[Path, Path]:
     return logs_dir, metrics_dir
 
 
-__all__ = ["render_all", "render_dirs_from_env", "render_yaml"]
+__all__ = [
+    "GROUP_LOGS_NAME",
+    "GROUP_METRICS_NAME",
+    "render_all",
+    "render_dirs_from_env",
+    "render_yaml",
+]

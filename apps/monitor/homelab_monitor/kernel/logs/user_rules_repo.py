@@ -22,6 +22,7 @@ from sqlalchemy import text
 
 from homelab_monitor.kernel.db.repository import SqliteRepository
 from homelab_monitor.kernel.db.time import utc_now_iso
+from homelab_monitor.kernel.logs.vmalert_dryrun import DryRunRunner
 
 #: Valid vmalert/Prometheus alertname identifier.
 _RULE_NAME_RE: Final[re.Pattern[str]] = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
@@ -132,14 +133,16 @@ def _validate_fields(  # noqa: PLR0913
     )
 
 
-def _validate_and_render_check(rule: LogUserRule) -> None:
-    """Validate fields, heuristically validate the expr, AND ensure the single
-    rule renders (D-VALIDATION-BEFORE-PERSIST).
+def _validate_and_render_check(
+    rule: LogUserRule, dryrun_runner: DryRunRunner | None = None
+) -> None:
+    """Validate fields, heuristically validate the expr, ensure the single rule
+    renders, AND (optionally) run the vmalert exact-parser dry-run.
 
     Order: field-shape validation -> heuristic expr loadability check
-    (ExprValidationError -> router 400 invalid_expr) -> render check. Imports are
-    lazy to avoid an import cycle (render + expr_validate both reference this
-    module).
+    (ExprValidationError -> router 400 invalid_expr) -> render check -> (if a
+    dryrun_runner is injected) vmalert -dryRun exact-parser check. The dry-run is
+    fail-open: skipped results are ignored; only a definitive ok=False raises.
     """
     _validate_fields(
         rule_name=rule.rule_name,
@@ -153,17 +156,26 @@ def _validate_and_render_check(rule: LogUserRule) -> None:
 
     # Heuristic expr loadability pre-filter (STAGE-004-043). Lazy import to avoid
     # a module-level cycle: expr_validate imports UserRuleValidationError from us.
-    from homelab_monitor.kernel.logs.expr_validate import validate_expr  # noqa: PLC0415
+    from homelab_monitor.kernel.logs.expr_validate import (  # noqa: PLC0415
+        ExprValidationError,
+        validate_expr,
+    )
 
     validate_expr(rule.expr, rule.expr_kind)
 
     from homelab_monitor.kernel.logs.user_rules_render import render_yaml  # noqa: PLC0415
 
     try:
-        render_yaml([rule])
+        rendered = render_yaml([rule])
     except ValueError as exc:  # pragma: no cover -- field validation catches all known cases
         msg = f"rule failed to render: {exc}"
         raise UserRuleValidationError(msg) from exc
+
+    if dryrun_runner is not None:
+        result = dryrun_runner(rendered)
+        if not result.skipped and not result.ok:
+            detail = result.stderr or "vmalert rejected the rule expression"
+            raise ExprValidationError(detail, check="dryrun")
 
 
 class LogUserRulesRepository:
@@ -183,6 +195,7 @@ class LogUserRulesRepository:
         source_kind: str = "manual",
         source_ref: str | None = None,
         enabled: bool = True,
+        dryrun_runner: DryRunRunner | None = None,
     ) -> LogUserRule:
         now = utc_now_iso()
         candidate = LogUserRule(
@@ -200,7 +213,7 @@ class LogUserRulesRepository:
             created_at=now,
             updated_at=now,
         )
-        _validate_and_render_check(candidate)
+        _validate_and_render_check(candidate, dryrun_runner)
         existing = await self.get_by_name(rule_name)
         if existing is not None:
             msg = f"rule_name already exists: {rule_name}"
@@ -271,6 +284,7 @@ class LogUserRulesRepository:
         description: str | None = None,
         for_duration: str | None = None,
         enabled: bool | None = None,
+        dryrun_runner: DryRunRunner | None = None,
     ) -> LogUserRule | None:
         """Partial update. None args are left unchanged. Returns None if absent.
 
@@ -295,7 +309,7 @@ class LogUserRulesRepository:
             created_at=current.created_at,
             updated_at=utc_now_iso(),
         )
-        _validate_and_render_check(merged)
+        _validate_and_render_check(merged, dryrun_runner)
         async with self._repo.transaction() as conn:
             await conn.execute(
                 text(

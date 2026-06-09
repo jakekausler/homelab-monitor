@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from collections.abc import AsyncGenerator, AsyncIterator
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Annotated, Literal, cast
@@ -45,9 +46,11 @@ from homelab_monitor.kernel.api.schemas import (
     LogsServicesResponse,
     LogsStreamsResponse,
     LogUserRuleCreateRequest,
+    LogUserRuleHealth,
     LogUserRuleListResponse,
     LogUserRulePatchRequest,
     LogUserRuleResponse,
+    LogUserRulesHealthResponse,
     LogWindowResponse,
     ModelDetailResponse,
     ModelListResponse,
@@ -127,10 +130,12 @@ from homelab_monitor.kernel.logs.tail_service import (
 )
 from homelab_monitor.kernel.logs.time_window import parse_and_validate_window
 from homelab_monitor.kernel.logs.user_rules_render import (
-    render_all as render_user_rules,
+    GROUP_LOGS_NAME,
+    GROUP_METRICS_NAME,
+    render_dirs_from_env,
 )
 from homelab_monitor.kernel.logs.user_rules_render import (
-    render_dirs_from_env,
+    render_all as render_user_rules,
 )
 from homelab_monitor.kernel.logs.user_rules_repo import (
     DuplicateRuleNameError,
@@ -142,6 +147,11 @@ from homelab_monitor.kernel.logs.victorialogs_client import (
     VictoriaLogsClient,
     VictoriaLogsClientError,
     logsql_quote_phrase,
+)
+from homelab_monitor.kernel.logs.vmalert_dryrun import (
+    DryRunResult,
+    DryRunRunner,
+    run_vmalert_dryrun,
 )
 from homelab_monitor.plugins.collectors.builtin.log_stream_budget import LogStreamState
 
@@ -1471,6 +1481,47 @@ def _get_user_rules_repo(
     return LogUserRulesRepository(repo)
 
 
+def _vmalert_logs_url() -> str:
+    return os.environ.get("HOMELAB_MONITOR_VMALERT_LOGS_URL", "http://vmalert-logs:8880")
+
+
+def _vmalert_metrics_url() -> str:
+    return os.environ.get("HOMELAB_MONITOR_VMALERT_METRICS_URL", "http://vmalert-metrics:8880")
+
+
+def _maybe_dryrun_runner() -> DryRunRunner | None:
+    """Build a vmalert dry-run runner from env, or None when disabled.
+
+    Gated by HOMELAB_MONITOR_VMALERT_DRYRUN_ENABLED (truthy '1'/'true'). When
+    disabled, returns None so the repo behaves exactly as before (tests/dev/CI
+    unaffected).
+    """
+    raw = os.environ.get("HOMELAB_MONITOR_VMALERT_DRYRUN_ENABLED", "").strip().lower()
+    if raw not in ("1", "true"):
+        return None
+    image = os.environ.get("HOMELAB_MONITOR_VMALERT_IMAGE", "victoriametrics/vmalert:v1.107.0")
+    try:
+        timeout_s = float(os.environ.get("HOMELAB_MONITOR_VMALERT_DRYRUN_TIMEOUT_S", "20.0"))
+    except ValueError:
+        timeout_s = 20.0
+    mount_source = os.environ.get("HOMELAB_MONITOR_VMALERT_DRYRUN_MOUNT", "")
+    work_dir = os.environ.get(
+        "HOMELAB_MONITOR_VMALERT_DRYRUN_WORKDIR",
+        os.environ.get("HOMELAB_MONITOR_VMALERT_USER_LOGS_DIR", "/var/vmalert-user-logs"),
+    )
+
+    def _runner(rule_yaml: str) -> DryRunResult:
+        return run_vmalert_dryrun(
+            rule_yaml,
+            image=image,
+            timeout_s=timeout_s,
+            mount_source=mount_source,
+            work_dir=work_dir,
+        )
+
+    return _runner
+
+
 def _user_rule_to_response(r: LogUserRule) -> LogUserRuleResponse:
     return LogUserRuleResponse(
         id=r.id,
@@ -1559,6 +1610,7 @@ async def create_user_rule(
             summary=body.summary,
             description=body.description,
             for_duration=body.for_duration,
+            dryrun_runner=_maybe_dryrun_runner(),
         )
     except DuplicateRuleNameError as exc:
         raise ConflictProblem(message=f"rule_name already exists: {body.rule_name}") from exc
@@ -1594,6 +1646,7 @@ async def patch_user_rule(
             description=body.description,
             for_duration=body.for_duration,
             enabled=body.enabled,
+            dryrun_runner=_maybe_dryrun_runner(),
         )
     except ExprValidationError as exc:
         raise HttpProblem(
@@ -1651,3 +1704,85 @@ async def disable_user_rule(
         raise NotFoundProblem(message=f"user rule not found: {rule_id}")
     await _render_user_rules(repo)
     return _user_rule_to_response(rule)
+
+
+async def _fetch_vmalert_rules(
+    *,
+    base_url: str,
+    group_names: set[str],
+    http_client: httpx.AsyncClient,
+    log: BoundLogger,
+) -> dict[str, LogUserRuleHealth]:
+    """Fetch /api/v1/rules from one vmalert; map rule_name -> health for the
+    given group_names. Returns {} on ANY error (degraded-200; never raises)."""
+    out: dict[str, LogUserRuleHealth] = {}
+    try:
+        resp = await http_client.get(f"{base_url}/api/v1/rules", timeout=5.0)
+        if resp.status_code != 200:  # noqa: PLR2004
+            log.warning("user_rules_health.non_200", base_url=base_url, status=resp.status_code)
+            return out
+        payload_raw = resp.json()  # pyright: ignore[reportAssignmentType, reportReturnType]
+        payload = cast(dict[str, object], payload_raw) if isinstance(payload_raw, dict) else {}
+    except (httpx.HTTPError, ValueError) as exc:
+        log.warning("user_rules_health.upstream_error", base_url=base_url, error=str(exc))
+        return out
+    data_raw = payload.get("data")
+    data = cast(dict[str, object], data_raw) if isinstance(data_raw, dict) else {}
+    groups_raw = data.get("groups")
+    groups: list[object] = cast(list[object], groups_raw) if isinstance(groups_raw, list) else []
+    for group in groups:
+        if not isinstance(group, dict):
+            continue
+        group_dict = cast(dict[str, object], group)
+        if group_dict.get("name") not in group_names:
+            continue
+        rules_raw = group_dict.get("rules")
+        rules: list[object] = cast(list[object], rules_raw) if isinstance(rules_raw, list) else []
+        for rule in rules:
+            if not isinstance(rule, dict):
+                continue
+            rule_dict = cast(dict[str, object], rule)
+            name = rule_dict.get("name")
+            if not isinstance(name, str):
+                continue
+            raw_health = rule_dict.get("health")
+            health = raw_health if raw_health in ("ok", "err") else "unknown"
+            last_error = rule_dict.get("lastError") or ""
+            out[name] = LogUserRuleHealth(
+                health=health,  # pyright: ignore[reportArgumentType]
+                last_error=str(last_error),
+            )
+    return out
+
+
+@router.get("/logs/user-rules-health", response_model=LogUserRulesHealthResponse)
+async def get_user_rules_health(
+    _user: Annotated[User, Depends(require_session())],
+    http_client: httpx.AsyncClient = Depends(get_http_client),  # noqa: B008
+) -> LogUserRulesHealthResponse:
+    """Per-rule vmalert health for all user rules.
+
+    Fans out to both vmalert instances (logs + metrics), filtering to the
+    user-rule groups. An unreachable instance is SKIPPED (degraded-200; never
+    500). Rules absent here are reported by the UI as 'unknown'. Auth: session
+    required; GET (no CSRF).
+    """
+    log: BoundLogger = cast(
+        BoundLogger, structlog.get_logger().bind(component="logs_user_rules_health")
+    )
+    merged: dict[str, LogUserRuleHealth] = {}
+    logs_rules = await _fetch_vmalert_rules(
+        base_url=_vmalert_logs_url(),
+        group_names={GROUP_LOGS_NAME},
+        http_client=http_client,
+        log=log,
+    )
+    metrics_rules = await _fetch_vmalert_rules(
+        base_url=_vmalert_metrics_url(),
+        group_names={GROUP_METRICS_NAME},
+        http_client=http_client,
+        log=log,
+    )
+    merged.update(logs_rules)
+    merged.update(metrics_rules)
+    return LogUserRulesHealthResponse(rules=merged)

@@ -450,4 +450,171 @@ async def test_update_to_invalid_expr_raises(repo: SqliteRepository) -> None:
     assert exc_info.value.check == "missing_stats_pipe"
 
 
+class TestDryRunRunner:
+    """Tests for dryrun_runner injection and validation (STAGE-004-043A)."""
+
+    async def test_create_with_dryrun_runner_none(self, repo: SqliteRepository) -> None:
+        """create(..., dryrun_runner=None) -> persists (default behavior unchanged)."""
+        user_repo = LogUserRulesRepository(repo)
+        rule = await user_repo.create(
+            rule_name="DryRunNone",
+            expr="_msg:error | stats count() as match_count | filter match_count:>0",
+            expr_kind="logsql",
+            severity="warning",
+            summary="Dryrun none",
+            dryrun_runner=None,
+        )
+        assert rule.id > 0
+        assert rule.rule_name == "DryRunNone"
+
+    async def test_create_with_dryrun_skipped_result(self, repo: SqliteRepository) -> None:
+        """create with dryrun returning skipped=True -> persists (fail-open)."""
+        from homelab_monitor.kernel.logs.vmalert_dryrun import DryRunResult  # noqa: PLC0415
+
+        def fake_runner(rule_yaml: str) -> DryRunResult:
+            return DryRunResult(skipped=True, ok=True, stderr="")
+
+        user_repo = LogUserRulesRepository(repo)
+        rule = await user_repo.create(
+            rule_name="DryRunSkipped",
+            expr="_msg:error | stats count() as match_count | filter match_count:>0",
+            expr_kind="logsql",
+            severity="warning",
+            summary="Dryrun skipped",
+            dryrun_runner=fake_runner,
+        )
+        assert rule.id > 0
+        found = await user_repo.get(rule.id)
+        assert found is not None
+
+    async def test_create_with_dryrun_ok_result(self, repo: SqliteRepository) -> None:
+        """create with dryrun returning ok=True -> persists."""
+        from homelab_monitor.kernel.logs.vmalert_dryrun import DryRunResult  # noqa: PLC0415
+
+        def fake_runner(rule_yaml: str) -> DryRunResult:
+            return DryRunResult(skipped=False, ok=True, stderr="")
+
+        user_repo = LogUserRulesRepository(repo)
+        rule = await user_repo.create(
+            rule_name="DryRunOk",
+            expr="_msg:error | stats count() as match_count | filter match_count:>0",
+            expr_kind="logsql",
+            severity="warning",
+            summary="Dryrun ok",
+            dryrun_runner=fake_runner,
+        )
+        assert rule.id > 0
+
+    async def test_create_with_dryrun_not_ok_raises(self, repo: SqliteRepository) -> None:
+        """create with dryrun returning ok=False -> raises ExprValidationError(check='dryrun')."""
+        from homelab_monitor.kernel.logs.vmalert_dryrun import DryRunResult  # noqa: PLC0415
+
+        def fake_runner(rule_yaml: str) -> DryRunResult:
+            return DryRunResult(skipped=False, ok=False, stderr="invalid expr: boom")
+
+        user_repo = LogUserRulesRepository(repo)
+        with pytest.raises(ExprValidationError) as exc_info:
+            await user_repo.create(
+                rule_name="DryRunFail",
+                expr="_msg:error | stats count() as match_count | filter match_count:>0",
+                expr_kind="logsql",
+                severity="warning",
+                summary="Dryrun fail",
+                dryrun_runner=fake_runner,
+            )
+        assert exc_info.value.check == "dryrun"
+        assert "boom" in str(exc_info.value)
+
+    async def test_update_with_dryrun_runner_none(self, repo: SqliteRepository) -> None:
+        """update(..., dryrun_runner=None) -> persists (default behavior unchanged)."""
+        user_repo = LogUserRulesRepository(repo)
+        rule = await user_repo.create(
+            rule_name="UpdateDryRunNone",
+            expr="_msg:error | stats count() as match_count | filter match_count:>0",
+            expr_kind="logsql",
+            severity="warning",
+            summary="Update dryrun none",
+        )
+        updated = await user_repo.update(
+            rule.id,
+            expr="_msg:modified | stats count() as match_count | filter match_count:>0",
+            dryrun_runner=None,
+        )
+        assert updated is not None
+        assert (
+            updated.expr == "_msg:modified | stats count() as match_count | filter match_count:>0"
+        )
+
+    async def test_update_with_dryrun_skipped_result(self, repo: SqliteRepository) -> None:
+        """update with dryrun returning skipped=True -> persists (fail-open)."""
+        from homelab_monitor.kernel.logs.vmalert_dryrun import DryRunResult  # noqa: PLC0415
+
+        def fake_runner(rule_yaml: str) -> DryRunResult:
+            return DryRunResult(skipped=True, ok=True, stderr="")
+
+        user_repo = LogUserRulesRepository(repo)
+        rule = await user_repo.create(
+            rule_name="UpdateDryRunSkipped",
+            expr="_msg:error | stats count() as match_count | filter match_count:>0",
+            expr_kind="logsql",
+            severity="warning",
+            summary="Update dryrun skipped",
+        )
+        updated = await user_repo.update(
+            rule.id,
+            expr="_msg:modified | stats count() as match_count | filter match_count:>0",
+            dryrun_runner=fake_runner,
+        )
+        assert updated is not None
+        assert (
+            updated.expr == "_msg:modified | stats count() as match_count | filter match_count:>0"
+        )
+
+    async def test_update_with_dryrun_ok_result(self, repo: SqliteRepository) -> None:
+        """update with dryrun returning ok=True -> persists."""
+        from homelab_monitor.kernel.logs.vmalert_dryrun import DryRunResult  # noqa: PLC0415
+
+        def fake_runner(rule_yaml: str) -> DryRunResult:
+            return DryRunResult(skipped=False, ok=True, stderr="")
+
+        user_repo = LogUserRulesRepository(repo)
+        rule = await user_repo.create(
+            rule_name="UpdateDryRunOk",
+            expr="_msg:error | stats count() as match_count | filter match_count:>0",
+            expr_kind="logsql",
+            severity="warning",
+            summary="Update dryrun ok",
+        )
+        updated = await user_repo.update(
+            rule.id,
+            expr="_msg:modified | stats count() as match_count | filter match_count:>0",
+            dryrun_runner=fake_runner,
+        )
+        assert updated is not None
+
+    async def test_update_with_dryrun_not_ok_raises(self, repo: SqliteRepository) -> None:
+        """update with dryrun returning ok=False -> raises ExprValidationError(check='dryrun')."""
+        from homelab_monitor.kernel.logs.vmalert_dryrun import DryRunResult  # noqa: PLC0415
+
+        def fake_runner(rule_yaml: str) -> DryRunResult:
+            return DryRunResult(skipped=False, ok=False, stderr="invalid expr: bad")
+
+        user_repo = LogUserRulesRepository(repo)
+        rule = await user_repo.create(
+            rule_name="UpdateDryRunFail",
+            expr="_msg:error | stats count() as match_count | filter match_count:>0",
+            expr_kind="logsql",
+            severity="warning",
+            summary="Update dryrun fail",
+        )
+        with pytest.raises(ExprValidationError) as exc_info:
+            await user_repo.update(
+                rule.id,
+                expr="_msg:modified | stats count() as match_count | filter match_count:>0",
+                dryrun_runner=fake_runner,
+            )
+        assert exc_info.value.check == "dryrun"
+        assert "bad" in str(exc_info.value)
+
+
 __all__: list[str] = []

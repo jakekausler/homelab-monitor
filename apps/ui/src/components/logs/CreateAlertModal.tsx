@@ -5,7 +5,7 @@ import { z } from 'zod'
 import { toast } from 'sonner'
 
 import { ApiError } from '@/api/client'
-import { useUserRules, useCreateUserRule } from '@/api/userRules'
+import { useUserRules, useCreateUserRule, usePatchUserRule } from '@/api/userRules'
 import { useLogsServicesQuery } from '@/api/logs'
 import { Button } from '@/components/ui/button'
 import {
@@ -222,6 +222,9 @@ export interface CreateAlertModalProps {
   sourceKind?: string
   /** Provenance ref (FUTURE use / 044). NOT sent in POST. */
   sourceRef?: string | null
+  /** When set, the modal is in EDIT mode: patches this rule instead of creating.
+   *  rule_name + expr_kind become read-only (immutable on PATCH). */
+  editRuleId?: number
 }
 
 export function CreateAlertModal({
@@ -231,12 +234,14 @@ export function CreateAlertModal({
   initialMode = 'simple',
   sourceKind = 'manual',
   sourceRef = null,
+  editRuleId,
 }: CreateAlertModalProps): JSX.Element {
   void sourceKind
   void sourceRef
 
   const rulesQuery = useUserRules()
   const createMut = useCreateUserRule()
+  const patchMut = usePatchUserRule()
   const [nameError, setNameError] = useState<string | null>(null)
   const [exprError, setExprError] = useState<string | null>(null)
   const [formError, setFormError] = useState<string | null>(null)
@@ -350,8 +355,11 @@ export function CreateAlertModal({
 
   // --- Client-side name-uniqueness (debounced), D3 ---
   const existingNames = useMemo<Set<string>>(
-    () => new Set((rulesQuery.data?.rules ?? []).map((r) => r.rule_name)),
-    [rulesQuery.data],
+    () =>
+      new Set(
+        (rulesQuery.data?.rules ?? []).filter((r) => r.id !== editRuleId).map((r) => r.rule_name),
+      ),
+    [rulesQuery.data, editRuleId],
   )
   const watchedName = form.watch('rule_name')
   useEffect(() => {
@@ -410,12 +418,27 @@ export function CreateAlertModal({
   }
 
   const submit = form.handleSubmit(async (vals: CreateAlertFormValues) => {
-    // Client-side uniqueness backstop before POST.
-    if (existingNames.has(vals.rule_name)) {
+    // Client-side uniqueness backstop before POST (create only; name immutable on edit).
+    if (editRuleId === undefined && existingNames.has(vals.rule_name)) {
       setNameError('A rule with that name already exists')
       return
     }
     try {
+      if (editRuleId !== undefined) {
+        await patchMut.mutateAsync({
+          rule_id: editRuleId,
+          body: {
+            expr: vals.expr,
+            severity: vals.severity,
+            summary: vals.summary,
+            description: vals.description,
+            for_duration: vals.for_duration,
+          },
+        })
+        toast.success(`Saved alert rule ${vals.rule_name}`)
+        onOpenChange(false)
+        return
+      }
       await createMut.mutateAsync({
         rule_name: vals.rule_name,
         expr: vals.expr,
@@ -441,10 +464,10 @@ export function CreateAlertModal({
           // Surface inline as a form error; keep modal open.
           setFormError(err.message || 'Invalid rule')
         } else {
-          toast.error(err.message || 'Failed to create alert rule')
+          toast.error(err.message || 'Failed to save alert rule')
         }
       } else {
-        toast.error('Failed to create alert rule')
+        toast.error('Failed to save alert rule')
       }
     }
   })
@@ -463,7 +486,9 @@ export function CreateAlertModal({
         data-testid="create-alert-modal"
       >
         <DialogHeader>
-          <DialogTitle>Create alert from query</DialogTitle>
+          <DialogTitle>
+            {editRuleId !== undefined ? 'Edit alert rule' : 'Create alert from query'}
+          </DialogTitle>
           <DialogDescription>
             Define a vmalert rule. The YAML preview is rendered client-side; the actual rule is
             rendered server-side on save.
@@ -486,6 +511,7 @@ export function CreateAlertModal({
                   id="create-alert-name"
                   data-testid="create-alert-name"
                   placeholder="MyAlertRule"
+                  disabled={editRuleId !== undefined}
                   {...form.register('rule_name')}
                 />
                 {form.formState.errors.rule_name && (
@@ -757,9 +783,15 @@ export function CreateAlertModal({
               <Button
                 type="submit"
                 data-testid="create-alert-submit"
-                disabled={createMut.isPending}
+                disabled={createMut.isPending || patchMut.isPending}
               >
-                {createMut.isPending ? 'Saving…' : 'Create alert'}
+                {editRuleId !== undefined
+                  ? patchMut.isPending
+                    ? 'Saving…'
+                    : 'Save changes'
+                  : createMut.isPending
+                    ? 'Saving…'
+                    : 'Create alert'}
               </Button>
             </div>
           </DialogFooter>

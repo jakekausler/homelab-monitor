@@ -510,4 +510,89 @@ async def test_patch_user_rule_invalid_expr_400(
     assert error["details"]["check"] == "missing_stats_pipe"
 
 
+async def test_create_with_dryrun_enabled_but_mount_empty(
+    authenticated_client: AsyncClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """POST with dryrun enabled but mount_source='' -> dryrun skips, rule persists (fail-open)."""
+    monkeypatch.setenv("HOMELAB_MONITOR_VMALERT_USER_LOGS_DIR", str(tmp_path / "logs"))
+    monkeypatch.setenv("HOMELAB_MONITOR_VMALERT_USER_METRICS_DIR", str(tmp_path / "metrics"))
+    monkeypatch.setenv("HOMELAB_MONITOR_VMALERT_DRYRUN_ENABLED", "1")
+    monkeypatch.setenv("HOMELAB_MONITOR_VMALERT_DRYRUN_MOUNT", "")
+    response = await authenticated_client.post(
+        "/api/logs/user-rules",
+        json={
+            "rule_name": "DryRunSkipMount",
+            "expr": "_msg:error | stats count() as match_count | filter match_count:>0",
+            "expr_kind": "logsql",
+            "severity": "warning",
+            "summary": "Dryrun skip mount",
+        },
+        headers=_csrf(authenticated_client),
+    )
+    # Should still persist (dryrun skipped due to no mount)
+    assert response.status_code == 201  # noqa: PLR2004
+    assert response.json()["rule_name"] == "DryRunSkipMount"
+
+
+async def test_create_with_dryrun_disabled_default(
+    authenticated_client: AsyncClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """POST without HOMELAB_MONITOR_VMALERT_DRYRUN_ENABLED (default off) -> rule persists."""
+    monkeypatch.setenv("HOMELAB_MONITOR_VMALERT_USER_LOGS_DIR", str(tmp_path / "logs"))
+    monkeypatch.setenv("HOMELAB_MONITOR_VMALERT_USER_METRICS_DIR", str(tmp_path / "metrics"))
+    # Don't set DRYRUN_ENABLED (defaults to off)
+    response = await authenticated_client.post(
+        "/api/logs/user-rules",
+        json={
+            "rule_name": "DryRunDisabledDefault",
+            "expr": "_msg:error | stats count() as match_count | filter match_count:>0",
+            "expr_kind": "logsql",
+            "severity": "warning",
+            "summary": "Dryrun disabled default",
+        },
+        headers=_csrf(authenticated_client),
+    )
+    assert response.status_code == 201  # noqa: PLR2004
+    assert response.json()["rule_name"] == "DryRunDisabledDefault"
+
+
+async def test_create_with_dryrun_mock_failure(
+    authenticated_client: AsyncClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """POST with mocked dryrun returning ok=False -> 400 invalid_expr(check='dryrun')."""
+    from unittest.mock import patch  # noqa: PLC0415
+
+    from homelab_monitor.kernel.logs.vmalert_dryrun import DryRunResult  # noqa: PLC0415
+
+    monkeypatch.setenv("HOMELAB_MONITOR_VMALERT_USER_LOGS_DIR", str(tmp_path / "logs"))
+    monkeypatch.setenv("HOMELAB_MONITOR_VMALERT_USER_METRICS_DIR", str(tmp_path / "metrics"))
+    monkeypatch.setenv("HOMELAB_MONITOR_VMALERT_DRYRUN_ENABLED", "1")
+    monkeypatch.setenv("HOMELAB_MONITOR_VMALERT_DRYRUN_MOUNT", "vol")
+
+    def mock_dryrun(
+        rule_yaml: str, *, image: str, timeout_s: float, mount_source: str, work_dir: str
+    ) -> DryRunResult:
+        return DryRunResult(skipped=False, ok=False, stderr="invalid expr: boom")
+
+    with patch("homelab_monitor.kernel.api.routers.logs.run_vmalert_dryrun", mock_dryrun):
+        response = await authenticated_client.post(
+            "/api/logs/user-rules",
+            json={
+                "rule_name": "DryRunMockFail",
+                "expr": "_msg:error | stats count() as match_count | filter match_count:>0",
+                "expr_kind": "logsql",
+                "severity": "warning",
+                "summary": "Dryrun mock fail",
+            },
+            headers=_csrf(authenticated_client),
+        )
+    assert response.status_code == 400  # noqa: PLR2004
+    error = response.json()["error"]
+    assert error["code"] == "invalid_expr"
+    assert error["details"]["check"] == "dryrun"
+    assert "boom" in error["message"]
+
+
 __all__: list[str] = []
