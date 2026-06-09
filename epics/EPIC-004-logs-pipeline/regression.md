@@ -458,3 +458,11 @@
 - A VALID rule (e.g. `<filter> | stats count() as match_count | filter match_count:>N`) persists, renders to a per-rule `<rule_name>.yaml`, and loads in vmalert health=ok.
 - The stats alias must be a non-reserved word (`match_count`), NOT `count` (vmalert rejects reserved-word filter fields).
 - Models tab detail pane scrolls horizontally (min-w-0) instead of clipping wide content.
+
+## STAGE-004-043A — User-rules management UI + prod vmalert dry-run validation
+
+- User-rules MANAGEMENT tab (/logs/user-rules) lists rules with name/kind/severity/enabled + a vmalert HEALTH column; health joins GET /api/logs/user-rules-health by rule_name (missing → "unknown").
+- GET /api/logs/user-rules-health is degraded-200: if a vmalert instance is unreachable it returns partial/empty health, NEVER 500. Requires session (401 without auth).
+- CreateAlertModal EDIT mode (editRuleId set): rule_name + expr_kind are read-only; submit PATCHes only the 5 mutable fields (expr/severity/summary/description/for_duration); create path is byte-stable (STAGE-044 depends on it). Duplicate-name check excludes the edited rule.
+- vmalert dry-run is DEFAULT-OFF + fail-open: create/update MUST succeed with no docker/vmalert (heuristic floor only). Enabling requires HOMELAB_MONITOR_VMALERT_DRYRUN_ENABLED + a host-shared mount (HOMELAB_MONITOR_VMALERT_DRYRUN_MOUNT). Dry-run does NOT semantically validate logsql exprs (vlogs type) — heuristic is the logsql semantic floor.
+- Management mutations (enable/disable/delete/patch) invalidate the user-rules react-query cache; health refetches on a ~20s interval.
