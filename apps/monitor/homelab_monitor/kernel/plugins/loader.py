@@ -33,10 +33,32 @@ from structlog.stdlib import BoundLogger
 from homelab_monitor.kernel.db.ids import uuid7
 from homelab_monitor.kernel.db.repository import SqliteRepository
 from homelab_monitor.kernel.db.time import utc_now_iso
-from homelab_monitor.kernel.plugins.base import Collector
+from homelab_monitor.kernel.plugins.base import BaseCollector, Collector
 from homelab_monitor.kernel.plugins.manifest import SubprocessManifest
 from homelab_monitor.kernel.plugins.subprocess_collector import make_subprocess_collector
 from homelab_monitor.kernel.plugins.types import CollectorConfig
+
+
+def config_from_classvars(cls: type[BaseCollector], **overrides: object) -> dict[str, object]:
+    """Derive a CollectorConfig dict from a collector's ClassVars.
+
+    The collector's own cadence (``interval`` / ``timeout`` ClassVars) is the
+    source of truth, so registration sites don't hand-build a dict and drift
+    from the collector's declared values. ``**overrides`` lets a caller layer
+    extra ``CollectorConfig`` fields (e.g. ``enabled=False``) or override a
+    derived key. Pass the result straight to :meth:`PluginLoader.register`.
+
+    Example::
+
+        loader.register(HaUpCollector, config_from_classvars(HaUpCollector))
+    """
+    base: dict[str, object] = {
+        "name": cls.name,
+        "interval_seconds": int(cls.interval.total_seconds()),
+        "timeout_seconds": int(cls.timeout.total_seconds()),
+    }
+    base.update(overrides)
+    return base
 
 
 @dataclass(frozen=True, slots=True)

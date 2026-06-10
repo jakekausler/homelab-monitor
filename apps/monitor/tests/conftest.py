@@ -275,6 +275,11 @@ async def _per_test_db(  # noqa: PLR0915  # pyright: ignore[reportUnusedFunction
             "timeout_seconds": int(CronDiscoverer.timeout.total_seconds()),
         },
     )
+    from homelab_monitor.plugins.collectors.integrations.homeassistant import (  # noqa: PLC0415
+        register_all as ha_register_all,
+    )
+
+    ha_register_all(loader)
     await loader.persist_to_db(repo)
     loaded = loader.load_all()
 

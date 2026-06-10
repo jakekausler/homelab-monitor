@@ -553,6 +553,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
         )
         degraded.append("silence_detection")
 
+    # ------------------------------------------------------------------
+    # STAGE-005-003: Home Assistant integration bundle (integrations/ exemplar).
+    # The bundle owns per-collector failure isolation internally, so this is a
+    # single import + call (no per-collector try/except here). Wave-B HA
+    # collectors are added inside the bundle, not here.
+    # ------------------------------------------------------------------
+    from homelab_monitor.plugins.collectors.integrations.homeassistant import (  # noqa: PLC0415
+        register_all as register_ha_collectors,
+    )
+
+    register_ha_collectors(loader)
+
     plugins_env = os.environ.get("HOMELAB_MONITOR_PLUGINS_DIR")
     if plugins_env is not None:
         plugins_dir: Path | None = Path(plugins_env)

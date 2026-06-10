@@ -206,3 +206,12 @@ def test_collector_quarantine_state_retrieved_when_quarantined() -> None:
     assert status.quarantined is True
     assert status.quarantined_at == "2026-05-05T11:00:00Z"
     assert status.quarantine_reason == "exceeded_failure_budget"
+
+
+@pytest.mark.asyncio
+async def test_ha_up_collector_listed(authenticated_client: AsyncClient) -> None:
+    """ha_up (registered via the HA integration bundle) appears in /api/collectors."""
+    resp = await authenticated_client.get("/api/collectors")
+    assert resp.status_code == 200  # noqa: PLR2004
+    names = {c["name"] for c in resp.json()}
+    assert "ha_up" in names
