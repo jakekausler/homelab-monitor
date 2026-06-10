@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, cleanup, waitFor, act } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
@@ -33,6 +33,21 @@ import {
 } from '../CreateAlertModal'
 import { useUserRules, useCreateUserRule, usePatchUserRule } from '@/api/userRules'
 import { useLogsServicesQuery } from '@/api/logs'
+
+// CreateAlertModal schedules two 300ms setTimeout debounce effects (YAML preview
+// + name-uniqueness) whose callbacks call setState. Under load (e.g. `make verify`
+// running pytest + vitest concurrently) a pending debounce timer can fire AFTER
+// jsdom tears down `window`, waking React's scheduler post-teardown →
+// "ReferenceError: window is not defined" as an unhandled error. Drain any pending
+// timers and unmount the tree under REAL timers before each test ends so no
+// setState lands after teardown.
+afterEach(async () => {
+  vi.useRealTimers()
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 350))
+  })
+  cleanup()
+})
 
 function renderWithClient(ui: React.ReactNode) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })

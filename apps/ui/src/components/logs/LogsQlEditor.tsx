@@ -13,6 +13,7 @@
 import { Suspense, lazy } from 'react'
 
 import { useMediaQuery } from '@/lib/useMediaQuery'
+import type { FieldsForCompletion } from './logsQlCompletion'
 
 export interface LogsQlEditorProps {
   value: string
@@ -21,6 +22,7 @@ export interface LogsQlEditorProps {
   placeholder?: string
   ariaLabel: string
   className?: string
+  fields?: FieldsForCompletion
 }
 
 const LazyLogsQlEditorImpl = lazy(() => import('./LogsQlEditorImpl'))

@@ -6,6 +6,7 @@ import {
   fetchNewerLogs,
   fetchOlderLogs,
   identitiesToServicesCsv,
+  useLogsFieldsQuery,
   useLogsQuery,
   useLogsServicesQuery,
   useSurroundingLogs,
@@ -245,6 +246,13 @@ export function LogsExplorerBody({
   // always true for this consumer by design.
   const servicesCsv = identitiesToServicesCsv(selectedIdentities)
   const logs = useLogsQuery(expr, startIso, endIso, servicesCsv)
+
+  // STAGE-004-018A — same committed scope + args as <FieldsDiscoveryPanel>'s
+  // internal useLogsFieldsQuery, so React Query dedupes (identical queryKey). The
+  // discovered fields feed the LogsQL editor's value-completion (sample_values)
+  // and field-name completion (union with the static FIELD_NAMES).
+  const editorFieldsQuery = useLogsFieldsQuery(expr, startIso, endIso, servicesCsv)
+  const editorFields = editorFieldsQuery.data?.fields
 
   // Only-this-service scope ANDs `service:"x" AND source_type:"y"` onto the
   // backend query. Each clause must match a RAW VictoriaLogs field or it
@@ -570,6 +578,7 @@ export function LogsExplorerBody({
             placeholder="Enter LogsQL…"
             ariaLabel="LogsQL query"
             className="min-w-0 flex-1"
+            fields={editorFields}
           />
         ) : (
           <input

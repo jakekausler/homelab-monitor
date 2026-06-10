@@ -20,6 +20,7 @@ vi.mock('@/api/logs', async (importActual) => {
     useLogsQuery: vi.fn(),
     useLogsServicesQuery: vi.fn(),
     useSurroundingLogs: vi.fn(),
+    useLogsFieldsQuery: vi.fn(() => ({ data: undefined, isLoading: false, isError: false })),
     fetchNewerLogs: vi.fn(),
     fetchOlderLogs: vi.fn(),
   }

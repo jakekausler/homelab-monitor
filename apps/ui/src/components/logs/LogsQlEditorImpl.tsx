@@ -3,8 +3,11 @@ import { defaultKeymap } from '@codemirror/commands'
 import { EditorState, Prec } from '@codemirror/state'
 import type { Transaction, TransactionSpec } from '@codemirror/state'
 import { EditorView, keymap, placeholder as cmPlaceholder } from '@codemirror/view'
+import { acceptCompletion, autocompletion } from '@codemirror/autocomplete'
 
 import { logsQlExtensions } from './logsQlLanguage'
+import { makeLogsQlCompletionSource } from './logsQlCompletion'
+import type { FieldsForCompletion } from './logsQlCompletion'
 import { sanitizeSingleLineInsert } from './logsQlEditorUtils'
 
 interface LogsQlEditorImplProps {
@@ -14,6 +17,7 @@ interface LogsQlEditorImplProps {
   placeholder?: string
   ariaLabel: string
   className?: string
+  fields?: FieldsForCompletion
 }
 
 /**
@@ -29,6 +33,7 @@ export default function LogsQlEditorImpl({
   placeholder,
   ariaLabel,
   className,
+  fields,
 }: LogsQlEditorImplProps) {
   const hostRef = useRef<HTMLDivElement | null>(null)
   const viewRef = useRef<EditorView | null>(null)
@@ -37,9 +42,13 @@ export default function LogsQlEditorImpl({
   // an effect (not during render) to satisfy react-hooks/refs.
   const onChangeRef = useRef(onChange)
   const onSubmitRef = useRef(onSubmit)
+  // Latest discovered fields, read by the completion source closure at call time
+  // so the view (created once) never re-creates when field data changes.
+  const fieldsRef = useRef<FieldsForCompletion>(fields)
   useEffect(() => {
     onChangeRef.current = onChange
     onSubmitRef.current = onSubmit
+    fieldsRef.current = fields
   })
 
   useEffect(() => {
@@ -61,6 +70,14 @@ export default function LogsQlEditorImpl({
           return true
         },
       },
+    ])
+
+    // Enter / Tab ACCEPT an open completion popup first. acceptCompletion returns
+    // false when no popup is active → CM6 falls through to Prec.high(submitKeymap)
+    // (Enter→submit) and the default Tab. Created here (mount-once), like submitKeymap.
+    const acceptCompletionKeymap = keymap.of([
+      { key: 'Enter', run: acceptCompletion },
+      { key: 'Tab', run: acceptCompletion },
     ])
 
     // Bulletproof single-line enforcement: atomically REJECT any transaction that
@@ -85,6 +102,7 @@ export default function LogsQlEditorImpl({
       doc: value,
       extensions: [
         singleLineFilter,
+        Prec.highest(acceptCompletionKeymap), // Enter/Tab accept completion FIRST; false→falls through to submitKeymap
         Prec.high(submitKeymap), // Enter→submit before defaultKeymap's insertNewlineAndIndent
         keymap.of(defaultKeymap),
         EditorView.lineWrapping,
@@ -126,6 +144,9 @@ export default function LogsQlEditorImpl({
           },
         }),
         EditorView.contentAttributes.of({ 'aria-label': ariaLabel }),
+        autocompletion({
+          override: [makeLogsQlCompletionSource(fieldsRef)],
+        }),
         ...logsQlExtensions(),
       ],
     })

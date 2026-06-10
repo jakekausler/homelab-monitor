@@ -4,7 +4,7 @@ import { tags } from '@lezer/highlight'
 
 // LogsQL keywords (pipe stages + boolean operators). Case-insensitive match on
 // the lowercased word. Basic highlighting only — NOT a full grammar.
-const KEYWORDS = new Set<string>([
+export const KEYWORDS = new Set<string>([
   'and',
   'or',
   'not',
@@ -22,7 +22,7 @@ const KEYWORDS = new Set<string>([
 
 // Well-known stream/field names for the homelab log schema. Highlighted as
 // property names so a query reads field:value at a glance.
-const FIELD_NAMES = new Set<string>([
+export const FIELD_NAMES = new Set<string>([
   '_msg',
   '_time',
   '_stream',
