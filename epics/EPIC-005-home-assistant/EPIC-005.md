@@ -1,12 +1,12 @@
 # EPIC-005: Home Assistant integration (collector + dispatcher channel + bidirectional events + UI panel)
 
-## Status: Not Started (0 / 26 Complete)
+## Status: In Progress (1 / 26 Complete)
 
-## Stages Counter: 0 / 26 Complete
+## Stages Counter: 1 / 26 Complete
 
-## Current Stage: STAGE-005-001
+## Current Stage: STAGE-005-002
 
-## Current Phase: STAGE-005-001 Design (Not Started)
+## Current Phase: STAGE-005-002 Design (Not Started)
 
 ## Overview
 
@@ -55,7 +55,7 @@ Stages MUST be implemented in order. No parallelization. Each stage lands a sing
 
 | # | Stage | Theme |
 |---|---|---|
-| STAGE-005-001 | HA REST client + secret + lifespan wiring | Real HomeAssistantClient (REST: get_states/call_service/get_error_log/get_config) replacing the empty io.py scaffold; ha_token/ha_url secret+config; wire ctx.ha in lifespan.ctx_factory (currently ha=None); smoke test /api/config. |
+| STAGE-005-001 | HA REST client + secret + lifespan wiring | ✓ Complete — Real HomeAssistantClient (REST: get_states/call_service/get_error_log/get_config) replacing the empty io.py scaffold; ha_token/ha_url secret+config; wire ctx.ha in lifespan.ctx_factory (currently ha=None); smoke test /api/config. |
 | STAGE-005-002 | HA websocket client | Persistent /api/websocket client: auth handshake, subscribe, reconnect/backoff; foundation for config-entry/repairs/notifications/automation structured events. |
 | STAGE-005-003 | integrations/ bundle skeleton + registration pattern | Create plugins/collectors/integrations/homeassistant/; establish the integration-bundle layout + collector registration pattern reused by 006/007/008/021. |
 | STAGE-005-004 | Reusable cardinality cap | Per-metric-family series cap (default 500) in the metrics path + over-budget suggestion event; first consumed by entity-availability. |
