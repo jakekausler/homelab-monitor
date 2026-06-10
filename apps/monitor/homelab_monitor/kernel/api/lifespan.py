@@ -19,7 +19,7 @@ from structlog.stdlib import BoundLogger
 from homelab_monitor.kernel.alerts.repository import AlertRepository
 from homelab_monitor.kernel.api.sse import SseBroker
 from homelab_monitor.kernel.backup.service import BackupService
-from homelab_monitor.kernel.config import load_tail_config
+from homelab_monitor.kernel.config import load_ha_config, load_tail_config
 from homelab_monitor.kernel.cron.repository import CronRepo
 from homelab_monitor.kernel.cron.run_repository import CronRunRepository
 from homelab_monitor.kernel.db.engine import dispose_engine, get_engine
@@ -29,6 +29,7 @@ from homelab_monitor.kernel.db.time import utc_now_iso
 from homelab_monitor.kernel.dispatch.channels.inproc_dashboard import InprocDashboardChannel
 from homelab_monitor.kernel.dispatch.dispatcher import AlertDispatcher
 from homelab_monitor.kernel.events import TriggerContext
+from homelab_monitor.kernel.ha.client import HomeAssistantRestClient
 from homelab_monitor.kernel.heartbeat.repository import HeartbeatRepo
 from homelab_monitor.kernel.logging import configure_logging
 from homelab_monitor.kernel.logs.cron_run_failure_enrichments_repo import (
@@ -578,6 +579,29 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
         limits=httpx.Limits(max_connections=50, max_keepalive_connections=20),
         timeout=httpx.Timeout(10.0, connect=5.0),
     )
+
+    # 7a. Home Assistant REST client (STAGE-005-001).
+    #
+    # DEGRADATION RESOLUTION (supersedes the card's literal ``ha=None`` flow):
+    # The card's locked construction snippet wrote ``ha_client = ... if ha_token
+    # is not None else None`` AND required "post-startup recovery without restart
+    # via token_provider re-reading per tick". Those two are in tension: a client
+    # constructed-once as ``None`` can never become non-None per tick. We resolve
+    # by ALWAYS constructing the client with a per-request ``token_provider``; the
+    # "no token configured" case is handled INSIDE the client (it returns
+    # HaError(reason="auth") WITHOUT a network call). This is the only way to
+    # honor the once-only construction constraint AND no-restart token recovery.
+    # ``ctx.ha`` is therefore never None due to token absence; the collector-side
+    # ``reason="no_token"`` no-op is a Wave-B collector concern (STAGE-005-006+),
+    # NOT this stage. The token value is never stored on the client and never
+    # logged.
+    ha_config = load_ha_config()
+    ha_client = HomeAssistantRestClient(
+        base_url=ha_config.base_url,
+        http=http_client,  # reuse the shared pool — do NOT create a second client
+        token_provider=lambda: ttl_resolver.current().get("ha_token"),
+    )
+
     in_memory_metrics_writer = MemoryRetainingMetricsWriter()
     prom_registry = CollectorRegistry()
     prom_writer = PrometheusRegistryWriter(prom_registry)
@@ -631,7 +655,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
             ssh=ssh_factory,
             secrets=secrets_view,
             log=bound_log,  # pyright: ignore[reportArgumentType]
-            ha=None,
+            ha=ha_client,
         )
 
     # 7f. BuildSourcesLoader — STAGE-003-009 generic config (scope expansion).

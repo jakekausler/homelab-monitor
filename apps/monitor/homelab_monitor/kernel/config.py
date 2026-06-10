@@ -463,6 +463,30 @@ def load_vl_health_config() -> VlHealthConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class HaConfig:
+    """Home Assistant connection config (STAGE-005-001). Env-only.
+
+    ``base_url`` is the HA instance base URL (no trailing slash; the loader
+    strips it). The long-lived bearer token is NOT here — it lives in the
+    secret store under ``ha_token`` and is resolved at request time.
+    """
+
+    base_url: str = "http://192.168.2.148:8123"
+
+
+def load_ha_config() -> HaConfig:
+    """Load HA connection config from env (HOMELAB_MONITOR_HA_URL).
+
+    Strips a trailing slash so client path concatenation is unambiguous.
+    Returns the default base URL when the env var is unset.
+    """
+    raw = os.environ.get("HOMELAB_MONITOR_HA_URL")
+    if raw is None:
+        return HaConfig()
+    return HaConfig(base_url=raw.rstrip("/"))
+
+
+@dataclass(frozen=True, slots=True)
 class DrainConfig:
     """Runtime tunables for the periodic DrainConsumer (STAGE-004-026).
 
@@ -1199,6 +1223,7 @@ __all__ = [
     "DrainConfig",
     "ErrorPattern",
     "ErrorRateOverride",
+    "HaConfig",
     "HealthcheckLogConfig",
     "LogStreamBudgetConfig",
     "LogsConfig",
@@ -1216,6 +1241,7 @@ __all__ = [
     "load_cron_run_reconciler_config",
     "load_disk_budget_config",
     "load_drain_config",
+    "load_ha_config",
     "load_healthcheck_log_config",
     "load_log_stream_budget_config",
     "load_logs_config",

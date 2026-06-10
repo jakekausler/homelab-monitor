@@ -18,6 +18,13 @@ from dataclasses import dataclass, field
 from typing import Literal, Protocol, cast, runtime_checkable
 
 from homelab_monitor.kernel.db.time import utc_now_iso
+from homelab_monitor.kernel.ha.client import (
+    HaConfigResult,
+    HaErrorLogResult,
+    HaServiceResult,
+    HaState,
+)
+from homelab_monitor.kernel.ha.errors import HaError
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,12 +122,31 @@ class SshClientFactory(Protocol):
 
 @runtime_checkable
 class HomeAssistantClient(Protocol):
-    """SCAFFOLDING: methods land in the HA-collector epic.
+    """REST surface for reaching Home Assistant (STAGE-005-001).
 
-    NOTE: while empty, ``isinstance(x, HomeAssistantClient)`` is a tautology
-    (always True for any object). Do NOT rely on it for narrowing in
-    production code until methods are added.
+    Every method is return-not-raise: it returns a success result OR an
+    :class:`HaError`, so an HA 5xx / timeout / auth failure never propagates
+    as our own 5xx. The concrete implementation is
+    :class:`homelab_monitor.kernel.ha.client.HomeAssistantRestClient`.
     """
+
+    async def get_config(self) -> HaConfigResult | HaError:
+        """GET /api/config — HA version + time_zone, or a typed HaError."""
+        ...
+
+    async def get_states(self) -> list[HaState] | HaError:
+        """GET /api/states — list of entity state objects, or a typed HaError."""
+        ...
+
+    async def get_error_log(self) -> HaErrorLogResult | HaError:
+        """GET /api/error_log — plain-text error log, or a typed HaError."""
+        ...
+
+    async def call_service(
+        self, domain: str, service: str, data: dict[str, object] | None = None
+    ) -> HaServiceResult | HaError:
+        """POST /api/services/<domain>/<service> — changed states, or a typed HaError."""
+        ...
 
 
 class InMemoryMetricsWriter:

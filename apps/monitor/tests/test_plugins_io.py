@@ -6,6 +6,13 @@ from collections.abc import AsyncGenerator
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from typing import cast
 
+from homelab_monitor.kernel.ha.client import (
+    HaConfigResult,
+    HaErrorLogResult,
+    HaServiceResult,
+    HaState,
+)
+from homelab_monitor.kernel.ha.errors import HaError
 from homelab_monitor.kernel.plugins.io import (
     HomeAssistantClient,
     InMemoryLogsWriter,
@@ -152,10 +159,24 @@ async def test_ssh_factory_open_context_manager_yields_conn() -> None:
 
 
 class _FakeHa:
-    """Empty class — Protocol body is empty so this is structurally an HA client."""
+    """Minimal stub satisfying the HomeAssistantClient Protocol."""
+
+    async def get_config(self) -> HaConfigResult | HaError:
+        return HaConfigResult(version="", time_zone="")
+
+    async def get_states(self) -> list[HaState] | HaError:
+        return []
+
+    async def get_error_log(self) -> HaErrorLogResult | HaError:
+        return HaErrorLogResult(text="")
+
+    async def call_service(
+        self, domain: str, service: str, data: dict[str, object] | None = None
+    ) -> HaServiceResult | HaError:
+        return HaServiceResult(changed_states=[])
 
 
-def test_home_assistant_client_protocol_accepts_empty_class() -> None:
-    """Any class satisfies the empty ``HomeAssistantClient`` Protocol (tautology by design)."""
+def test_home_assistant_client_protocol_accepts_conforming_class() -> None:
+    """A class with all 4 HA methods satisfies the ``HomeAssistantClient`` Protocol."""
     ha: HomeAssistantClient = _FakeHa()
     assert isinstance(ha, HomeAssistantClient)

@@ -14,6 +14,13 @@ import structlog
 from structlog import BoundLogger
 
 from homelab_monitor.kernel.db.repository import SqliteRepository
+from homelab_monitor.kernel.ha.client import (
+    HaConfigResult,
+    HaErrorLogResult,
+    HaServiceResult,
+    HaState,
+)
+from homelab_monitor.kernel.ha.errors import HaError
 from homelab_monitor.kernel.plugins.context import CollectorContext
 from homelab_monitor.kernel.plugins.io import (
     InMemoryLogsWriter,
@@ -59,7 +66,19 @@ async def test_context_accepts_ha_value() -> None:
     """ha may be a HomeAssistantClient (any object satisfies the empty Protocol)."""
 
     class _FakeHa:
-        pass
+        async def get_config(self) -> HaConfigResult | HaError:
+            return HaConfigResult(version="", time_zone="")
+
+        async def get_states(self) -> list[HaState] | HaError:
+            return []
+
+        async def get_error_log(self) -> HaErrorLogResult | HaError:
+            return HaErrorLogResult(text="")
+
+        async def call_service(
+            self, domain: str, service: str, data: dict[str, object] | None = None
+        ) -> HaServiceResult | HaError:
+            return HaServiceResult(changed_states=[])
 
     async with httpx.AsyncClient() as http:
         engine = cast(SqliteRepository, object())
