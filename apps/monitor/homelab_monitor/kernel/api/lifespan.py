@@ -30,6 +30,7 @@ from homelab_monitor.kernel.dispatch.channels.inproc_dashboard import InprocDash
 from homelab_monitor.kernel.dispatch.dispatcher import AlertDispatcher
 from homelab_monitor.kernel.events import TriggerContext
 from homelab_monitor.kernel.ha.client import HomeAssistantRestClient
+from homelab_monitor.kernel.ha.websocket import HomeAssistantWebsocketClient
 from homelab_monitor.kernel.heartbeat.repository import HeartbeatRepo
 from homelab_monitor.kernel.logging import configure_logging
 from homelab_monitor.kernel.logs.cron_run_failure_enrichments_repo import (
@@ -606,6 +607,20 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
     prom_registry = CollectorRegistry()
     prom_writer = PrometheusRegistryWriter(prom_registry)
     metrics_writer = MultiplexMetricsWriter([in_memory_metrics_writer, prom_writer])
+    # 7a-ws. Home Assistant WebSocket client (STAGE-005-002).
+    # Constructed AFTER metrics_writer (it emits homelab_ha_websocket_* series).
+    # Reuses the same per-request token_provider as the REST client so a rotated
+    # / post-startup ha_token is picked up at the next (re)connect without a
+    # restart. The token value is never stored on the client and never logged.
+    ha_ws_client = HomeAssistantWebsocketClient(
+        base_url=ha_config.base_url,
+        token_provider=lambda: ttl_resolver.current().get("ha_token"),
+        metrics_writer=metrics_writer,
+        log=log.bind(component="ha_websocket"),
+    )
+    if ha_config.base_url:
+        ha_ws_client.start_task()
+    app.state.ha_ws_client = ha_ws_client
     in_memory_logs_writer = InMemoryLogsWriter()
     vl_url = os.environ.get("HOMELAB_MONITOR_VL_URL", "http://victorialogs:9428")
     vl_writer = VictoriaLogsWriter(
@@ -1316,6 +1331,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
             image_events_task_handle.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await image_events_task_handle
+        # Stop HA WebSocket client (STAGE-005-002).
+        ha_ws_handle = getattr(app.state, "ha_ws_client", None)
+        if ha_ws_handle is not None:  # pragma: no branch -- always set in full boot
+            await ha_ws_handle.stop_task()
         await scheduler.stop()
         refresh_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):

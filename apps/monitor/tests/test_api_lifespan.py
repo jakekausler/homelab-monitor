@@ -882,3 +882,29 @@ async def test_lifespan_wires_local_build_refresher_to_compose_runner(
         # Verify it's a callable bound to the collector (check __self__ for bound method)
         assert hasattr(refresher, "__self__")
         assert refresher.__self__ is local_build_collector
+
+
+@pytest.mark.asyncio
+async def test_lifespan_ha_disabled_skips_websocket_start(
+    db_url: str,
+    master_key: bytes,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When HOMELAB_MONITOR_HA_URL is empty, ha_ws_client.start_task() is NOT called.
+
+    Covers lifespan.py line 621-622: the if ha_config.base_url branch
+    (when base_url is falsy, skip start_task).
+    """
+    monkeypatch.setenv("HOMELAB_MONITOR_DB_URL", db_url)
+    monkeypatch.setenv("HOMELAB_MONITOR_MASTER_KEY", base64.b64encode(master_key).decode())
+    # Set empty HA URL to disable Home Assistant integration
+    monkeypatch.setenv("HOMELAB_MONITOR_HA_URL", "")
+
+    app = create_app(lifespan_enabled=True)
+
+    async with app.router.lifespan_context(app):
+        # ha_ws_client should exist but start_task should not have been called
+        assert hasattr(app.state, "ha_ws_client")
+        ha_ws_client = app.state.ha_ws_client
+        # _task is None because start_task was not called (base_url was falsy)
+        assert ha_ws_client._task is None  # pyright: ignore[reportPrivateUsage]

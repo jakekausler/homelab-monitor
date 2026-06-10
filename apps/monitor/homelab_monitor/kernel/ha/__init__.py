@@ -14,6 +14,10 @@ from homelab_monitor.kernel.ha.client import (
     HomeAssistantRestClient,
 )
 from homelab_monitor.kernel.ha.errors import HaError, HaErrorReason
+from homelab_monitor.kernel.ha.websocket import (
+    HomeAssistantWebsocketClient,
+    Subscription,
+)
 
 __all__ = [
     "HaConfigResult",
@@ -23,4 +27,6 @@ __all__ = [
     "HaServiceResult",
     "HaState",
     "HomeAssistantRestClient",
+    "HomeAssistantWebsocketClient",
+    "Subscription",
 ]

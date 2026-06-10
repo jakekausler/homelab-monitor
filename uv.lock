@@ -525,6 +525,7 @@ dependencies = [
     { name = "structlog" },
     { name = "uuid-utils" },
     { name = "uvicorn", extra = ["standard"] },
+    { name = "websockets" },
 ]
 
 [package.optional-dependencies]
@@ -571,6 +572,7 @@ requires-dist = [
     { name = "structlog", specifier = ">=24.4" },
     { name = "uuid-utils", specifier = ">=0.10" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.32" },
+    { name = "websockets", specifier = ">=16.0" },
 ]
 provides-extras = ["dev"]
 
