@@ -1,12 +1,12 @@
 # EPIC-005: Home Assistant integration (collector + dispatcher channel + bidirectional events + UI panel)
 
-## Status: In Progress (1 / 26 Complete)
+## Status: In Progress (2 / 26 Complete)
 
-## Stages Counter: 1 / 26 Complete
+## Stages Counter: 2 / 26 Complete
 
-## Current Stage: STAGE-005-002
+## Current Stage: STAGE-005-003
 
-## Current Phase: STAGE-005-002 Design (Not Started)
+## Current Phase: STAGE-005-003 Design (Not Started)
 
 ## Overview
 
@@ -56,7 +56,7 @@ Stages MUST be implemented in order. No parallelization. Each stage lands a sing
 | # | Stage | Theme |
 |---|---|---|
 | STAGE-005-001 | HA REST client + secret + lifespan wiring | ✓ Complete — Real HomeAssistantClient (REST: get_states/call_service/get_error_log/get_config) replacing the empty io.py scaffold; ha_token/ha_url secret+config; wire ctx.ha in lifespan.ctx_factory (currently ha=None); smoke test /api/config. |
-| STAGE-005-002 | HA websocket client | Persistent /api/websocket client: auth handshake, subscribe, reconnect/backoff; foundation for config-entry/repairs/notifications/automation structured events. |
+| STAGE-005-002 | HA websocket client | ✓ Complete — Persistent /api/websocket client: auth handshake, subscribe, reconnect/backoff; foundation for config-entry/repairs/notifications/automation structured events. |
 | STAGE-005-003 | integrations/ bundle skeleton + registration pattern | Create plugins/collectors/integrations/homeassistant/; establish the integration-bundle layout + collector registration pattern reused by 006/007/008/021. |
 | STAGE-005-004 | Reusable cardinality cap | Per-metric-family series cap (default 500) in the metrics path + over-budget suggestion event; first consumed by entity-availability. |
 | STAGE-005-005 | User-authored MetricsQL alert-rule machinery | Extend EPIC-004 user-rule surface (log_user_rules/CreateAlertModal/user-rules mgmt/vmalert dry-run) to a sibling metric_user_rules path so users author+customize numeric metric thresholds (generic; HA presets consume it in 005-016). |
