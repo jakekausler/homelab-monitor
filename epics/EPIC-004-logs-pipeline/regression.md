@@ -208,6 +208,13 @@
 - "Prod render (manual, on Vector/template change): `make dev-prod` → monitor logs `vector.render.success`, Vector container boots with no VRL compile error, rendered `/var/vector-config/vector.toml` `[transforms.json_flatten]` shows caps as integer literals; real container JSON shows `json.*` dotted fields in `/api/logs/query`. Tear down with `make dev-down`."
 - "Integration query window: integration tests must keep `end = now.isoformat()` (NOT future) or `/api/logs/query` returns 400 `range_in_future` (5s future-skew grace)."
 
+## STAGE-004-018A — LogsQL editor autocomplete + field suggestions
+
+- "STAGE-004-018A — LogsQL autocomplete: In the Logs Explorer advanced (CodeMirror) mode at desktop width, after running a query, typing a bare word offers field-name completions (static FIELD_NAMES + scope-discovered fields); typing `field:` offers that field's sample values; typing `| ` offers pipe-function/keyword completions."
+- "STAGE-004-018A — Autocomplete keymap: with the completion popup OPEN, Enter/Tab ACCEPT the completion and do NOT submit; with the popup CLOSED, Enter submits the query; Escape closes the popup. Verify both the accept-without-submit and the submit-when-closed paths still work after any future edit to LogsQlEditorImpl's keymap/extensions."
+- "STAGE-004-018A — Graceful degradation: when the /api/logs/fields endpoint is unavailable/empty, the autocomplete still offers static LogsQL keywords + base field names (no crash, no empty popup error)."
+- "STAGE-004-018A — Mobile fallback: at narrow viewport the LogsQL editor uses the plain textarea (no autocomplete) — confirm this is intact and the textarea still submits on Enter."
+
 ## STAGE-004-018 — Filter-scope-aware field discovery (Available fields panel, sample-based)
 
 - "Scope-aware field discovery: in the Logs Explorer, open the 'Fields' sidebar tab with a filter set (e.g. a service over 1h) → panel lists only fields in that scope, each with a coverage% badge, type hint, and sample-value chips. `make verify` must keep `FieldsDiscoveryPanel.test.tsx` + `test_logs_fields.py` + `test_api_logs_fields.py` green."
