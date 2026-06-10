@@ -2,13 +2,17 @@ import { cleanup, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { LogLineList } from '@/components/logs/LogLineList'
+import { LogLineList, getColumnValue } from '@/components/logs/LogLineList'
 import { severityTintClass } from '@/components/logs/severity'
 import type { LogLine } from '@/components/logs/types'
 
 afterEach(cleanup)
 
-function line(message: string, severity: string | null = null): LogLine {
+function line(
+  message: string,
+  severity: string | null = null,
+  fields: Record<string, unknown> = {},
+): LogLine {
   return {
     timestamp: '2026-05-21T14:30:00Z',
     message,
@@ -16,7 +20,7 @@ function line(message: string, severity: string | null = null): LogLine {
     severity,
     host: null,
     service: null,
-    fields: {},
+    fields,
   }
 }
 
@@ -115,6 +119,60 @@ describe('LogLineList', () => {
     expect(onLineClick).toHaveBeenCalledTimes(1)
   })
 
+  // STAGE-004-018B — back-compat guard: NO columns prop → no multi-column path.
+  it('renders the 2-column path (no log-row-columns) when no columns prop', () => {
+    render(<LogLineList lines={[line('x')]} testId="x" />)
+    const body = screen.getByTestId('x')
+    expect(screen.queryByTestId('log-row-columns')).toBeNull()
+    // original ts + message still render
+    expect(body.textContent).toContain('x')
+    expect(body.textContent).toContain('2026-05-21 10:30:00 EDT')
+  })
+
+  it('renders the 2-column path when columns is an empty array', () => {
+    render(<LogLineList lines={[line('x')]} testId="x" columns={[]} />)
+    expect(screen.queryByTestId('log-row-columns')).toBeNull()
+  })
+
+  // STAGE-004-018B — multi-column render.
+  it('renders one cell per configured column with values', () => {
+    render(
+      <LogLineList
+        lines={[
+          {
+            ...line('msg', 'error', { region: 'us' }),
+            host: 'nas01',
+          },
+        ]}
+        testId="x"
+        columns={['host', 'severity']}
+      />,
+    )
+    expect(screen.getByTestId('log-row-columns')).toBeInTheDocument()
+    const cells = screen.getAllByTestId('log-cell')
+    expect(cells).toHaveLength(2)
+    const hostCell = cells.find((c) => c.getAttribute('data-field') === 'host')
+    const sevCell = cells.find((c) => c.getAttribute('data-field') === 'severity')
+    expect(hostCell?.textContent).toBe('nas01')
+    expect(sevCell?.textContent).toBe('error')
+    // severity column carries the red tint class
+    expect(sevCell?.className).toContain('text-red-500')
+  })
+
+  it('renders an empty cell for a missing column field (no crash)', () => {
+    render(<LogLineList lines={[line('msg')]} testId="x" columns={['nope']} />)
+    const cells = screen.getAllByTestId('log-cell')
+    expect(cells).toHaveLength(1)
+    expect(cells[0]?.textContent).toBe('')
+  })
+
+  it('sets inline gridTemplateColumns = auto + N + 1fr', () => {
+    render(<LogLineList lines={[line('msg')]} testId="x" columns={['host', 'severity']} />)
+    const row = screen.getByTestId('log-row-columns')
+    // 'auto auto auto 1fr' (timestamp + 2 columns + message)
+    expect(row.style.gridTemplateColumns).toBe('auto auto auto 1fr')
+  })
+
   describe('severityTintClass', () => {
     it('returns text-red-500 for error', () => {
       expect(severityTintClass('error')).toBe('text-red-500')
@@ -146,6 +204,44 @@ describe('LogLineList', () => {
 
     it('returns empty string for undefined', () => {
       expect(severityTintClass(undefined)).toBe('')
+    })
+  })
+
+  describe('getColumnValue', () => {
+    it('resolves promoted severity/host/service first', () => {
+      const l = { ...line('m', 'warn'), host: 'h1', service: 'svc' }
+      expect(getColumnValue(l, 'severity')).toBe('warn')
+      expect(getColumnValue(l, 'host')).toBe('h1')
+      expect(getColumnValue(l, 'service')).toBe('svc')
+    })
+
+    it('resolves from the fields bag', () => {
+      const l = line('m', null, { region: 'us-east' })
+      expect(getColumnValue(l, 'region')).toBe('us-east')
+    })
+
+    it('returns empty string for a missing field', () => {
+      expect(getColumnValue(line('m'), 'absent')).toBe('')
+    })
+
+    it('returns empty string for null promoted fields', () => {
+      expect(getColumnValue(line('m'), 'host')).toBe('')
+    })
+
+    it('coerces a numeric field value to string', () => {
+      const l = line('m', null, { count: 42 })
+      expect(getColumnValue(l, 'count')).toBe('42')
+    })
+
+    it('coerces a boolean field value to string', () => {
+      const l = line('m', null, { ok: true })
+      expect(getColumnValue(l, 'ok')).toBe('true')
+    })
+
+    it('serializes object/array field values as compact JSON', () => {
+      const l = line('msg', null, { meta: { a: 1 }, tags: ['x', 'y'] })
+      expect(getColumnValue(l, 'meta')).toBe('{"a":1}')
+      expect(getColumnValue(l, 'tags')).toBe('["x","y"]')
     })
   })
 })

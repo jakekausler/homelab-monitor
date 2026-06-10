@@ -21,7 +21,14 @@ vi.mock('../client', () => ({
 }))
 
 import { apiClient } from '../client'
-import { identitiesToServicesCsv, logsQueryKeys, useLogsQuery, useLogsServicesQuery } from '../logs'
+import {
+  columnsToCsv,
+  identitiesToServicesCsv,
+  logsQueryKeys,
+  parseColumnsParam,
+  useLogsQuery,
+  useLogsServicesQuery,
+} from '../logs'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -95,6 +102,46 @@ describe('logsQueryKeys', () => {
     const key1 = logsQueryKeys.query('expr', 's', 'e', 'docker:nginx')
     const key2 = logsQueryKeys.query('expr', 's', 'e', 'cron:hmrun')
     expect(key1).not.toEqual(key2)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// columnsToCsv
+// ---------------------------------------------------------------------------
+
+describe('columnsToCsv', () => {
+  it('joins field names with commas', () => {
+    expect(columnsToCsv(['host', 'severity'])).toBe('host,severity')
+  })
+  it('returns empty string for an empty list', () => {
+    expect(columnsToCsv([])).toBe('')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// parseColumnsParam
+// ---------------------------------------------------------------------------
+
+describe('parseColumnsParam', () => {
+  it('parses a CSV string into an ordered array', () => {
+    expect(parseColumnsParam('host,severity')).toEqual(['host', 'severity'])
+  })
+  it('trims entries and drops empties', () => {
+    expect(parseColumnsParam(' host , , severity ')).toEqual(['host', 'severity'])
+  })
+  it('returns undefined for an empty string', () => {
+    expect(parseColumnsParam('')).toBeUndefined()
+  })
+  it('returns undefined for absent (non-string, non-array) input', () => {
+    expect(parseColumnsParam(undefined)).toBeUndefined()
+    expect(parseColumnsParam(null)).toBeUndefined()
+  })
+  it('filters a string[] input to strings', () => {
+    expect(parseColumnsParam(['host', 42, 'severity'])).toEqual(['host', 'severity'])
+  })
+  it('round-trips with columnsToCsv', () => {
+    const cols = ['host', 'severity', 'region']
+    expect(parseColumnsParam(columnsToCsv(cols))).toEqual(cols)
   })
 })
 

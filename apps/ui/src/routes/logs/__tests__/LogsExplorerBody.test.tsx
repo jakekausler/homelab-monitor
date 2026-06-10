@@ -188,8 +188,10 @@ describe('LogsExplorerBody (surrounding mode)', () => {
             liveLogsQl=""
             range={{ kind: 'preset', token: '1h' }}
             selectedIdentities={[]}
+            selectedColumns={[]}
             onLivePlainTextChange={() => {}}
             onLiveLogsQlChange={() => {}}
+            onColumnsChange={() => {}}
             onToggleAdvanced={() => {}}
             onSubmitSearch={() => {}}
             onClearSearch={() => {}}

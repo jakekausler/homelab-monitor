@@ -25,6 +25,7 @@ export function LogViewer({
   selectedKey: controlledSelectedKey,
   onLineSelected,
   fillHeight = false,
+  columns,
 }: LogViewerProps) {
   const {
     lines,
@@ -137,6 +138,7 @@ export function LogViewer({
                 testId="logs-body"
                 wrap={wrap ?? false}
                 timezone={timezone ?? 'local'}
+                {...(columns !== undefined && { columns })}
                 {...(fieldInspectorEnabled && { onLineClick: handleLineClick })}
                 selectedKey={fieldInspectorEnabled ? selectedKey : null}
               />

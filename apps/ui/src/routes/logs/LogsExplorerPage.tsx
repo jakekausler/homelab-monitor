@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate, useSearch } from '@tanstack/react-router'
 
-import { identitiesToServicesCsv, type ServiceIdentity } from '@/api/logs'
+import { columnsToCsv, identitiesToServicesCsv, type ServiceIdentity } from '@/api/logs'
 import {
   type SavedQuery,
   type SaveQueryCreateRequest,
@@ -52,6 +52,11 @@ export function LogsExplorerPage() {
     ? search.services
     : undefined
 
+  // STAGE-004-018B: read the `columns` URL param (parsed to string[] by router validateSearch).
+  const columnsParam: string[] | undefined = Array.isArray(search.columns)
+    ? search.columns
+    : undefined
+
   // Compute the initial seed ONCE: URL precedence over persisted (TTL-checked).
   // Lazy initializer → evaluated a single time at mount.
   const [seed] = useState<ExplorerSeed>(() =>
@@ -73,6 +78,8 @@ export function LogsExplorerPage() {
   const [selectedIdentities, setSelectedIdentities] = useState<ServiceIdentity[]>(
     seed.selectedIdentities,
   )
+
+  const [selectedColumns, setSelectedColumns] = useState<string[]>(columnsParam ?? [])
 
   // Modal state for saving a query
   const [saveOpen, setSaveOpen] = useState(false)
@@ -115,6 +122,7 @@ export function LogsExplorerPage() {
     lql: string,
     r: TimeRangeValue,
     ids: ServiceIdentity[],
+    cols: string[],
   ): void => {
     const next: {
       q?: string
@@ -123,6 +131,7 @@ export function LogsExplorerPage() {
       start?: string
       end?: string
       services?: string
+      columns?: string
     } = {}
     if (advanced) {
       if (lql.length > 0) next.logsql = lql
@@ -140,9 +149,11 @@ export function LogsExplorerPage() {
     // on read. The cast at the navigate call below bridges this CSV-string write value
     // to validateSearch's ServiceIdentity[] return type.
     if (ids.length > 0) next.services = identitiesToServicesCsv(ids)
+    // STAGE-004-018B: serialize the column list as the CSV `columns` URL key.
+    if (cols.length > 0) next.columns = columnsToCsv(cols)
     void navigate({
       to: '/logs/query',
-      search: next as unknown as { services?: ServiceIdentity[] },
+      search: next as unknown as { services?: ServiceIdentity[]; columns?: string[] },
     })
     recordQuery(buildHistoryEntry(advanced, plain, lql, r, ids))
   }
@@ -150,10 +161,10 @@ export function LogsExplorerPage() {
   const handleSubmitSearch = (): void => {
     if (advancedMode) {
       setCommittedLogsQl(liveLogsQl)
-      writeUrl(true, committedPlainText, liveLogsQl, range, selectedIdentities)
+      writeUrl(true, committedPlainText, liveLogsQl, range, selectedIdentities, selectedColumns)
     } else {
       setCommittedPlainText(livePlainText)
-      writeUrl(false, livePlainText, committedLogsQl, range, selectedIdentities)
+      writeUrl(false, livePlainText, committedLogsQl, range, selectedIdentities, selectedColumns)
     }
   }
 
@@ -163,11 +174,11 @@ export function LogsExplorerPage() {
     if (advancedMode) {
       setLiveLogsQl('')
       setCommittedLogsQl('')
-      writeUrl(true, committedPlainText, '', range, selectedIdentities)
+      writeUrl(true, committedPlainText, '', range, selectedIdentities, selectedColumns)
     } else {
       setLivePlainText('')
       setCommittedPlainText('')
-      writeUrl(false, '', committedLogsQl, range, selectedIdentities)
+      writeUrl(false, '', committedLogsQl, range, selectedIdentities, selectedColumns)
     }
   }
 
@@ -199,7 +210,7 @@ export function LogsExplorerPage() {
     setAdvancedMode(true)
     setCommittedLogsQl(nextLogsQl)
     setLiveLogsQl(nextLogsQl)
-    writeUrl(true, committedPlainText, nextLogsQl, range, selectedIdentities)
+    writeUrl(true, committedPlainText, nextLogsQl, range, selectedIdentities, selectedColumns)
   }
 
   // STAGE-004-016A — append a structured field:"value" clause to the LogsQL query.
@@ -224,12 +235,19 @@ export function LogsExplorerPage() {
     setAdvancedMode(true)
     setCommittedLogsQl(nextLogsQl)
     setLiveLogsQl(nextLogsQl)
-    writeUrl(true, committedPlainText, nextLogsQl, range, selectedIdentities)
+    writeUrl(true, committedPlainText, nextLogsQl, range, selectedIdentities, selectedColumns)
   }
 
   const handleRangeChange = (next: TimeRangeValue): void => {
     setRange(next)
-    writeUrl(advancedMode, committedPlainText, committedLogsQl, next, selectedIdentities)
+    writeUrl(
+      advancedMode,
+      committedPlainText,
+      committedLogsQl,
+      next,
+      selectedIdentities,
+      selectedColumns,
+    )
   }
 
   // STAGE-004-019 — narrow the range to a clicked histogram bucket
@@ -242,14 +260,28 @@ export function LogsExplorerPage() {
     if (s === null || e === null) return
     const next: TimeRangeValue = { kind: 'custom', start: s, end: e }
     setRange(next)
-    writeUrl(advancedMode, committedPlainText, committedLogsQl, next, selectedIdentities)
+    writeUrl(
+      advancedMode,
+      committedPlainText,
+      committedLogsQl,
+      next,
+      selectedIdentities,
+      selectedColumns,
+    )
   }
 
   const handleToggleAdvanced = (nextAdvanced: boolean): void => {
     setAdvancedMode(nextAdvanced)
     // Rewrite the URL to reflect the NEW active mode's COMMITTED value. Both
     // texts are preserved in state across the toggle.
-    writeUrl(nextAdvanced, committedPlainText, committedLogsQl, range, selectedIdentities)
+    writeUrl(
+      nextAdvanced,
+      committedPlainText,
+      committedLogsQl,
+      range,
+      selectedIdentities,
+      selectedColumns,
+    )
   }
 
   const sameIdentity = (a: ServiceIdentity, b: ServiceIdentity): boolean =>
@@ -259,7 +291,7 @@ export function LogsExplorerPage() {
     setSelectedIdentities((prev) => {
       const exists = prev.some((i) => sameIdentity(i, identity))
       const next = exists ? prev.filter((i) => !sameIdentity(i, identity)) : [...prev, identity]
-      writeUrl(advancedMode, committedPlainText, committedLogsQl, range, next)
+      writeUrl(advancedMode, committedPlainText, committedLogsQl, range, next, selectedColumns)
       return next
     })
   }
@@ -271,7 +303,7 @@ export function LogsExplorerPage() {
     setSelectedIdentities((prev) => {
       if (prev.some((i) => sameIdentity(i, identity))) return prev
       const next = [...prev, identity]
-      writeUrl(advancedMode, committedPlainText, committedLogsQl, range, next)
+      writeUrl(advancedMode, committedPlainText, committedLogsQl, range, next, selectedColumns)
       return next
     })
   }
@@ -282,7 +314,7 @@ export function LogsExplorerPage() {
       for (const id of identities) {
         if (!next.some((i) => sameIdentity(i, id))) next.push(id)
       }
-      writeUrl(advancedMode, committedPlainText, committedLogsQl, range, next)
+      writeUrl(advancedMode, committedPlainText, committedLogsQl, range, next, selectedColumns)
       return next
     })
   }
@@ -290,9 +322,16 @@ export function LogsExplorerPage() {
   const handleDeselectIdentities = (identities: ServiceIdentity[]): void => {
     setSelectedIdentities((prev) => {
       const next = prev.filter((i) => !identities.some((id) => sameIdentity(id, i)))
-      writeUrl(advancedMode, committedPlainText, committedLogsQl, range, next)
+      writeUrl(advancedMode, committedPlainText, committedLogsQl, range, next, selectedColumns)
       return next
     })
+  }
+
+  // STAGE-004-018B: replace the column selection wholesale (the picker emits the
+  // next ordered list). Routes through writeUrl so the URL round-trips.
+  const handleColumnsChange = (next: string[]): void => {
+    setSelectedColumns(next)
+    writeUrl(advancedMode, committedPlainText, committedLogsQl, range, selectedIdentities, next)
   }
 
   // The name-less common payload shared by buildSavePayload and history recording.
@@ -383,7 +422,7 @@ export function LogsExplorerPage() {
     setLiveLogsQl(nextLogsQl)
     setRange(nextRange)
     setSelectedIdentities(nextIds)
-    writeUrl(nextAdvanced, nextPlain, nextLogsQl, nextRange, nextIds)
+    writeUrl(nextAdvanced, nextPlain, nextLogsQl, nextRange, nextIds, selectedColumns)
   }
 
   const handleLoadSavedQuery = (saved: SavedQuery): void => {
@@ -434,6 +473,7 @@ export function LogsExplorerPage() {
         liveLogsQl={liveLogsQl}
         range={range}
         selectedIdentities={selectedIdentities}
+        selectedColumns={selectedColumns}
         onLivePlainTextChange={setLivePlainText}
         onLiveLogsQlChange={setLiveLogsQl}
         onToggleAdvanced={handleToggleAdvanced}
@@ -444,6 +484,7 @@ export function LogsExplorerPage() {
         onAddIdentity={handleAddIdentity}
         onSelectIdentities={handleSelectIdentities}
         onDeselectIdentities={handleDeselectIdentities}
+        onColumnsChange={handleColumnsChange}
         onOpenSave={() => setSaveOpen(true)}
         onOpenCreateAlert={() => setCreateAlertOpen(true)}
         onLoadSavedQuery={handleLoadSavedQuery}

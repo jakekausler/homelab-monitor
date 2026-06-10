@@ -6,6 +6,24 @@ import { parseAnsi } from './ansi'
 import { severityTintClass } from './severity'
 import type { LogLine } from './types'
 
+/**
+ * STAGE-004-018B — resolve one cell value for a configured column.
+ * PURE. Promoted top-level fields (severity/host/service) take precedence over
+ * the `fields` bag. Missing → ''. Non-string values are coerced via String().
+ */
+export function getColumnValue(line: LogLine, field: string): string {
+  // Promoted top-level fields first.
+  if (field === 'severity') return line.severity ?? ''
+  if (field === 'host') return line.host ?? ''
+  if (field === 'service') return line.service ?? ''
+  // Then the fields bag.
+  const v = line.fields[field]
+  if (v === null || v === undefined) return ''
+  if (typeof v === 'string') return v
+  if (typeof v === 'number' || typeof v === 'boolean') return String(v)
+  return JSON.stringify(v)
+}
+
 interface LogLineListProps {
   lines: LogLine[]
   /** Rendered inside the <pre> when lines is empty. */
@@ -21,6 +39,10 @@ interface LogLineListProps {
   onLineClick?: (line: LogLine, key: string) => void
   /** STAGE-004-016: key of the currently-inspected line (for highlight). */
   selectedKey?: string | null
+  /** STAGE-004-018B: ordered list of extra column field names. When non-empty,
+   *  rows render via LogRowWithColumns (timestamp | one cell per column | message).
+   *  Absent/empty → the existing 2-column LogRow renders (back-compat). */
+  columns?: string[] | undefined
 }
 
 export function LogLineList({
@@ -31,7 +53,12 @@ export function LogLineList({
   timezone = 'local',
   onLineClick,
   selectedKey,
+  columns,
 }: LogLineListProps) {
+  const useColumns = columns !== undefined && columns.length > 0
+  // timestamp (auto) | one auto col per configured column | message (1fr)
+  const gridTemplateColumns = useColumns ? `auto ${'auto '.repeat(columns.length)}1fr` : ''
+
   return (
     <pre
       className={cn(
@@ -47,7 +74,19 @@ export function LogLineList({
             // older lines shift indices, so the inspected highlight may drift to
             // a different line. Accepted — no special handling (D-016).
             const key = `${line.timestamp}-${String(i)}`
-            return (
+            return useColumns ? (
+              <LogRowWithColumns
+                key={key}
+                line={line}
+                wrap={wrap}
+                timezone={timezone}
+                lineKey={key}
+                columns={columns}
+                gridTemplateColumns={gridTemplateColumns}
+                {...(onLineClick !== undefined && { onLineClick })}
+                isSelected={selectedKey === key}
+              />
+            ) : (
               <LogRow
                 key={key}
                 line={line}
@@ -127,6 +166,85 @@ function LogRow({
               // is the fg fallback. Keep classesFor() honoring that invariant.
               seg.classes.includes('text-') ? seg.classes : cn(tint, seg.classes),
             )}
+          >
+            {seg.text}
+          </span>
+        ))}
+      </span>
+    </div>
+  )
+}
+
+function LogRowWithColumns({
+  line,
+  wrap,
+  timezone,
+  lineKey,
+  columns,
+  gridTemplateColumns,
+  onLineClick,
+  isSelected = false,
+}: {
+  line: LogLine
+  wrap: boolean
+  timezone: 'local' | 'utc'
+  lineKey: string
+  columns: string[]
+  gridTemplateColumns: string
+  onLineClick?: (line: LogLine, key: string) => void
+  isSelected?: boolean
+}) {
+  const tint = severityTintClass(line.severity)
+  const segments = parseAnsi(line.message)
+  const ts = formatLogTimestampParts(line.timestamp, { timezone })
+  const clickable = onLineClick !== undefined
+  return (
+    <div
+      className={cn(
+        'grid items-start gap-x-2',
+        !wrap && 'min-w-max',
+        clickable && 'cursor-pointer rounded-sm hover:bg-accent/40',
+        isSelected && 'bg-accent ring-1 ring-ring',
+      )}
+      style={{ gridTemplateColumns }}
+      data-testid="log-row-columns"
+      {...(clickable && {
+        role: 'button',
+        tabIndex: 0,
+        'aria-pressed': isSelected,
+        onClick: () => onLineClick(line, lineKey),
+        onKeyDown: (e: React.KeyboardEvent<HTMLDivElement>) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault()
+            onLineClick(line, lineKey)
+          }
+        },
+      })}
+    >
+      <span
+        className="whitespace-nowrap border-r border-border pr-2 text-muted-foreground"
+        title={ts.tooltip}
+      >
+        {ts.display}
+      </span>
+      {columns.map((field) => (
+        <span
+          key={field}
+          data-testid="log-cell"
+          data-field={field}
+          className={cn(
+            'whitespace-nowrap border-r border-border pr-2',
+            field === 'severity' && tint,
+          )}
+        >
+          {getColumnValue(line, field)}
+        </span>
+      ))}
+      <span className={cn(wrap ? 'whitespace-pre-wrap break-all' : 'whitespace-pre')}>
+        {segments.map((seg, j) => (
+          <span
+            key={j}
+            className={cn(seg.classes.includes('text-') ? seg.classes : cn(tint, seg.classes))}
           >
             {seg.text}
           </span>

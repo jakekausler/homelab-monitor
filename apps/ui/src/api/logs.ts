@@ -23,6 +23,33 @@ export function identitiesToServicesCsv(identities: ServiceIdentity[]): string {
   return identities.map((i) => `${i.source_type}:${i.service}`).join(',')
 }
 
+/**
+ * STAGE-004-018B — serialize the ordered column list to the `columns` URL CSV.
+ * Field names contain no commas (safe). Empty list → '' (caller omits the key).
+ */
+export function columnsToCsv(cols: string[]): string {
+  return cols.join(',')
+}
+
+/**
+ * STAGE-004-018B — parse the `columns` URL param (CSV of field names) into an
+ * ordered string[]. Splits on ',', trims each, drops empties. Already-array
+ * input is filtered to strings. Empty/absent/no-valid-entries → undefined (so
+ * the URL key is omitted and validateSearch returns undefined).
+ */
+export function parseColumnsParam(raw: unknown): string[] | undefined {
+  let parts: string[]
+  if (typeof raw === 'string') {
+    parts = raw.split(',')
+  } else if (Array.isArray(raw)) {
+    parts = (raw as unknown[]).filter((s): s is string => typeof s === 'string')
+  } else {
+    return undefined
+  }
+  const out = parts.map((s) => s.trim()).filter((s) => s.length > 0)
+  return out.length > 0 ? out : undefined
+}
+
 export const logsQueryKeys = {
   query: (expr: string, start: string, end: string, services: string) =>
     ['logs', 'query', expr, start, end, services] as const,

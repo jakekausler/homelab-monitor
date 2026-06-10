@@ -3,6 +3,7 @@ import type { QueryClient } from '@tanstack/react-query'
 
 import { apiClient } from '@/api/client'
 import { queryKeys } from '@/api/queries'
+import { parseColumnsParam } from '@/api/logs'
 import type { Schema } from '@/api/types'
 import type { RunSearchSchema } from '@/routes/inventory/types'
 import { Route as rootRoute } from '@/routes/__root'
@@ -176,6 +177,7 @@ const logsQueryRoute = createRoute({
     start?: string | undefined
     end?: string | undefined
     services?: { source_type: string; service: string }[] | undefined
+    columns?: string[] | undefined
   } => ({
     q: typeof search.q === 'string' ? search.q : undefined,
     logsql: typeof search.logsql === 'string' ? search.logsql : undefined,
@@ -183,6 +185,7 @@ const logsQueryRoute = createRoute({
     start: typeof search.start === 'string' ? search.start : undefined,
     end: typeof search.end === 'string' ? search.end : undefined,
     services: parseServicesParam(search.services),
+    columns: parseColumnsParam(search.columns),
   }),
 })
 

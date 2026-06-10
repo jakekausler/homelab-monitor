@@ -22,6 +22,7 @@ import { LogsQlEditor } from '@/components/logs/LogsQlEditor'
 import { StreamPickerSidebar } from '@/components/logs/StreamPickerSidebar'
 import { SavedQueriesPanel } from './SavedQueriesPanel'
 import { QueryHistoryPanel } from './QueryHistoryPanel'
+import { ColumnsControl } from './ColumnsControl'
 import { FieldsDiscoveryPanel } from './FieldsDiscoveryPanel'
 import { HistogramChart } from './HistogramChart'
 import { ExportButton } from './ExportButton'
@@ -118,6 +119,10 @@ interface LogsExplorerBodyProps {
   /** STAGE-004-019: narrow the range to a clicked histogram bucket
    *  [startIso, endIso). Page commits a custom absolute range via writeUrl. */
   onNarrowRange: (startIso: string, endIso: string) => void
+  /** STAGE-004-018B: ordered list of selected extra-column field names. */
+  selectedColumns: string[]
+  /** STAGE-004-018B: emit the next ordered column selection (URL round-trips). */
+  onColumnsChange: (next: string[]) => void
 }
 
 export function LogsExplorerBody({
@@ -128,6 +133,7 @@ export function LogsExplorerBody({
   liveLogsQl,
   range,
   selectedIdentities,
+  selectedColumns,
   onLivePlainTextChange,
   onLiveLogsQlChange,
   onToggleAdvanced,
@@ -138,6 +144,7 @@ export function LogsExplorerBody({
   onAddIdentity,
   onSelectIdentities,
   onDeselectIdentities,
+  onColumnsChange,
   onOpenSave,
   onOpenCreateAlert,
   onLoadSavedQuery,
@@ -253,6 +260,12 @@ export function LogsExplorerBody({
   // and field-name completion (union with the static FIELD_NAMES).
   const editorFieldsQuery = useLogsFieldsQuery(expr, startIso, endIso, servicesCsv)
   const editorFields = editorFieldsQuery.data?.fields
+
+  // STAGE-004-018B: field NAMES for the column picker's "Discovered" group.
+  const availableColumnFields = useMemo(
+    () => (editorFields ?? []).map((f) => f.name),
+    [editorFields],
+  )
 
   // Only-this-service scope ANDs `service:"x" AND source_type:"y"` onto the
   // backend query. Each clause must match a RAW VictoriaLogs field or it
@@ -730,6 +743,12 @@ export function LogsExplorerBody({
 
         <WrapIconToggle checked={wrap} onChange={setWrap} />
 
+        <ColumnsControl
+          selected={selectedColumns}
+          available={availableColumnFields}
+          onChange={onColumnsChange}
+        />
+
         <Tooltip>
           <TooltipTrigger asChild>
             <Button
@@ -1177,6 +1196,7 @@ export function LogsExplorerBody({
           unavailableCopy={UNAVAILABLE_COPY}
           wrap={wrap}
           timezone={timezone}
+          columns={selectedColumns}
           fieldInspectorEnabled
           fillHeight
           selectedKey={inSurroundingMode ? surroundingSelectedKey : (selection?.key ?? null)}

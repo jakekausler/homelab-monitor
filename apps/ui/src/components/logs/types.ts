@@ -66,4 +66,7 @@ export interface LogViewerProps {
    *  results region gets data-log-scroll-container for STAGE-015 scroll targeting.
    *  Default false → legacy page-level scrolling (Docker/cron viewers unchanged). */
   fillHeight?: boolean
+  /** STAGE-004-018B: ordered extra-column field names for the results table.
+   *  Threaded straight to LogLineList. Absent/empty → 2-column rows (back-compat). */
+  columns?: string[] | undefined
 }
