@@ -287,6 +287,14 @@
 - "Prod-render smoke (manual, on UI change): `rm -rf apps/ui/dist && make dev-prod`, confirm served bundle contains `data-testid=\"settings-logs-page\"` and `data-testid=\"retention-save\"`; curl test `GET /api/settings/logs/retention` (authenticated via session) returns 200 with all 7 fields. Tear down `make dev-down`."
 - "`make verify` must pass: backend tests `tests/test_vl_retention.py` (reconcile/resolve/persist/disk logic), `tests/test_api_settings_logs.py` (GET default/env/runtime sources, PATCH validates/persists/restart-required, unauthenticated 401, out-of-range 422), `tests/test_db_migrations.py` (app_settings table present + schema correct); frontend tests SettingsLogsPage.test.tsx (card render, input clamp, Save calls), settingsLogs.test.ts (GET/PATCH hooks success+error), SettingsLayout.test.tsx (heading + Outlet). **100% backend kernel coverage required** (vl_retention.py, settings_logs.py, app_settings_repository.py all 100%)."
 
+## STAGE-004-018B — Configurable columns in logs results
+
+- "STAGE-004-018B — Configurable columns: In the Logs Explorer, the Columns control (after the wrap toggle) opens a dropdown listing Common fields (service/host/severity, always shown) + scope-discovered fields. Toggling a field adds/removes it as a result column between timestamp and message."
+- "STAGE-004-018B — Column value resolution: promoted fields (severity/host/service) resolve from the top-level LogLine field; other fields from line.fields[name]; a missing field renders an EMPTY cell (no crash). The severity column reuses the existing severity tint."
+- "STAGE-004-018B — Backward-compat (CRITICAL): the shared LogViewer/LogLineList render timestamp+message ONLY when no `columns` prop is passed. Verify the docker logs viewer, cron run log viewer, RecentCrashesSection, RecentHealthcheckIncidentsSection, and SignatureDetailPage are visually unchanged (no extra columns). The LogLineList unit test asserts `log-row-columns` testid is ABSENT with no columns prop — keep that guard."
+- "STAGE-004-018B — URL persistence: selected columns serialize to a `columns` CSV URL param (`?columns=service,severity`) and round-trip on reload. Empty/absent → no columns. Verify the param survives navigation and a page refresh."
+- "STAGE-004-018B — Mobile: at narrow viewport the multi-column row scrolls horizontally (no breakpoint hiding). Confirm columns remain accessible and the existing single-column mobile log rendering is unchanged when no columns are configured."
+
 ## STAGE-004-025 — Drain clustering library + SQLite persistence
 
 - Drain library clusters realistic homelab log lines sensibly: similar-shape lines (HA errors, Pi-hole DNS) generalize to ONE template with `<*>` placeholders after priming; `is_new` flips False on the established template.
