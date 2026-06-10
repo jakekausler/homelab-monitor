@@ -35,6 +35,17 @@ Same as EPIC-001 plus:
 - EPIC-001 (alerts, AM, channels framework).
 - EPIC-005 (HA push channel) and EPIC-013 (SMTP) typically wired before this epic so the routing UI has interesting destinations to send to. If not, the routing UI degrades to "in-process dashboard only" with explanatory text.
 
+## Deferred from EPIC-005 (routing)
+
+EPIC-005 (Home Assistant) shipped the **HAPushChannel** plus a **minimal severity-based routing layer** only — it reads `routing_rules` so that just `error`/`critical` alerts reach the HA mobile-push channel (rather than the EPIC-001 hard-coded "every alert → every channel" fan-out). That was the smallest routing slice needed to ship a non-noisy push channel. The following routing work was explicitly deferred to this epic and MUST be accounted for in the EPIC-012 Design/decomposition:
+
+- **Full routing-rule CRUD + schema expansion.** Today `routing_rules` and `channels` are scaffolding-stub tables (the EPIC-005 minimal layer reads only a `severity` gate). EPIC-012 must expand the `routing_rules` schema (ordered priority, `severity` + label-selector / `tag_match` conditions, per-channel mapping) and the `channels` table (kind + encrypted config) per spec §6.1. (Covered by STAGE-012-004.)
+- **Per-tag / label-selector overrides.** EPIC-005's gate is severity-only. The per-tag overrides from spec §8.3 (e.g. "any alert tagged `target_kind=cert` always emails") are EPIC-012's job. (STAGE-012-004 / -005.)
+- **Dispatcher filtering engine beyond the severity gate.** EPIC-005's minimal layer is a coarse severity check inside/around the dispatcher. EPIC-012's routing-rules engine (STAGE-012-005) replaces BOTH the EPIC-001 hard-coded fan-out AND the EPIC-005 minimal severity gate with the full rules-consulting dispatcher. When EPIC-012 lands, retire the EPIC-005 minimal gate so there is one routing authority.
+- **Routing rule-builder UI + preview + dry-run.** EPIC-005 ships no routing UI. The drag-and-drop priority editor, the "if this alert came in, it would route to…" preview, and the synthetic-alert dry-run (STAGE-012-006 / -007) cover the HA push channel (and all channels) uniformly.
+
+**Migration note:** when STAGE-012-005's engine lands, audit the EPIC-005 HAPushChannel wiring so the channel is selected via `routing_rules` (not a hard-coded severity check) — this is a small rewire, not a rebuild, since HAPushChannel already implements the standard `Channel.deliver(AlertEvent)` contract.
+
 ## Notes
 
 - rrule parsing: `python-dateutil`'s `rrulestr`. Common patterns are exposed as one-click ("every Saturday 2am-4am", "first Sunday of the month all day").
