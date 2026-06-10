@@ -8,6 +8,7 @@ import pytest
 
 from homelab_monitor.kernel.config import (
     DEFAULT_ERROR_PATTERNS,
+    CardinalityCapsConfig,
     CronAnomalyConfig,
     CronRunReconcilerConfig,
     DiskBudgetConfig,
@@ -22,6 +23,7 @@ from homelab_monitor.kernel.config import (
     TailConfig,
     VlHealthConfig,
     VlQueryLimits,
+    load_cardinality_caps_config,
     load_cron_anomaly_config,
     load_cron_run_reconciler_config,
     load_disk_budget_config,
@@ -1245,3 +1247,185 @@ def test_vl_health_config_is_frozen() -> None:
     cfg = VlHealthConfig()
     with pytest.raises((AttributeError, TypeError)):
         cfg.timeout_s = 99.0  # type: ignore[misc]
+
+
+# --- CardinalityCapsConfig ---------------------------------------------------------------
+
+
+def test_cardinality_caps_defaults_when_file_missing(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """No config file = built-in defaults."""
+    monkeypatch.setenv("HOMELAB_MONITOR_CONFIG", str(tmp_path / "missing.yaml"))
+    monkeypatch.delenv("HOMELAB_MONITOR_CARDINALITY_CAP_DEFAULT", raising=False)
+    cfg = load_cardinality_caps_config()
+    assert cfg == CardinalityCapsConfig()
+    assert cfg.default == 500  # noqa: PLR2004
+    assert cfg.cap_for("anything") == 500  # noqa: PLR2004
+
+
+def test_cardinality_caps_reads_yaml_families(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """YAML with cardinality_caps section overrides defaults."""
+    cfg_file = tmp_path / "homelab-monitor.yaml"
+    cfg_file.write_text(
+        "cardinality_caps:\n  default: 500\n  families:\n    homelab_ha_entity_available: 2500\n"
+    )
+    monkeypatch.setenv("HOMELAB_MONITOR_CONFIG", str(cfg_file))
+    monkeypatch.delenv("HOMELAB_MONITOR_CARDINALITY_CAP_DEFAULT", raising=False)
+    cfg = load_cardinality_caps_config()
+    assert cfg.cap_for("homelab_ha_entity_available") == 2500  # noqa: PLR2004
+    assert cfg.cap_for("other") == 500  # noqa: PLR2004
+
+
+def test_cardinality_caps_yaml_default_override(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """YAML default overrides built-in default."""
+    cfg_file = tmp_path / "homelab-monitor.yaml"
+    cfg_file.write_text("cardinality_caps:\n  default: 1000\n")
+    monkeypatch.setenv("HOMELAB_MONITOR_CONFIG", str(cfg_file))
+    monkeypatch.delenv("HOMELAB_MONITOR_CARDINALITY_CAP_DEFAULT", raising=False)
+    cfg = load_cardinality_caps_config()
+    assert cfg.default == 1000  # noqa: PLR2004
+    assert cfg.cap_for("x") == 1000  # noqa: PLR2004
+
+
+def test_cardinality_caps_env_overrides_default(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """HOMELAB_MONITOR_CARDINALITY_CAP_DEFAULT env overrides default."""
+    monkeypatch.setenv("HOMELAB_MONITOR_CONFIG", str(tmp_path / "absent.yaml"))
+    monkeypatch.setenv("HOMELAB_MONITOR_CARDINALITY_CAP_DEFAULT", "999")
+    cfg = load_cardinality_caps_config()
+    assert cfg.default == 999  # noqa: PLR2004
+
+
+def test_cardinality_caps_env_override_keeps_yaml_families(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """env default override keeps yaml families."""
+    cfg_file = tmp_path / "homelab-monitor.yaml"
+    cfg_file.write_text(
+        "cardinality_caps:\n  default: 500\n  families:\n    homelab_ha_entity_available: 2500\n"
+    )
+    monkeypatch.setenv("HOMELAB_MONITOR_CONFIG", str(cfg_file))
+    monkeypatch.setenv("HOMELAB_MONITOR_CARDINALITY_CAP_DEFAULT", "999")
+    cfg = load_cardinality_caps_config()
+    assert cfg.default == 999  # noqa: PLR2004
+    assert cfg.cap_for("homelab_ha_entity_available") == 2500  # noqa: PLR2004
+
+
+def test_cardinality_caps_rejects_non_mapping_section(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """cardinality_caps must be a mapping."""
+    cfg_file = tmp_path / "bad.yaml"
+    cfg_file.write_text("cardinality_caps: 42\n")
+    monkeypatch.setenv("HOMELAB_MONITOR_CONFIG", str(cfg_file))
+    with pytest.raises(ValueError, match="cardinality_caps must be a mapping"):
+        load_cardinality_caps_config()
+
+
+def test_cardinality_caps_rejects_non_mapping_families(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """families must be a mapping."""
+    cfg_file = tmp_path / "bad.yaml"
+    cfg_file.write_text("cardinality_caps:\n  families: 7\n")
+    monkeypatch.setenv("HOMELAB_MONITOR_CONFIG", str(cfg_file))
+    with pytest.raises(ValueError, match="families must be a mapping"):
+        load_cardinality_caps_config()
+
+
+def test_cardinality_caps_rejects_non_int_family_value(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """family cap value must be an integer."""
+    cfg_file = tmp_path / "bad.yaml"
+    cfg_file.write_text("cardinality_caps:\n  families:\n    fam: notanumber\n")
+    monkeypatch.setenv("HOMELAB_MONITOR_CONFIG", str(cfg_file))
+    with pytest.raises(ValueError, match="must be an integer"):
+        load_cardinality_caps_config()
+
+
+def test_cardinality_caps_rejects_non_int_default(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """default cap value must be an integer."""
+    cfg_file = tmp_path / "bad.yaml"
+    cfg_file.write_text("cardinality_caps:\n  default: notanumber\n")
+    monkeypatch.setenv("HOMELAB_MONITOR_CONFIG", str(cfg_file))
+    with pytest.raises(ValueError, match="must be an integer"):
+        load_cardinality_caps_config()
+
+
+def test_cardinality_caps_rejects_non_mapping_root(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """config root must be a mapping."""
+    cfg_file = tmp_path / "bad.yaml"
+    cfg_file.write_text("- a\n- b\n")
+    monkeypatch.setenv("HOMELAB_MONITOR_CONFIG", str(cfg_file))
+    with pytest.raises(ValueError, match="config root must be a mapping"):
+        load_cardinality_caps_config()
+
+
+def test_cardinality_caps_null_families_is_empty(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """families: null falls through to empty dict."""
+    cfg_file = tmp_path / "empty.yaml"
+    cfg_file.write_text("cardinality_caps:\n  default: 500\n  families:\n")
+    monkeypatch.setenv("HOMELAB_MONITOR_CONFIG", str(cfg_file))
+    cfg = load_cardinality_caps_config()
+    assert cfg.families == {}
+    assert cfg.cap_for("x") == 500  # noqa: PLR2004
+
+
+def test_cardinality_caps_rejects_bool_family_value(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """family cap value cannot be a bool."""
+    cfg_file = tmp_path / "bad.yaml"
+    cfg_file.write_text("cardinality_caps:\n  families:\n    fam: true\n")
+    monkeypatch.setenv("HOMELAB_MONITOR_CONFIG", str(cfg_file))
+    with pytest.raises(ValueError, match="must be an integer"):
+        load_cardinality_caps_config()
+
+
+def test_cardinality_caps_rejects_bool_default(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """default cap value cannot be a bool (bool is subclass of int but must be rejected)."""
+    cfg_file = tmp_path / "bad.yaml"
+    cfg_file.write_text("cardinality_caps:\n  default: true\n")
+    monkeypatch.setenv("HOMELAB_MONITOR_CONFIG", str(cfg_file))
+    with pytest.raises(ValueError, match="'default' must be an integer"):
+        load_cardinality_caps_config()
+
+
+def test_cardinality_caps_rejects_empty_string_family_key(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """families mapping key must be a non-empty string."""
+    cfg_file = tmp_path / "bad.yaml"
+    cfg_file.write_text('cardinality_caps:\n  families:\n    "": 500\n')
+    monkeypatch.setenv("HOMELAB_MONITOR_CONFIG", str(cfg_file))
+    with pytest.raises(ValueError, match="families key must be a non-empty string"):
+        load_cardinality_caps_config()
+
+
+def test_cardinality_caps_accepts_negative_values(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A negative cap loads as-is (the capper clamps it to 0 at apply time)."""
+    cfg_file = tmp_path / "neg.yaml"
+    cfg_file.write_text("cardinality_caps:\n  default: -5\n  families:\n    fam: -1\n")
+    monkeypatch.setenv("HOMELAB_MONITOR_CONFIG", str(cfg_file))
+    monkeypatch.delenv("HOMELAB_MONITOR_CARDINALITY_CAP_DEFAULT", raising=False)
+    cfg = load_cardinality_caps_config()
+    assert cfg.cap_for("fam") == -1
+    assert cfg.cap_for("unknown") == -5  # noqa: PLR2004

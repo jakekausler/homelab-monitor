@@ -15,7 +15,8 @@ from __future__ import annotations
 import math
 import os
 import re
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
 
@@ -48,6 +49,25 @@ def _coerce_float(d: dict[str, Any], key: str, default: float) -> float:
     if v is None:
         return default
     return float(v)
+
+
+def _coerce_int(d: dict[str, Any], key: str, default: int) -> int:
+    """Read d[key] coerced to int, or return default if missing/None.
+
+    Raises ValueError when the value is present but non-integer (mirrors the
+    explicit-coercion guard in load_log_stream_budget_config).
+    """
+    v = d.get(key)
+    if v is None:
+        return default
+    if isinstance(v, bool) or not isinstance(v, (int, float, str)):
+        msg = f"{key!r} must be an integer, got {v!r}"
+        raise ValueError(msg)
+    try:
+        return int(v)
+    except (TypeError, ValueError) as exc:
+        msg = f"{key!r} must be an integer, got {v!r}"
+        raise ValueError(msg) from exc
 
 
 def load_disk_budget_config() -> DiskBudgetConfig:
@@ -484,6 +504,105 @@ def load_ha_config() -> HaConfig:
     if raw is None:
         return HaConfig()
     return HaConfig(base_url=raw.rstrip("/"))
+
+
+@dataclass(frozen=True, slots=True)
+class CardinalityCapsConfig:
+    """Per-metric-family cardinality caps (STAGE-005-004).
+
+    A "family" is a metric name (e.g. ``homelab_ha_entity_available``). A
+    collector feeds that family's candidate series through a
+    :class:`~homelab_monitor.kernel.metrics.cardinality.CardinalityCapper`
+    built with ``cap_for(family)`` to bound how many distinct label-sets it
+    emits per tick. ``default`` applies to any family without an explicit
+    ``families`` entry.
+
+    Config is OPT-IN at the collector level — nothing enforces a cap unless a
+    collector explicitly wires the capper into its ``run()``. The cap is a per-
+    tick survivor budget, not a hard registry limit.
+    """
+
+    default: int = 500
+    families: Mapping[str, int] = field(default_factory=lambda: {})
+
+    def cap_for(self, family: str) -> int:
+        """Return the configured cap for ``family``, or ``default`` if unset."""
+        return self.families.get(family, self.default)
+
+
+_CARDINALITY_CAPS_KEY = "cardinality_caps"
+
+
+def load_cardinality_caps_config() -> CardinalityCapsConfig:
+    """Load per-family cardinality caps from YAML + env.
+
+    Sources, in priority order (later overrides earlier):
+      1. Hard-coded ``default`` (500) in :class:`CardinalityCapsConfig`.
+      2. ``HOMELAB_MONITOR_CONFIG`` ``cardinality_caps`` section:
+         ``cardinality_caps.default`` (int) and ``cardinality_caps.families``
+         (mapping of family-name -> int cap).
+      3. ``HOMELAB_MONITOR_CARDINALITY_CAP_DEFAULT`` env (overrides ``default`` only;
+         per-family entries from YAML are kept).
+
+    Returns:
+        CardinalityCapsConfig: validated configuration.
+
+    Raises:
+        ValueError: if the YAML root, the ``cardinality_caps`` section, or its
+            ``families`` sub-mapping is not a mapping, or a cap value is non-integer.
+        yaml.YAMLError: if the YAML file exists but is malformed.
+    """
+    config_path = Path(os.environ.get("HOMELAB_MONITOR_CONFIG", _DEFAULT_CONFIG_PATH))
+
+    defaults = CardinalityCapsConfig()
+    default_cap = defaults.default
+    families: dict[str, int] = {}
+
+    if config_path.is_file():
+        with config_path.open(encoding="utf-8") as f:
+            raw_obj: object = yaml.safe_load(f) or {}
+        if not isinstance(raw_obj, dict):
+            msg = f"config root must be a mapping, got {type(raw_obj).__name__}"
+            raise ValueError(msg)
+        raw = cast(dict[str, Any], raw_obj)
+        section_obj: object = raw.get(_CARDINALITY_CAPS_KEY) or {}
+        if not isinstance(section_obj, dict):
+            msg = f"{_CARDINALITY_CAPS_KEY} must be a mapping, got {type(section_obj).__name__}"
+            raise ValueError(msg)
+        section = cast(dict[str, Any], section_obj)
+        default_cap = _coerce_int(section, "default", default_cap)
+        families = _load_cardinality_families(section)
+
+    env_default = os.environ.get("HOMELAB_MONITOR_CARDINALITY_CAP_DEFAULT")
+    if env_default is not None:
+        default_cap = int(env_default)
+
+    return CardinalityCapsConfig(default=default_cap, families=families)
+
+
+def _load_cardinality_families(section: dict[str, Any]) -> dict[str, int]:
+    """Parse cardinality_caps.families; empty dict when absent or null."""
+    families_obj: object = section.get("families") or {}
+    if not isinstance(families_obj, dict):
+        msg = (
+            f"{_CARDINALITY_CAPS_KEY}.families must be a mapping, got {type(families_obj).__name__}"
+        )
+        raise ValueError(msg)
+    families_raw = cast(dict[str, Any], families_obj)
+    result: dict[str, int] = {}
+    for key, value_obj in families_raw.items():
+        if not key:
+            msg = f"{_CARDINALITY_CAPS_KEY}.families key must be a non-empty string, got {key!r}"
+            raise ValueError(msg)
+        if isinstance(value_obj, bool) or not isinstance(value_obj, (int, float, str)):
+            msg = f"{_CARDINALITY_CAPS_KEY}.families[{key!r}] must be an integer, got {value_obj!r}"
+            raise ValueError(msg)
+        try:
+            result[key] = int(value_obj)
+        except (TypeError, ValueError) as exc:
+            msg = f"{_CARDINALITY_CAPS_KEY}.families[{key!r}] must be an integer, got {value_obj!r}"
+            raise ValueError(msg) from exc
+    return result
 
 
 @dataclass(frozen=True, slots=True)
@@ -1216,6 +1335,7 @@ def _validate_redact_entry(idx: int, entry_obj: object, seen: set[str]) -> Redac
 __all__ = [
     "DEFAULT_ERROR_PATTERNS",
     "DEFAULT_REDACT_PATTERNS",
+    "CardinalityCapsConfig",
     "CrashLogConfig",
     "CronAnomalyConfig",
     "CronRunReconcilerConfig",
@@ -1236,6 +1356,7 @@ __all__ = [
     "VlHealthConfig",
     "VlQueryLimits",
     "get_public_url",
+    "load_cardinality_caps_config",
     "load_crash_log_config",
     "load_cron_anomaly_config",
     "load_cron_run_reconciler_config",
