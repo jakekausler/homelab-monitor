@@ -20,6 +20,9 @@ from homelab_monitor.plugins.collectors.integrations.homeassistant.ha_entity_ava
 from homelab_monitor.plugins.collectors.integrations.homeassistant.ha_up import (
     HaUpCollector,
 )
+from homelab_monitor.plugins.collectors.integrations.homeassistant.ha_update import (
+    HaUpdateCollector,
+)
 
 _EXPECTED_INTERVAL = 30
 _EXPECTED_TIMEOUT = 10
@@ -85,6 +88,18 @@ def test_register_all_registers_ha_battery() -> None:
     record = records[0]
     assert isinstance(record, LoadedCollector)
     assert record.config.name == "ha_battery"
+
+
+def test_register_all_registers_ha_update() -> None:
+    """register_all registers HaUpdateCollector with the derived config."""
+    loader = PluginLoader()
+    register_all(loader)
+    loaded = loader.load_all()
+    records = [r for r in loaded if isinstance(r.collector, HaUpdateCollector)]
+    assert len(records) == 1
+    record = records[0]
+    assert isinstance(record, LoadedCollector)
+    assert record.config.name == "ha_update"
 
 
 def test_register_all_isolates_failing_register(monkeypatch: pytest.MonkeyPatch) -> None:

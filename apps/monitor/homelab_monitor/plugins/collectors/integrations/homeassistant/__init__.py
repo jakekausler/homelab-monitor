@@ -24,6 +24,9 @@ from homelab_monitor.plugins.collectors.integrations.homeassistant.ha_entity_ava
 from homelab_monitor.plugins.collectors.integrations.homeassistant.ha_up import (
     HaUpCollector,
 )
+from homelab_monitor.plugins.collectors.integrations.homeassistant.ha_update import (
+    HaUpdateCollector,
+)
 
 _log = structlog.get_logger()
 
@@ -32,6 +35,7 @@ _HA_COLLECTORS: list[type[BaseCollector]] = [
     HaUpCollector,
     HaEntityAvailableCollector,
     HaBatteryCollector,
+    HaUpdateCollector,
 ]
 
 

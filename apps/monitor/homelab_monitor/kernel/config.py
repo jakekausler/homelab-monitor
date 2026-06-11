@@ -513,6 +513,8 @@ def load_ha_config() -> HaConfig:
 _DEFAULT_CARDINALITY_FAMILIES: dict[str, int] = {
     "homelab_ha_entity_available": 2500,
     "homelab_ha_entity_last_changed_seconds": 2500,
+    # ~106 real update entities observed on this homelab + headroom.
+    "homelab_ha_update_available": 150,
 }
 
 
