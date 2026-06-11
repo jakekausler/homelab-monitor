@@ -37,3 +37,15 @@
 - Real-HA behavior: on a ~2000-entity HA, the domain filter + 2500 cap emit the full filtered set with 0 drops + 0 suggestions; an install >2500 filtered entities fires the over-cap suggestion (raise cap or narrow filter).
 - Unparseable `last_changed` → availability still emitted, staleness skipped, `homelab_ha_entity_last_changed_parse_errors{}` counts it (only when >0). HaError / ctx.ha None → failed CollectorResult, no crash.
 - Both `ha_up` + `ha_entity_available` registered in the HA bundle (`register_all`).
+
+## STAGE-005-007 (Battery-level collector)
+
+- `HaBatteryCollector` emits `homelab_ha_battery_level{entity_id,domain}` (percent 0-100) for HA
+  entities with `device_class=="battery"` AND `unit_of_measurement=="%"`.
+- Battery-classed entities with non-`%` unit (e.g. `binary_sensor.*_battery_low`) must be EXCLUDED.
+- Unavailable/unknown/non-numeric battery entities must be SKIPPED (not emitted as 0).
+- Always-emitted drop gauge `homelab_metric_family_dropped_series{family="homelab_ha_battery_level"}`.
+- Real HA battery cardinality ~25 (well under 500 cap). Verify via prod rig: collector run `ok=True`,
+  metric live in VM.
+- `_shared.py` helpers (`extract_domain`, `get_states_or_error`, `parse_float_state`) shared by 006 +
+  007 — 006 (entity-availability) behavior must remain byte-identical.

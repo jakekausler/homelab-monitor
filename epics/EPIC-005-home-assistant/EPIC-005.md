@@ -1,12 +1,12 @@
 # EPIC-005: Home Assistant integration (collector + dispatcher channel + bidirectional events + UI panel)
 
-## Status: In Progress (6 / 26 Complete)
+## Status: In Progress (7 / 26 Complete)
 
-## Stages Counter: 6 / 26 Complete
+## Stages Counter: 7 / 26 Complete
 
-## Current Stage: STAGE-005-007
+## Current Stage: STAGE-005-008
 
-## Current Phase: STAGE-005-007 Design (Not Started)
+## Current Phase: STAGE-005-008 Design (Not Started)
 
 ## Overview
 
@@ -66,7 +66,7 @@ Stages MUST be implemented in order. No parallelization. Each stage lands a sing
 | # | Stage | Theme |
 |---|---|---|
 | STAGE-005-006 | Entity-availability collector | ✓ Complete — Poll /api/states; homelab_ha_entity_available{entity_id,domain} 1/0 + homelab_ha_entity_last_changed_seconds. (89ad211) |
-| STAGE-005-007 | Battery-level collector | device_class=battery entities; battery metrics. (#5) |
+| STAGE-005-007 | Battery-level collector | ✓ Complete — Filter device_class=battery entities; emit homelab_ha_battery_level{entity_id,domain} percent. Extract _shared.py helpers (get_states_or_error, extract_domain, parse_float_state). Refactor 006 tests green. (a0a8ebb) |
 | STAGE-005-008 | Update-availability collector | update.* entities (state=on=update available; installed/latest version labels). Covers Settings>Updates incl HA core/OS/supervisor/add-ons/HACS. (#13) |
 | STAGE-005-009 | Automation/script run-cadence collector | automation.*/script.* last_triggered → run-cadence + last-triggered-age metrics. (#15 run side) |
 | STAGE-005-010 | Config-entry state collector (websocket) | Authoritative integration loaded/setup_error/setup_retry state. (#10) |
