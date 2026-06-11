@@ -60,3 +60,16 @@
 - Always-emitted drop gauge `homelab_metric_family_dropped_series{family="homelab_ha_update_available"}`.
 - Per-family cap 150 in `_DEFAULT_CARDINALITY_FAMILIES`. Real HA update cardinality ~106 (under cap).
 - Verify via prod rig: collector run `ok=True`, ~41 on / ~55 off, metric live in VM.
+
+## STAGE-005-009 (Automation/script run-cadence collector)
+- `HaCadenceCollector` emits `homelab_ha_automation_last_triggered_seconds{entity_id}`,
+  `homelab_ha_script_last_triggered_seconds{entity_id}` = max(now − last_triggered, 0), and
+  `homelab_ha_automation_enabled{entity_id}` = 1.0 (on) / 0.0 (off).
+- Never-triggered (null/missing last_triggered) → SKIPPED (no series, NOT a parse error).
+  Present-but-unparseable → counted in `homelab_ha_cadence_last_triggered_parse_errors`.
+- Scripts get last_triggered ONLY (no enabled metric).
+- NO threshold/expected-cadence config in the collector (015's concern — rule YAML + 005-005 user rules).
+- ISO parsing via shared `parse_iso_or_none` in `_shared.py` (006 refactored onto it — behavior
+  byte-identical, 006 tests green).
+- Real HA: ~80 automations + ~20 scripts (under 500 cap). Verify via prod rig: collector ok=True,
+  null-triggered skipped with 0 parse errors, all 3 families live in VM.
