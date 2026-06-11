@@ -17,3 +17,14 @@
 ## STAGE-005-004 (Reusable cardinality cap)
 
 - **STAGE-005-004 (Reusable cardinality cap):** Run the cardinality-cap unit suite: `make uv ARGS="--directory apps/monitor pytest tests/test_cardinality.py"` — all CardinalityCapper + CappedEmitter tests pass. Cap mechanism invariant: feeding > cap distinct label-sets for a family to `CappedEmitter.emit_family(family, cap, observations)` must (a) write exactly `cap` survivors to the MetricsWriter, (b) keep the SAME survivors across repeated calls with reordered input (deterministic, no flapping), (c) emit `homelab_metric_family_dropped_series{family}` = dropped count (0 when under cap), and (d) append exactly one `SuggestionEvent(severity="warning")` per over-budget family. Config: `load_cardinality_caps_config().cap_for(family)` returns the per-family YAML override or the `cardinality_caps.default` (500), with `HOMELAB_MONITOR_CARDINALITY_CAP_DEFAULT` overriding the default. When the first consumer (entity-availability collector, STAGE-005-006) lands, confirm the cap sits BEFORE the MultiplexMetricsWriter fan-out so dropped series reach neither the snapshot sink nor the VM scrape.
+
+## STAGE-005-005 (User-authored MetricsQL alert-rule machinery + Alerts page)
+
+- User-rule backend suite: `make uv ARGS="--directory apps/monitor pytest tests/test_expr_validate.py tests/test_log_user_rules_repo.py tests/test_log_user_rules_api.py tests/test_api_metric_names.py"` — all pass.
+- MetricsQL authoring: from Alerts → Manage Rules → "New rule" (data-testid user-rules-new), the Rule type selector is ENABLED (logsql/metricsql); selecting Metrics + Simple shows metric (autocomplete from /api/metrics/metric-names) + comparison + threshold fields; Advanced shows a plain MetricsQL textarea (NOT the LogsQL CodeMirror) with no "Uses LogsQL" link.
+- Validation floor: a bare metricsql selector (e.g. `up` with no comparison) is rejected; `up > 0`, `absent(up)` accepted.
+- `error` severity selectable end-to-end (info/warning/error/critical).
+- Audit: each user-rule create/patch/delete/enable/disable writes an audit_log row.
+- Backend `GET /api/metrics/metric-names` proxies VM `/api/v1/label/__name__/values`, returns `{names:[...]}`, 502 on VM unreachable, session-required.
+- Alerts page: `/alerts` redirects to `/alerts/active` (Karma); `/alerts/manage` hosts rule management; the Logs page has NO "Alert Rules" tab.
+- End-to-end: a created metricsql rule renders to the `user-rules-metrics` vmalert group (`/etc/vmalert/metrics-user/<name>.yaml`), loads healthy in vmalert-metrics, and fires when its expr matches.

@@ -1,12 +1,12 @@
 # EPIC-005: Home Assistant integration (collector + dispatcher channel + bidirectional events + UI panel)
 
-## Status: In Progress (4 / 26 Complete)
+## Status: In Progress (5 / 26 Complete)
 
-## Stages Counter: 4 / 26 Complete
+## Stages Counter: 5 / 26 Complete
 
-## Current Stage: STAGE-005-005
+## Current Stage: STAGE-005-006
 
-## Current Phase: STAGE-005-005 Design (Not Started)
+## Current Phase: STAGE-005-006 Design (Not Started)
 
 ## Overview
 
@@ -59,7 +59,7 @@ Stages MUST be implemented in order. No parallelization. Each stage lands a sing
 | STAGE-005-002 | HA websocket client | ✓ Complete — Persistent /api/websocket client: auth handshake, subscribe, reconnect/backoff; foundation for config-entry/repairs/notifications/automation structured events. |
 | STAGE-005-003 | integrations/ bundle skeleton + registration pattern | ✓ Complete — Create plugins/collectors/integrations/homeassistant/; establish the integration-bundle layout + collector registration pattern reused by 006/007/008/021. |
 | STAGE-005-004 | Reusable cardinality cap | ✓ Complete — Per-metric-family series cap (default 500) in the metrics path + over-budget suggestion event; deterministic stable-sort eviction policy, configurable caps, integrated into production writer stack. (7fb7dd4) |
-| STAGE-005-005 | User-authored MetricsQL alert-rule machinery | Extend EPIC-004 user-rule surface (log_user_rules/CreateAlertModal/user-rules mgmt/vmalert dry-run) to a sibling metric_user_rules path so users author+customize numeric metric thresholds (generic; HA presets consume it in 005-016). |
+| STAGE-005-005 | User-authored MetricsQL alert-rule machinery | ✓ Complete — Extended EPIC-004 user-rule surface (log_user_rules/CreateAlertModal/user-rules mgmt/vmalert dry-run) to author+manage MetricsQL rules; generic machinery for numeric metric thresholds; HA presets consume it in 005-016. (afc4a00) |
 
 ### Wave B — Collectors (S06-S13)
 
