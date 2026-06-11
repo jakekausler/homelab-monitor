@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 import yaml
 from httpx import AsyncClient
+from sqlalchemy import text
 
 from homelab_monitor.kernel.db.repository import SqliteRepository
 
@@ -593,6 +594,220 @@ async def test_create_with_dryrun_mock_failure(
     assert error["code"] == "invalid_expr"
     assert error["details"]["check"] == "dryrun"
     assert "boom" in error["message"]
+
+
+async def test_create_user_rule_error_severity_201(
+    authenticated_client: AsyncClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """POST a metricsql rule with severity='error' returns 201 and echoes it."""
+    monkeypatch.setenv("HOMELAB_MONITOR_VMALERT_USER_LOGS_DIR", str(tmp_path / "logs"))
+    monkeypatch.setenv("HOMELAB_MONITOR_VMALERT_USER_METRICS_DIR", str(tmp_path / "metrics"))
+    response = await authenticated_client.post(
+        "/api/logs/user-rules",
+        json={
+            "rule_name": "ErrSev",
+            "expr": "up == 0",
+            "expr_kind": "metricsql",
+            "severity": "error",
+            "summary": "host down",
+        },
+        headers=_csrf(authenticated_client),
+    )
+    assert response.status_code == 201  # noqa: PLR2004
+    assert response.json()["severity"] == "error"
+
+
+async def test_create_metricsql_bare_selector_400(
+    authenticated_client: AsyncClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A bare metricsql selector is rejected with 400 invalid_expr/missing_threshold."""
+    monkeypatch.setenv("HOMELAB_MONITOR_VMALERT_USER_LOGS_DIR", str(tmp_path / "logs"))
+    monkeypatch.setenv("HOMELAB_MONITOR_VMALERT_USER_METRICS_DIR", str(tmp_path / "metrics"))
+    response = await authenticated_client.post(
+        "/api/logs/user-rules",
+        json={
+            "rule_name": "BareSel",
+            "expr": "up",
+            "expr_kind": "metricsql",
+            "severity": "warning",
+            "summary": "always fires",
+        },
+        headers=_csrf(authenticated_client),
+    )
+    assert response.status_code == 400  # noqa: PLR2004
+    body = response.json()
+    assert body["error"]["code"] == "invalid_expr"
+    assert body["error"]["details"]["check"] == "missing_threshold"
+
+
+async def test_create_user_rule_writes_audit(
+    authenticated_client: AsyncClient,
+    repo: SqliteRepository,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A successful create writes a user_rule.create audit row."""
+    monkeypatch.setenv("HOMELAB_MONITOR_VMALERT_USER_LOGS_DIR", str(tmp_path / "logs"))
+    monkeypatch.setenv("HOMELAB_MONITOR_VMALERT_USER_METRICS_DIR", str(tmp_path / "metrics"))
+    resp = await authenticated_client.post(
+        "/api/logs/user-rules",
+        json={
+            "rule_name": "AuditCreate",
+            "expr": "up == 0",
+            "expr_kind": "metricsql",
+            "severity": "warning",
+            "summary": "host down",
+        },
+        headers=_csrf(authenticated_client),
+    )
+    assert resp.status_code == 201  # noqa: PLR2004
+    audit = await repo.fetch_one(
+        text("SELECT what FROM audit_log WHERE what = :w ORDER BY id DESC LIMIT 1"),
+        {"w": "user_rule.create"},
+    )
+    assert audit is not None
+    assert audit[0] == "user_rule.create"
+
+
+async def test_patch_user_rule_writes_audit(
+    authenticated_client: AsyncClient,
+    repo: SqliteRepository,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A successful patch writes a user_rule.update audit row."""
+    monkeypatch.setenv("HOMELAB_MONITOR_VMALERT_USER_LOGS_DIR", str(tmp_path / "logs"))
+    monkeypatch.setenv("HOMELAB_MONITOR_VMALERT_USER_METRICS_DIR", str(tmp_path / "metrics"))
+    csrf = _csrf(authenticated_client)
+    created = await authenticated_client.post(
+        "/api/logs/user-rules",
+        json={
+            "rule_name": "AuditPatch",
+            "expr": "_msg:error | stats count() as match_count | filter match_count:>0",
+            "expr_kind": "logsql",
+            "severity": "warning",
+            "summary": "s",
+        },
+        headers=csrf,
+    )
+    rule_id = created.json()["id"]
+    resp = await authenticated_client.patch(
+        f"/api/logs/user-rules/{rule_id}",
+        json={"severity": "error"},
+        headers=csrf,
+    )
+    assert resp.status_code == 200  # noqa: PLR2004
+    audit = await repo.fetch_one(
+        text("SELECT what FROM audit_log WHERE what = :w ORDER BY id DESC LIMIT 1"),
+        {"w": "user_rule.update"},
+    )
+    assert audit is not None
+    assert audit[0] == "user_rule.update"
+
+
+async def test_delete_user_rule_writes_audit(
+    authenticated_client: AsyncClient,
+    repo: SqliteRepository,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A successful delete writes a user_rule.delete audit row."""
+    monkeypatch.setenv("HOMELAB_MONITOR_VMALERT_USER_LOGS_DIR", str(tmp_path / "logs"))
+    monkeypatch.setenv("HOMELAB_MONITOR_VMALERT_USER_METRICS_DIR", str(tmp_path / "metrics"))
+    csrf = _csrf(authenticated_client)
+    created = await authenticated_client.post(
+        "/api/logs/user-rules",
+        json={
+            "rule_name": "AuditDelete",
+            "expr": "_msg:error | stats count() as match_count | filter match_count:>0",
+            "expr_kind": "logsql",
+            "severity": "warning",
+            "summary": "s",
+        },
+        headers=csrf,
+    )
+    rule_id = created.json()["id"]
+    resp = await authenticated_client.delete(f"/api/logs/user-rules/{rule_id}", headers=csrf)
+    assert resp.status_code == 204  # noqa: PLR2004
+    audit = await repo.fetch_one(
+        text("SELECT what FROM audit_log WHERE what = :w ORDER BY id DESC LIMIT 1"),
+        {"w": "user_rule.delete"},
+    )
+    assert audit is not None and audit[0] == "user_rule.delete"
+
+
+async def test_enable_user_rule_writes_audit(
+    authenticated_client: AsyncClient,
+    repo: SqliteRepository,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A successful enable writes a user_rule.enable audit row."""
+    monkeypatch.setenv("HOMELAB_MONITOR_VMALERT_USER_LOGS_DIR", str(tmp_path / "logs"))
+    monkeypatch.setenv("HOMELAB_MONITOR_VMALERT_USER_METRICS_DIR", str(tmp_path / "metrics"))
+    csrf = _csrf(authenticated_client)
+    created = await authenticated_client.post(
+        "/api/logs/user-rules",
+        json={
+            "rule_name": "AuditEnable",
+            "expr": "_msg:error | stats count() as match_count | filter match_count:>0",
+            "expr_kind": "logsql",
+            "severity": "warning",
+            "summary": "s",
+        },
+        headers=csrf,
+    )
+    rule_id = created.json()["id"]
+    # Disable first
+    await authenticated_client.post(
+        f"/api/logs/user-rules/{rule_id}/disable",
+        headers=csrf,
+    )
+    # Enable
+    resp = await authenticated_client.post(
+        f"/api/logs/user-rules/{rule_id}/enable",
+        headers=csrf,
+    )
+    assert resp.status_code == 200  # noqa: PLR2004
+    audit = await repo.fetch_one(
+        text("SELECT what FROM audit_log WHERE what = :w ORDER BY id DESC LIMIT 1"),
+        {"w": "user_rule.enable"},
+    )
+    assert audit is not None and audit[0] == "user_rule.enable"
+
+
+async def test_disable_user_rule_writes_audit(
+    authenticated_client: AsyncClient,
+    repo: SqliteRepository,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A successful disable writes a user_rule.disable audit row."""
+    monkeypatch.setenv("HOMELAB_MONITOR_VMALERT_USER_LOGS_DIR", str(tmp_path / "logs"))
+    monkeypatch.setenv("HOMELAB_MONITOR_VMALERT_USER_METRICS_DIR", str(tmp_path / "metrics"))
+    csrf = _csrf(authenticated_client)
+    created = await authenticated_client.post(
+        "/api/logs/user-rules",
+        json={
+            "rule_name": "AuditDisable",
+            "expr": "_msg:error | stats count() as match_count | filter match_count:>0",
+            "expr_kind": "logsql",
+            "severity": "warning",
+            "summary": "s",
+        },
+        headers=csrf,
+    )
+    rule_id = created.json()["id"]
+    resp = await authenticated_client.post(
+        f"/api/logs/user-rules/{rule_id}/disable",
+        headers=csrf,
+    )
+    assert resp.status_code == 200  # noqa: PLR2004
+    audit = await repo.fetch_one(
+        text("SELECT what FROM audit_log WHERE what = :w ORDER BY id DESC LIMIT 1"),
+        {"w": "user_rule.disable"},
+    )
+    assert audit is not None and audit[0] == "user_rule.disable"
 
 
 __all__: list[str] = []

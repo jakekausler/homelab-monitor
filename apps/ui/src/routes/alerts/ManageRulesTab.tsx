@@ -33,7 +33,7 @@ function HealthBadge({ health, lastError }: { health: Health; lastError: string 
   )
 }
 
-export function UserRulesTab(): JSX.Element {
+export function ManageRulesTab(): JSX.Element {
   const { data, isLoading, error } = useUserRules()
   const healthQuery = useUserRulesHealth()
   const enableMut = useEnableUserRule()
@@ -42,6 +42,7 @@ export function UserRulesTab(): JSX.Element {
 
   const [editRuleId, setEditRuleId] = useState<number | null>(null)
   const [editOpen, setEditOpen] = useState(false)
+  const [createOpen, setCreateOpen] = useState(false)
 
   const healthMap = useMemo(() => healthQuery.data?.rules ?? {}, [healthQuery.data])
   const rules: LogUserRuleResponse[] = data?.rules ?? []
@@ -85,11 +86,25 @@ export function UserRulesTab(): JSX.Element {
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="min-h-0 flex-1 space-y-6 overflow-auto p-4">
-        <div data-testid="user-rules-description" className="min-w-0">
-          <h1 className="text-2xl font-semibold tracking-tight">Alert Rules</h1>
-          <p className="text-sm text-muted-foreground">
-            User-authored vmalert rules. Health reflects whether vmalert has loaded each rule.
-          </p>
+        <div
+          data-testid="user-rules-description"
+          className="flex items-start justify-between gap-4 min-w-0"
+        >
+          <div className="min-w-0">
+            <h1 className="text-2xl font-semibold tracking-tight">Alert Rules</h1>
+            <p className="text-sm text-muted-foreground">
+              User-authored vmalert rules. Health reflects whether vmalert has loaded each rule.
+            </p>
+          </div>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            data-testid="user-rules-new"
+            onClick={() => setCreateOpen(true)}
+          >
+            New rule
+          </Button>
         </div>
 
         <div className="min-w-0 rounded-lg border border-border bg-card p-4">
@@ -244,6 +259,10 @@ export function UserRulesTab(): JSX.Element {
           {...(editInitial !== undefined ? { initialValues: editInitial } : {})}
           initialMode="advanced"
         />
+      )}
+
+      {createOpen && (
+        <CreateAlertModal open={createOpen} onOpenChange={setCreateOpen} initialMode="simple" />
       )}
     </div>
   )

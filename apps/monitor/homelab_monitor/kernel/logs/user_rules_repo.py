@@ -36,7 +36,7 @@ _FORBIDDEN_INLINE: Final[re.Pattern[str]] = re.compile(r'["\\]|[\x00-\x1f\x7f]')
 _FORBIDDEN_BLOCK: Final[re.Pattern[str]] = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
 VALID_EXPR_KINDS: Final[frozenset[str]] = frozenset({"logsql", "metricsql"})
-VALID_SEVERITIES: Final[frozenset[str]] = frozenset({"info", "warning", "critical"})
+VALID_SEVERITIES: Final[frozenset[str]] = frozenset({"info", "warning", "error", "critical"})
 
 _MAX_RULE_NAME = 200
 _MAX_EXPR = 8192

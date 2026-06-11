@@ -7,14 +7,20 @@ vi.mock('@/components/logs/CreateAlertModal', () => ({
     ({
       open,
       editRuleId,
+      initialMode,
     }: {
       open: boolean
       editRuleId?: number
+      initialMode?: string
       onOpenChange: (v: boolean) => void
     }) =>
       open ? (
-        <div data-testid="create-alert-modal-stub" data-edit-rule-id={editRuleId ?? ''}>
-          {editRuleId !== undefined ? 'Edit alert rule' : 'Create alert from query'}
+        <div
+          data-testid="create-alert-modal-stub"
+          data-edit-rule-id={editRuleId ?? ''}
+          data-initial-mode={initialMode ?? ''}
+        >
+          {editRuleId !== undefined ? 'Edit alert rule' : 'Create alert rule'}
         </div>
       ) : null,
   ),
@@ -35,7 +41,7 @@ import {
   useDisableUserRule,
   useDeleteUserRule,
 } from '@/api/userRules'
-import { UserRulesTab } from '../UserRulesTab'
+import { ManageRulesTab } from '../ManageRulesTab'
 
 const mockUseUserRules = vi.mocked(useUserRules)
 const mockUseUserRulesHealth = vi.mocked(useUserRulesHealth)
@@ -49,7 +55,7 @@ function makeRule(overrides: {
   rule_name: string
   expr?: string
   expr_kind?: 'logsql' | 'metricsql'
-  severity?: 'info' | 'warning' | 'critical'
+  severity?: 'info' | 'warning' | 'error' | 'critical'
   enabled?: boolean
   summary?: string
   description?: string
@@ -87,7 +93,7 @@ afterEach(() => {
   cleanup()
 })
 
-describe('UserRulesTab', () => {
+describe('ManageRulesTab', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockUseUserRulesHealth.mockReturnValue({ data: { rules: {} } } as never)
@@ -100,7 +106,7 @@ describe('UserRulesTab', () => {
       isLoading: false,
       error: null,
     } as never)
-    render(<UserRulesTab />)
+    render(<ManageRulesTab />)
     expect(screen.getByTestId('user-rules-empty')).toBeInTheDocument()
     expect(screen.getByText('No alert rules yet.')).toBeInTheDocument()
   })
@@ -123,7 +129,7 @@ describe('UserRulesTab', () => {
       }),
     ]
     mockUseUserRules.mockReturnValue({ data: { rules }, isLoading: false, error: null } as never)
-    render(<UserRulesTab />)
+    render(<ManageRulesTab />)
 
     const rows = screen.getAllByTestId('user-rules-row')
     // Two rows in the desktop table + two in the mobile cards = 4 total.
@@ -155,7 +161,7 @@ describe('UserRulesTab', () => {
         data: { rules: { OkRule: { health: 'ok', last_error: '' } } },
       } as never)
 
-      render(<UserRulesTab />)
+      render(<ManageRulesTab />)
 
       const desktopTable = screen.getByTestId('user-rules-table')
       const healthBadges = within(desktopTable).getAllByTestId('user-rule-health')
@@ -172,7 +178,7 @@ describe('UserRulesTab', () => {
         },
       } as never)
 
-      render(<UserRulesTab />)
+      render(<ManageRulesTab />)
 
       const desktopTable = screen.getByTestId('user-rules-table')
       const healthBadges = within(desktopTable).getAllByTestId('user-rule-health')
@@ -187,7 +193,7 @@ describe('UserRulesTab', () => {
       // Health map deliberately empty — rule not loaded by vmalert yet.
       mockUseUserRulesHealth.mockReturnValue({ data: { rules: {} } } as never)
 
-      render(<UserRulesTab />)
+      render(<ManageRulesTab />)
 
       const desktopTable = screen.getByTestId('user-rules-table')
       const healthBadges = within(desktopTable).getAllByTestId('user-rule-health')
@@ -203,7 +209,7 @@ describe('UserRulesTab', () => {
       const rules = [makeRule({ id: 42, rule_name: 'ActiveRule', enabled: true })]
       mockUseUserRules.mockReturnValue({ data: { rules }, isLoading: false, error: null } as never)
 
-      render(<UserRulesTab />)
+      render(<ManageRulesTab />)
 
       // Desktop table toggle button.
       const desktopTable = screen.getByTestId('user-rules-table')
@@ -221,7 +227,7 @@ describe('UserRulesTab', () => {
       const rules = [makeRule({ id: 7, rule_name: 'InactiveRule', enabled: false })]
       mockUseUserRules.mockReturnValue({ data: { rules }, isLoading: false, error: null } as never)
 
-      render(<UserRulesTab />)
+      render(<ManageRulesTab />)
 
       const desktopTable = screen.getByTestId('user-rules-table')
       const toggleBtn = within(desktopTable).getAllByTestId('user-rule-toggle')[0] as HTMLElement
@@ -240,7 +246,7 @@ describe('UserRulesTab', () => {
       const rules = [makeRule({ id: 99, rule_name: 'DeleteMe' })]
       mockUseUserRules.mockReturnValue({ data: { rules }, isLoading: false, error: null } as never)
 
-      render(<UserRulesTab />)
+      render(<ManageRulesTab />)
 
       const desktopTable = screen.getByTestId('user-rules-table')
       const deleteBtn = within(desktopTable).getAllByTestId('user-rule-delete')[0] as HTMLElement
@@ -258,7 +264,7 @@ describe('UserRulesTab', () => {
       const rules = [makeRule({ id: 99, rule_name: 'DeleteMe' })]
       mockUseUserRules.mockReturnValue({ data: { rules }, isLoading: false, error: null } as never)
 
-      render(<UserRulesTab />)
+      render(<ManageRulesTab />)
 
       const desktopTable = screen.getByTestId('user-rules-table')
       const deleteBtn = within(desktopTable).getAllByTestId('user-rule-delete')[0] as HTMLElement
@@ -275,7 +281,7 @@ describe('UserRulesTab', () => {
       const rules = [makeRule({ id: 55, rule_name: 'EditableRule' })]
       mockUseUserRules.mockReturnValue({ data: { rules }, isLoading: false, error: null } as never)
 
-      render(<UserRulesTab />)
+      render(<ManageRulesTab />)
 
       // Modal should not be visible before clicking Edit.
       expect(screen.queryByTestId('create-alert-modal-stub')).not.toBeInTheDocument()
@@ -295,7 +301,7 @@ describe('UserRulesTab', () => {
       const rules = [makeRule({ id: 55, rule_name: 'EditableRule' })]
       mockUseUserRules.mockReturnValue({ data: { rules }, isLoading: false, error: null } as never)
 
-      render(<UserRulesTab />)
+      render(<ManageRulesTab />)
 
       const desktopTable = screen.getByTestId('user-rules-table')
       fireEvent.click(within(desktopTable).getAllByTestId('user-rule-edit')[0] as HTMLElement)
@@ -310,9 +316,38 @@ describe('UserRulesTab', () => {
     })
   })
 
+  describe('new rule button', () => {
+    it('renders a "New rule" button that opens CreateAlertModal without editRuleId', () => {
+      mockUseUserRules.mockReturnValue({
+        data: { rules: [] },
+        isLoading: false,
+        error: null,
+      } as never)
+
+      render(<ManageRulesTab />)
+
+      const newBtn = screen.getByTestId('user-rules-new')
+      expect(newBtn).toBeInTheDocument()
+      expect(newBtn).toHaveTextContent('New rule')
+
+      // Modal should not be visible before clicking.
+      expect(screen.queryByTestId('create-alert-modal-stub')).not.toBeInTheDocument()
+
+      fireEvent.click(newBtn)
+
+      const modalStub = screen.getByTestId('create-alert-modal-stub')
+      expect(modalStub).toBeInTheDocument()
+      // No editRuleId — this is a blank create.
+      expect(modalStub).toHaveAttribute('data-edit-rule-id', '')
+      // Simple mode.
+      expect(modalStub).toHaveAttribute('data-initial-mode', 'simple')
+      expect(modalStub).toHaveTextContent('Create alert rule')
+    })
+  })
+
   it('shows loading state while rules are being fetched', () => {
     mockUseUserRules.mockReturnValue({ data: undefined, isLoading: true, error: null } as never)
-    render(<UserRulesTab />)
+    render(<ManageRulesTab />)
     expect(screen.getByText('Loading…')).toBeInTheDocument()
   })
 
@@ -322,7 +357,7 @@ describe('UserRulesTab', () => {
       isLoading: false,
       error: new Error('api error'),
     } as never)
-    render(<UserRulesTab />)
+    render(<ManageRulesTab />)
     expect(screen.getByText('Error loading alert rules')).toBeInTheDocument()
   })
 })

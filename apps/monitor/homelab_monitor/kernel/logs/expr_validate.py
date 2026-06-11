@@ -97,6 +97,29 @@ _RESERVED_FILTER_WORDS: Final[frozenset[str]] = frozenset(
     }
 )
 
+# MetricsQL alerting constructs that fire on a NON-EMPTY result set even without a
+# bare comparison operator. `absent(`/`absent_over_time(` fire when a series is
+# MISSING; the set operators `unless`/`and`/`or` produce a filtered vector that
+# alerts when non-empty. Word-boundary matched so they don't match inside an
+# identifier (e.g. `errors_total`, `android_up`). CONSERVATIVE — favors letting a
+# borderline expr through (vmalert -dryRun is the authoritative layer above).
+_METRICSQL_ALERT_CONSTRUCT_RE: Final[re.Pattern[str]] = re.compile(
+    r"\babsent(?:_over_time)?\s*\(|\b(?:unless|and|or)\b",
+    re.IGNORECASE,
+)
+
+# A threshold COMPARISON operator in MetricsQL: `>`, `<`, `>=`, `<=`, `==`, `!=`.
+# Deliberately EXCLUDES the label-matcher operators `=~`, `!~`, and the bare `=`
+# used in `{k="v"}` — those are NOT thresholds and must NOT satisfy the floor.
+# Pattern logic (scan a QUOTE-STRIPPED copy so operators inside string literals
+# never count):
+#   - `>=?` / `<=?`  → matches `>`, `>=`, `<`, `<=`.
+#   - `==` / `!=`    → matches the two-char equality/inequality operators.
+# `=~` / `!~` are NOT matched: `==`/`!=` require a SECOND `=`, and a lone `=`
+# (label matcher) is matched by neither alternative. `!~` has `!` followed by `~`,
+# not `=`, so `!=` does not match it.
+_METRICSQL_THRESHOLD_RE: Final[re.Pattern[str]] = re.compile(r"[<>]=?|==|!=")
+
 
 def _count_unescaped_double_quotes(expr: str) -> int:
     """Count `"` chars not immediately preceded by a backslash.
@@ -153,6 +176,41 @@ def _parens_balanced_outside_quotes(expr: str) -> bool:
     return depth == 0
 
 
+def _strip_quoted_spans(expr: str) -> str:
+    """Return a copy of expr with the contents of double-quoted spans (and the
+    surrounding quotes) replaced by spaces.
+
+    Mirrors the quote model used by _count_unescaped_double_quotes: a backslash
+    escapes the following char; a bare `"` toggles in/out of a quoted span.
+    Quoted text is blanked so operators inside string literals / label values
+    (e.g. `{job="a>b"}`) are not seen by the operator scan. Length is preserved.
+    """
+    out: list[str] = []
+    in_quote = False
+    i = 0
+    n = len(expr)
+    while i < n:
+        ch = expr[i]
+        if ch == "\\":
+            # Escaped char: blank both the backslash and the escaped char if we
+            # are inside a quote; otherwise keep them (rare outside quotes in
+            # metricsql, but harmless to preserve).
+            if in_quote:
+                out.append("  ")
+            else:
+                out.append(expr[i : i + 2])
+            i += 2
+            continue
+        if ch == '"':
+            in_quote = not in_quote
+            out.append(" ")
+            i += 1
+            continue
+        out.append(" " if in_quote else ch)
+        i += 1
+    return "".join(out)
+
+
 def _check_balanced_quotes(expr: str) -> None:
     """Reject an odd number of unescaped double-quotes (dangling quote)."""
     if _count_unescaped_double_quotes(expr) % 2 != 0:
@@ -201,6 +259,33 @@ def _check_filter_field_not_reserved(expr: str) -> None:
             )
 
 
+def _check_metricsql_has_threshold(expr: str) -> None:
+    """Reject a metricsql alerting expr that has no threshold comparison AND no
+    recognized alerting construct.
+
+    A bare vector selector (`up`, `up{job="x"}`, `rate(x[5m])`) ALWAYS produces a
+    non-empty result and so would fire continuously. vmalert requires the expr to
+    NARROW: either a comparison (`> 0`, `== 0`, ...) or an alerting construct
+    (`absent(...)`, `... unless ...`).
+
+    The scan runs on a quote-stripped copy so operators inside string literals /
+    label values never count. Label-matcher operators (`=~`, `!~`, bare `=`) are
+    NOT counted as thresholds. CONSERVATIVE: when a recognized construct OR any
+    comparison is present, accept; only a bare selector is rejected.
+    """
+    stripped = _strip_quoted_spans(expr)
+    if _METRICSQL_THRESHOLD_RE.search(stripped):
+        return
+    if _METRICSQL_ALERT_CONSTRUCT_RE.search(stripped):
+        return
+    raise ExprValidationError(
+        "Metric alert expressions need a threshold comparison "
+        "(e.g. `> 0`, `== 0`) or an alerting construct like `absent(...)`; "
+        "a bare selector always fires.",
+        check="missing_threshold",
+    )
+
+
 def _validate_logsql(expr: str) -> None:
     """Run the logsql check order: quotes → parens → stats → filter-field."""
     _check_balanced_quotes(expr)
@@ -210,9 +295,10 @@ def _validate_logsql(expr: str) -> None:
 
 
 def _validate_metricsql(expr: str) -> None:
-    """metricsql: balanced quotes + parens only (best-effort minimal)."""
+    """metricsql: balanced quotes + parens, then a threshold/construct floor."""
     _check_balanced_quotes(expr)
     _check_balanced_parens(expr)
+    _check_metricsql_has_threshold(expr)
 
 
 def validate_expr(expr: str, expr_kind: str) -> None:

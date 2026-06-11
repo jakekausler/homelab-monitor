@@ -25,14 +25,20 @@ vi.mock('@/api/logs', () => ({
   useLogsServicesQuery: vi.fn(),
 }))
 
+vi.mock('@/api/metrics', () => ({
+  useMetricNamesQuery: vi.fn(),
+}))
+
 import {
   CreateAlertModal,
   scaffoldLogsqlExpr,
   buildSimpleExpr,
+  buildSimpleMetricsQLExpr,
   advancedExprWarnings,
 } from '../CreateAlertModal'
 import { useUserRules, useCreateUserRule, usePatchUserRule } from '@/api/userRules'
 import { useLogsServicesQuery } from '@/api/logs'
+import { useMetricNamesQuery } from '@/api/metrics'
 
 // CreateAlertModal schedules two 300ms setTimeout debounce effects (YAML preview
 // + name-uniqueness) whose callbacks call setState. Under load (e.g. `make verify`
@@ -76,6 +82,9 @@ describe('CreateAlertModal', () => {
     } as never)
     vi.mocked(useLogsServicesQuery).mockReturnValue({
       data: { services: [], truncated: false },
+    } as never)
+    vi.mocked(useMetricNamesQuery).mockReturnValue({
+      data: { names: [] },
     } as never)
   })
 
@@ -436,6 +445,9 @@ describe('CreateAlertModal modes', () => {
     vi.mocked(useLogsServicesQuery).mockReturnValue({
       data: { services: [], truncated: false },
     } as never)
+    vi.mocked(useMetricNamesQuery).mockReturnValue({
+      data: { names: [] },
+    } as never)
   })
 
   it('defaults to Simple mode and shows the structured fields', () => {
@@ -482,6 +494,41 @@ describe('CreateAlertModal modes', () => {
       'href',
       'https://docs.victoriametrics.com/victorialogs/logsql/',
     )
+  })
+
+  it('Advanced + metricsql: shows plain textarea, NO logsql doc link, MetricsQL hint; typed expr submits', async () => {
+    const mutate = vi.fn().mockResolvedValue({})
+    vi.mocked(useCreateUserRule).mockReturnValue({ mutateAsync: mutate, isPending: false } as never)
+    renderWithClient(
+      <CreateAlertModal
+        open
+        onOpenChange={vi.fn()}
+        initialMode="advanced"
+        initialValues={{ expr_kind: 'metricsql', expr: 'up > 0' }}
+      />,
+    )
+    // LogsQL doc link must be absent
+    expect(screen.queryByTestId('create-alert-logsql-doc-link')).not.toBeInTheDocument()
+    // Advanced fields wrapper present
+    expect(screen.getByTestId('create-alert-advanced-fields')).toBeInTheDocument()
+    // MetricsQL hint visible
+    expect(screen.getByText('Uses MetricsQL')).toBeInTheDocument()
+    // Expr textarea present and editable (data-testid="create-alert-expr")
+    const exprTextarea = screen.getByTestId('create-alert-expr')
+    expect(exprTextarea).toBeInTheDocument()
+    fireEvent.change(exprTextarea, { target: { value: 'cpu_usage > 0.8' } })
+    // Fill required fields
+    fireEvent.change(screen.getByTestId('create-alert-name'), {
+      target: { value: 'cpu_high' },
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('create-alert-submit'))
+      await Promise.resolve()
+    })
+    await waitFor(() => expect(mutate).toHaveBeenCalled())
+    const body = mutate.mock.calls[0]![0] as Record<string, unknown>
+    expect(body.expr).toBe('cpu_usage > 0.8')
+    expect(body.expr_kind).toBe('metricsql')
   })
 
   it('shows the expr advisory warnings for an Advanced logsql expr without a stats pipe', () => {
@@ -573,6 +620,42 @@ describe('CreateAlertModal modes', () => {
     renderWithClient(<CreateAlertModal open onOpenChange={vi.fn()} />)
     expect(screen.getByRole('option', { name: /nginx/ })).toBeInTheDocument()
   })
+
+  it('renders the metric datalist options from useMetricNamesQuery in metricsql mode', () => {
+    vi.mocked(useMetricNamesQuery).mockReturnValue({
+      data: { names: ['up', 'node_filesystem_avail_bytes', 'go_goroutines'] },
+    } as never)
+    renderWithClient(<CreateAlertModal open onOpenChange={vi.fn()} />)
+    // Switch to metricsql so the metric field renders.
+    fireEvent.change(screen.getByTestId('create-alert-expr-kind'), {
+      target: { value: 'metricsql' },
+    })
+    // The metric input is wired to the datalist.
+    const metricInput = screen.getByTestId('create-alert-metric')
+    expect(metricInput).toHaveAttribute('list', 'create-alert-metric-options')
+    // The datalist holds one <option> per discovered metric name.
+    const datalist = screen.getByTestId('create-alert-metric-datalist')
+    const options = datalist.querySelectorAll('option')
+    expect(options).toHaveLength(3)
+    expect(Array.from(options).map((o) => o.getAttribute('value'))).toEqual([
+      'up',
+      'node_filesystem_avail_bytes',
+      'go_goroutines',
+    ])
+  })
+
+  it('still allows a custom metric name not present in the datalist (free-text)', () => {
+    vi.mocked(useMetricNamesQuery).mockReturnValue({
+      data: { names: ['up'] },
+    } as never)
+    renderWithClient(<CreateAlertModal open onOpenChange={vi.fn()} />)
+    fireEvent.change(screen.getByTestId('create-alert-expr-kind'), {
+      target: { value: 'metricsql' },
+    })
+    const metricInput = screen.getByTestId('create-alert-metric')
+    fireEvent.change(metricInput, { target: { value: 'my_custom_metric' } })
+    expect((metricInput as HTMLInputElement).value).toBe('my_custom_metric')
+  })
 })
 
 describe('scaffoldLogsqlExpr', () => {
@@ -622,6 +705,9 @@ describe('CreateAlertModal edit mode', () => {
     } as never)
     vi.mocked(useLogsServicesQuery).mockReturnValue({
       data: { services: [], truncated: false },
+    } as never)
+    vi.mocked(useMetricNamesQuery).mockReturnValue({
+      data: { names: [] },
     } as never)
   })
 
@@ -741,5 +827,142 @@ describe('CreateAlertModal edit mode', () => {
     })
     await waitFor(() => expect(createMutFn).toHaveBeenCalled())
     expect(patchMutFn).not.toHaveBeenCalled()
+  })
+
+  it('compiles a metricsql Simple rule into the YAML preview', async () => {
+    vi.useFakeTimers()
+    try {
+      renderWithClient(<CreateAlertModal open onOpenChange={vi.fn()} />)
+      // Switch rule type to metricsql.
+      fireEvent.change(screen.getByTestId('create-alert-expr-kind'), {
+        target: { value: 'metricsql' },
+      })
+      // The logsql simple fields hide; the metric fields show.
+      expect(screen.getByTestId('create-alert-simple-metrics-fields')).toBeInTheDocument()
+      expect(screen.queryByTestId('create-alert-simple-fields')).not.toBeInTheDocument()
+      fireEvent.change(screen.getByTestId('create-alert-metric'), { target: { value: 'up' } })
+      fireEvent.change(screen.getByTestId('create-alert-metric-op'), { target: { value: '==' } })
+      fireEvent.change(screen.getByTestId('create-alert-metric-threshold'), {
+        target: { value: '0' },
+      })
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(350)
+      })
+      const preview = screen.getByTestId('yaml-preview-textarea')
+      expect((preview as HTMLTextAreaElement).value).toContain('up == 0')
+      // metricsql preview uses the metrics group + no `type: vlogs`.
+      expect((preview as HTMLTextAreaElement).value).toContain('name: user-rules-metrics')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('submits a metricsql Simple rule with the compiled expr and expr_kind=metricsql', async () => {
+    const mutate = vi.fn().mockResolvedValue({})
+    vi.mocked(useCreateUserRule).mockReturnValue({ mutateAsync: mutate, isPending: false } as never)
+    renderWithClient(
+      <CreateAlertModal
+        open
+        onOpenChange={vi.fn()}
+        initialValues={{ rule_name: 'MetRule', summary: 'host down' }}
+      />,
+    )
+    fireEvent.change(screen.getByTestId('create-alert-expr-kind'), {
+      target: { value: 'metricsql' },
+    })
+    fireEvent.change(screen.getByTestId('create-alert-metric'), { target: { value: 'up' } })
+    fireEvent.change(screen.getByTestId('create-alert-metric-op'), { target: { value: '==' } })
+    fireEvent.change(screen.getByTestId('create-alert-metric-threshold'), {
+      target: { value: '0' },
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('create-alert-submit'))
+      await Promise.resolve()
+    })
+    await waitFor(() => expect(mutate).toHaveBeenCalled())
+    const body = mutate.mock.calls[0]![0] as Record<string, unknown>
+    expect(body.expr_kind).toBe('metricsql')
+    expect(body.expr).toBe('up == 0')
+    expect(body).not.toHaveProperty('simple_metric')
+    expect(body).not.toHaveProperty('simple_metric_op')
+    expect(body).not.toHaveProperty('simple_metric_threshold')
+  })
+
+  it('blocks submit in metricsql Simple mode when the metric name is invalid', async () => {
+    const mutate = vi.fn().mockResolvedValue({})
+    vi.mocked(useCreateUserRule).mockReturnValue({ mutateAsync: mutate, isPending: false } as never)
+    renderWithClient(
+      <CreateAlertModal
+        open
+        onOpenChange={vi.fn()}
+        initialValues={{ rule_name: 'BadMetric', summary: 'host down' }}
+      />,
+    )
+    fireEvent.change(screen.getByTestId('create-alert-expr-kind'), {
+      target: { value: 'metricsql' },
+    })
+    // An invalid metric name (whitespace) → buildSimpleMetricsQLExpr returns '' →
+    // zod expr.min(1) fails → handleSubmit never invokes the create mutation.
+    fireEvent.change(screen.getByTestId('create-alert-metric'), {
+      target: { value: 'has space' },
+    })
+    fireEvent.change(screen.getByTestId('create-alert-metric-op'), { target: { value: '>' } })
+    fireEvent.change(screen.getByTestId('create-alert-metric-threshold'), {
+      target: { value: '0' },
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('create-alert-submit'))
+      await Promise.resolve()
+    })
+    // Submit is blocked — the create mutation must not have been called.
+    expect(mutate).not.toHaveBeenCalled()
+  })
+
+  it('allows selecting the error severity and submits it', async () => {
+    const mutate = vi.fn().mockResolvedValue({})
+    vi.mocked(useCreateUserRule).mockReturnValue({ mutateAsync: mutate, isPending: false } as never)
+    renderWithClient(
+      <CreateAlertModal
+        open
+        onOpenChange={vi.fn()}
+        initialMode="advanced"
+        initialValues={baseInitial}
+      />,
+    )
+    fireEvent.change(screen.getByTestId('create-alert-severity'), { target: { value: 'error' } })
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('create-alert-submit'))
+      await Promise.resolve()
+    })
+    await waitFor(() => expect(mutate).toHaveBeenCalled())
+    const body = mutate.mock.calls[0]![0] as Record<string, unknown>
+    expect(body.severity).toBe('error')
+  })
+})
+
+describe('buildSimpleMetricsQLExpr', () => {
+  it('builds `<metric> <op> <threshold>` for each operator', () => {
+    expect(buildSimpleMetricsQLExpr({ metric: 'up', op: '>', threshold: 5 })).toBe('up > 5')
+    expect(buildSimpleMetricsQLExpr({ metric: 'up', op: '>=', threshold: 1 })).toBe('up >= 1')
+    expect(buildSimpleMetricsQLExpr({ metric: 'up', op: '<', threshold: 0 })).toBe('up < 0')
+    expect(buildSimpleMetricsQLExpr({ metric: 'up', op: '<=', threshold: 2 })).toBe('up <= 2')
+    expect(buildSimpleMetricsQLExpr({ metric: 'up', op: '==', threshold: 0 })).toBe('up == 0')
+    expect(buildSimpleMetricsQLExpr({ metric: 'up', op: '!=', threshold: 0 })).toBe('up != 0')
+  })
+
+  it('allows `:`-namespaced metric names', () => {
+    expect(buildSimpleMetricsQLExpr({ metric: 'node:cpu:rate', op: '>', threshold: 0 })).toBe(
+      'node:cpu:rate > 0',
+    )
+  })
+
+  it('returns empty string for an invalid metric name (no injection)', () => {
+    expect(buildSimpleMetricsQLExpr({ metric: 'rate(x[5m]) or 1', op: '>', threshold: 0 })).toBe('')
+    expect(buildSimpleMetricsQLExpr({ metric: '', op: '>', threshold: 0 })).toBe('')
+    expect(buildSimpleMetricsQLExpr({ metric: '1bad', op: '>', threshold: 0 })).toBe('')
+  })
+
+  it('returns empty string for a non-finite threshold', () => {
+    expect(buildSimpleMetricsQLExpr({ metric: 'up', op: '>', threshold: Number.NaN })).toBe('')
   })
 })

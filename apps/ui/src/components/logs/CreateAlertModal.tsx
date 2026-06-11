@@ -7,6 +7,7 @@ import { toast } from 'sonner'
 import { ApiError } from '@/api/client'
 import { useUserRules, useCreateUserRule, usePatchUserRule } from '@/api/userRules'
 import { useLogsServicesQuery } from '@/api/logs'
+import { useMetricNamesQuery } from '@/api/metrics'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -150,11 +151,45 @@ export function buildSimpleExpr(fields: SimpleExprFields): string {
   return `${prefix} | stats count() as match_count | filter match_count:>${String(fields.threshold)}`
 }
 
+/** Structured inputs for metricsql Simple mode → a `<metric> <op> <threshold>` expr. */
+export interface SimpleMetricsQlFields {
+  /** Metric name or simple selector (validated against METRIC_NAME_REGEX). */
+  metric: string
+  /** Comparison operator from the fixed allow-list. */
+  op: MetricsQlOperator
+  /** Numeric threshold (coerced; NaN → empty expr). */
+  threshold: number
+}
+
+/**
+ * Compile metricsql Simple-mode fields into `<metric> <op> <threshold>`.
+ *
+ * SAFETY: the metric name is validated against METRIC_NAME_REGEX and the
+ * operator against the fixed allow-list; on ANY invalid input (bad metric name,
+ * non-finite threshold) returns '' so the empty-expr surfaces zod's
+ * "Expression is required" rather than emitting a malformed/injectable expr.
+ * PURE — no side effects. Exported for unit testing (mirrors buildSimpleExpr).
+ */
+export function buildSimpleMetricsQLExpr(fields: SimpleMetricsQlFields): string {
+  const metric = fields.metric.trim()
+  if (!METRIC_NAME_REGEX.test(metric)) return ''
+  if (!METRICSQL_OPERATORS.includes(fields.op)) return ''
+  if (!Number.isFinite(fields.threshold)) return ''
+  return `${metric} ${fields.op} ${String(fields.threshold)}`
+}
+
 const RULE_NAME_REGEX = /^[a-zA-Z_][a-zA-Z0-9_]*$/
 const FOR_DURATION_REGEX = /^(\d+[smhd])+$|^0s$/
 const WINDOW_REGEX = /^\d+[smhd]$/
 const DEFAULT_THRESHOLD = 10
 const DEFAULT_WINDOW = '5m'
+/** Valid PromQL/MetricsQL metric (or label-free selector) name. */
+const METRIC_NAME_REGEX = /^[a-zA-Z_:][a-zA-Z0-9_:]*$/
+/** Allowed metricsql Simple-mode comparison operators (fixed allow-list). */
+const METRICSQL_OPERATORS = ['>', '>=', '<', '<=', '==', '!='] as const
+type MetricsQlOperator = (typeof METRICSQL_OPERATORS)[number]
+const DEFAULT_METRIC_OP: MetricsQlOperator = '>'
+const DEFAULT_METRIC_THRESHOLD = 0
 const SERVICES_LOOKBACK_MS = 24 * 60 * 60 * 1000 // 24h default range for the service dropdown
 const LOGSQL_DOC_URL = 'https://docs.victoriametrics.com/victorialogs/logsql/'
 
@@ -166,7 +201,7 @@ const formSchema = z.object({
     .regex(RULE_NAME_REGEX, 'Letters, digits, underscore; must not start with a digit'),
   expr: z.string().min(1, 'Expression is required'),
   expr_kind: z.enum(['logsql', 'metricsql']),
-  severity: z.enum(['info', 'warning', 'critical']),
+  severity: z.enum(['info', 'warning', 'error', 'critical']),
   for_duration: z
     .string()
     .regex(FOR_DURATION_REGEX, 'Use durations like 5m, 30s, 1h, 2h30m, or 0s'),
@@ -177,6 +212,10 @@ const formSchema = z.object({
   simple_contains: z.string(),
   simple_threshold: z.number().int().min(1, 'Threshold must be at least 1'),
   simple_window: z.string().regex(WINDOW_REGEX, 'Use a duration like 5m, 30s, 1h, 2d'),
+  // --- metricsql Simple-mode sub-fields (compile source; not POSTed directly) ---
+  simple_metric: z.string(),
+  simple_metric_op: z.enum(['>', '>=', '<', '<=', '==', '!=']),
+  simple_metric_threshold: z.number(),
 })
 
 export type CreateAlertFormValues = z.infer<typeof formSchema>
@@ -187,12 +226,15 @@ const DEFAULT_VALUES: CreateAlertFormValues = {
   expr_kind: 'logsql',
   severity: 'warning',
   for_duration: '5m',
-  summary: 'Alert from logs query',
+  summary: 'Alert rule',
   description: '',
   simple_service: '',
   simple_contains: '',
   simple_threshold: DEFAULT_THRESHOLD,
   simple_window: DEFAULT_WINDOW,
+  simple_metric: '',
+  simple_metric_op: DEFAULT_METRIC_OP,
+  simple_metric_threshold: DEFAULT_METRIC_THRESHOLD,
 }
 
 export interface CreateAlertModalProps {
@@ -254,17 +296,16 @@ export function CreateAlertModal({
   // initialValues replaces stale state). Mirrors AddProbeModal's reset-on-open.
   useEffect(() => {
     if (open) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional reset on open
       form.reset(mergedDefaults)
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional reset on open
+
       setNameError(null)
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional reset on open
+
       setExprError(null)
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional reset on open
+
       setFormError(null)
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional reset on open
+
       setMode(initialMode)
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional reset on open
+
       setExprDirty(false)
     }
     // form is stable from useForm; depend on open + mergedDefaults + initialMode.
@@ -272,33 +313,59 @@ export function CreateAlertModal({
   }, [open, mergedDefaults, initialMode])
 
   // --- Simple mode: recompile expr from structured fields on every change ---
+  const exprKind = form.watch('expr_kind')
   const simpleService = form.watch('simple_service')
   const simpleContains = form.watch('simple_contains')
   const simpleThreshold = form.watch('simple_threshold')
   const simpleWindow = form.watch('simple_window')
+  const simpleMetric = form.watch('simple_metric')
+  const simpleMetricOp = form.watch('simple_metric_op')
+  const simpleMetricThreshold = form.watch('simple_metric_threshold')
   useEffect(() => {
     if (mode !== 'simple') return
-    // Threshold/window may be transiently invalid mid-typing; guard so we never
-    // build a malformed expr. Fall back to defaults for the compile only.
-    const thresholdNum = Number(simpleThreshold)
-    const safeThreshold =
-      Number.isFinite(thresholdNum) && thresholdNum >= 1
-        ? Math.floor(thresholdNum)
-        : DEFAULT_THRESHOLD
-    const safeWindow = WINDOW_REGEX.test(String(simpleWindow))
-      ? String(simpleWindow)
-      : DEFAULT_WINDOW
-    const expr = buildSimpleExpr({
-      service: simpleService,
-      contains: simpleContains,
-      threshold: safeThreshold,
-      window: safeWindow,
-    })
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- recompile derived expr
+    let expr: string
+    if (exprKind === 'metricsql') {
+      // buildSimpleMetricsQLExpr returns '' on an invalid metric name / NaN
+      // threshold; the empty expr surfaces zod's "Expression is required".
+      const thresholdNum = Number(simpleMetricThreshold)
+      expr = buildSimpleMetricsQLExpr({
+        metric: simpleMetric,
+        op: simpleMetricOp,
+        threshold: thresholdNum,
+      })
+    } else {
+      // Threshold/window may be transiently invalid mid-typing; guard so we never
+      // build a malformed expr. Fall back to defaults for the compile only.
+      const thresholdNum = Number(simpleThreshold)
+      const safeThreshold =
+        Number.isFinite(thresholdNum) && thresholdNum >= 1
+          ? Math.floor(thresholdNum)
+          : DEFAULT_THRESHOLD
+      const safeWindow = WINDOW_REGEX.test(String(simpleWindow))
+        ? String(simpleWindow)
+        : DEFAULT_WINDOW
+      expr = buildSimpleExpr({
+        service: simpleService,
+        contains: simpleContains,
+        threshold: safeThreshold,
+        window: safeWindow,
+      })
+    }
+
     form.setValue('expr', expr, { shouldValidate: true })
-    // form stable; depend on the four simple fields + mode.
+    // form stable; depend on expr_kind + all simple fields + mode.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, simpleService, simpleContains, simpleThreshold, simpleWindow])
+  }, [
+    mode,
+    exprKind,
+    simpleService,
+    simpleContains,
+    simpleThreshold,
+    simpleWindow,
+    simpleMetric,
+    simpleMetricOp,
+    simpleMetricThreshold,
+  ])
 
   // --- Services dropdown: last-24h window, computed once per open ---
   const servicesRange = useMemo(() => {
@@ -311,12 +378,18 @@ export function CreateAlertModal({
   const servicesQuery = useLogsServicesQuery(servicesRange.start, servicesRange.end)
   const serviceOptions = useMemo(() => servicesQuery.data?.services ?? [], [servicesQuery.data])
 
+  // --- Metric-name autocomplete (MetricsQL Simple mode): VM __name__ discovery ---
+  const metricNamesQuery = useMetricNamesQuery()
+  const metricNameOptions = useMemo(
+    () => metricNamesQuery.data?.names ?? [],
+    [metricNamesQuery.data],
+  )
+
   // --- Live YAML preview (debounced ~300ms) ---
   const watched = form.watch()
   const [previewYaml, setPreviewYaml] = useState<string>('')
   useEffect(() => {
     const handle = setTimeout(() => {
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- debounced preview
       setPreviewYaml(
         buildAlertRuleYaml({
           rule_name: watched.rule_name || '<rule_name>',
@@ -359,7 +432,6 @@ export function CreateAlertModal({
   const uniqDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => {
     const handle = setTimeout(() => {
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- debounced uniqueness check
       setNameError(
         watchedName.length > 0 && existingNames.has(watchedName)
           ? 'A rule with that name already exists'
@@ -397,23 +469,29 @@ export function CreateAlertModal({
     // Recompile immediately so the expr reflects the structured fields (the
     // recompile effect also fires, but do it here so the value is correct even
     // before the effect runs).
-    const thresholdNum = Number(form.getValues('simple_threshold'))
-    const safeThreshold =
-      Number.isFinite(thresholdNum) && thresholdNum >= 1
-        ? Math.floor(thresholdNum)
-        : DEFAULT_THRESHOLD
-    const win = form.getValues('simple_window')
-    const safeWindow = WINDOW_REGEX.test(String(win)) ? String(win) : DEFAULT_WINDOW
-    form.setValue(
-      'expr',
-      buildSimpleExpr({
+    let recompiled: string
+    if (form.getValues('expr_kind') === 'metricsql') {
+      recompiled = buildSimpleMetricsQLExpr({
+        metric: form.getValues('simple_metric'),
+        op: form.getValues('simple_metric_op'),
+        threshold: Number(form.getValues('simple_metric_threshold')),
+      })
+    } else {
+      const thresholdNum = Number(form.getValues('simple_threshold'))
+      const safeThreshold =
+        Number.isFinite(thresholdNum) && thresholdNum >= 1
+          ? Math.floor(thresholdNum)
+          : DEFAULT_THRESHOLD
+      const win = form.getValues('simple_window')
+      const safeWindow = WINDOW_REGEX.test(String(win)) ? String(win) : DEFAULT_WINDOW
+      recompiled = buildSimpleExpr({
         service: form.getValues('simple_service'),
         contains: form.getValues('simple_contains'),
         threshold: safeThreshold,
         window: safeWindow,
-      }),
-      { shouldValidate: true },
-    )
+      })
+    }
+    form.setValue('expr', recompiled, { shouldValidate: true })
   }
 
   // Set an authoritative name error from the submit path, cancelling any pending
@@ -496,7 +574,11 @@ export function CreateAlertModal({
       >
         <DialogHeader>
           <DialogTitle>
-            {editRuleId !== undefined ? 'Edit alert rule' : 'Create alert from query'}
+            {editRuleId !== undefined
+              ? 'Edit alert rule'
+              : sourceKind !== undefined
+                ? 'Create alert from query'
+                : 'Create alert rule'}
           </DialogTitle>
           <DialogDescription>
             Define a vmalert rule. The YAML preview is rendered client-side; the actual rule is
@@ -539,6 +621,20 @@ export function CreateAlertModal({
                 )}
               </div>
 
+              {/* expr_kind */}
+              <div className="space-y-1">
+                <Label htmlFor="create-alert-expr-kind">Rule type</Label>
+                <Select
+                  id="create-alert-expr-kind"
+                  data-testid="create-alert-expr-kind"
+                  disabled={editRuleId !== undefined}
+                  {...form.register('expr_kind')}
+                >
+                  <option value="logsql">Logs (LogsQL)</option>
+                  <option value="metricsql">Metrics (MetricsQL)</option>
+                </Select>
+              </div>
+
               {/* severity */}
               <div className="space-y-1">
                 <Label htmlFor="create-alert-severity">Severity</Label>
@@ -549,6 +645,7 @@ export function CreateAlertModal({
                 >
                   <option value="info">info</option>
                   <option value="warning">warning</option>
+                  <option value="error">error</option>
                   <option value="critical">critical</option>
                 </Select>
               </div>
@@ -587,8 +684,8 @@ export function CreateAlertModal({
                 </div>
               </div>
 
-              {/* ---------- SIMPLE mode fields ---------- */}
-              {mode === 'simple' && (
+              {/* ---------- SIMPLE mode fields (logsql) ---------- */}
+              {mode === 'simple' && form.watch('expr_kind') === 'logsql' && (
                 <div className="space-y-4" data-testid="create-alert-simple-fields">
                   {/* service */}
                   <div className="space-y-1">
@@ -653,8 +750,65 @@ export function CreateAlertModal({
                 </div>
               )}
 
-              {/* ---------- ADVANCED mode: raw expr editor ---------- */}
-              {mode === 'advanced' && (
+              {/* ---------- SIMPLE mode fields (metricsql) ---------- */}
+              {mode === 'simple' && form.watch('expr_kind') === 'metricsql' && (
+                <div className="space-y-4" data-testid="create-alert-simple-metrics-fields">
+                  {/* metric — native datalist autocomplete over VM metric names.
+                      Type-to-filter the real metric list, but a custom name (a
+                      metric that does not exist yet) is still allowed. */}
+                  <div className="space-y-1">
+                    <Label htmlFor="create-alert-metric">Metric</Label>
+                    <Input
+                      id="create-alert-metric"
+                      data-testid="create-alert-metric"
+                      list="create-alert-metric-options"
+                      placeholder="e.g. up or node_filesystem_avail_bytes"
+                      autoComplete="off"
+                      {...form.register('simple_metric')}
+                    />
+                    <datalist
+                      id="create-alert-metric-options"
+                      data-testid="create-alert-metric-datalist"
+                    >
+                      {metricNameOptions.map((name) => (
+                        <option key={name} value={name} />
+                      ))}
+                    </datalist>
+                  </div>
+
+                  {/* operator */}
+                  <div className="space-y-1">
+                    <Label htmlFor="create-alert-metric-op">Comparison</Label>
+                    <Select
+                      id="create-alert-metric-op"
+                      data-testid="create-alert-metric-op"
+                      {...form.register('simple_metric_op')}
+                    >
+                      <option value=">">&gt;</option>
+                      <option value=">=">&gt;=</option>
+                      <option value="<">&lt;</option>
+                      <option value="<=">&lt;=</option>
+                      <option value="==">==</option>
+                      <option value="!=">!=</option>
+                    </Select>
+                  </div>
+
+                  {/* threshold */}
+                  <div className="space-y-1">
+                    <Label htmlFor="create-alert-metric-threshold">Threshold</Label>
+                    <Input
+                      id="create-alert-metric-threshold"
+                      data-testid="create-alert-metric-threshold"
+                      type="number"
+                      step="any"
+                      {...form.register('simple_metric_threshold', { valueAsNumber: true })}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* ---------- ADVANCED mode: LogsQL expr editor ---------- */}
+              {mode === 'advanced' && form.watch('expr_kind') === 'logsql' && (
                 <div className="space-y-1" data-testid="create-alert-advanced-fields">
                   <Label htmlFor="create-alert-expr">Expression *</Label>
                   <LogsQlEditor
@@ -693,6 +847,42 @@ export function CreateAlertModal({
                       ))}
                     </ul>
                   )}
+                  {exprError && (
+                    <p
+                      role="alert"
+                      data-testid="create-alert-expr-error"
+                      className="text-sm text-red-600"
+                    >
+                      {exprError}
+                    </p>
+                  )}
+                  {form.formState.errors.expr && (
+                    <p role="alert" className="text-sm text-red-600">
+                      {form.formState.errors.expr.message}
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {/* ---------- ADVANCED mode: MetricsQL expr editor ---------- */}
+              {mode === 'advanced' && form.watch('expr_kind') === 'metricsql' && (
+                <div className="space-y-1" data-testid="create-alert-advanced-fields">
+                  <Label htmlFor="create-alert-expr">Expression *</Label>
+                  <textarea
+                    id="create-alert-expr"
+                    data-testid="create-alert-expr"
+                    rows={3}
+                    className="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    value={exprValue}
+                    onChange={(e) => {
+                      form.setValue('expr', e.target.value, { shouldValidate: true })
+                      setExprDirty(true)
+                      setExprError(null)
+                      setFormError(null)
+                    }}
+                    aria-label="Alert expression"
+                  />
+                  <p className="text-xs text-muted-foreground">Uses MetricsQL</p>
                   {exprError && (
                     <p
                       role="alert"

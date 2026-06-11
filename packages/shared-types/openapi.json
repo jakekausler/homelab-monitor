@@ -3289,6 +3289,7 @@
             "enum": [
               "info",
               "warning",
+              "error",
               "critical"
             ],
             "title": "Severity",
@@ -3412,6 +3413,7 @@
                 "enum": [
                   "info",
                   "warning",
+                  "error",
                   "critical"
                 ],
                 "type": "string"
@@ -3483,6 +3485,7 @@
             "enum": [
               "info",
               "warning",
+              "error",
               "critical"
             ],
             "title": "Severity",
@@ -3912,6 +3915,24 @@
           "user"
         ],
         "title": "MeResponse",
+        "type": "object"
+      },
+      "MetricNamesResponse": {
+        "additionalProperties": false,
+        "description": "Response for GET /api/metrics/metric-names \u2014 VM ``__name__`` label values.\n\nDiscovery aid for the MetricsQL Simple-mode authoring autocomplete. ``names``\nis the distinct list of metric names VictoriaMetrics currently knows about\n(VM's ``/api/v1/label/__name__/values`` response ``data``).",
+        "properties": {
+          "names": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Names",
+            "type": "array"
+          }
+        },
+        "required": [
+          "names"
+        ],
+        "title": "MetricNamesResponse",
         "type": "object"
       },
       "MetricsRangeResponse": {
@@ -10245,6 +10266,25 @@
           }
         },
         "summary": "Logs Window"
+      }
+    },
+    "/api/metrics/metric-names": {
+      "get": {
+        "description": "Proxy VictoriaMetrics' ``__name__`` label-values list (metric-name discovery).\n\nAuth: cookie session required. CSRF NOT enforced on GET.\n\nPowers the MetricsQL Simple-mode authoring autocomplete. On any non-200\nresponse from VM, a transport error, or a timeout, surfaces as 502\n``upstream_unavailable`` (mirrors ``metrics_range``). VM's response shape is\n``{\"status\": \"success\", \"data\": [\"metric1\", \"metric2\", ...]}``; we parse\n``data`` (a list of strings) into ``names``. A 200 with ``status != \"success\"``\nor a missing/non-list ``data`` yields an empty ``names`` list rather than an\nerror (best-effort discovery aid).",
+        "operationId": "metrics_metric_names_api_metrics_metric_names_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetricNamesResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Metrics Metric Names"
       }
     },
     "/api/metrics/range": {

@@ -19,6 +19,7 @@ from homelab_monitor.kernel.api.dependencies import (
 )
 from homelab_monitor.kernel.api.errors import HttpProblem
 from homelab_monitor.kernel.api.schemas import (
+    MetricNamesResponse,
     MetricsRangeResponse,
     MetricsSnapshotEntry,
     MetricsSnapshotResponse,
@@ -177,3 +178,67 @@ async def metrics_range(  # noqa: PLR0913
             result=parsed_results,
         ),
     )
+
+
+@router.get("/metrics/metric-names", response_model=MetricNamesResponse)
+async def metrics_metric_names(
+    _user: User = Depends(require_session()),  # noqa: B008
+    vm_url: str = Depends(get_vm_url),
+    http_client: httpx.AsyncClient = Depends(get_http_client),  # noqa: B008
+) -> MetricNamesResponse:
+    """Proxy VictoriaMetrics' ``__name__`` label-values list (metric-name discovery).
+
+    Auth: cookie session required. CSRF NOT enforced on GET.
+
+    Powers the MetricsQL Simple-mode authoring autocomplete. On any non-200
+    response from VM, a transport error, or a timeout, surfaces as 502
+    ``upstream_unavailable`` (mirrors ``metrics_range``). VM's response shape is
+    ``{"status": "success", "data": ["metric1", "metric2", ...]}``; we parse
+    ``data`` (a list of strings) into ``names``. A 200 with ``status != "success"``
+    or a missing/non-list ``data`` yields an empty ``names`` list rather than an
+    error (best-effort discovery aid).
+    """
+    log: BoundLogger = cast(
+        BoundLogger,
+        structlog.get_logger().bind(component="metrics_metric_names"),
+    )
+
+    try:
+        resp = await http_client.get(
+            f"{vm_url}/api/v1/label/__name__/values",
+            timeout=_VM_TIMEOUT_S,
+        )
+    except (httpx.TimeoutException, httpx.RequestError) as exc:
+        log.warning("metrics_metric_names.upstream_error", error=str(exc))
+        raise HttpProblem(
+            status_code=502,
+            code="upstream_unavailable",
+            message="victoriametrics label-values query failed",
+        ) from exc
+
+    if resp.status_code != _HTTP_OK:
+        log.warning(
+            "metrics_metric_names.upstream_status",
+            status=resp.status_code,
+            body=resp.text[:200],
+        )
+        raise HttpProblem(
+            status_code=502,
+            code="upstream_unavailable",
+            message=f"victoriametrics returned status {resp.status_code}",
+        )
+
+    body_raw = resp.json()  # pyright: ignore[reportAssignmentType, reportReturnType]
+    body = cast(dict[str, object], body_raw) if isinstance(body_raw, dict) else {}
+
+    # Best-effort: a non-success status or a non-list `data` yields an empty list
+    # (the autocomplete is advisory; a custom-typed metric name is always allowed).
+    names: list[str] = []
+    if body.get("status") == "success":
+        data_raw = body.get("data")
+        if isinstance(data_raw, list):
+            for item in data_raw:  # pyright: ignore[reportUnknownVariableType]
+                if isinstance(item, str):
+                    names.append(item)
+
+    return MetricNamesResponse(names=names)

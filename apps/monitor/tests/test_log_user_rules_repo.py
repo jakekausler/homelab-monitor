@@ -430,6 +430,22 @@ async def test_create_metricsql_without_stats_ok(repo: SqliteRepository) -> None
     assert rule.expr == "up == 0"
 
 
+async def test_create_rule_with_error_severity_round_trips(repo: SqliteRepository) -> None:
+    """A rule created with severity='error' persists and reads back unchanged."""
+    user_repo = LogUserRulesRepository(repo)
+    created = await user_repo.create(
+        rule_name="ErrorSevRule",
+        expr="up == 0",
+        expr_kind="metricsql",
+        severity="error",
+        summary="host down",
+    )
+    assert created.severity == "error"
+    fetched = await user_repo.get(created.id)
+    assert fetched is not None
+    assert fetched.severity == "error"
+
+
 async def test_update_to_invalid_expr_raises(repo: SqliteRepository) -> None:
     """update() with invalid expr raises ExprValidationError."""
     user_repo = LogUserRulesRepository(repo)

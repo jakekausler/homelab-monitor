@@ -7,7 +7,9 @@ import { parseColumnsParam } from '@/api/logs'
 import type { Schema } from '@/api/types'
 import type { RunSearchSchema } from '@/routes/inventory/types'
 import { Route as rootRoute } from '@/routes/__root'
-import { AlertsPage } from '@/routes/Alerts'
+import { AlertsLayout } from '@/routes/alerts/AlertsLayout'
+import { ActiveAlertsTab } from '@/routes/alerts/ActiveAlertsTab'
+import { ManageRulesTab } from '@/routes/alerts/ManageRulesTab'
 import { LoginPage } from '@/routes/Login'
 import { MetricsPage } from '@/routes/Metrics'
 import { OverviewPage } from '@/routes/Overview'
@@ -28,7 +30,6 @@ import { ModelsDebugPage } from '@/routes/logs/ModelsDebugPage'
 import { SignaturesTab } from '@/routes/logs/SignaturesTab'
 import { SignatureDetailPage } from '@/routes/logs/SignatureDetailPage'
 import { SilenceAllowlistTab } from '@/routes/logs/SilenceAllowlistTab'
-import { UserRulesTab } from '@/routes/logs/UserRulesTab'
 import { SettingsLayout } from '@/routes/settings/SettingsLayout'
 import { SettingsLogsPage } from '@/routes/settings/SettingsLogsPage'
 import { AppShell } from '@/components/AppShell'
@@ -92,10 +93,31 @@ const overviewRoute = createRoute({
   component: OverviewPage,
 })
 
-const alertsRoute = createRoute({
+const alertsLayoutRoute = createRoute({
   getParentRoute: () => protectedLayoutRoute,
   path: '/alerts',
-  component: AlertsPage,
+  component: AlertsLayout,
+})
+
+const alertsIndexRoute = createRoute({
+  getParentRoute: () => alertsLayoutRoute,
+  path: '/',
+  beforeLoad: () => {
+    // eslint-disable-next-line @typescript-eslint/only-throw-error -- TanStack Router redirect objects are thrown by design
+    throw redirect({ to: '/alerts/active' })
+  },
+})
+
+const alertsActiveRoute = createRoute({
+  getParentRoute: () => alertsLayoutRoute,
+  path: 'active',
+  component: ActiveAlertsTab,
+})
+
+const alertsManageRoute = createRoute({
+  getParentRoute: () => alertsLayoutRoute,
+  path: 'manage',
+  component: ManageRulesTab,
 })
 
 const metricsRoute = createRoute({
@@ -228,12 +250,6 @@ const logsSilenceAllowlistRoute = createRoute({
   getParentRoute: () => logsLayoutRoute,
   path: 'silence-allowlist',
   component: SilenceAllowlistTab,
-})
-
-const logsUserRulesRoute = createRoute({
-  getParentRoute: () => logsLayoutRoute,
-  path: 'user-rules',
-  component: UserRulesTab,
 })
 
 const inventoryLayoutRoute = createRoute({
@@ -418,7 +434,7 @@ const routeTree = rootRoute.addChildren([
   protectedLayoutRoute.addChildren([
     indexRoute,
     overviewRoute,
-    alertsRoute,
+    alertsLayoutRoute.addChildren([alertsIndexRoute, alertsActiveRoute, alertsManageRoute]),
     metricsRoute,
     logsLayoutRoute.addChildren([
       logsIndexRoute,
@@ -426,7 +442,6 @@ const routeTree = rootRoute.addChildren([
       logsSignaturesRoute,
       logsSignatureDetailRoute,
       logsSilenceAllowlistRoute,
-      logsUserRulesRoute,
       logsModelsDebugRoute,
     ]),
     inventoryLayoutRoute.addChildren([

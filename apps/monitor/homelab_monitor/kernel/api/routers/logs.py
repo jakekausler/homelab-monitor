@@ -1528,7 +1528,7 @@ def _user_rule_to_response(r: LogUserRule) -> LogUserRuleResponse:
         rule_name=r.rule_name,
         expr=r.expr,
         expr_kind=cast(Literal["logsql", "metricsql"], r.expr_kind),
-        severity=cast(Literal["info", "warning", "critical"], r.severity),
+        severity=cast(Literal["info", "warning", "error", "critical"], r.severity),
         summary=r.summary,
         description=r.description,
         for_duration=r.for_duration,
@@ -1594,8 +1594,9 @@ async def get_user_rule(
 )
 async def create_user_rule(
     body: LogUserRuleCreateRequest,
-    _user: Annotated[User, Depends(require_session())],
+    user: Annotated[User, Depends(require_session())],
     repo: Annotated[LogUserRulesRepository, Depends(_get_user_rules_repo)],
+    repo_db: Annotated[SqliteRepository, Depends(get_repo)],
 ) -> LogUserRuleResponse:
     """Create a user rule. 201 on success; 409 on duplicate rule_name; 400 on
     validation/render failure. The rule is rendered to the aggregate YAML and
@@ -1623,6 +1624,19 @@ async def create_user_rule(
         ) from exc
     except UserRuleValidationError as exc:
         raise HttpProblem(status_code=400, code="invalid_rule", message=str(exc)) from exc
+    from homelab_monitor.kernel.db.audit import audit_write  # noqa: PLC0415
+
+    await audit_write(
+        repo_db,
+        who=user.username,
+        what="user_rule.create",
+        after={
+            "rule_id": created.id,
+            "rule_name": created.rule_name,
+            "expr_kind": created.expr_kind,
+            "severity": created.severity,
+        },
+    )
     await _render_user_rules(repo)
     return _user_rule_to_response(created)
 
@@ -1631,8 +1645,9 @@ async def create_user_rule(
 async def patch_user_rule(
     rule_id: int,
     body: LogUserRulePatchRequest,
-    _user: Annotated[User, Depends(require_session())],
+    user: Annotated[User, Depends(require_session())],
     repo: Annotated[LogUserRulesRepository, Depends(_get_user_rules_repo)],
+    repo_db: Annotated[SqliteRepository, Depends(get_repo)],
 ) -> LogUserRuleResponse:
     """Partial update (expr/severity/summary/description/for_duration/enabled).
     404 if absent; 400 on validation/render failure. Re-renders. CSRF enforced.
@@ -1661,6 +1676,18 @@ async def patch_user_rule(
         ) from exc
     if updated is None:
         raise NotFoundProblem(message=f"user rule not found: {rule_id}")
+    from homelab_monitor.kernel.db.audit import audit_write  # noqa: PLC0415
+
+    await audit_write(
+        repo_db,
+        who=user.username,
+        what="user_rule.update",
+        after={
+            "rule_id": updated.id,
+            "rule_name": updated.rule_name,
+            "severity": updated.severity,
+        },
+    )
     await _render_user_rules(repo)
     return _user_rule_to_response(updated)
 
@@ -1668,26 +1695,44 @@ async def patch_user_rule(
 @router.delete("/logs/user-rules/{rule_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_user_rule(
     rule_id: int,
-    _user: Annotated[User, Depends(require_session())],
+    user: Annotated[User, Depends(require_session())],
     repo: Annotated[LogUserRulesRepository, Depends(_get_user_rules_repo)],
+    repo_db: Annotated[SqliteRepository, Depends(get_repo)],
 ) -> None:
     """Delete a user rule. 204 on success, 404 if absent. Re-renders. CSRF enforced."""
     deleted = await repo.delete(rule_id)
     if not deleted:
         raise NotFoundProblem(message=f"user rule not found: {rule_id}")
+    from homelab_monitor.kernel.db.audit import audit_write  # noqa: PLC0415
+
+    await audit_write(
+        repo_db,
+        who=user.username,
+        what="user_rule.delete",
+        before={"rule_id": rule_id},
+    )
     await _render_user_rules(repo)
 
 
 @router.post("/logs/user-rules/{rule_id}/enable", response_model=LogUserRuleResponse)
 async def enable_user_rule(
     rule_id: int,
-    _user: Annotated[User, Depends(require_session())],
+    user: Annotated[User, Depends(require_session())],
     repo: Annotated[LogUserRulesRepository, Depends(_get_user_rules_repo)],
+    repo_db: Annotated[SqliteRepository, Depends(get_repo)],
 ) -> LogUserRuleResponse:
     """Enable a rule. 404 if absent. Re-renders. CSRF enforced."""
     rule = await repo.set_enabled(rule_id, enabled=True)
     if rule is None:
         raise NotFoundProblem(message=f"user rule not found: {rule_id}")
+    from homelab_monitor.kernel.db.audit import audit_write  # noqa: PLC0415
+
+    await audit_write(
+        repo_db,
+        who=user.username,
+        what="user_rule.enable",
+        after={"rule_id": rule.id, "rule_name": rule.rule_name},
+    )
     await _render_user_rules(repo)
     return _user_rule_to_response(rule)
 
@@ -1695,13 +1740,22 @@ async def enable_user_rule(
 @router.post("/logs/user-rules/{rule_id}/disable", response_model=LogUserRuleResponse)
 async def disable_user_rule(
     rule_id: int,
-    _user: Annotated[User, Depends(require_session())],
+    user: Annotated[User, Depends(require_session())],
     repo: Annotated[LogUserRulesRepository, Depends(_get_user_rules_repo)],
+    repo_db: Annotated[SqliteRepository, Depends(get_repo)],
 ) -> LogUserRuleResponse:
     """Disable a rule. 404 if absent. Re-renders. CSRF enforced."""
     rule = await repo.set_enabled(rule_id, enabled=False)
     if rule is None:
         raise NotFoundProblem(message=f"user rule not found: {rule_id}")
+    from homelab_monitor.kernel.db.audit import audit_write  # noqa: PLC0415
+
+    await audit_write(
+        repo_db,
+        who=user.username,
+        what="user_rule.disable",
+        after={"rule_id": rule.id, "rule_name": rule.rule_name},
+    )
     await _render_user_rules(repo)
     return _user_rule_to_response(rule)
 

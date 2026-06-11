@@ -48,6 +48,7 @@ __all__ = [
     "LogsServicesResponse",
     "LogsStreamSummary",
     "LogsStreamsResponse",
+    "MetricNamesResponse",
     "MetricsRangeResponse",
     "MetricsSnapshotEntry",
     "MetricsSnapshotResponse",
@@ -170,6 +171,18 @@ class MetricsRangeResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
     status: Literal["success", "error"]
     data: VMRangeData
+
+
+class MetricNamesResponse(BaseModel):
+    """Response for GET /api/metrics/metric-names — VM ``__name__`` label values.
+
+    Discovery aid for the MetricsQL Simple-mode authoring autocomplete. ``names``
+    is the distinct list of metric names VictoriaMetrics currently knows about
+    (VM's ``/api/v1/label/__name__/values`` response ``data``).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    names: list[str]
 
 
 class AlertView(BaseModel):
@@ -497,7 +510,7 @@ class LogUserRuleResponse(BaseModel):
     rule_name: str
     expr: str
     expr_kind: Literal["logsql", "metricsql"]
-    severity: Literal["info", "warning", "critical"]
+    severity: Literal["info", "warning", "error", "critical"]
     summary: str
     description: str
     for_duration: str
@@ -528,7 +541,7 @@ class LogUserRuleCreateRequest(BaseModel):
     rule_name: str = Field(min_length=1, max_length=200)
     expr: str = Field(min_length=1, max_length=8192)
     expr_kind: Literal["logsql", "metricsql"]
-    severity: Literal["info", "warning", "critical"]
+    severity: Literal["info", "warning", "error", "critical"]
     summary: str = Field(min_length=1, max_length=1000)
     description: str = Field(default="", max_length=4000)
     for_duration: str = Field(default="0s", max_length=16)
@@ -542,7 +555,7 @@ class LogUserRulePatchRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     expr: str | None = Field(default=None, min_length=1, max_length=8192)
-    severity: Literal["info", "warning", "critical"] | None = None
+    severity: Literal["info", "warning", "error", "critical"] | None = None
     summary: str | None = Field(default=None, min_length=1, max_length=1000)
     description: str | None = Field(default=None, max_length=4000)
     for_duration: str | None = Field(default=None, max_length=16)

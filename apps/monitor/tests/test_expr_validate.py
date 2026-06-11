@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import pytest
 
-from homelab_monitor.kernel.logs.expr_validate import ExprValidationError, validate_expr
+from homelab_monitor.kernel.logs.expr_validate import (
+    ExprValidationError,
+    validate_expr,
+)
 
 
 class TestLogsQLValidation:
@@ -161,6 +164,70 @@ class TestMetricsQLValidation:
     def test_metricsql_valid_passes(self) -> None:
         """Valid MetricsQL with balanced parens/quotes must pass."""
         validate_expr("sum(rate(x[5m])) > 0", "metricsql")  # Should not raise
+
+    def test_metricsql_bare_selector_rejected(self) -> None:
+        """A bare selector (always fires) is rejected with missing_threshold."""
+        with pytest.raises(ExprValidationError) as exc_info:
+            validate_expr("up", "metricsql")
+        assert exc_info.value.check == "missing_threshold"
+
+    def test_metricsql_label_matcher_only_rejected(self) -> None:
+        """`up{job="x"}`'s `=` is a label matcher, NOT a threshold → rejected."""
+        with pytest.raises(ExprValidationError) as exc_info:
+            validate_expr('up{job="x"}', "metricsql")
+        assert exc_info.value.check == "missing_threshold"
+
+    @pytest.mark.parametrize(
+        "expr",
+        [
+            "up > 0",
+            "up >= 1",
+            "up == 0",
+            "up != 0",
+            "up < 1",
+            "up <= 1",
+            "rate(x[5m]) > 0.5",
+            'up{job=~"x"} > 0',
+        ],
+    )
+    def test_metricsql_comparison_accepted(self, expr: str) -> None:
+        """Any threshold comparison satisfies the floor (no raise)."""
+        validate_expr(expr, "metricsql")
+
+    def test_metricsql_absent_accepted(self) -> None:
+        """absent(...) is a recognized alerting construct → accepted."""
+        validate_expr("absent(up)", "metricsql")
+
+    def test_metricsql_absent_over_time_accepted(self) -> None:
+        """absent_over_time(...) is recognized → accepted."""
+        validate_expr("absent_over_time(up[5m])", "metricsql")
+
+    def test_metricsql_unless_accepted(self) -> None:
+        """The `unless` set operator is a recognized construct → accepted."""
+        validate_expr("foo unless bar", "metricsql")
+
+    def test_metricsql_regex_matcher_alone_rejected(self) -> None:
+        """`=~` is a label-regex matcher, NOT a threshold → bare selector rejected."""
+        with pytest.raises(ExprValidationError) as exc_info:
+            validate_expr('up{job=~"x"}', "metricsql")
+        assert exc_info.value.check == "missing_threshold"
+
+    def test_metricsql_operator_inside_quotes_not_counted(self) -> None:
+        """A `>` inside a quoted label value must NOT satisfy the floor."""
+        with pytest.raises(ExprValidationError) as exc_info:
+            validate_expr('up{note="a>b"}', "metricsql")
+        assert exc_info.value.check == "missing_threshold"
+
+    def test_metricsql_escaped_quote_inside_label_accepted_with_threshold(self) -> None:
+        r"""An escaped quote inside a label value plus a real `> 0` is accepted
+        (exercises the in-quote backslash branch of _strip_quoted_spans)."""
+        validate_expr(r'up{n="a\"b"} > 0', "metricsql")
+
+    def test_metricsql_backslash_outside_quote_with_threshold_accepted(self) -> None:
+        r"""A backslash outside a quoted span is kept as-is; a real `> 0` still
+        satisfies the floor (exercises the outside-quote backslash branch of the
+        quote-stripper)."""
+        validate_expr("up\\ > 0", "metricsql")
 
 
 class TestUnknownExprKind:

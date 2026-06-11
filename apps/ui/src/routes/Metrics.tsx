@@ -2,7 +2,7 @@
  * Metrics route — embeds Grafana at /api/grafana/ via a sandboxed iframe.
  *
  * Sandbox attribute: `allow-scripts allow-same-origin allow-forms`.
- * (Same caveat + same defenses as Alerts.tsx; see ErrorDisplay/CSP/proxy.)
+ * (Same caveat + same defenses as ActiveAlertsTab's Karma iframe; see CSP/proxy.)
  *
  * iframe src loads the host-overview dashboard in kiosk mode (no Grafana
  * navigation chrome). Operators needing the full Grafana UI (datasources,
@@ -11,8 +11,7 @@
  * Layout: full-bleed (negates AppShell's `p-6`), full-height of <main>.
  * Note: `h-[calc(100vh-3.5rem)]` assumes AppShell's TopBar is 3.5rem
  * (56px). If TopBar height changes, adjust this calc accordingly.
- * Note: identical h-calc coupling exists in apps/ui/src/routes/Alerts.tsx;
- * if AppShell's TopBar height changes, BOTH must be updated.
+ * Note: if AppShell's TopBar height changes, update this calc to match.
  */
 export function MetricsPage() {
   return (
