@@ -73,3 +73,19 @@
   byte-identical, 006 tests green).
 - Real HA: ~80 automations + ~20 scripts (under 500 cap). Verify via prod rig: collector ok=True,
   null-triggered skipped with 0 parse errors, all 3 families live in VM.
+
+## STAGE-005-010 (Config-entry state collector — websocket)
+- `HaConfigEntryCollector` emits `homelab_ha_config_entry_loaded{domain,title}` (1=loaded/0) +
+  `homelab_ha_config_entry_setup_error{domain,title}` (1 iff state ∈ {setup_error,setup_retry,
+  migration_error,failed_unload} / 0). not_loaded/setup_in_progress/unknown → both 0.
+- First WS collector: `self._ws` injected by lifespan (app.state.ha_ws_client); per-tick
+  `send_command("config_entries/get")` snapshot (NO subscription). _ws None/not-connected/HaError →
+  ok=False. reason panel-only (not a label).
+- WS-client contract (STAGE-005-002 fix from this stage): `send_command`/`_result_payload` pass through
+  LIST results (HA config_entries/get returns a top-level array) — NOT collapsed to {}. Return type is
+  `dict[str,object] | list[object] | HaError`. Regression risk: if `_result_payload` is ever narrowed
+  back to dict-only, this collector silently emits ZERO entries. Test
+  `test_send_command_success_list_result_returns_list` guards this.
+- Real HA: ~189 config entries (under 500 cap). 015 #10 rule consumes `homelab_ha_config_entry_loaded
+  == 0`. Verify via prod rig: collector ok=True, ~189 gauges/family, any setup_error==1 = broken
+  integration, live in VM.

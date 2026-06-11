@@ -1,12 +1,12 @@
 # EPIC-005: Home Assistant integration (collector + dispatcher channel + bidirectional events + UI panel)
 
-## Status: In Progress (9 / 26 Complete)
+## Status: In Progress (10 / 26 Complete)
 
-## Stages Counter: 9 / 26 Complete
+## Stages Counter: 10 / 26 Complete
 
-## Current Stage: STAGE-005-010
+## Current Stage: STAGE-005-011
 
-## Current Phase: STAGE-005-010 Design (Not Started)
+## Current Phase: STAGE-005-011 Design (Not Started)
 
 ## Overview
 
@@ -69,7 +69,7 @@ Stages MUST be implemented in order. No parallelization. Each stage lands a sing
 | STAGE-005-007 | Battery-level collector | ✓ Complete — Filter device_class=battery entities; emit homelab_ha_battery_level{entity_id,domain} percent. Extract _shared.py helpers (get_states_or_error, extract_domain, parse_float_state). Refactor 006 tests green. (a0a8ebb) |
 | STAGE-005-008 | Update-availability collector | ✓ Complete — update.* entities (state=on=update available); emit homelab_ha_update_available{entity_id,title}; 150 cap; 106 real entities validated 3b. (f036eb2) |
 | STAGE-005-009 | Automation/script run-cadence collector | ✓ Complete — automation.*/script.* last_triggered → run-cadence + last-triggered-age metrics; 100 entities, null-skip + parse-error gauge; extract parse_iso_or_none to _shared.py, refactor 006 (byte-identical). (5ddd29a) |
-| STAGE-005-010 | Config-entry state collector (websocket) | Authoritative integration loaded/setup_error/setup_retry state. (#10) |
+| STAGE-005-010 | Config-entry state collector (websocket) | ✓ Complete — Authoritative integration loaded/setup_error/setup_retry state via config_entries/get RPC; WS-client list-result fix (c2ffbad) unblocks 011/012. (#10) |
 | STAGE-005-011 | Repairs collector (websocket) | repairs/list_issues → active repair issues. (#11) |
 | STAGE-005-012 | Persistent-notifications collector (websocket) | HA notification-bell events. (#12) |
 | STAGE-005-013 | History/anomaly z-score collector | Recorder API for slow sensors; rolling-baseline z-score homelab_ha_entity_value_zscore. (#4) [heaviest; clean optional cut point] |
