@@ -18,6 +18,9 @@ from homelab_monitor.kernel.plugins.loader import PluginLoader, config_from_clas
 from homelab_monitor.plugins.collectors.integrations.homeassistant.ha_battery import (
     HaBatteryCollector,
 )
+from homelab_monitor.plugins.collectors.integrations.homeassistant.ha_cadence import (
+    HaCadenceCollector,
+)
 from homelab_monitor.plugins.collectors.integrations.homeassistant.ha_entity_available import (
     HaEntityAvailableCollector,
 )
@@ -36,6 +39,7 @@ _HA_COLLECTORS: list[type[BaseCollector]] = [
     HaEntityAvailableCollector,
     HaBatteryCollector,
     HaUpdateCollector,
+    HaCadenceCollector,
 ]
 
 

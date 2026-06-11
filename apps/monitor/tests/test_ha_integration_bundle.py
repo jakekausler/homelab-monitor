@@ -14,6 +14,9 @@ from homelab_monitor.plugins.collectors.integrations.homeassistant import regist
 from homelab_monitor.plugins.collectors.integrations.homeassistant.ha_battery import (
     HaBatteryCollector,
 )
+from homelab_monitor.plugins.collectors.integrations.homeassistant.ha_cadence import (
+    HaCadenceCollector,
+)
 from homelab_monitor.plugins.collectors.integrations.homeassistant.ha_entity_available import (
     HaEntityAvailableCollector,
 )
@@ -100,6 +103,18 @@ def test_register_all_registers_ha_update() -> None:
     record = records[0]
     assert isinstance(record, LoadedCollector)
     assert record.config.name == "ha_update"
+
+
+def test_register_all_registers_ha_cadence() -> None:
+    """register_all registers HaCadenceCollector with the derived config."""
+    loader = PluginLoader()
+    register_all(loader)
+    loaded = loader.load_all()
+    records = [r for r in loaded if isinstance(r.collector, HaCadenceCollector)]
+    assert len(records) == 1
+    record = records[0]
+    assert isinstance(record, LoadedCollector)
+    assert record.config.name == "ha_cadence"
 
 
 def test_register_all_isolates_failing_register(monkeypatch: pytest.MonkeyPatch) -> None:

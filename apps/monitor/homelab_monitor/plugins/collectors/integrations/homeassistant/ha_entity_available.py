@@ -36,6 +36,7 @@ from homelab_monitor.kernel.plugins.types import CollectorEvent, CollectorResult
 from homelab_monitor.plugins.collectors.integrations.homeassistant._shared import (
     extract_domain,
     get_states_or_error,
+    parse_iso_or_none,
 )
 
 # Metric family names (referenced by both the cap lookup and the emit).
@@ -68,18 +69,6 @@ DEFAULT_DOMAIN_ALLOW: Final[frozenset[str]] = frozenset(
         "valve",
     }
 )
-
-
-def _parse_last_changed(value: str) -> datetime:
-    """Parse an ISO-8601 ``last_changed`` string, attaching UTC if it is naive.
-
-    Raises ``ValueError`` on an empty or malformed string (caller handles by counting a
-    parse error and skipping the staleness series for that entity).
-    """
-    ts = datetime.fromisoformat(value)
-    if ts.tzinfo is None:
-        ts = ts.replace(tzinfo=UTC)
-    return ts
 
 
 class HaEntityAvailableCollector(BaseCollector):
@@ -128,9 +117,8 @@ class HaEntityAvailableCollector(BaseCollector):
             available = 0.0 if state.state.strip() in _UNAVAILABLE_STATES else 1.0
             available_obs.append((labels, available))
 
-            try:
-                changed_at = _parse_last_changed(state.last_changed)
-            except (ValueError, TypeError):
+            changed_at = parse_iso_or_none(state.last_changed)
+            if changed_at is None:
                 parse_errors += 1
                 continue
 

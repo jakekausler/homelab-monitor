@@ -9,6 +9,7 @@ collector-local and byte-identical to the pre-extraction code.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Final
 
 from homelab_monitor.kernel.ha.errors import HaError
@@ -57,3 +58,28 @@ def parse_float_state(state: str) -> float | None:
         return float(state)
     except ValueError:
         return None
+
+
+def parse_iso_or_none(value: object) -> datetime | None:
+    """Parse an ISO-8601 timestamp into an aware UTC datetime, or ``None``.
+
+    Accepts an arbitrary attribute value (HA ``attributes`` values are typed
+    ``object``). Returns ``None`` — never raises — when:
+
+    - ``value`` is not a non-empty ``str`` (covers ``None``, missing, ``""``,
+      and non-string types), or
+    - ``datetime.fromisoformat`` cannot parse it.
+
+    A successfully parsed naive datetime is assumed to be UTC (HA reports UTC).
+    This is the pure parse seam: ISO string -> aware datetime | None. It does
+    NO seconds math and NO parse-error counting — those stay collector-local.
+    """
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        ts = datetime.fromisoformat(value)
+    except (ValueError, TypeError):
+        return None
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=UTC)
+    return ts
