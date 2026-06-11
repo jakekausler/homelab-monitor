@@ -11,6 +11,9 @@ from homelab_monitor.kernel.plugins.loader import (
     config_from_classvars,
 )
 from homelab_monitor.plugins.collectors.integrations.homeassistant import register_all
+from homelab_monitor.plugins.collectors.integrations.homeassistant.ha_battery import (
+    HaBatteryCollector,
+)
 from homelab_monitor.plugins.collectors.integrations.homeassistant.ha_entity_available import (
     HaEntityAvailableCollector,
 )
@@ -70,6 +73,18 @@ def test_register_all_registers_ha_entity_available() -> None:
     record = records[0]
     assert isinstance(record, LoadedCollector)
     assert record.config.name == "ha_entity_available"
+
+
+def test_register_all_registers_ha_battery() -> None:
+    """register_all registers HaBatteryCollector with the derived config."""
+    loader = PluginLoader()
+    register_all(loader)
+    loaded = loader.load_all()
+    records = [r for r in loaded if isinstance(r.collector, HaBatteryCollector)]
+    assert len(records) == 1
+    record = records[0]
+    assert isinstance(record, LoadedCollector)
+    assert record.config.name == "ha_battery"
 
 
 def test_register_all_isolates_failing_register(monkeypatch: pytest.MonkeyPatch) -> None:

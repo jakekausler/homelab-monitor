@@ -13,12 +13,14 @@ from homelab_monitor.kernel.ha.client import HaState
 from homelab_monitor.kernel.ha.errors import HaError
 from homelab_monitor.kernel.plugins.io import InMemoryMetricsWriter, MetricEntry
 from homelab_monitor.kernel.plugins.types import SuggestionEvent
+from homelab_monitor.plugins.collectors.integrations.homeassistant._shared import (
+    extract_domain,
+)
 from homelab_monitor.plugins.collectors.integrations.homeassistant.ha_entity_available import (
     M_ENTITY_AVAILABLE,
     M_ENTITY_LAST_CHANGED_SECONDS,
     M_ENTITY_PARSE_ERRORS,
     HaEntityAvailableCollector,
-    extract_domain,
 )
 
 

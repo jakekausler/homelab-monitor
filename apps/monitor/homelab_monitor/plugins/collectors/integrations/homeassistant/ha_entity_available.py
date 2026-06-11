@@ -33,6 +33,10 @@ from homelab_monitor.kernel.metrics.cardinality import CappedEmitter
 from homelab_monitor.kernel.plugins.base import BaseCollector
 from homelab_monitor.kernel.plugins.context import CollectorContext
 from homelab_monitor.kernel.plugins.types import CollectorEvent, CollectorResult
+from homelab_monitor.plugins.collectors.integrations.homeassistant._shared import (
+    extract_domain,
+    get_states_or_error,
+)
 
 # Metric family names (referenced by both the cap lookup and the emit).
 M_ENTITY_AVAILABLE: Final[str] = "homelab_ha_entity_available"
@@ -66,11 +70,6 @@ DEFAULT_DOMAIN_ALLOW: Final[frozenset[str]] = frozenset(
 )
 
 
-def extract_domain(entity_id: str) -> str:
-    """Return the HA domain (text before the first ``.``) of ``entity_id``."""
-    return entity_id.partition(".")[0]
-
-
 def _parse_last_changed(value: str) -> datetime:
     """Parse an ISO-8601 ``last_changed`` string, attaching UTC if it is naive.
 
@@ -95,16 +94,7 @@ class HaEntityAvailableCollector(BaseCollector):
         """Poll HA states, filter by domain, emit capped availability + staleness families."""
         start = time.monotonic()
 
-        if ctx.ha is None:
-            return CollectorResult(
-                ok=False,
-                metrics_emitted=0,
-                errors=["ha client not configured"],
-                events=[],
-                duration_seconds=time.monotonic() - start,
-            )
-
-        result = await ctx.ha.get_states()
+        result = await get_states_or_error(ctx)
         if isinstance(result, HaError):
             return CollectorResult(
                 ok=False,
