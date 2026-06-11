@@ -907,6 +907,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
             )
 
             c._config = load_silence_detection_config()  # pyright: ignore[reportPrivateUsage]
+
+        from homelab_monitor.plugins.collectors.integrations.homeassistant.ha_config_entry import (  # noqa: PLC0415
+            HaConfigEntryCollector,
+        )
+
+        if isinstance(c, HaConfigEntryCollector):
+            c._ws = app.state.ha_ws_client  # pyright: ignore[reportPrivateUsage]
+
     scheduler = Scheduler(
         collectors,
         ctx_factory,

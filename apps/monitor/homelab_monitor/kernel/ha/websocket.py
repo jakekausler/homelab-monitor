@@ -183,7 +183,7 @@ class HomeAssistantWebsocketClient:
         self._backoff: float = _INITIAL_BACKOFF
         self._conn: _WsConnection | None = None
 
-        self._pending: dict[int, asyncio.Future[dict[str, object] | HaError]] = {}
+        self._pending: dict[int, asyncio.Future[dict[str, object] | list[object] | HaError]] = {}
         self._subscriptions: dict[int, Subscription] = {}
         self._intents: list[Subscription] = []
         # Transition-only logging guard: last (kind) we logged, e.g. "auth_invalid".
@@ -227,10 +227,12 @@ class HomeAssistantWebsocketClient:
             await self._task
         self._task = None
 
-    async def send_command(self, type_: str, **fields: object) -> dict[str, object] | HaError:
+    async def send_command(
+        self, type_: str, **fields: object
+    ) -> dict[str, object] | list[object] | HaError:
         """One-shot RPC: send ``{"id", "type", **fields}``, await the result frame.
 
-        Returns the result payload dict on ``success: true``, or an HaError:
+        Returns the result payload (dict or list) on ``success: true``, or an HaError:
           - not connected -> ``unreachable``
           - command timeout -> ``timeout``
           - ``success: false`` -> ``http_error`` if HA gave a numeric error code,
@@ -240,7 +242,7 @@ class HomeAssistantWebsocketClient:
         if not self._connected or self._conn is None:
             return HaError(reason="unreachable", message="websocket not connected")
         msg_id = self._next_id()
-        future: asyncio.Future[dict[str, object] | HaError] = (
+        future: asyncio.Future[dict[str, object] | list[object] | HaError] = (
             asyncio.get_running_loop().create_future()
         )
         self._pending[msg_id] = future
@@ -291,7 +293,7 @@ class HomeAssistantWebsocketClient:
         msg_id = self._next_id()
         sub._rebind(msg_id)  # pyright: ignore[reportPrivateUsage]
         self._subscriptions[msg_id] = sub
-        future: asyncio.Future[dict[str, object] | HaError] = (
+        future: asyncio.Future[dict[str, object] | list[object] | HaError] = (
             asyncio.get_running_loop().create_future()
         )
         self._pending[msg_id] = future
@@ -475,13 +477,15 @@ class HomeAssistantWebsocketClient:
             self._log.debug("ha_websocket.unhandled_frame", frame_type=str(ftype))
 
     @staticmethod
-    def _result_payload(frame: dict[str, object]) -> dict[str, object] | HaError:
-        """Map a ``result`` frame to its payload dict or an HaError."""
+    def _result_payload(frame: dict[str, object]) -> dict[str, object] | list[object] | HaError:
+        """Map a ``result`` frame to its payload dict, list, or an HaError."""
         if frame.get("success") is True:
             result = frame.get("result")
             if isinstance(result, dict):
                 return cast("dict[str, object]", result)
-            return {}  # success with null/non-dict result (e.g. subscribe confirms).
+            if isinstance(result, list):
+                return cast("list[object]", result)
+            return {}  # success with null/scalar result (e.g. subscribe confirms).
         # success: false -> error. HA error shape: {"error": {"code", "message"}}.
         err = frame.get("error")
         code: int | None = None

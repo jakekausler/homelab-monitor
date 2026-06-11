@@ -313,6 +313,23 @@ async def test_send_command_success_non_dict_result_returns_empty() -> None:
 
 
 @pytest.mark.asyncio
+async def test_send_command_success_list_result_returns_list() -> None:
+    """config_entries/get returns a top-level JSON array; send_command passes the list through."""
+    conn = FakeWsConnection()
+    _seed_auth_ok(conn)
+    client, _ = _client(ScriptedConnector(conn))
+    client.start_task()
+    await _wait_connected(client)
+    cmd = asyncio.ensure_future(client.send_command("config_entries/get"))
+    await _wait_until(lambda: any(s.get("type") == "config_entries/get" for s in conn.sent))
+    sent_id = next(s["id"] for s in conn.sent if s.get("type") == "config_entries/get")
+    conn.push({"id": sent_id, "type": "result", "success": True, "result": [{"a": 1}, {"b": 2}]})
+    result = await cmd
+    assert result == [{"a": 1}, {"b": 2}]
+    await client.stop_task()
+
+
+@pytest.mark.asyncio
 async def test_send_command_failure_with_code_is_http_error() -> None:
     conn = FakeWsConnection()
     _seed_auth_ok(conn)
@@ -1198,7 +1215,7 @@ async def test_fail_all_pending_skips_already_done_future() -> None:
     loop = asyncio.get_running_loop()
 
     # Create a future that is already done before _fail_all_pending is called.
-    already_done: asyncio.Future[dict[str, object] | HaError] = loop.create_future()
+    already_done: asyncio.Future[dict[str, object] | list[object] | HaError] = loop.create_future()
     already_done.set_result(_ALREADY_DONE_RESULT)
 
     client._pending[_PENDING_CMD_ID] = already_done  # pyright: ignore[reportPrivateUsage]
