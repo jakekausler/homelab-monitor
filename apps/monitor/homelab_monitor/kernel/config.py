@@ -506,6 +506,16 @@ def load_ha_config() -> HaConfig:
     return HaConfig(base_url=raw.rstrip("/"))
 
 
+# Built-in per-family cardinality caps (STAGE-005-006).
+# A typical large HA deployment emits ~1906 entity-family series; 2500 gives
+# comfortable headroom while still bounding runaway growth.
+# Users can override individual entries via cardinality_caps.families in YAML.
+_DEFAULT_CARDINALITY_FAMILIES: dict[str, int] = {
+    "homelab_ha_entity_available": 2500,
+    "homelab_ha_entity_last_changed_seconds": 2500,
+}
+
+
 @dataclass(frozen=True, slots=True)
 class CardinalityCapsConfig:
     """Per-metric-family cardinality caps (STAGE-005-004).
@@ -523,7 +533,7 @@ class CardinalityCapsConfig:
     """
 
     default: int = 500
-    families: Mapping[str, int] = field(default_factory=lambda: {})
+    families: Mapping[str, int] = field(default_factory=lambda: dict(_DEFAULT_CARDINALITY_FAMILIES))
 
     def cap_for(self, family: str) -> int:
         """Return the configured cap for ``family``, or ``default`` if unset."""
@@ -538,10 +548,12 @@ def load_cardinality_caps_config() -> CardinalityCapsConfig:
 
     Sources, in priority order (later overrides earlier):
       1. Hard-coded ``default`` (500) in :class:`CardinalityCapsConfig`.
-      2. ``HOMELAB_MONITOR_CONFIG`` ``cardinality_caps`` section:
+      2. Built-in per-family caps from ``_DEFAULT_CARDINALITY_FAMILIES``
+         (e.g. HA entity families default to 2500).
+      3. ``HOMELAB_MONITOR_CONFIG`` ``cardinality_caps`` section:
          ``cardinality_caps.default`` (int) and ``cardinality_caps.families``
          (mapping of family-name -> int cap).
-      3. ``HOMELAB_MONITOR_CARDINALITY_CAP_DEFAULT`` env (overrides ``default`` only;
+      4. ``HOMELAB_MONITOR_CARDINALITY_CAP_DEFAULT`` env (overrides ``default`` only;
          per-family entries from YAML are kept).
 
     Returns:
@@ -556,7 +568,7 @@ def load_cardinality_caps_config() -> CardinalityCapsConfig:
 
     defaults = CardinalityCapsConfig()
     default_cap = defaults.default
-    families: dict[str, int] = {}
+    families: dict[str, int] = dict(_DEFAULT_CARDINALITY_FAMILIES)
 
     if config_path.is_file():
         with config_path.open(encoding="utf-8") as f:
@@ -571,7 +583,8 @@ def load_cardinality_caps_config() -> CardinalityCapsConfig:
             raise ValueError(msg)
         section = cast(dict[str, Any], section_obj)
         default_cap = _coerce_int(section, "default", default_cap)
-        families = _load_cardinality_families(section)
+        yaml_families = _load_cardinality_families(section)
+        families = {**_DEFAULT_CARDINALITY_FAMILIES, **yaml_families}
 
     env_default = os.environ.get("HOMELAB_MONITOR_CARDINALITY_CAP_DEFAULT")
     if env_default is not None:

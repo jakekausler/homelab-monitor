@@ -1262,6 +1262,8 @@ def test_cardinality_caps_defaults_when_file_missing(
     cfg = load_cardinality_caps_config()
     assert cfg == CardinalityCapsConfig()
     assert cfg.default == 500  # noqa: PLR2004
+    assert cfg.cap_for("homelab_ha_entity_available") == 2500  # noqa: PLR2004
+    assert cfg.cap_for("homelab_ha_entity_last_changed_seconds") == 2500  # noqa: PLR2004
     assert cfg.cap_for("anything") == 500  # noqa: PLR2004
 
 
@@ -1280,6 +1282,23 @@ def test_cardinality_caps_reads_yaml_families(
     assert cfg.cap_for("other") == 500  # noqa: PLR2004
 
 
+def test_cardinality_caps_partial_yaml_families_merge(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """User YAML overrides one HA family; the other retains its built-in default."""
+    cfg_file = tmp_path / "homelab-monitor.yaml"
+    cfg_file.write_text("cardinality_caps:\n  families:\n    homelab_ha_entity_available: 1000\n")
+    monkeypatch.setenv("HOMELAB_MONITOR_CONFIG", str(cfg_file))
+    monkeypatch.delenv("HOMELAB_MONITOR_CARDINALITY_CAP_DEFAULT", raising=False)
+    cfg = load_cardinality_caps_config()
+    # User set this one explicitly — user wins.
+    assert cfg.cap_for("homelab_ha_entity_available") == 1000  # noqa: PLR2004
+    # User did NOT set this one — built-in default of 2500 is preserved.
+    assert cfg.cap_for("homelab_ha_entity_last_changed_seconds") == 2500  # noqa: PLR2004
+    # Unknown family still falls through to default.
+    assert cfg.cap_for("some_other_family") == 500  # noqa: PLR2004
+
+
 def test_cardinality_caps_yaml_default_override(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -1290,6 +1309,7 @@ def test_cardinality_caps_yaml_default_override(
     monkeypatch.delenv("HOMELAB_MONITOR_CARDINALITY_CAP_DEFAULT", raising=False)
     cfg = load_cardinality_caps_config()
     assert cfg.default == 1000  # noqa: PLR2004
+    assert cfg.cap_for("homelab_ha_entity_available") == 2500  # noqa: PLR2004
     assert cfg.cap_for("x") == 1000  # noqa: PLR2004
 
 
@@ -1316,6 +1336,21 @@ def test_cardinality_caps_env_override_keeps_yaml_families(
     cfg = load_cardinality_caps_config()
     assert cfg.default == 999  # noqa: PLR2004
     assert cfg.cap_for("homelab_ha_entity_available") == 2500  # noqa: PLR2004
+
+
+def test_cardinality_caps_env_default_does_not_override_ha_families(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """HOMELAB_MONITOR_CARDINALITY_CAP_DEFAULT changes default; HA built-in families unaffected."""
+    monkeypatch.setenv("HOMELAB_MONITOR_CONFIG", str(tmp_path / "absent.yaml"))
+    monkeypatch.setenv("HOMELAB_MONITOR_CARDINALITY_CAP_DEFAULT", "750")
+    cfg = load_cardinality_caps_config()
+    assert cfg.default == 750  # noqa: PLR2004
+    # HA families come from built-in defaults, not from `default`.
+    assert cfg.cap_for("homelab_ha_entity_available") == 2500  # noqa: PLR2004
+    assert cfg.cap_for("homelab_ha_entity_last_changed_seconds") == 2500  # noqa: PLR2004
+    # An unknown family uses the env-overridden default.
+    assert cfg.cap_for("unrelated_family") == 750  # noqa: PLR2004
 
 
 def test_cardinality_caps_rejects_non_mapping_section(
@@ -1376,12 +1411,14 @@ def test_cardinality_caps_rejects_non_mapping_root(
 def test_cardinality_caps_null_families_is_empty(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """families: null falls through to empty dict."""
+    """families: null merges with built-in HA defaults."""
     cfg_file = tmp_path / "empty.yaml"
     cfg_file.write_text("cardinality_caps:\n  default: 500\n  families:\n")
     monkeypatch.setenv("HOMELAB_MONITOR_CONFIG", str(cfg_file))
     cfg = load_cardinality_caps_config()
-    assert cfg.families == {}
+    assert cfg.families["homelab_ha_entity_available"] == 2500  # noqa: PLR2004
+    assert cfg.families["homelab_ha_entity_last_changed_seconds"] == 2500  # noqa: PLR2004
+    assert cfg.cap_for("homelab_ha_entity_available") == 2500  # noqa: PLR2004
     assert cfg.cap_for("x") == 500  # noqa: PLR2004
 
 

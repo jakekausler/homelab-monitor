@@ -11,6 +11,9 @@ from homelab_monitor.kernel.plugins.loader import (
     config_from_classvars,
 )
 from homelab_monitor.plugins.collectors.integrations.homeassistant import register_all
+from homelab_monitor.plugins.collectors.integrations.homeassistant.ha_entity_available import (
+    HaEntityAvailableCollector,
+)
 from homelab_monitor.plugins.collectors.integrations.homeassistant.ha_up import (
     HaUpCollector,
 )
@@ -47,13 +50,26 @@ def test_register_all_registers_ha_up() -> None:
     loader = PluginLoader()
     register_all(loader)
     loaded = loader.load_all()
-    assert len(loaded) == 1
-    record = loaded[0]
+    ha_up_records = [r for r in loaded if isinstance(r.collector, HaUpCollector)]
+    assert len(ha_up_records) == 1
+    record = ha_up_records[0]
     assert isinstance(record, LoadedCollector)
     assert isinstance(record.collector, HaUpCollector)
     assert record.config.name == "ha_up"
     assert record.config.interval_seconds == _EXPECTED_INTERVAL
     assert record.config.timeout_seconds == _EXPECTED_TIMEOUT
+
+
+def test_register_all_registers_ha_entity_available() -> None:
+    """register_all registers HaEntityAvailableCollector with the derived config."""
+    loader = PluginLoader()
+    register_all(loader)
+    loaded = loader.load_all()
+    records = [r for r in loaded if isinstance(r.collector, HaEntityAvailableCollector)]
+    assert len(records) == 1
+    record = records[0]
+    assert isinstance(record, LoadedCollector)
+    assert record.config.name == "ha_entity_available"
 
 
 def test_register_all_isolates_failing_register(monkeypatch: pytest.MonkeyPatch) -> None:

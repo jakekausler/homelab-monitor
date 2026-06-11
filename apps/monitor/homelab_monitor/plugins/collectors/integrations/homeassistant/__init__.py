@@ -15,6 +15,9 @@ import structlog
 
 from homelab_monitor.kernel.plugins.base import BaseCollector
 from homelab_monitor.kernel.plugins.loader import PluginLoader, config_from_classvars
+from homelab_monitor.plugins.collectors.integrations.homeassistant.ha_entity_available import (
+    HaEntityAvailableCollector,
+)
 from homelab_monitor.plugins.collectors.integrations.homeassistant.ha_up import (
     HaUpCollector,
 )
@@ -22,7 +25,7 @@ from homelab_monitor.plugins.collectors.integrations.homeassistant.ha_up import 
 _log = structlog.get_logger()
 
 # Wave-B stages append their collector class here.
-_HA_COLLECTORS: list[type[BaseCollector]] = [HaUpCollector]
+_HA_COLLECTORS: list[type[BaseCollector]] = [HaUpCollector, HaEntityAvailableCollector]
 
 
 def register_all(loader: PluginLoader) -> None:
