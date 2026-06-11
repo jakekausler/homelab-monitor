@@ -49,3 +49,14 @@
   metric live in VM.
 - `_shared.py` helpers (`extract_domain`, `get_states_or_error`, `parse_float_state`) shared by 006 +
   007 — 006 (entity-availability) behavior must remain byte-identical.
+
+## STAGE-005-008 (Update-availability collector)
+- `HaUpdateCollector` emits `homelab_ha_update_available{entity_id,title}` = 1.0 (state "on" = update
+  available) / 0.0 (state "off" = up-to-date) for `update.*` entities. EMIT the 0s (stable denominator).
+- Unavailable/unknown update entities must be SKIPPED (not emitted as 0).
+- NO version labels (installed_version/latest_version are panel-only per Option C — 021's concern).
+- `title` label from attributes, defaults to "" when missing/non-str (real HACS entities have
+  title=None → title="").
+- Always-emitted drop gauge `homelab_metric_family_dropped_series{family="homelab_ha_update_available"}`.
+- Per-family cap 150 in `_DEFAULT_CARDINALITY_FAMILIES`. Real HA update cardinality ~106 (under cap).
+- Verify via prod rig: collector run `ok=True`, ~41 on / ~55 off, metric live in VM.
