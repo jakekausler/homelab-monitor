@@ -28,3 +28,12 @@
 - Backend `GET /api/metrics/metric-names` proxies VM `/api/v1/label/__name__/values`, returns `{names:[...]}`, 502 on VM unreachable, session-required.
 - Alerts page: `/alerts` redirects to `/alerts/active` (Karma); `/alerts/manage` hosts rule management; the Logs page has NO "Alert Rules" tab.
 - End-to-end: a created metricsql rule renders to the `user-rules-metrics` vmalert group (`/etc/vmalert/metrics-user/<name>.yaml`), loads healthy in vmalert-metrics, and fires when its expr matches.
+
+## STAGE-005-006 (Entity-availability collector)
+
+- Collector suite: `make uv ARGS="--directory apps/monitor pytest tests/test_ha_entity_available_collector.py"` — all pass.
+- `ha_entity_available` collector polls `/api/states`, emits `homelab_ha_entity_available{entity_id,domain}` (1.0 real / 0.0 unavailable/unknown/empty) + `homelab_ha_entity_last_changed_seconds{entity_id,domain}` (now−last_changed, ≥0), applies the 005-004 cardinality cap. Domain allow-list (`DEFAULT_DOMAIN_ALLOW`) is first-line control; cap is safety net.
+- Built-in default cap for the two HA entity families is **2500** (not 500) via `_DEFAULT_CARDINALITY_FAMILIES` in `kernel/config.py`; user YAML `cardinality_caps.families.*` overrides per-family, global `default` stays 500. Verify: `load_cardinality_caps_config().cap_for("homelab_ha_entity_available") == 2500` with no YAML.
+- Real-HA behavior: on a ~2000-entity HA, the domain filter + 2500 cap emit the full filtered set with 0 drops + 0 suggestions; an install >2500 filtered entities fires the over-cap suggestion (raise cap or narrow filter).
+- Unparseable `last_changed` → availability still emitted, staleness skipped, `homelab_ha_entity_last_changed_parse_errors{}` counts it (only when >0). HaError / ctx.ha None → failed CollectorResult, no crash.
+- Both `ha_up` + `ha_entity_available` registered in the HA bundle (`register_all`).
