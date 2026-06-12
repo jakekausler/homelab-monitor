@@ -1462,9 +1462,85 @@ def load_anomaly_zscore_config() -> AnomalyZscoreConfig:
     )
 
 
+# ---------------------------------------------------------------------------
+# STAGE-005-016: HA safety binary-sensor + HA temp/humidity value collectors.
+# Both use the established frozen-dataclass + load_* env-loader pattern (read
+# inside run()). Each holds only its device-class allow-set, env-overridable via
+# a comma-separated list (lowercased + stripped; empty result keeps the default).
+# ---------------------------------------------------------------------------
+
+#: Default safety-relevant binary_sensor device classes for HaSafetySensorsCollector.
+#: Life-safety (smoke/gas/carbon_monoxide/moisture) + contact (door/window/opening).
+DEFAULT_SAFETY_DEVICE_CLASSES: frozenset[str] = frozenset(
+    {"smoke", "gas", "carbon_monoxide", "moisture", "door", "window", "opening"}
+)
+
+
+@dataclass(frozen=True, slots=True)
+class SafetySensorsConfig:
+    """Tunables for HaSafetySensorsCollector (STAGE-005-016).
+
+    ``device_classes`` — the binary_sensor device-class allow-set the collector
+    emits ``homelab_ha_binary_sensor_on`` for. Env-overridable; an empty override
+    falls back to ``DEFAULT_SAFETY_DEVICE_CLASSES``.
+    """
+
+    device_classes: frozenset[str] = DEFAULT_SAFETY_DEVICE_CLASSES
+
+
+def load_safety_sensors_config() -> SafetySensorsConfig:
+    """Load HaSafetySensorsCollector tunables from env.
+
+    HOMELAB_MONITOR_HA_SAFETY_DEVICE_CLASSES -> comma-separated device classes,
+        lowercased + stripped; empty result falls back to the default set.
+    """
+    defaults = SafetySensorsConfig()
+    device_classes = defaults.device_classes
+    raw_dc = os.environ.get("HOMELAB_MONITOR_HA_SAFETY_DEVICE_CLASSES")
+    if raw_dc is not None:
+        parsed_dc = frozenset(s.strip().lower() for s in raw_dc.split(",") if s.strip())
+        if parsed_dc:
+            device_classes = parsed_dc
+    return SafetySensorsConfig(device_classes=device_classes)
+
+
+#: Default device classes for HaSensorValueCollector (temp/humidity raw values).
+DEFAULT_SENSOR_VALUE_DEVICE_CLASSES: frozenset[str] = frozenset({"temperature", "humidity"})
+
+
+@dataclass(frozen=True, slots=True)
+class SensorValueConfig:
+    """Tunables for HaSensorValueCollector (STAGE-005-016).
+
+    ``device_classes`` — the device-class allow-set the collector emits
+    ``homelab_ha_sensor_value`` for (scoped by device_class, NOT domain).
+    Env-overridable; an empty override falls back to the default set.
+    """
+
+    device_classes: frozenset[str] = DEFAULT_SENSOR_VALUE_DEVICE_CLASSES
+
+
+def load_sensor_value_config() -> SensorValueConfig:
+    """Load HaSensorValueCollector tunables from env.
+
+    HOMELAB_MONITOR_HA_SENSOR_VALUE_DEVICE_CLASSES -> comma-separated device
+        classes, lowercased + stripped; empty result falls back to the default.
+    """
+    defaults = SensorValueConfig()
+    device_classes = defaults.device_classes
+    raw_dc = os.environ.get("HOMELAB_MONITOR_HA_SENSOR_VALUE_DEVICE_CLASSES")
+    if raw_dc is not None:
+        parsed_dc = frozenset(s.strip().lower() for s in raw_dc.split(",") if s.strip())
+        if parsed_dc:
+            device_classes = parsed_dc
+    return SensorValueConfig(device_classes=device_classes)
+
+
 __all__ = [
     "DEFAULT_ERROR_PATTERNS",
     "DEFAULT_REDACT_PATTERNS",
+    "DEFAULT_SAFETY_DEVICE_CLASSES",
+    "DEFAULT_SENSOR_VALUE_DEVICE_CLASSES",
     "DEFAULT_ZSCORE_DEVICE_CLASSES",
     "AnomalyZscoreConfig",
     "CardinalityCapsConfig",
@@ -1481,6 +1557,8 @@ __all__ = [
     "LogsConfig",
     "NewSignatureConfig",
     "RedactPattern",
+    "SafetySensorsConfig",
+    "SensorValueConfig",
     "SeverityFloor",
     "SilenceDetectionConfig",
     "TailConfig",
@@ -1501,6 +1579,8 @@ __all__ = [
     "load_logs_config",
     "load_new_signature_config",
     "load_redact_patterns",
+    "load_safety_sensors_config",
+    "load_sensor_value_config",
     "load_silence_detection_config",
     "load_tail_config",
     "load_vl_disk_warning_config",

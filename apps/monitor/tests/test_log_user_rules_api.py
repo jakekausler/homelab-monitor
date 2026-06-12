@@ -19,11 +19,12 @@ def _csrf(client: AsyncClient) -> dict[str, str]:
 
 
 async def test_list_user_rules_empty(authenticated_client: AsyncClient) -> None:
-    """GET /api/logs/user-rules empty returns 200 with rules=[]."""
+    """GET /api/logs/user-rules returns 200 with no user-created rules on a fresh DB."""
     response = await authenticated_client.get("/api/logs/user-rules")
     assert response.status_code == 200  # noqa: PLR2004
     data = response.json()
-    assert data["rules"] == []
+    user_rules = [r for r in data["rules"] if r["source_kind"] != "preset"]
+    assert user_rules == []
 
 
 async def test_create_user_rule_201(

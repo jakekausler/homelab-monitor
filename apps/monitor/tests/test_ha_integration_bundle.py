@@ -32,6 +32,12 @@ from homelab_monitor.plugins.collectors.integrations.homeassistant.ha_persistent
 from homelab_monitor.plugins.collectors.integrations.homeassistant.ha_repairs import (
     HaRepairsCollector,
 )
+from homelab_monitor.plugins.collectors.integrations.homeassistant.ha_safety_sensors import (
+    HaSafetySensorsCollector,
+)
+from homelab_monitor.plugins.collectors.integrations.homeassistant.ha_sensor_value import (
+    HaSensorValueCollector,
+)
 from homelab_monitor.plugins.collectors.integrations.homeassistant.ha_up import (
     HaUpCollector,
 )
@@ -175,6 +181,30 @@ def test_register_all_registers_ha_anomaly_zscore() -> None:
     record = records[0]
     assert isinstance(record, LoadedCollector)
     assert record.config.name == "ha_anomaly_zscore"
+
+
+def test_register_all_registers_ha_safety_sensors() -> None:
+    """register_all registers HaSafetySensorsCollector with the derived config."""
+    loader = PluginLoader()
+    register_all(loader)
+    loaded = loader.load_all()
+    records = [r for r in loaded if isinstance(r.collector, HaSafetySensorsCollector)]
+    assert len(records) == 1
+    record = records[0]
+    assert isinstance(record, LoadedCollector)
+    assert record.config.name == "ha_safety_sensors"
+
+
+def test_register_all_registers_ha_sensor_value() -> None:
+    """register_all registers HaSensorValueCollector with the derived config."""
+    loader = PluginLoader()
+    register_all(loader)
+    loaded = loader.load_all()
+    records = [r for r in loaded if isinstance(r.collector, HaSensorValueCollector)]
+    assert len(records) == 1
+    record = records[0]
+    assert isinstance(record, LoadedCollector)
+    assert record.config.name == "ha_sensor_value"
 
 
 def test_register_all_isolates_failing_register(monkeypatch: pytest.MonkeyPatch) -> None:

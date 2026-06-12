@@ -36,6 +36,12 @@ from homelab_monitor.plugins.collectors.integrations.homeassistant.ha_persistent
 from homelab_monitor.plugins.collectors.integrations.homeassistant.ha_repairs import (
     HaRepairsCollector,
 )
+from homelab_monitor.plugins.collectors.integrations.homeassistant.ha_safety_sensors import (
+    HaSafetySensorsCollector,
+)
+from homelab_monitor.plugins.collectors.integrations.homeassistant.ha_sensor_value import (
+    HaSensorValueCollector,
+)
 from homelab_monitor.plugins.collectors.integrations.homeassistant.ha_up import (
     HaUpCollector,
 )
@@ -56,6 +62,8 @@ _HA_COLLECTORS: list[type[BaseCollector]] = [
     HaRepairsCollector,  # STAGE-005-011
     HaPersistentNotificationCollector,  # STAGE-005-012
     HaAnomalyZscoreCollector,  # STAGE-005-013
+    HaSafetySensorsCollector,  # STAGE-005-016
+    HaSensorValueCollector,  # STAGE-005-016
 ]
 
 

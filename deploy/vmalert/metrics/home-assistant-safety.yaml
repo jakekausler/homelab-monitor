@@ -1,0 +1,69 @@
+# vmalert METRICS rules — Home Assistant LIFE-SAFETY sensors (STAGE-005-016).
+#
+# These rules alert over the homelab_ha_binary_sensor_on metric ADDED THIS STAGE
+# by the ha_safety_sensors collector:
+#   homelab_ha_binary_sensor_on{entity_id, domain, device_class}  1/0
+# (1 = sensor is "on"/triggered, 0 = "off"; unavailable/unknown states are NOT
+# emitted, so a stale value never fires these rules).
+#
+# This file is the LIFE-SAFETY counterpart to the general HA metric rules in
+# deploy/vmalert/metrics/home-assistant.yaml. It is a SEPARATE file (not appended
+# to home-assistant.yaml) so the safety surface is reviewable in isolation.
+#
+# Two rule families:
+#   1. HaSafetySensorTriggered (smoke/gas/carbon_monoxide/moisture) — CRITICAL,
+#      for: 0s -> fires IMMEDIATELY. A triggered life-safety sensor is an emergency;
+#      there is no debounce window.
+#   2. HaContactSensorOpen (door/window/opening) — WARNING, for: 30m -> fires only
+#      when a contact sensor has been OPEN too long (a door left ajar). The 30m
+#      window is tunable per-entity via the STAGE-005-005 user-rule machinery.
+#
+# All rules carry: severity / source_tool: vmalert-metrics / target_kind: container /
+# integration: home_assistant (mirrors home-assistant.yaml's conventions). NO
+# routing label.
+#
+# Severity vocabulary locked: info / warning / error / critical (spec §8.2).
+#
+# Test counterpart: deploy/vmalert/metrics/__tests__/home-assistant-safety.tests.yaml
+# (forward-compatible static fixture — no automated runner yet; validated by
+# yaml.safe_load + vmalert -dryRun + Refinement 3b).
+
+groups:
+  - name: home_assistant_safety
+    interval: 30s
+    rules:
+      - alert: HaSafetySensorTriggered
+        expr: homelab_ha_binary_sensor_on{device_class=~"smoke|gas|carbon_monoxide|moisture"} == 1
+        for: 0s
+        labels:
+          severity: critical
+          source_tool: vmalert-metrics
+          target_kind: container
+          integration: home_assistant
+        annotations:
+          summary: "Life-safety sensor triggered: {{ $labels.device_class }} ({{ $labels.entity_id }})"
+          description: >-
+            Home Assistant life-safety sensor {{ $labels.entity_id }}
+            (device_class {{ $labels.device_class }}) is reporting TRIGGERED
+            (homelab_ha_binary_sensor_on=1). This is a smoke / gas /
+            carbon_monoxide / moisture sensor and fires immediately (for: 0s) —
+            treat as an emergency until confirmed otherwise.
+          explorer: '/integrations/home-assistant'
+
+      - alert: HaContactSensorOpen
+        expr: homelab_ha_binary_sensor_on{device_class=~"door|window|opening"} == 1
+        for: 30m
+        labels:
+          severity: warning
+          source_tool: vmalert-metrics
+          target_kind: container
+          integration: home_assistant
+        annotations:
+          summary: "Contact sensor open too long: {{ $labels.device_class }} ({{ $labels.entity_id }})"
+          description: >-
+            Home Assistant contact sensor {{ $labels.entity_id }} (device_class
+            {{ $labels.device_class }}) has been OPEN (homelab_ha_binary_sensor_on=1)
+            for at least 30 minutes — e.g. a door, window, or other opening left
+            ajar. The 30m window is tunable per-entity via the STAGE-005-005
+            user-rule machinery.
+          explorer: '/integrations/home-assistant'

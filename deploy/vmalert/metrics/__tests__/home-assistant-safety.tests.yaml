@@ -1,0 +1,103 @@
+# Rule unit-test fixtures for deploy/vmalert/metrics/home-assistant-safety.yaml.
+# Schema: Prometheus / vmalert rule unit-test format.
+# Run manually: vmalert -rule.config=../home-assistant-safety.yaml \
+#   -rule.testFile=home-assistant-safety.tests.yaml
+#   (via docker: victoriametrics/vmalert:v1.107.0 — no vmalert/promtool on this host)
+# (No make target wires this yet — forward-compatible static fixture, NOT CI-run.
+#  Consistent with every other __tests__/*.tests.yaml in this directory.)
+#
+# ANNOTATION NOTE: summaries use {{ $labels.* }} only (no {{ $value }}), so we
+# assert the rendered summary alongside exp_labels.
+
+rule_files:
+  - ../home-assistant-safety.yaml
+
+evaluation_interval: 30s
+
+tests:
+  # === HaSafetySensorTriggered (for: 0s) — fires immediately ===
+  # FIRE: a smoke sensor at 1 -> HaSafetySensorTriggered fires at first eval.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_ha_binary_sensor_on{entity_id="binary_sensor.kitchen_smoke",domain="binary_sensor",device_class="smoke"}'
+        values: '1+0x10'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: HaSafetySensorTriggered
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              source_tool: vmalert-metrics
+              target_kind: container
+              integration: home_assistant
+              entity_id: binary_sensor.kitchen_smoke
+              domain: binary_sensor
+              device_class: smoke
+            exp_annotations:
+              summary: "Life-safety sensor triggered: smoke (binary_sensor.kitchen_smoke)"
+
+  # FIRE: a moisture (leak) sensor at 1 -> HaSafetySensorTriggered fires.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_ha_binary_sensor_on{entity_id="binary_sensor.basement_leak",domain="binary_sensor",device_class="moisture"}'
+        values: '1+0x10'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: HaSafetySensorTriggered
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              source_tool: vmalert-metrics
+              target_kind: container
+              integration: home_assistant
+              entity_id: binary_sensor.basement_leak
+              domain: binary_sensor
+              device_class: moisture
+            exp_annotations:
+              summary: "Life-safety sensor triggered: moisture (binary_sensor.basement_leak)"
+
+  # === HaContactSensorOpen (for: 30m) ===
+  # NO-FIRE: a door held open 15m -> below the 30m threshold, no alert.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_ha_binary_sensor_on{entity_id="binary_sensor.front_door",domain="binary_sensor",device_class="door"}'
+        values: '1+0x80'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: HaContactSensorOpen
+        exp_alerts: []
+
+  # FIRE: a door held open 35m -> past the 30m threshold, warning fires.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_ha_binary_sensor_on{entity_id="binary_sensor.front_door",domain="binary_sensor",device_class="door"}'
+        values: '1+0x80'
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: HaContactSensorOpen
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              source_tool: vmalert-metrics
+              target_kind: container
+              integration: home_assistant
+              entity_id: binary_sensor.front_door
+              domain: binary_sensor
+              device_class: door
+            exp_annotations:
+              summary: "Contact sensor open too long: door (binary_sensor.front_door)"
+
+  # === Baseline: all sensors at 0 -> NO alerts of either kind ===
+  - interval: 30s
+    input_series:
+      - series: 'homelab_ha_binary_sensor_on{entity_id="binary_sensor.kitchen_smoke",domain="binary_sensor",device_class="smoke"}'
+        values: '0+0x80'
+      - series: 'homelab_ha_binary_sensor_on{entity_id="binary_sensor.front_door",domain="binary_sensor",device_class="door"}'
+        values: '0+0x80'
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: HaSafetySensorTriggered
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: HaContactSensorOpen
+        exp_alerts: []

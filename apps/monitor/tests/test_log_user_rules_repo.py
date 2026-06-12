@@ -213,7 +213,7 @@ async def test_list_all_orders_by_rule_name(repo: SqliteRepository) -> None:
             summary=f"{name} alert",
         )
     rules = await user_repo.list_all()
-    names = [r.rule_name for r in rules]
+    names = [r.rule_name for r in rules if r.source_kind != "preset"]
     assert names == ["Alpha", "Beta", "Zebra"]
 
 
