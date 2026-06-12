@@ -26,6 +26,7 @@ from homelab_monitor.kernel.db.engine import dispose_engine, get_engine
 from homelab_monitor.kernel.db.migrations import MigrationsPendingError, run_migrations
 from homelab_monitor.kernel.db.repository import SqliteRepository
 from homelab_monitor.kernel.db.time import utc_now_iso
+from homelab_monitor.kernel.dispatch.channels.ha_event import HAEventChannel
 from homelab_monitor.kernel.dispatch.channels.ha_push import HAPushChannel
 from homelab_monitor.kernel.dispatch.channels.inproc_dashboard import InprocDashboardChannel
 from homelab_monitor.kernel.dispatch.dispatcher import AlertDispatcher
@@ -655,6 +656,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
         channels=[
             InprocDashboardChannel(broker),
             HAPushChannel(ha_client, ha_config.notify_service),
+            HAEventChannel(ha_client, ha_config.event_type),
         ],
         log=log,
     )

@@ -495,10 +495,18 @@ class HaConfig:
     open-source-safe default) makes the push channel a no-op — no HA call is
     made — so a public release never tries to notify a service that does not
     exist on the operator's instance.
+
+    ``event_type`` (STAGE-005-020) is the HA event-bus event type fired by the
+    ha_event push-back channel (recommended value ``homelab_monitor_alert``).
+    Empty string (the open-source-safe default) makes that channel globally
+    OFF — no event is fired — so a public release never spams an event bus the
+    operator has no automation for. Per-alert opt-in is via the
+    ``push_to_ha=="true"`` label (STOPGAP — see EPIC-012 STAGE-012-005).
     """
 
     base_url: str = "http://192.168.2.148:8123"
     notify_service: str = ""
+    event_type: str = ""
 
 
 def load_ha_config() -> HaConfig:
@@ -508,11 +516,15 @@ def load_ha_config() -> HaConfig:
     path concatenation is unambiguous; default base URL when unset).
     ``HOMELAB_MONITOR_HA_NOTIFY_SERVICE`` -> ``notify_service`` (default ``""``;
     empty makes the alert push channel a no-op).
+    ``HOMELAB_MONITOR_HA_EVENT_TYPE`` -> ``event_type`` (default ``""``; empty
+    makes the ha_event push-back channel globally OFF. Recommended value:
+    ``homelab_monitor_alert``).
     """
     raw = os.environ.get("HOMELAB_MONITOR_HA_URL")
     base_url = HaConfig().base_url if raw is None else raw.rstrip("/")
     notify_service = os.environ.get("HOMELAB_MONITOR_HA_NOTIFY_SERVICE", "")
-    return HaConfig(base_url=base_url, notify_service=notify_service)
+    event_type = os.environ.get("HOMELAB_MONITOR_HA_EVENT_TYPE", "")
+    return HaConfig(base_url=base_url, notify_service=notify_service, event_type=event_type)
 
 
 # Built-in per-family cardinality caps (STAGE-005-006).

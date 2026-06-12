@@ -437,3 +437,49 @@ def test_load_ha_config_notify_service_env_override(monkeypatch: pytest.MonkeyPa
     monkeypatch.setenv("HOMELAB_MONITOR_HA_NOTIFY_SERVICE", "mobile_app_pixel")
     cfg = load_ha_config()
     assert cfg.notify_service == "mobile_app_pixel"
+
+
+# ---- fire_event ----
+
+
+@pytest.mark.asyncio
+async def test_fire_event_success_returns_none() -> None:
+    client, mock_http = _client()
+    mock_http.request.return_value = _ok_response(json_value={"message": "fired"})
+    result = await client.fire_event("homelab_monitor_alert", {"status": "firing"})
+    assert result is None
+    call = mock_http.request.call_args
+    assert call.args[0] == "POST"
+    assert call.args[1] == "http://ha.local:8123/api/events/homelab_monitor_alert"
+    assert call.kwargs["json"] == {"status": "firing"}
+
+
+@pytest.mark.asyncio
+async def test_fire_event_non_200_is_http_error() -> None:
+    client, mock_http = _client()
+    mock_http.request.return_value = _ok_response(status=_HTTP_SERVER_ERROR)
+    result = await client.fire_event("homelab_monitor_alert", {"status": "firing"})
+    assert isinstance(result, HaError)
+    assert result.reason == "http_error"
+    assert result.status == _HTTP_SERVER_ERROR
+
+
+@pytest.mark.asyncio
+async def test_fire_event_connect_error_passes_through_haerror() -> None:
+    client, mock_http = _client()
+    mock_http.request.side_effect = httpx.ConnectError("refused")
+    result = await client.fire_event("homelab_monitor_alert", {"status": "firing"})
+    assert isinstance(result, HaError)
+    assert result.reason == "unreachable"
+
+
+def test_load_ha_config_event_type_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("HOMELAB_MONITOR_HA_EVENT_TYPE", raising=False)
+    cfg = load_ha_config()
+    assert cfg.event_type == ""
+
+
+def test_load_ha_config_event_type_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HOMELAB_MONITOR_HA_EVENT_TYPE", "homelab_monitor_alert")
+    cfg = load_ha_config()
+    assert cfg.event_type == "homelab_monitor_alert"

@@ -178,6 +178,24 @@ class HomeAssistantRestClient:
                 changed.append(cast("dict[str, object]", item))
         return HaServiceResult(changed_states=changed)
 
+    async def fire_event(self, event_type: str, data: dict[str, str]) -> None | HaError:
+        """POST /api/events/<event_type> to fire an event on HA's event bus.
+
+        Used by the ha_event dispatch channel (STAGE-005-020) to push alert
+        firing/resolved events back to Home Assistant for the operator's own
+        automations. Returns ``None`` on success (HA replies 200 with a small
+        ``{"message": ...}`` body we do not consume) or an HaError on transport
+        failure / non-200.
+        """
+        path = f"/api/events/{event_type}"
+        resp = await self._request("POST", path, json_body=cast("dict[str, object]", data))
+        if isinstance(resp, HaError):
+            return resp
+        status_err = _status_error(resp, "POST", path)
+        if status_err is not None:
+            return status_err
+        return None
+
     # ---- internals ----
 
     async def _get_json(self, path: str) -> object | HaError:
