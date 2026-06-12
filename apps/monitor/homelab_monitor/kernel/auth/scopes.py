@@ -14,6 +14,7 @@ class Scope(StrEnum):
     READ_STATUS = "read:status"
     ADMIN_BACKUP_WRITE = "admin:backup:write"
     DOCKER_WRITE = "docker:write"
+    HA_EVENT_WRITE = "ha:event:write"
 
 
 def parse_scopes(stored: str) -> set[Scope]:

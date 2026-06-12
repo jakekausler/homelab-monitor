@@ -15,6 +15,7 @@ from typing import Annotated
 import structlog
 from fastapi import APIRouter, Depends, Request
 
+from homelab_monitor.kernel.api._audit_helpers import principal_label
 from homelab_monitor.kernel.api.dependencies import (
     get_backup_service,
     require_user_or_token,
@@ -25,13 +26,6 @@ from homelab_monitor.kernel.auth.scopes import Scope
 from homelab_monitor.kernel.backup.service import BackupService
 
 router = APIRouter(prefix="/admin", tags=["admin"])
-
-
-def _principal_label(principal: User | ApiToken) -> str:
-    """Format the audit `who` column for a user or token principal."""
-    if isinstance(principal, ApiToken):
-        return f"api-token:{principal.id}"
-    return f"user:{principal.username}"
 
 
 @router.post("/backup", response_model=BackupResponse, status_code=200)
@@ -45,9 +39,9 @@ async def run_backup(
 ) -> BackupResponse:
     """Run a full backup (SQLite + VM snapshot). Audit rows written by BackupService."""
     log = structlog.get_logger().bind(component="admin.backup")
-    log.info("admin.backup.start", who=_principal_label(principal))
+    log.info("admin.backup.start", who=principal_label(principal))
 
-    who = _principal_label(principal)
+    who = principal_label(principal)
     # TODO(stage-013-followup): Use request.state.client_ip if AccessLogMiddleware
     # extracts forwarded IP. Behind nginx, request.client.host is the proxy.
     ip = request.client.host if request.client is not None else None

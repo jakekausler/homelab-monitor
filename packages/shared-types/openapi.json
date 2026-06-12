@@ -2501,6 +2501,73 @@
         "title": "FieldDescriptor",
         "type": "object"
       },
+      "HAEventPayload": {
+        "additionalProperties": false,
+        "description": "Inbound Home Assistant event payload.",
+        "properties": {
+          "data": {
+            "additionalProperties": true,
+            "title": "Data",
+            "type": "object"
+          },
+          "event_type": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[a-zA-Z0-9_.:-]+$",
+            "title": "Event Type",
+            "type": "string"
+          },
+          "severity": {
+            "anyOf": [
+              {
+                "enum": [
+                  "info",
+                  "warning",
+                  "critical"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Severity"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          }
+        },
+        "required": [
+          "event_type"
+        ],
+        "title": "HAEventPayload",
+        "type": "object"
+      },
+      "HAEventResponse": {
+        "additionalProperties": false,
+        "description": "Response envelope for an accepted HA event.",
+        "properties": {
+          "status": {
+            "const": "accepted",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "HAEventResponse",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -8377,6 +8444,48 @@
         "summary": "Ignore Suggestion",
         "tags": [
           "docker"
+        ]
+      }
+    },
+    "/api/integrations/ha/event": {
+      "post": {
+        "description": "Record an inbound HA event as a single audit_log row and return 202.",
+        "operationId": "ingest_ha_event_api_integrations_ha_event_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HAEventPayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HAEventResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Ingest Ha Event",
+        "tags": [
+          "integrations"
         ]
       }
     },
