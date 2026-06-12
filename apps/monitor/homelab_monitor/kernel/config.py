@@ -1347,9 +1347,126 @@ def _validate_redact_entry(idx: int, entry_obj: object, seen: set[str]) -> Redac
     return RedactPattern(name=name_s, pattern=pattern_s, replacement=replacement_s)
 
 
+# ---------------------------------------------------------------------------
+# STAGE-005-013: HA history/anomaly z-score collector tunables.
+# Mirrors the CronAnomalyConfig / NewSignatureConfig env-loader precedent. The
+# z-score collector reads this INSIDE run() each tick (like ha_battery reads
+# load_cardinality_caps_config), so an operator edit is picked up without a
+# restart.
+# ---------------------------------------------------------------------------
+
+#: Default eligible device classes for z-score scoring. A sensor qualifies only
+#: when state_class == "measurement" AND device_class is in this set (plus the
+#: extra_entity_ids force-include / excluded_entity_ids force-exclude overrides).
+#: Chosen to cover the common numeric-trend sensors on a homelab HA install while
+#: excluding enum/diagnostic classes that have no meaningful rolling z-score.
+DEFAULT_ZSCORE_DEVICE_CLASSES: frozenset[str] = frozenset(
+    {
+        "temperature",
+        "humidity",
+        "pressure",
+        "power",
+        "energy",
+        "current",
+        "voltage",
+        "carbon_dioxide",
+        "pm25",
+        "illuminance",
+        "signal_strength",
+    }
+)
+
+
+@dataclass(frozen=True, slots=True)
+class AnomalyZscoreConfig:
+    """Tunables for HaAnomalyZscoreCollector (STAGE-005-013).
+
+    ``window_samples`` — per-entity rolling-window length (deque maxlen). Default
+    48 ≈ 4h at the locked 5-minute cadence. ``min_samples`` — minimum values in a
+    window before any z-score is emitted (cold-start warmup gate). Default 12 ≈ 1h.
+    ``zero_variance_epsilon`` — population-std floor; a window whose pstdev is below
+    this is treated as flat and emits NO series (a z-score over zero variance is a
+    division-by-(near)-zero blow-up, not a signal). ``device_classes`` — the
+    eligible device-class set (state_class must additionally be "measurement").
+    ``excluded_entity_ids`` — force-exclude (wins over everything). ``extra_entity_ids``
+    — force-include even when the device-class heuristic would reject (the value must
+    still parse to a float to contribute).
+
+    All numeric tunables clamped to safe floors so an operator 0/negative can't
+    make the collector degenerate.
+    """
+
+    window_samples: int = 48
+    min_samples: int = 12
+    zero_variance_epsilon: float = 1e-9
+    device_classes: frozenset[str] = DEFAULT_ZSCORE_DEVICE_CLASSES
+    excluded_entity_ids: frozenset[str] = frozenset()
+    extra_entity_ids: frozenset[str] = frozenset()
+
+
+def load_anomaly_zscore_config() -> AnomalyZscoreConfig:
+    """Load HaAnomalyZscoreCollector tunables from env (HOMELAB_MONITOR_HA_ZSCORE_*).
+
+    HOMELAB_MONITOR_HA_ZSCORE_WINDOW_SAMPLES   -> window_samples (clamped >= 1).
+    HOMELAB_MONITOR_HA_ZSCORE_MIN_SAMPLES      -> min_samples (clamped >= 2;
+        pstdev needs >= 2 values to be meaningful, mirroring load_cron_anomaly_config's
+        min_history >= 2 clamp). Also clamped <= window_samples so the gate is reachable.
+    HOMELAB_MONITOR_HA_ZSCORE_EPSILON          -> zero_variance_epsilon (clamped > 0;
+        a 0 epsilon would let a flat window divide by zero).
+    HOMELAB_MONITOR_HA_ZSCORE_DEVICE_CLASSES   -> comma-separated device classes,
+        lowercased + stripped; empty result falls back to DEFAULT_ZSCORE_DEVICE_CLASSES.
+    HOMELAB_MONITOR_HA_ZSCORE_EXCLUDED_ENTITY_IDS -> comma-separated entity_ids.
+    HOMELAB_MONITOR_HA_ZSCORE_EXTRA_ENTITY_IDS    -> comma-separated entity_ids.
+    """
+    defaults = AnomalyZscoreConfig()
+    window_samples = defaults.window_samples
+    min_samples = defaults.min_samples
+    epsilon = defaults.zero_variance_epsilon
+    device_classes = defaults.device_classes
+    excluded = defaults.excluded_entity_ids
+    extra = defaults.extra_entity_ids
+
+    raw_window = os.environ.get("HOMELAB_MONITOR_HA_ZSCORE_WINDOW_SAMPLES")
+    if raw_window is not None:
+        window_samples = int(raw_window)
+    raw_min = os.environ.get("HOMELAB_MONITOR_HA_ZSCORE_MIN_SAMPLES")
+    if raw_min is not None:
+        min_samples = int(raw_min)
+    raw_eps = os.environ.get("HOMELAB_MONITOR_HA_ZSCORE_EPSILON")
+    if raw_eps is not None:
+        epsilon = float(raw_eps)
+    raw_dc = os.environ.get("HOMELAB_MONITOR_HA_ZSCORE_DEVICE_CLASSES")
+    if raw_dc is not None:
+        parsed_dc = frozenset(s.strip().lower() for s in raw_dc.split(",") if s.strip())
+        if parsed_dc:
+            device_classes = parsed_dc
+    raw_excl = os.environ.get("HOMELAB_MONITOR_HA_ZSCORE_EXCLUDED_ENTITY_IDS")
+    if raw_excl is not None:
+        excluded = frozenset(s.strip() for s in raw_excl.split(",") if s.strip())
+    raw_extra = os.environ.get("HOMELAB_MONITOR_HA_ZSCORE_EXTRA_ENTITY_IDS")
+    if raw_extra is not None:
+        extra = frozenset(s.strip() for s in raw_extra.split(",") if s.strip())
+
+    window_samples = max(window_samples, 1)
+    min_samples = max(min_samples, 2)
+    min_samples = min(min_samples, window_samples)
+    epsilon = max(epsilon, 1e-12)
+
+    return AnomalyZscoreConfig(
+        window_samples=window_samples,
+        min_samples=min_samples,
+        zero_variance_epsilon=epsilon,
+        device_classes=device_classes,
+        excluded_entity_ids=excluded,
+        extra_entity_ids=extra,
+    )
+
+
 __all__ = [
     "DEFAULT_ERROR_PATTERNS",
     "DEFAULT_REDACT_PATTERNS",
+    "DEFAULT_ZSCORE_DEVICE_CLASSES",
+    "AnomalyZscoreConfig",
     "CardinalityCapsConfig",
     "CrashLogConfig",
     "CronAnomalyConfig",
@@ -1371,6 +1488,7 @@ __all__ = [
     "VlHealthConfig",
     "VlQueryLimits",
     "get_public_url",
+    "load_anomaly_zscore_config",
     "load_cardinality_caps_config",
     "load_crash_log_config",
     "load_cron_anomaly_config",

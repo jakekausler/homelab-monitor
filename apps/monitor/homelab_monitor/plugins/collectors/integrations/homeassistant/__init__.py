@@ -15,6 +15,9 @@ import structlog
 
 from homelab_monitor.kernel.plugins.base import BaseCollector
 from homelab_monitor.kernel.plugins.loader import PluginLoader, config_from_classvars
+from homelab_monitor.plugins.collectors.integrations.homeassistant.ha_anomaly_zscore import (
+    HaAnomalyZscoreCollector,
+)
 from homelab_monitor.plugins.collectors.integrations.homeassistant.ha_battery import (
     HaBatteryCollector,
 )
@@ -52,6 +55,7 @@ _HA_COLLECTORS: list[type[BaseCollector]] = [
     HaConfigEntryCollector,
     HaRepairsCollector,  # STAGE-005-011
     HaPersistentNotificationCollector,  # STAGE-005-012
+    HaAnomalyZscoreCollector,  # STAGE-005-013
 ]
 
 

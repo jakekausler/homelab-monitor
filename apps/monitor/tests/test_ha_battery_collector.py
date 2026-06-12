@@ -101,6 +101,12 @@ def test_parse_float_state_numeric_sentinel_and_unparseable() -> None:
     assert parse_float_state("unknown") is None
     assert parse_float_state("") is None
     assert parse_float_state("not-a-number") is None
+    # Non-finite floats (nan, inf, -inf, Python spellings) -> None.
+    assert parse_float_state("nan") is None
+    assert parse_float_state("inf") is None
+    assert parse_float_state("-inf") is None
+    assert parse_float_state("Infinity") is None
+    assert parse_float_state("-Infinity") is None
 
 
 # --- collector behavior tests ---

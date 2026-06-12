@@ -8,6 +8,8 @@ import pytest
 
 from homelab_monitor.kernel.config import (
     DEFAULT_ERROR_PATTERNS,
+    DEFAULT_ZSCORE_DEVICE_CLASSES,
+    AnomalyZscoreConfig,
     CardinalityCapsConfig,
     CronAnomalyConfig,
     CronRunReconcilerConfig,
@@ -23,6 +25,7 @@ from homelab_monitor.kernel.config import (
     TailConfig,
     VlHealthConfig,
     VlQueryLimits,
+    load_anomaly_zscore_config,
     load_cardinality_caps_config,
     load_cron_anomaly_config,
     load_cron_run_reconciler_config,
@@ -1466,3 +1469,58 @@ def test_cardinality_caps_accepts_negative_values(
     cfg = load_cardinality_caps_config()
     assert cfg.cap_for("fam") == -1
     assert cfg.cap_for("unknown") == -5  # noqa: PLR2004
+
+
+# --- AnomalyZscoreConfig / load_anomaly_zscore_config (STAGE-005-013) -----------------------
+
+
+def test_load_anomaly_zscore_config_epsilon_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    """HOMELAB_MONITOR_HA_ZSCORE_EPSILON overrides zero_variance_epsilon only."""
+    monkeypatch.setenv("HOMELAB_MONITOR_HA_ZSCORE_EPSILON", "0.05")
+    monkeypatch.delenv("HOMELAB_MONITOR_HA_ZSCORE_WINDOW_SAMPLES", raising=False)
+    monkeypatch.delenv("HOMELAB_MONITOR_HA_ZSCORE_MIN_SAMPLES", raising=False)
+    monkeypatch.delenv("HOMELAB_MONITOR_HA_ZSCORE_DEVICE_CLASSES", raising=False)
+    monkeypatch.delenv("HOMELAB_MONITOR_HA_ZSCORE_EXCLUDED_ENTITY_IDS", raising=False)
+    monkeypatch.delenv("HOMELAB_MONITOR_HA_ZSCORE_EXTRA_ENTITY_IDS", raising=False)
+
+    cfg = load_anomaly_zscore_config()
+    assert cfg.zero_variance_epsilon == 0.05  # noqa: PLR2004
+    # Other fields stay at defaults.
+    defaults = AnomalyZscoreConfig()
+    assert cfg.window_samples == defaults.window_samples
+    assert cfg.min_samples == defaults.min_samples
+
+
+def test_load_anomaly_zscore_config_device_classes_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """HOMELAB_MONITOR_HA_ZSCORE_DEVICE_CLASSES overrides device_classes with
+    stripped, lowercased frozenset; the non-empty branch assigns the parsed set."""
+    monkeypatch.setenv(
+        "HOMELAB_MONITOR_HA_ZSCORE_DEVICE_CLASSES",
+        "Temperature, Power , humidity",
+    )
+    monkeypatch.delenv("HOMELAB_MONITOR_HA_ZSCORE_WINDOW_SAMPLES", raising=False)
+    monkeypatch.delenv("HOMELAB_MONITOR_HA_ZSCORE_MIN_SAMPLES", raising=False)
+    monkeypatch.delenv("HOMELAB_MONITOR_HA_ZSCORE_EPSILON", raising=False)
+    monkeypatch.delenv("HOMELAB_MONITOR_HA_ZSCORE_EXCLUDED_ENTITY_IDS", raising=False)
+    monkeypatch.delenv("HOMELAB_MONITOR_HA_ZSCORE_EXTRA_ENTITY_IDS", raising=False)
+
+    cfg = load_anomaly_zscore_config()
+    assert cfg.device_classes == frozenset({"temperature", "power", "humidity"})
+
+
+def test_load_anomaly_zscore_config_device_classes_blank_keeps_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """HOMELAB_MONITOR_HA_ZSCORE_DEVICE_CLASSES set to all-whitespace/commas parses to
+    empty frozenset — the if parsed_dc: FALSE branch — so device_classes keeps default."""
+    monkeypatch.setenv("HOMELAB_MONITOR_HA_ZSCORE_DEVICE_CLASSES", ",")
+    monkeypatch.delenv("HOMELAB_MONITOR_HA_ZSCORE_WINDOW_SAMPLES", raising=False)
+    monkeypatch.delenv("HOMELAB_MONITOR_HA_ZSCORE_MIN_SAMPLES", raising=False)
+    monkeypatch.delenv("HOMELAB_MONITOR_HA_ZSCORE_EPSILON", raising=False)
+    monkeypatch.delenv("HOMELAB_MONITOR_HA_ZSCORE_EXCLUDED_ENTITY_IDS", raising=False)
+    monkeypatch.delenv("HOMELAB_MONITOR_HA_ZSCORE_EXTRA_ENTITY_IDS", raising=False)
+
+    cfg = load_anomaly_zscore_config()
+    assert cfg.device_classes == DEFAULT_ZSCORE_DEVICE_CLASSES

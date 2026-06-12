@@ -9,6 +9,7 @@ collector-local and byte-identical to the pre-extraction code.
 
 from __future__ import annotations
 
+import math
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Final
 
@@ -46,18 +47,21 @@ async def get_states_or_error(ctx: CollectorContext) -> list[HaState] | HaError:
 
 
 def parse_float_state(state: str) -> float | None:
-    """Parse a numeric entity state, or ``None`` when it is not a real number.
+    """Parse a finite numeric entity state, or ``None`` when it is not one.
 
     Returns ``None`` for the case-sensitive sentinels ``unavailable`` /
-    ``unknown`` / empty, and for any string ``float()`` cannot parse. Callers
-    skip the entity (do NOT emit 0) when this returns ``None``.
+    ``unknown`` / empty, for any string ``float()`` cannot parse, AND for
+    non-finite values (``nan`` / ``inf`` / ``-inf``) which ``float()`` accepts
+    but which would poison downstream statistics. Callers skip the entity (do
+    NOT emit 0) when this returns ``None``.
     """
     if state in _NON_NUMERIC_STATES:
         return None
     try:
-        return float(state)
+        value = float(state)
     except ValueError:
         return None
+    return value if math.isfinite(value) else None
 
 
 def parse_iso_or_none(value: object) -> datetime | None:
