@@ -1,12 +1,12 @@
 # EPIC-005: Home Assistant integration (collector + dispatcher channel + bidirectional events + UI panel)
 
-## Status: In Progress (12 / 26 Complete)
+## Status: In Progress (13 / 26 Complete)
 
-## Stages Counter: 12 / 26 Complete
+## Stages Counter: 13 / 26 Complete
 
-## Current Stage: STAGE-005-013
+## Current Stage: STAGE-005-014
 
-## Current Phase: STAGE-005-013 Design (Not Started)
+## Current Phase: STAGE-005-014 Design (Not Started)
 
 ## Overview
 
@@ -72,7 +72,7 @@ Stages MUST be implemented in order. No parallelization. Each stage lands a sing
 | STAGE-005-010 | Config-entry state collector (websocket) | ✓ Complete — Authoritative integration loaded/setup_error/setup_retry state via config_entries/get RPC; WS-client list-result fix (c2ffbad) unblocks 011/012. (#10) |
 | STAGE-005-011 | Repairs collector (websocket) | ✓ Complete — repairs/list_issues → active repair issues. (#11) |
 | STAGE-005-012 | Persistent-notifications collector (websocket) | ✓ Complete — HA notification-bell events. (#12) |
-| STAGE-005-013 | History/anomaly z-score collector | Recorder API for slow sensors; rolling-baseline z-score homelab_ha_entity_value_zscore. (#4) [heaviest; clean optional cut point] |
+| STAGE-005-013 | History/anomaly z-score collector | ✓ Complete — Recorder API for slow sensors; rolling-baseline z-score homelab_ha_entity_value_zscore. In-memory deque window (no /api/history REST), device-class heuristic + config allow/deny, zero-variance SKIP (no inf/NaN); 118 real HA sensors validated 3b; z-score emits after ~1h warmup. (#4) [heaviest; clean optional cut point] |
 
 ### Wave C — Alert rules (S14-S16)
 
