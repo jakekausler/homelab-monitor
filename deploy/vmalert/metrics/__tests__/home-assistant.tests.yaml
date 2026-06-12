@@ -1,0 +1,164 @@
+# Rule unit-test fixtures for deploy/vmalert/metrics/home-assistant.yaml.
+# Schema: Prometheus / vmalert rule unit-test format.
+# Run manually: vmalert -rule.config=../home-assistant.yaml -rule.testFile=home-assistant.tests.yaml
+#   (via docker: victoriametrics/vmalert:v1.107.0 — no vmalert/promtool binary on this host)
+# (No make target wires this yet — forward-compatible static fixture, NOT CI-run.
+#  Consistent with every other __tests__/*.tests.yaml in this directory.)
+#
+# ANNOTATION NOTE: rules whose summary contains {{ $value }} (HaBatteryCritical,
+# HaBatteryLow, HaUpdatesPending) assert exp_labels ONLY and omit exp_annotations,
+# matching how every existing fixture treats dynamically-valued annotations. Rules
+# with static / {{ $labels.* }}-only summaries assert the rendered summary.
+
+rule_files:
+  - ../home-assistant.yaml
+
+evaluation_interval: 30s
+
+tests:
+  # === HaUnreachable (for: 2m) ===
+  # FIRE: homelab_ha_up==0 held well past 2m.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_ha_up'
+        values: '0+0x10'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: HaUnreachable
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              source_tool: vmalert-metrics
+              target_kind: container
+              integration: home_assistant
+            exp_annotations:
+              summary: "Home Assistant is unreachable"
+
+  # NO-FIRE: HA is up (==1).
+  - interval: 30s
+    input_series:
+      - series: 'homelab_ha_up'
+        values: '1+0x10'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: HaUnreachable
+        exp_alerts: []
+
+  # === HaConfigEntryError (for: 5m) ===
+  # FIRE: setup_error==1 held past 5m. Asserts passthrough domain/title labels.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_ha_config_entry_setup_error{domain="zwave_js",title="Z-Wave JS"}'
+        values: '1+0x20'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: HaConfigEntryError
+        exp_alerts:
+          - exp_labels:
+              severity: error
+              source_tool: vmalert-metrics
+              target_kind: container
+              integration: home_assistant
+              domain: zwave_js
+              title: Z-Wave JS
+            exp_annotations:
+              summary: "HA config entry in error: Z-Wave JS (zwave_js)"
+
+  # NO-FIRE: setup_error==0.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_ha_config_entry_setup_error{domain="zwave_js",title="Z-Wave JS"}'
+        values: '0+0x20'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: HaConfigEntryError
+        exp_alerts: []
+
+  # === HaBatteryCritical + HaBatteryLow band dedup (for: 10m each) ===
+  # DEDUP TEST A: battery at 5% -> fires HaBatteryCritical, NOT HaBatteryLow.
+  # exp_labels only (summary contains {{ $value }}).
+  - interval: 30s
+    input_series:
+      - series: 'homelab_ha_battery_level{entity_id="sensor.door_battery",domain="sensor"}'
+        values: '5+0x30'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: HaBatteryCritical
+        exp_alerts:
+          - exp_labels:
+              severity: error
+              source_tool: vmalert-metrics
+              target_kind: container
+              integration: home_assistant
+              entity_id: sensor.door_battery
+              domain: sensor
+      - eval_time: 11m
+        alertname: HaBatteryLow
+        exp_alerts: []
+
+  # DEDUP TEST B: battery at 15% -> fires HaBatteryLow, NOT HaBatteryCritical.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_ha_battery_level{entity_id="sensor.window_battery",domain="sensor"}'
+        values: '15+0x30'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: HaBatteryLow
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              source_tool: vmalert-metrics
+              target_kind: container
+              integration: home_assistant
+              entity_id: sensor.window_battery
+              domain: sensor
+      - eval_time: 11m
+        alertname: HaBatteryCritical
+        exp_alerts: []
+
+  # NO-FIRE: healthy battery at 80% -> neither alert fires.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_ha_battery_level{entity_id="sensor.thermostat_battery",domain="sensor"}'
+        values: '80+0x30'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: HaBatteryCritical
+        exp_alerts: []
+      - eval_time: 11m
+        alertname: HaBatteryLow
+        exp_alerts: []
+
+  # === HaUpdatesPending (for: 15m, count() aggregation) ===
+  # FIRE: 3 update_available==1 series -> count()=3 > 0. Alert carries ONLY the
+  # rule's own labels (count() yields an empty label set). exp_labels only
+  # (summary contains {{ $value }} = the count). One alert instance expected.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_ha_update_available{entity_id="update.core",title="Home Assistant Core"}'
+        values: '1+0x40'
+      - series: 'homelab_ha_update_available{entity_id="update.os",title="Home Assistant OS"}'
+        values: '1+0x40'
+      - series: 'homelab_ha_update_available{entity_id="update.zigbee2mqtt",title="Zigbee2MQTT"}'
+        values: '1+0x40'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: HaUpdatesPending
+        exp_alerts:
+          - exp_labels:
+              severity: info
+              source_tool: vmalert-metrics
+              target_kind: container
+              integration: home_assistant
+
+  # NO-FIRE: all updates applied (==0) -> count(==1)=0, > 0 is false, empty result.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_ha_update_available{entity_id="update.core",title="Home Assistant Core"}'
+        values: '0+0x40'
+      - series: 'homelab_ha_update_available{entity_id="update.os",title="Home Assistant OS"}'
+        values: '0+0x40'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: HaUpdatesPending
+        exp_alerts: []

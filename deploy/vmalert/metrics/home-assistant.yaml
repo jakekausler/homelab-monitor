@@ -1,0 +1,239 @@
+# vmalert METRICS rules for Home Assistant (STAGE-005-015).
+#
+# This is the metric-STATE counterpart to STAGE-005-014's log-EVENT rules at
+# deploy/vmalert/logs/home-assistant.yaml. Log rules (vmalert-logs) catch
+# transient EVENTS in the log stream; these metric rules (vmalert-metrics) catch
+# PERSISTENT STATE sampled from the HA collector gauges. Distinct alertnames AND
+# distinct source_tool values (vmalert-metrics vs vmalert-logs) mean Alertmanager
+# never dedup-collides the two families.
+#
+# All rules carry: severity / source_tool: vmalert-metrics / target_kind: container /
+# integration: home_assistant (mirrors 014's logs-file label conventions, but with
+# the metrics source_tool).
+#
+# Severity vocabulary locked: info / warning / error / critical (spec §8.2).
+#
+# DEFERRED — per-entity entity-availability alerting (design rule #1) AND
+# device-down rollup (design rule #7): both are OPT-IN (commented) rather than
+# active defaults. Root reason: without a per-entity "expected available" baseline,
+# a blanket `entity_available == 0` rule fires on chronic integration/cloud noise.
+# Measured on a real homelab during STAGE-005-015 Refinement 3b: ~50% of 1906 HA
+# entities are chronically unavailable (Frigate-linked, smart-plug ancillary, Plex
+# session players, cloud integrations); domain does NOT discriminate (sensor 52%,
+# binary_sensor 69%, switch 41% chronic). Per-entity scoping belongs in the
+# 005-005 user-rule machinery (deploy/vmalert/metrics-user/*.yaml). For rule #7:
+# there is NO `device` label on HA metrics yet. A per-device rollup needs
+# HA core.device_registry sourced via the WS API plus a CollectorContext change to
+# attach a `device` label to entity series. That is a future EPIC-005 stage.
+# HaUnreachable (#18, HA-itself-down) remains the only default-on availability
+# signal. Both #1 and #7 await the device-availability facility or user scoping.
+#
+# Metric contracts (verified):
+#   homelab_ha_up{}                                      1/0
+#   homelab_ha_entity_available{entity_id,domain}        1/0
+#   homelab_ha_entity_last_changed_seconds{entity_id,domain}
+#   homelab_ha_battery_level{entity_id,domain}           0-100
+#   homelab_ha_update_available{entity_id,title}         1/0
+#   homelab_ha_automation_last_triggered_seconds{entity_id}
+#   homelab_ha_automation_enabled{entity_id}             1/0
+#   homelab_ha_config_entry_setup_error{domain,title}    1/0
+#
+# Test counterpart: deploy/vmalert/metrics/__tests__/home-assistant.tests.yaml
+# (forward-compatible static fixture; see that file's header for the manual runner).
+
+groups:
+  - name: home_assistant_availability
+    interval: 30s
+    rules:
+      - alert: HaUnreachable
+        expr: homelab_ha_up == 0
+        for: 2m
+        labels:
+          severity: critical
+          source_tool: vmalert-metrics
+          target_kind: container
+          integration: home_assistant
+        annotations:
+          summary: "Home Assistant is unreachable"
+          description: >-
+            The Home Assistant API has been unreachable (homelab_ha_up=0) for at
+            least 2 minutes. Entity state, automations, and updates cannot be
+            collected until it recovers.
+          explorer: '/integrations/home-assistant'
+
+  - name: home_assistant_health
+    interval: 30s
+    rules:
+      - alert: HaConfigEntryError
+        expr: homelab_ha_config_entry_setup_error == 1
+        for: 5m
+        labels:
+          severity: error
+          source_tool: vmalert-metrics
+          target_kind: container
+          integration: home_assistant
+        annotations:
+          summary: "HA config entry in error: {{ $labels.title }} ({{ $labels.domain }})"
+          description: >-
+            Config entry {{ $labels.title }} (domain {{ $labels.domain }}) has been
+            in a setup-error state for at least 5 minutes. This is the persistent-
+            STATE counterpart to the HaIntegrationSetupFailure log EVENT
+            (deploy/vmalert/logs/home-assistant.yaml): the log rule fires on any
+            transient setup-failure line, whereas this fires only when the entry
+            stays in error across scrapes. Distinct alertname + source_tool
+            (vmalert-metrics) — no Alertmanager dedup collision with the log rule.
+          explorer: '/integrations/home-assistant'
+
+      - alert: HaBatteryCritical
+        expr: homelab_ha_battery_level < 10
+        for: 10m
+        labels:
+          severity: error
+          source_tool: vmalert-metrics
+          target_kind: container
+          integration: home_assistant
+        annotations:
+          summary: "Battery critical: {{ $labels.entity_id }} ({{ $value }}%)"
+          description: >-
+            Battery entity {{ $labels.entity_id }} (domain {{ $labels.domain }}) is
+            at {{ $value }}% — below the 10% critical threshold for at least 10
+            minutes. Replace or recharge soon to avoid a dead sensor.
+          explorer: '/integrations/home-assistant'
+
+      - alert: HaBatteryLow
+        expr: homelab_ha_battery_level >= 10 and homelab_ha_battery_level < 20
+        for: 10m
+        labels:
+          severity: warning
+          source_tool: vmalert-metrics
+          target_kind: container
+          integration: home_assistant
+        annotations:
+          summary: "Battery low: {{ $labels.entity_id }} ({{ $value }}%)"
+          description: >-
+            Battery entity {{ $labels.entity_id }} (domain {{ $labels.domain }}) is
+            at {{ $value }}% — in the 10-20% low band for at least 10 minutes. The
+            `>= 10 and < 20` band is deliberate: a battery below 10% fires only
+            HaBatteryCritical (not both), so a single dying battery raises exactly
+            one alert.
+          explorer: '/integrations/home-assistant'
+
+  - name: home_assistant_updates
+    interval: 30s
+    rules:
+      - alert: HaUpdatesPending
+        expr: count(homelab_ha_update_available == 1) > 0
+        for: 15m
+        labels:
+          severity: info
+          source_tool: vmalert-metrics
+          target_kind: container
+          integration: home_assistant
+        annotations:
+          summary: "{{ $value }} Home Assistant update(s) pending"
+          description: >-
+            {{ $value }} Home Assistant component/add-on/OS update(s) have been
+            available for at least 15 minutes. Review and apply them from the Home
+            Assistant integration panel. NOTE: count() collapses every matching
+            series into a single value with an EMPTY label set, so this alert
+            carries only the rule's own labels (no entity_id/title).
+          explorer: '/integrations/home-assistant'
+
+# -----------------------------------------------------------------------------
+# OPT-IN exemplars (NOT active). Per-entity scoped rules live in the STAGE-005-005
+# user-rule machinery (deploy/vmalert/metrics-user/*.yaml, managed via the UI).
+# These are left commented as copy-paste templates: a global default would be too
+# noisy because the relevant scoping label (device_class) is not present on these
+# series. Uncomment + scope to a specific entity_id, or author the equivalent via
+# the 005-005 user-rule UI.
+# -----------------------------------------------------------------------------
+#
+#  - name: home_assistant_opt_in
+#    interval: 30s
+#    rules:
+#      # HaEntityStale (#2): a sensor that has not changed value in too long.
+#      # OPT-IN because device_class is NOT a label here, so a single global
+#      # threshold would false-fire on legitimately-slow sensors (e.g. a door
+#      # that is simply closed all day) while missing fast ones. Scope per-entity
+#      # instead. Catches the "frozen freezer" case a z-score cannot (a stuck
+#      # reading looks perfectly stable to anomaly detection). Per-entity overrides
+#      # belong in the 005-005 user-rule machinery.
+#      - alert: HaEntityStale
+#        expr: homelab_ha_entity_last_changed_seconds{entity_id="sensor.freezer_temp"} > 7200
+#        for: 15m
+#        labels:
+#          severity: warning
+#          source_tool: vmalert-metrics
+#          target_kind: container
+#          integration: home_assistant
+#        annotations:
+#          summary: "HA entity stale: {{ $labels.entity_id }}"
+#          description: 'Entity {{ $labels.entity_id }} has not changed in over 2h.'
+#          explorer: '/integrations/home-assistant'
+#
+#      # HaAutomationIdle (#16): an automation that has not triggered in too long.
+#      # OPT-IN because seasonal/occasional automations legitimately idle for
+#      # months (e.g. a "freeze warning" automation in summer). The default
+#      # threshold (24h) is encoded here per STAGE-005-009; per-automation
+#      # overrides belong in the 005-005 user-rule machinery.
+#      - alert: HaAutomationIdle
+#        expr: homelab_ha_automation_last_triggered_seconds{entity_id="automation.example"} > 86400
+#        for: 15m
+#        labels:
+#          severity: warning
+#          source_tool: vmalert-metrics
+#          target_kind: container
+#          integration: home_assistant
+#        annotations:
+#          summary: "HA automation idle: {{ $labels.entity_id }}"
+#          description: 'Automation {{ $labels.entity_id }} has not triggered in over 24h.'
+#          explorer: '/integrations/home-assistant'
+#
+#      # HaAutomationDisabled (#17): an automation that is turned off.
+#      # OPT-IN because disabling an automation is usually intentional, so a global
+#      # rule would be pure noise. Scope per-automation via the 005-005 user-rule
+#      # machinery if you want to be warned that a specific automation is off.
+#      - alert: HaAutomationDisabled
+#        expr: homelab_ha_automation_enabled{entity_id="automation.example"} == 0
+#        for: 15m
+#        labels:
+#          severity: warning
+#          source_tool: vmalert-metrics
+#          target_kind: container
+#          integration: home_assistant
+#        annotations:
+#          summary: "HA automation disabled: {{ $labels.entity_id }}"
+#          description: 'Automation {{ $labels.entity_id }} is currently disabled.'
+#          explorer: '/integrations/home-assistant'
+#
+#      # HaEntityUnavailable (#1): an entity that has been unavailable for too long.
+#      # OPT-IN — DEMOTED from active default during STAGE-005-015 Refinement 3b
+#      # based on real measurement: ~50% of 1906 HA entities are chronically
+#      # unavailable on this homelab (Frigate-linked, smart-plug ancillary, Plex
+#      # session players, cloud integrations). Domain does NOT discriminate — chronic
+#      # and actionable entities share sensor/binary_sensor/switch domains. A blanket
+#      # rule = ~924 firing instances = a failed (noisy) rule. Per-entity scoping
+#      # belongs in the 005-005 user-rule machinery: select the specific entity_ids
+#      # you care about and author rules there. The proper default form awaits the
+#      # device-availability facility (deferred design rule #7). HaUnreachable (#18)
+#      # remains the default-on HA availability signal.
+#      - alert: HaEntityUnavailable
+#        expr: homelab_ha_entity_available == 0
+#        for: 5m
+#        labels:
+#          severity: warning
+#          source_tool: vmalert-metrics
+#          target_kind: container
+#          integration: home_assistant
+#        annotations:
+#          summary: "HA entity unavailable: {{ $labels.entity_id }}"
+#          description: >-
+#            Entity {{ $labels.entity_id }} (domain {{ $labels.domain }}) has
+#            reported unavailable for at least 5 minutes. If many entities on one
+#            device are unavailable at once, this is usually a single device or
+#            integration outage. Scope this rule per-entity via the 005-005
+#            user-rule machinery instead of using the global form.
+#          explorer: '/integrations/home-assistant'
+#
+# Critical repairs (homelab_ha_repair_issue) are surfaced in the HA integration
+# panel, not as a default vmalert rule.
