@@ -1,12 +1,12 @@
 # EPIC-005: Home Assistant integration (collector + dispatcher channel + bidirectional events + UI panel)
 
-## Status: In Progress (15 / 26 Complete)
+## Status: In Progress (16 / 26 Complete)
 
-## Stages Counter: 15 / 26 Complete
+## Stages Counter: 16 / 26 Complete
 
-## Current Stage: STAGE-005-016
+## Current Stage: STAGE-005-017
 
-## Current Phase: STAGE-005-016 Design (Not Started)
+## Current Phase: STAGE-005-017 Design (Not Started)
 
 ## Overview
 
@@ -80,7 +80,7 @@ Stages MUST be implemented in order. No parallelization. Each stage lands a sing
 |---|---|---|
 | STAGE-005-014 | vmalert-LOGS rules | ✓ Complete — Automation/script failures + integration-setup failures + general HA error-rate, over service:"homeassistant". (#15 fail side, #10 log path, #20) |
 | STAGE-005-015 | vmalert-METRICS rules | ✓ Complete — Entity-unavailable-for-long (#1), stale/frozen-entity per-class (#2), battery 20%/10% (#5), update-available roundup (#13), device-down rollup group-by-device (#7), homelab_ha_up reachability+rule (#18), anomaly z-score (#4), automation-didnt-run-when-expected (#16), automation-disabled-unexpectedly (#17). |
-| STAGE-005-016 | Built-in safety-sensor rules + HA threshold presets | binary_sensor device_class smoke/gas/carbon_monoxide/moisture(water) firing → critical; door/window-left-open; + seed HA numeric-threshold presets into the 005-005 user-rule machinery. (#3a + #3b) |
+| STAGE-005-016 | Built-in safety-sensor rules + HA threshold presets | ✓ Complete — binary_sensor device_class smoke/gas/carbon_monoxide/moisture(water) firing → critical; door/window-left-open; + seed HA numeric-threshold presets into the 005-005 user-rule machinery. (#3a + #3b) |
 
 ### Wave D — Dispatcher channel + routing (S17-S18)
 
