@@ -1,12 +1,12 @@
 # EPIC-005: Home Assistant integration (collector + dispatcher channel + bidirectional events + UI panel)
 
-## Status: In Progress (19 / 26 Complete)
+## Status: In Progress (20 / 26 Complete)
 
-## Stages Counter: 19 / 26 Complete
+## Stages Counter: 20 / 26 Complete
 
-## Current Stage: STAGE-005-020
+## Current Stage: STAGE-005-021
 
-## Current Phase: STAGE-005-020 Design (Not Started)
+## Current Phase: STAGE-005-021 Design (Not Started)
 
 ## Overview
 
@@ -94,7 +94,7 @@ Stages MUST be implemented in order. No parallelization. Each stage lands a sing
 | # | Stage | Theme |
 |---|---|---|
 | STAGE-005-019 | HA webhook ingester | ✓ Complete — POST /api/integrations/ha/event + new Scope.HA_EVENT_WRITE; pydantic payload → audit_log. (#23) |
-| STAGE-005-020 | Push-back-to-HA event firer | On alert fire, optional POST /api/events/<type> to HA (per-alert opt-in) so HA automations react. (#24) |
+| STAGE-005-020 | Push-back-to-HA event firer | ✓ Complete — On alert fire, optional POST /api/events/<type> to HA (per-alert opt-in) so HA automations react. (#24) |
 
 ### Wave F — UI panel (S21-S26)
 
