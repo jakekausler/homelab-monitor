@@ -915,6 +915,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
         if isinstance(c, HaConfigEntryCollector):
             c._ws = app.state.ha_ws_client  # pyright: ignore[reportPrivateUsage]
 
+        from homelab_monitor.plugins.collectors.integrations.homeassistant.ha_repairs import (  # noqa: PLC0415
+            HaRepairsCollector,
+        )
+
+        if isinstance(c, HaRepairsCollector):
+            c._ws = app.state.ha_ws_client  # pyright: ignore[reportPrivateUsage]
+
     scheduler = Scheduler(
         collectors,
         ctx_factory,

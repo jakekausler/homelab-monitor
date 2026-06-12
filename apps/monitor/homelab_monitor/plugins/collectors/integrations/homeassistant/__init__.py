@@ -27,6 +27,9 @@ from homelab_monitor.plugins.collectors.integrations.homeassistant.ha_config_ent
 from homelab_monitor.plugins.collectors.integrations.homeassistant.ha_entity_available import (
     HaEntityAvailableCollector,
 )
+from homelab_monitor.plugins.collectors.integrations.homeassistant.ha_repairs import (
+    HaRepairsCollector,
+)
 from homelab_monitor.plugins.collectors.integrations.homeassistant.ha_up import (
     HaUpCollector,
 )
@@ -44,6 +47,7 @@ _HA_COLLECTORS: list[type[BaseCollector]] = [
     HaUpdateCollector,
     HaCadenceCollector,
     HaConfigEntryCollector,
+    HaRepairsCollector,  # STAGE-005-011
 ]
 
 
