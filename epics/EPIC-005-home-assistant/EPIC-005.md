@@ -1,12 +1,12 @@
 # EPIC-005: Home Assistant integration (collector + dispatcher channel + bidirectional events + UI panel)
 
-## Status: In Progress (16 / 26 Complete)
+## Status: In Progress (17 / 26 Complete)
 
-## Stages Counter: 16 / 26 Complete
+## Stages Counter: 17 / 26 Complete
 
-## Current Stage: STAGE-005-017
+## Current Stage: STAGE-005-018
 
-## Current Phase: STAGE-005-017 Design (Not Started)
+## Current Phase: STAGE-005-018 Design (Not Started)
 
 ## Overview
 
@@ -86,7 +86,7 @@ Stages MUST be implemented in order. No parallelization. Each stage lands a sing
 
 | # | Stage | Theme |
 |---|---|---|
-| STAGE-005-017 | HAPushChannel | Channel.deliver(AlertEvent) → POST notify/mobile_app_jake_s_android; reuses HA client. (#25) |
+| STAGE-005-017 | HAPushChannel | ✓ Complete — Channel.deliver(AlertEvent) → POST notify/mobile_app_jake_s_android; reuses HA client. (#25) |
 | STAGE-005-018 | Minimal severity routing | Read routing_rules so only error/critical → HA push. Full builder deferred to EPIC-012. |
 
 ### Wave E — Bidirectional webhook (S19-S20)
