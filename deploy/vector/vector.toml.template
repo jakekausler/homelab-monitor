@@ -217,9 +217,23 @@ if (.severity == "info" || is_null(.severity)) && exists(.label) && exists(.mess
 }
 '''
 
+[transforms.strip_ansi]
+type = "remap"
+inputs = ["docker_severity_extract"]
+source = '''
+# STAGE-005-014: strip ANSI/CSI escape sequences from docker .message so VL
+# phrase-filter rules (e.g. HA "Error while executing automation") match. Runs
+# AFTER docker_severity_extract (whose regexes already tolerate a leading ANSI
+# prefix) so severity classification is unaffected. Docker-only via exists(.label);
+# journald/cron lines pass through untouched.
+if exists(.label) && exists(.message) {
+  .message = strip_ansi_escape_codes(to_string(.message) ?? "")
+}
+'''
+
 [transforms.drop_noise]
 type = "filter"
-inputs = ["docker_severity_extract"]
+inputs = ["strip_ansi"]
 condition = '''
 .message != null && .message != "" && .SYSLOG_IDENTIFIER != "hmrun"
 '''

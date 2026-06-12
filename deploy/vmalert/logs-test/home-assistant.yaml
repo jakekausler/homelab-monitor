@@ -1,0 +1,63 @@
+# Test-window counterpart of deploy/vmalert/logs/home-assistant.yaml.
+# Used ONLY by docker-compose.test.yml (vmalert-logs-test service).
+#
+# Differences vs production:
+#   - _time:30s vs _time:5m (faster firing for integration tests)
+#   - interval: 5s vs interval: 30s
+#   - HaAutomationScriptFailure: threshold fail_count:>0 unchanged (fire on 1 line)
+#   - HaIntegrationSetupFailure: threshold setup_fail_count:>0 unchanged (fire on 1 line)
+#   - HaErrorRateSpike: threshold lowered >50 → >2; for: 10m → for: 0m
+#   - Description text reflects 30s window.
+#   - Same group/alert names, same labels, same annotations structure.
+#
+# Production rules at deploy/vmalert/logs/home-assistant.yaml — keep BOTH
+# files in sync for label/annotation changes; only _time: and filter thresholds
+# and for: may diverge.
+
+groups:
+  - name: home_assistant_logs
+    type: vlogs
+    # interval: 5s gives ~6 evaluations per 30s window — sufficient resolution
+    # for the integration test to observe transitions (firing + resolved).
+    # DO NOT raise to match production's 30s; the test would only get 1 eval
+    # per window.
+    interval: 5s
+    rules:
+      - alert: HaAutomationScriptFailure
+        expr: '_time:30s service:="homeassistant" ("Error while executing automation" OR "Error executing script") | stats by (host) count() as fail_count | filter fail_count:>0'
+        for: 0m
+        labels:
+          severity: error
+          source_tool: vmalert-logs
+          target_kind: container
+          integration: home_assistant
+        annotations:
+          summary: "HA automation/script error on {{ $labels.host }}"
+          description: '{{ $value }} automation or script failure(s) in 30s on {{ $labels.host }}'
+          explorer: '/logs?logsql=service:"homeassistant" AND ("Error while executing automation" OR "Error executing script")'
+
+      - alert: HaIntegrationSetupFailure
+        expr: '_time:30s service:="homeassistant" ("Error during setup of component" OR "ConfigEntryNotReady") | stats by (host) count() as setup_fail_count | filter setup_fail_count:>0'
+        for: 0m
+        labels:
+          severity: error
+          source_tool: vmalert-logs
+          target_kind: container
+          integration: home_assistant
+        annotations:
+          summary: "HA integration setup failure on {{ $labels.host }}"
+          description: '{{ $value }} integration setup failure(s) in 30s on {{ $labels.host }} (ConfigEntryNotReady or component setup error)'
+          explorer: '/logs?logsql=service:"homeassistant" AND ("Error during setup of component" OR "ConfigEntryNotReady")'
+
+      - alert: HaErrorRateSpike
+        expr: '_time:30s service:="homeassistant" severity:error | stats by (host) count() as error_count | filter error_count:>2'
+        for: 0m
+        labels:
+          severity: warning
+          source_tool: vmalert-logs
+          target_kind: container
+          integration: home_assistant
+        annotations:
+          summary: "HA error-rate spike on {{ $labels.host }}"
+          description: '{{ $value }} error-severity log lines in 30s on {{ $labels.host }} (fixed threshold N=2 for test, N=50 in production — tuned at Refinement 3b). This is a coarse safety-net floor; the baseline-aware rule is ServiceErrorRateSpike in deploy/vmalert/metrics/error_rate_spike.yaml.'
+          explorer: '/logs?logsql=service:"homeassistant" AND severity:error'

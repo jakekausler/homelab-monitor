@@ -459,8 +459,8 @@ def test_drop_noise_inputs_is_docker_severity_extract(parsed_config: dict[str, A
     transforms = parsed_config.get("transforms", {})
     drop_noise = transforms.get("drop_noise", {})
     inputs = drop_noise.get("inputs", [])
-    assert inputs == ["docker_severity_extract"], (
-        f"drop_noise.inputs must be ['docker_severity_extract'] after rewire, got {inputs}"
+    assert inputs == ["strip_ansi"], (
+        f"drop_noise.inputs must be ['strip_ansi'] (STAGE-005-014 ANSI-strip), got {inputs}"
     )
 
 
@@ -742,6 +742,24 @@ def test_docker_severity_extract_fatal_maps_to_critical(
     assert error_pat.search("FATAL: out of memory") is None, (
         "FATAL: out of memory must NOT match ERROR pattern (belongs in critical)"
     )
+
+
+def test_strip_ansi_transform_present(parsed_config: dict[str, Any]) -> None:
+    """[transforms.strip_ansi] must exist (type=remap, reads docker_severity_extract)."""
+    transforms = parsed_config.get("transforms", {})
+    assert "strip_ansi" in transforms, (
+        f"strip_ansi missing from transforms; keys: {list(transforms.keys())}"
+    )
+    assert transforms["strip_ansi"].get("type") == "remap"
+    assert transforms["strip_ansi"].get("inputs") == ["docker_severity_extract"], (
+        f"strip_ansi.inputs must be ['docker_severity_extract'], "
+        f"got {transforms['strip_ansi'].get('inputs')}"
+    )
+    source = transforms["strip_ansi"].get("source", "")
+    assert "strip_ansi_escape_codes" in source, (
+        "strip_ansi source must call strip_ansi_escape_codes"
+    )
+    assert "exists(.label)" in source, "strip_ansi must gate on exists(.label) (docker-only)"
 
 
 # ---------------------------------------------------------------------------
