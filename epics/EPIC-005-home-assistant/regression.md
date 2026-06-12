@@ -89,3 +89,10 @@
 - Real HA: ~189 config entries (under 500 cap). 015 #10 rule consumes `homelab_ha_config_entry_loaded
   == 0`. Verify via prod rig: collector ok=True, ~189 gauges/family, any setup_error==1 = broken
   integration, live in VM.
+
+## STAGE-005-011 (Repairs collector — websocket)
+- `HaRepairsCollector` emits `homelab_ha_repair_issue{domain,issue_id,severity}` (1.0 for each active, non-ignored repair issue) + always-emitted drop gauge `homelab_metric_family_dropped_series{family="homelab_ha_repair_issue"}` (0 when under cap).
+- Repairs via websocket: per-tick `send_command("repairs/list_issues")` snapshot (NO subscription). Real HA returns a **dict** `{"issues": [...]}` (NOT a bare list) — defensive `_extract_issues` handles both shapes + empty. _ws None/not-connected/HaError → ok=False.
+- Real HA shape verified (2026-06-12): `repairs/list_issues` response = dict with `issues` key; each issue has `domain`/`issue_id`/`severity` literal keys; `severity` enum = critical|error|warning (matches collector); `ignored` present (computed from `dismissed_version is not None`); `active` NOT serialized (HA pre-filters to active-only). Collector's `active is False` identity guard (emit when absent) is correct and tested.
+- Label filter: `active is True and ignored is not True` → emit (skip-via-None); dismissed issues drop out via stale-series TTL.
+- Real HA validation: 0 active repair issues (was 43 at card-authoring; issues clear over time). Collector run ok=True, metrics_emitted=1 (drop gauge only). Cardinality 0 → global 500 cap ample; no per-family override. No code changes during Refinement (wiring confirmed, no bugs found).
