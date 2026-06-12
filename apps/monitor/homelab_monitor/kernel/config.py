@@ -489,21 +489,30 @@ class HaConfig:
     ``base_url`` is the HA instance base URL (no trailing slash; the loader
     strips it). The long-lived bearer token is NOT here — it lives in the
     secret store under ``ha_token`` and is resolved at request time.
+
+    ``notify_service`` (STAGE-005-017) is the HA ``notify`` target name (e.g.
+    ``mobile_app_pixel``) used by the alert push channel. Empty string (the
+    open-source-safe default) makes the push channel a no-op — no HA call is
+    made — so a public release never tries to notify a service that does not
+    exist on the operator's instance.
     """
 
     base_url: str = "http://192.168.2.148:8123"
+    notify_service: str = ""
 
 
 def load_ha_config() -> HaConfig:
-    """Load HA connection config from env (HOMELAB_MONITOR_HA_URL).
+    """Load HA connection config from env.
 
-    Strips a trailing slash so client path concatenation is unambiguous.
-    Returns the default base URL when the env var is unset.
+    ``HOMELAB_MONITOR_HA_URL`` -> ``base_url`` (trailing slash stripped so client
+    path concatenation is unambiguous; default base URL when unset).
+    ``HOMELAB_MONITOR_HA_NOTIFY_SERVICE`` -> ``notify_service`` (default ``""``;
+    empty makes the alert push channel a no-op).
     """
     raw = os.environ.get("HOMELAB_MONITOR_HA_URL")
-    if raw is None:
-        return HaConfig()
-    return HaConfig(base_url=raw.rstrip("/"))
+    base_url = HaConfig().base_url if raw is None else raw.rstrip("/")
+    notify_service = os.environ.get("HOMELAB_MONITOR_HA_NOTIFY_SERVICE", "")
+    return HaConfig(base_url=base_url, notify_service=notify_service)
 
 
 # Built-in per-family cardinality caps (STAGE-005-006).

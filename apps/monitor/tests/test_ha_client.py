@@ -425,3 +425,15 @@ def test_load_ha_config_strips_trailing_slash(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setenv("HOMELAB_MONITOR_HA_URL", "http://10.0.0.5:8123/")
     cfg = load_ha_config()
     assert cfg.base_url == "http://10.0.0.5:8123"
+
+
+def test_load_ha_config_notify_service_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("HOMELAB_MONITOR_HA_NOTIFY_SERVICE", raising=False)
+    cfg = load_ha_config()
+    assert cfg.notify_service == ""
+
+
+def test_load_ha_config_notify_service_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HOMELAB_MONITOR_HA_NOTIFY_SERVICE", "mobile_app_pixel")
+    cfg = load_ha_config()
+    assert cfg.notify_service == "mobile_app_pixel"

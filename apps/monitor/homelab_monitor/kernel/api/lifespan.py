@@ -26,6 +26,7 @@ from homelab_monitor.kernel.db.engine import dispose_engine, get_engine
 from homelab_monitor.kernel.db.migrations import MigrationsPendingError, run_migrations
 from homelab_monitor.kernel.db.repository import SqliteRepository
 from homelab_monitor.kernel.db.time import utc_now_iso
+from homelab_monitor.kernel.dispatch.channels.ha_push import HAPushChannel
 from homelab_monitor.kernel.dispatch.channels.inproc_dashboard import InprocDashboardChannel
 from homelab_monitor.kernel.dispatch.dispatcher import AlertDispatcher
 from homelab_monitor.kernel.events import TriggerContext
@@ -651,7 +652,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
     cron_run_repo = CronRunRepository(repo)
     cron_run_failure_repo = CronRunFailureEnrichmentsRepository(repo)
     alert_dispatcher = AlertDispatcher(
-        channels=[InprocDashboardChannel(broker)],
+        channels=[
+            InprocDashboardChannel(broker),
+            HAPushChannel(ha_client, ha_config.notify_service),
+        ],
         log=log,
     )
     failure_budget = FailureBudget(

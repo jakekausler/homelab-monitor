@@ -65,3 +65,12 @@ async def test_lifespan_passes_dispatcher_to_failure_budget(app_with_alerts: Fas
     # The wired instances must be the same objects as app.state
     assert alert_repo is app_with_alerts.state.alert_repo
     assert dispatcher is app_with_alerts.state.alert_dispatcher
+
+
+@pytest.mark.asyncio
+async def test_lifespan_registers_ha_push_channel(app_with_alerts: FastAPI) -> None:
+    """The dispatcher's channels include an ha_push channel after lifespan boot."""
+    dispatcher = app_with_alerts.state.alert_dispatcher
+    channel_kinds = [c.kind for c in dispatcher._channels]  # pyright: ignore[reportPrivateUsage]
+    assert "ha_push" in channel_kinds
+    assert "inproc_dashboard" in channel_kinds
