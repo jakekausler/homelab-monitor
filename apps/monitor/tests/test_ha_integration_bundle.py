@@ -23,6 +23,9 @@ from homelab_monitor.plugins.collectors.integrations.homeassistant.ha_config_ent
 from homelab_monitor.plugins.collectors.integrations.homeassistant.ha_entity_available import (
     HaEntityAvailableCollector,
 )
+from homelab_monitor.plugins.collectors.integrations.homeassistant.ha_persistent_notification import (  # noqa: E501
+    HaPersistentNotificationCollector,
+)
 from homelab_monitor.plugins.collectors.integrations.homeassistant.ha_repairs import (
     HaRepairsCollector,
 )
@@ -145,6 +148,18 @@ def test_register_all_registers_ha_repairs() -> None:
     record = records[0]
     assert isinstance(record, LoadedCollector)
     assert record.config.name == "ha_repairs"
+
+
+def test_register_all_registers_ha_persistent_notification() -> None:
+    """register_all registers HaPersistentNotificationCollector with the derived config."""
+    loader = PluginLoader()
+    register_all(loader)
+    loaded = loader.load_all()
+    records = [r for r in loaded if isinstance(r.collector, HaPersistentNotificationCollector)]
+    assert len(records) == 1
+    record = records[0]
+    assert isinstance(record, LoadedCollector)
+    assert record.config.name == "ha_persistent_notification"
 
 
 def test_register_all_isolates_failing_register(monkeypatch: pytest.MonkeyPatch) -> None:

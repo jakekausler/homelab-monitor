@@ -27,6 +27,9 @@ from homelab_monitor.plugins.collectors.integrations.homeassistant.ha_config_ent
 from homelab_monitor.plugins.collectors.integrations.homeassistant.ha_entity_available import (
     HaEntityAvailableCollector,
 )
+from homelab_monitor.plugins.collectors.integrations.homeassistant.ha_persistent_notification import (  # noqa: E501
+    HaPersistentNotificationCollector,
+)
 from homelab_monitor.plugins.collectors.integrations.homeassistant.ha_repairs import (
     HaRepairsCollector,
 )
@@ -48,6 +51,7 @@ _HA_COLLECTORS: list[type[BaseCollector]] = [
     HaCadenceCollector,
     HaConfigEntryCollector,
     HaRepairsCollector,  # STAGE-005-011
+    HaPersistentNotificationCollector,  # STAGE-005-012
 ]
 
 
