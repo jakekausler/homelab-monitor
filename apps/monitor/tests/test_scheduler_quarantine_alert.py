@@ -48,6 +48,10 @@ class _CapturingChannel:
     def __init__(self) -> None:
         self.events: list[AlertEvent] = []
 
+    def accepts(self, event: AlertEvent) -> bool:
+        del event
+        return True
+
     async def deliver(self, event: AlertEvent) -> None:
         self.events.append(event)
 

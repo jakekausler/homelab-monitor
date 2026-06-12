@@ -28,15 +28,27 @@ class AlertDispatcher:
         self._delivery_failures: dict[str, int] = defaultdict(int)
 
     async def dispatch(self, event: AlertEvent) -> list[DeliveryResult]:
-        """Deliver ``event`` to every channel; return per-channel results.
+        """Deliver ``event`` to every channel that accepts it; return per-channel results.
 
         NEVER raises: per-channel exceptions are caught, logged at WARNING
         with channel kind + error, and surfaced as ``DeliveryResult(ok=False,
         error=str(exc))``. The kind-keyed failure counter is incremented for
         each failure (used by the eventual metrics surface).
+
+        Channels that return ``False`` from ``accepts(event)`` are skipped;
+        no ``DeliveryResult`` is appended for them.
+
+        # TODO: STOPGAP accepts() gate — retire when EPIC-012 STAGE-012-005 lands
         """
         results: list[DeliveryResult] = []
         for channel in self._channels:
+            # TODO: STOPGAP — retire when EPIC-012 STAGE-012-005 lands (full routing engine)
+            if not channel.accepts(event):
+                self._log.debug(
+                    "alert_dispatcher.channel_skipped",
+                    channel_kind=channel.kind,
+                )
+                continue
             try:
                 await channel.deliver(event)
                 results.append(DeliveryResult(channel_kind=channel.kind, ok=True))

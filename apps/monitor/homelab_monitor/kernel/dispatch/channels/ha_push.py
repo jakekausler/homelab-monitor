@@ -52,6 +52,18 @@ class HAPushChannel:
         self._notify_service = notify_service
         self._public_url_provider = public_url_provider
 
+    def accepts(self, event: AlertEvent) -> bool:
+        """Admit only error/critical-severity events (raw label, uncoerced).
+
+        Uses the raw ``severity`` label to avoid any Severity-enum normalisation
+        that could change case or canonical form. Fail-closed: missing label →
+        False.
+
+        # TODO: STOPGAP — retire when EPIC-012 STAGE-012-005 lands (full routing engine)
+        """
+        raw = (event.labels.get("severity") or "").strip().lower()
+        return raw in {"error", "critical"}
+
     async def deliver(self, event: AlertEvent) -> None:
         """Push ``event`` to the HA notify service. MAY raise; dispatcher catches.
 

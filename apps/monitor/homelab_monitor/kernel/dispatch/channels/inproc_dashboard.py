@@ -24,3 +24,11 @@ class InprocDashboardChannel:
     async def deliver(self, event: AlertEvent) -> None:
         """Forward the event to the SSE broker. MAY raise; dispatcher catches."""
         await self._broker.publish(event)
+
+    def accepts(self, event: AlertEvent) -> bool:
+        """Accept all events. Default-accept channel.
+
+        # TODO: STOPGAP — retire when EPIC-012 STAGE-012-005 lands (full routing engine)
+        """
+        del event  # unused — accept everything
+        return True

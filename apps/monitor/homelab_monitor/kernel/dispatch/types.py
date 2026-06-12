@@ -19,11 +19,21 @@ class Channel(Protocol):
     Implementations advertise their kind via ``kind`` (used for log + counter
     keys) and implement ``deliver``. ``deliver`` MAY raise; the dispatcher
     catches and records the failure.
+
+    ``accepts`` is a sync pre-filter called by the dispatcher before
+    ``deliver``. Return ``True`` to receive the event, ``False`` to skip.
+    There is no default: ``accepts`` is a required member (a structural
+    implementer that omits it fails conformance). ``InprocDashboardChannel``
+    returns ``True`` (accept-all); ``HAPushChannel`` gates on severity.
+
+    # TODO: STOPGAP — retire when EPIC-012 STAGE-012-005 lands (full routing engine)
     """
 
     kind: ClassVar[str]
 
     async def deliver(self, event: AlertEvent) -> None: ...
+
+    def accepts(self, event: AlertEvent) -> bool: ...  # required — see concrete impls
 
 
 class DeliveryResult(BaseModel):

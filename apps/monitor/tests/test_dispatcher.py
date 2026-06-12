@@ -37,6 +37,10 @@ class _RecordingChannel:
     async def deliver(self, event: AlertEvent) -> None:
         self.received.append(event)
 
+    def accepts(self, event: AlertEvent) -> bool:
+        del event
+        return True
+
 
 class _FailingChannel:
     kind: ClassVar[str] = "boom"
@@ -45,6 +49,10 @@ class _FailingChannel:
         del event
         msg = "kaboom"
         raise RuntimeError(msg)
+
+    def accepts(self, event: AlertEvent) -> bool:
+        del event
+        return True
 
 
 class _FakeBroker:
