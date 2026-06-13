@@ -156,3 +156,7 @@
 ## STAGE-005-021 (Backend HA panel data endpoint)
 
 - **STAGE-005-021 — HA panel summary endpoint:** With the prod rig up (real HA), authenticate to the monitor (admin/admin-dev-password) and `GET http://127.0.0.1:29090/api/integrations/home-assistant/summary`. Expect 200 with entities.total in the hundreds/thousands (≈1906 against real HA), ha_up=true, last_seen a recent ISO timestamp, config_entries.loaded>0. Cross-check entities.total against VM `count(homelab_ha_entity_available)`. Confirm no token leak: `docker logs homelab-monitor | grep -iE 'ha_token|bearer|eyJ'` → 0 matches. VM unreachable → endpoint returns 502 (not 200-with-zeros).
+
+## STAGE-005-022 (HA panel shell + nav/router + tabbed layout)
+
+- The 'Home Assistant' sidebar nav entry (HousePlug icon, under Integrations) links to `/integrations/home-assistant`, which redirects to the Health tab. The panel is a route-based TABBED layout (mirroring the logs page): tabs Health / Status / Logs at `/integrations/home-assistant/{health,status,logs}`, each deep-linkable. This stage ships calm `PanelSection` placeholders ('… will appear here.') filled by 023 (Health: entity-health + battery), 024 (Status: updates + integration-status), 025 (Logs: embedded HA LogViewer). Regression check: `pnpm --filter ui run verify` passes; the nav entry renders + links; visiting `/integrations/home-assistant` redirects to `/integrations/home-assistant/health`; all three tabs render their PanelSection titles; Desktop + Mobile reflow cleanly (tab bar fits, cards stack 1-up on mobile).

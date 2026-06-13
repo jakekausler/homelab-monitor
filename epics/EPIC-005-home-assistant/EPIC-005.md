@@ -1,12 +1,12 @@
 # EPIC-005: Home Assistant integration (collector + dispatcher channel + bidirectional events + UI panel)
 
-## Status: In Progress (21 / 26 Complete)
+## Status: In Progress (22 / 26 Complete)
 
-## Stages Counter: 21 / 26 Complete
+## Stages Counter: 22 / 26 Complete
 
-## Current Stage: STAGE-005-022
+## Current Stage: STAGE-005-023
 
-## Current Phase: STAGE-005-022 Design (Not Started)
+## Current Phase: STAGE-005-023 Design (Not Started)
 
 ## Overview
 
@@ -101,7 +101,7 @@ Stages MUST be implemented in order. No parallelization. Each stage lands a sing
 | # | Stage | Theme |
 |---|---|---|
 | STAGE-005-021 | Backend HA panel data endpoint(s) | ✓ Complete — GET /api/integrations/home-assistant/summary (+/entities) returning typed rows (mirrors Docker ContainerRow[]): entity-health counts, battery summary, update count, recent automation-failure count, integration-issue count, last-seen. |
-| STAGE-005-022 | Panel shell + sidebar/router registration | "Home Assistant" NAV_ITEMS entry + /integrations/home-assistant route + page scaffold; establishes the per-integration-panel pattern. |
+| STAGE-005-022 | Panel shell + sidebar/router registration | ✓ Complete — "Home Assistant" NAV_ITEMS entry + /integrations/home-assistant route + page scaffold; establishes the per-integration-panel pattern. |
 | STAGE-005-023 | Entity-health + battery widgets | Consume 021 data. |
 | STAGE-005-024 | Updates + integration-status widgets | Updates-available list + config-entry/repairs/notifications summary. |
 | STAGE-005-025 | Embedded LogViewer | Scoped service:"homeassistant" via the EPIC-004 embedding contract; recent automation failures inline. (#20 inline) |
