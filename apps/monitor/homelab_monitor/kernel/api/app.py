@@ -31,6 +31,7 @@ from homelab_monitor.kernel.api.routers import (
     health,
     heartbeat,
     integrations_ha,
+    integrations_home_assistant,
     karma,
     logs,
     metrics,
@@ -92,6 +93,7 @@ def create_app(*, lifespan_enabled: bool = True) -> FastAPI:
     app.include_router(grafana.router, prefix="/api")
     app.include_router(heartbeat.router, prefix="/api")
     app.include_router(integrations_ha.router, prefix="/api")
+    app.include_router(integrations_home_assistant.router, prefix="/api")
     app.include_router(crons.router, prefix="/api")
     app.include_router(cron_events.router, prefix="/api")
     app.include_router(docker.router, prefix="/api")

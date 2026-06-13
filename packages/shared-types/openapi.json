@@ -2581,6 +2581,135 @@
         "title": "HTTPValidationError",
         "type": "object"
       },
+      "HaBatterySummary": {
+        "properties": {
+          "critical": {
+            "title": "Critical",
+            "type": "integer"
+          },
+          "low": {
+            "title": "Low",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "low",
+          "critical"
+        ],
+        "title": "HaBatterySummary",
+        "type": "object"
+      },
+      "HaConfigEntriesSummary": {
+        "properties": {
+          "error": {
+            "title": "Error",
+            "type": "integer"
+          },
+          "loaded": {
+            "title": "Loaded",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "loaded",
+          "error"
+        ],
+        "title": "HaConfigEntriesSummary",
+        "type": "object"
+      },
+      "HaEntitiesSummary": {
+        "properties": {
+          "available": {
+            "title": "Available",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          },
+          "unavailable": {
+            "title": "Unavailable",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total",
+          "available",
+          "unavailable"
+        ],
+        "title": "HaEntitiesSummary",
+        "type": "object"
+      },
+      "HaSummaryResponse": {
+        "description": "Aggregated HA panel summary, sourced from VictoriaMetrics instant queries.",
+        "properties": {
+          "battery": {
+            "$ref": "#/components/schemas/HaBatterySummary"
+          },
+          "config_entries": {
+            "$ref": "#/components/schemas/HaConfigEntriesSummary"
+          },
+          "entities": {
+            "$ref": "#/components/schemas/HaEntitiesSummary"
+          },
+          "ha_up": {
+            "title": "Ha Up",
+            "type": "boolean"
+          },
+          "last_seen": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Seen"
+          },
+          "notifications": {
+            "title": "Notifications",
+            "type": "integer"
+          },
+          "repairs": {
+            "title": "Repairs",
+            "type": "integer"
+          },
+          "updates": {
+            "$ref": "#/components/schemas/HaUpdatesSummary"
+          }
+        },
+        "required": [
+          "entities",
+          "battery",
+          "updates",
+          "config_entries",
+          "repairs",
+          "notifications",
+          "ha_up",
+          "last_seen"
+        ],
+        "title": "HaSummaryResponse",
+        "type": "object"
+      },
+      "HaUpdatesSummary": {
+        "properties": {
+          "available": {
+            "title": "Available",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "available",
+          "total"
+        ],
+        "title": "HaUpdatesSummary",
+        "type": "object"
+      },
       "HealthzResponse": {
         "additionalProperties": false,
         "description": "Response for GET /api/healthz.",
@@ -8484,6 +8613,28 @@
           }
         },
         "summary": "Ingest Ha Event",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/api/integrations/home-assistant/summary": {
+      "get": {
+        "description": "Return HA panel summary counts from VictoriaMetrics instant queries.\n\nAuth: cookie session required. CSRF NOT enforced on GET.\n\nEach count defaults to 0 when its instant query returns an empty vector\n(``count(metric == 0)`` yields no sample when zero series match). Any VM\ntransport/query failure surfaces as 502 ``upstream_unavailable`` (via the\nshared ``vm_query`` helper) rather than a 200-with-zeros response.",
+        "operationId": "get_ha_summary_api_integrations_home_assistant_summary_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HaSummaryResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Ha Summary",
         "tags": [
           "integrations"
         ]
