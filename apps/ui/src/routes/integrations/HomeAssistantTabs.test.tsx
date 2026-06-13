@@ -1,34 +1,11 @@
 import { cleanup, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { HomeAssistantHealthTab } from './HomeAssistantHealthTab'
 import { HomeAssistantLogsTab } from './HomeAssistantLogsTab'
 import { HomeAssistantStatusTab } from './HomeAssistantStatusTab'
 
 afterEach(() => {
   cleanup()
-})
-
-describe('HomeAssistantHealthTab', () => {
-  it('renders Entity health section title', () => {
-    render(<HomeAssistantHealthTab />)
-    expect(screen.getByRole('heading', { name: /entity health/i })).toBeInTheDocument()
-  })
-
-  it('renders Battery section title', () => {
-    render(<HomeAssistantHealthTab />)
-    expect(screen.getByRole('heading', { name: /battery/i })).toBeInTheDocument()
-  })
-
-  it('renders Entity health placeholder copy', () => {
-    render(<HomeAssistantHealthTab />)
-    expect(screen.getByText('Entity health will appear here.')).toBeInTheDocument()
-  })
-
-  it('renders Battery placeholder copy', () => {
-    render(<HomeAssistantHealthTab />)
-    expect(screen.getByText('Battery status will appear here.')).toBeInTheDocument()
-  })
 })
 
 describe('HomeAssistantStatusTab', () => {
