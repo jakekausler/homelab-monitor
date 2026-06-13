@@ -1,12 +1,12 @@
 # EPIC-005: Home Assistant integration (collector + dispatcher channel + bidirectional events + UI panel)
 
-## Status: In Progress (23 / 28 Complete)
+## Status: In Progress (24 / 29 Complete)
 
-## Stages Counter: 23 / 28 Complete
+## Stages Counter: 24 / 29 Complete
 
-## Current Stage: STAGE-005-024
+## Current Stage: STAGE-005-025
 
-## Current Phase: STAGE-005-024 Design (Not Started)
+## Current Phase: STAGE-005-025 Design (Not Started)
 
 ## Overview
 
@@ -47,7 +47,7 @@ EPIC-005 is the first full integration-bundle epic and the exemplar whose shape 
 - **EPIC-005 adds HAPushChannel + minimal severity-based routing layer** (read `routing_rules` so only error/critical reach HA push).
 - **Full rule-builder UI + per-tag overrides deferred to EPIC-012** (noted there).
 
-## Stage decomposition (28 stages, sequential)
+## Stage decomposition (29 stages, sequential)
 
 Stages MUST be implemented in order. No parallelization. Each stage lands a single small slice and ships independently usable.
 
@@ -96,18 +96,19 @@ Stages MUST be implemented in order. No parallelization. Each stage lands a sing
 | STAGE-005-019 | HA webhook ingester | ✓ Complete — POST /api/integrations/ha/event + new Scope.HA_EVENT_WRITE; pydantic payload → audit_log. (#23) |
 | STAGE-005-020 | Push-back-to-HA event firer | ✓ Complete — On alert fire, optional POST /api/events/<type> to HA (per-alert opt-in) so HA automations react. (#24) |
 
-### Wave F — UI panel (S21-S28)
+### Wave F — UI panel (S21-S29)
 
 | # | Stage | Theme |
 |---|---|---|
 | STAGE-005-021 | Backend HA panel data endpoint(s) | ✓ Complete — GET /api/integrations/home-assistant/summary (+/entities) returning typed rows (mirrors Docker ContainerRow[]): entity-health counts, battery summary, update count, recent automation-failure count, integration-issue count, last-seen. |
 | STAGE-005-022 | Panel shell + sidebar/router registration | ✓ Complete — "Home Assistant" NAV_ITEMS entry + /integrations/home-assistant route + page scaffold; establishes the per-integration-panel pattern. |
 | STAGE-005-023 | Entity-health + battery widgets | ✓ Complete — Consume 021 data. |
-| STAGE-005-024 | Updates + integration-status widgets | Updates-available list + config-entry/repairs/notifications summary. |
+| STAGE-005-024 | Updates + integration-status widgets | ✓ Complete — Updates-available list + config-entry/repairs/notifications summary. |
 | STAGE-005-025 | Embedded LogViewer | Scoped service:"homeassistant" via the EPIC-004 embedding contract; recent automation failures inline. (#20 inline) |
 | STAGE-005-026 | Grafana dashboard home-assistant.json | Default dashboard provisioned via deploy/grafana/dashboards/. |
 | STAGE-005-027 | HA entity + battery detail endpoints (drill-down backend) | GET /entities + /batteries returning per-entity/per-device rows (entity_id, domain, last-changed age, level) from VM per-series gauges; the deferred detail-endpoint split (021's D-PANEL-ENDPOINT-SPLIT). Backend; OpenAPI regen; 3a+3b. |
 | STAGE-005-028 | Entity + battery drill-down widgets (frontend) | Consume 027 detail endpoints: drill-lists of the actual unavailable/stale entities + low/critical battery devices, added below 023's count tiles on the Health tab. Frontend; 3a (Desktop + Mobile). |
+| STAGE-005-029 | HA persistent-notification detail (live re-query + privacy + safe render) | Notification BODY list (title + safely-rendered message) on the Integration-status section; live HA re-query (NOT VM — bodies kept out of metrics per 012 privacy); privacy review + safe text render. Deferred from 024. Backend + frontend; 3a+3b. |
 
 ## Cross-stage acceptance criteria
 
