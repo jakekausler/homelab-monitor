@@ -1,12 +1,12 @@
 # EPIC-005: Home Assistant integration (collector + dispatcher channel + bidirectional events + UI panel)
 
-## Status: In Progress (25 / 29 Complete)
+## Status: In Progress (26 / 29 Complete)
 
-## Stages Counter: 25 / 29 Complete
+## Stages Counter: 26 / 29 Complete
 
-## Current Stage: STAGE-005-026
+## Current Stage: STAGE-005-027
 
-## Current Phase: STAGE-005-026 Design (Not Started)
+## Current Phase: STAGE-005-027 Design (Not Started)
 
 ## Overview
 
@@ -105,7 +105,7 @@ Stages MUST be implemented in order. No parallelization. Each stage lands a sing
 | STAGE-005-023 | Entity-health + battery widgets | ✓ Complete — Consume 021 data. |
 | STAGE-005-024 | Updates + integration-status widgets | ✓ Complete — Updates-available list + config-entry/repairs/notifications summary. |
 | STAGE-005-025 | Embedded LogViewer | ✓ Complete — Scoped service:"homeassistant" via the EPIC-004 embedding contract; recent automation failures inline. (#20 inline) |
-| STAGE-005-026 | Grafana dashboard home-assistant.json | Default dashboard provisioned via deploy/grafana/dashboards/. |
+| STAGE-005-026 | Grafana dashboard home-assistant.json | ✓ Complete — Default dashboard provisioned via deploy/grafana/dashboards/. |
 | STAGE-005-027 | HA entity + battery detail endpoints (drill-down backend) | GET /entities + /batteries returning per-entity/per-device rows (entity_id, domain, last-changed age, level) from VM per-series gauges; the deferred detail-endpoint split (021's D-PANEL-ENDPOINT-SPLIT). Backend; OpenAPI regen; 3a+3b. |
 | STAGE-005-028 | Entity + battery drill-down widgets (frontend) | Consume 027 detail endpoints: drill-lists of the actual unavailable/stale entities + low/critical battery devices, added below 023's count tiles on the Health tab. Frontend; 3a (Desktop + Mobile). |
 | STAGE-005-029 | HA persistent-notification detail (live re-query + privacy + safe render) | Notification BODY list (title + safely-rendered message) on the Integration-status section; live HA re-query (NOT VM — bodies kept out of metrics per 012 privacy); privacy review + safe text render. Deferred from 024. Backend + frontend; 3a+3b. |
