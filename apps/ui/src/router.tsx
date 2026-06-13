@@ -19,6 +19,10 @@ import { CronDetailPage } from '@/routes/inventory/CronDetailPage'
 import { CronRunsListPage } from '@/routes/inventory/CronRunsList'
 import { CronRunLogViewerPage } from '@/routes/inventory/CronRunLogViewer'
 import { DockerIntegrationPage } from '@/routes/integrations/DockerIntegrationPage'
+import { HomeAssistantLayout } from '@/routes/integrations/HomeAssistantLayout'
+import { HomeAssistantHealthTab } from '@/routes/integrations/HomeAssistantHealthTab'
+import { HomeAssistantStatusTab } from '@/routes/integrations/HomeAssistantStatusTab'
+import { HomeAssistantLogsTab } from '@/routes/integrations/HomeAssistantLogsTab'
 import { ContainerPage } from '@/routes/integrations/ContainerPage'
 import { ContainerOverviewTab } from '@/routes/integrations/ContainerOverviewTab'
 import { ContainerProbesTab } from '@/routes/integrations/ContainerProbesTab'
@@ -377,6 +381,39 @@ const dockerIntegrationRoute = createRoute({
   component: DockerIntegrationPage,
 })
 
+const homeAssistantLayoutRoute = createRoute({
+  getParentRoute: () => protectedLayoutRoute,
+  path: '/integrations/home-assistant',
+  component: HomeAssistantLayout,
+})
+
+const homeAssistantIndexRoute = createRoute({
+  getParentRoute: () => homeAssistantLayoutRoute,
+  path: '/',
+  beforeLoad: () => {
+    // eslint-disable-next-line @typescript-eslint/only-throw-error -- TanStack Router redirect objects are thrown by design
+    throw redirect({ to: '/integrations/home-assistant/health', search: (prev) => prev })
+  },
+})
+
+const homeAssistantHealthRoute = createRoute({
+  getParentRoute: () => homeAssistantLayoutRoute,
+  path: 'health',
+  component: HomeAssistantHealthTab,
+})
+
+const homeAssistantStatusRoute = createRoute({
+  getParentRoute: () => homeAssistantLayoutRoute,
+  path: 'status',
+  component: HomeAssistantStatusTab,
+})
+
+const homeAssistantLogsRoute = createRoute({
+  getParentRoute: () => homeAssistantLayoutRoute,
+  path: 'logs',
+  component: HomeAssistantLogsTab,
+})
+
 // NEW: parent route hosts the shared header + tab strip; children render in <Outlet>.
 const containerPageRoute = createRoute({
   getParentRoute: () => protectedLayoutRoute,
@@ -453,6 +490,12 @@ const routeTree = rootRoute.addChildren([
     ]),
     settingsLayoutRoute.addChildren([settingsIndexRoute, settingsLogsRoute]),
     dockerIntegrationRoute,
+    homeAssistantLayoutRoute.addChildren([
+      homeAssistantIndexRoute,
+      homeAssistantHealthRoute,
+      homeAssistantStatusRoute,
+      homeAssistantLogsRoute,
+    ]),
     containerPageRoute.addChildren([
       containerIndexRoute,
       containerOverviewRoute,
