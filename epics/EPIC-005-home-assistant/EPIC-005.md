@@ -1,8 +1,8 @@
 # EPIC-005: Home Assistant integration (collector + dispatcher channel + bidirectional events + UI panel)
 
-## Status: In Progress (26 / 29 Complete)
+## Status: In Progress (27 / 30 Complete)
 
-## Stages Counter: 26 / 29 Complete
+## Stages Counter: 27 / 30 Complete
 
 ## Current Stage: STAGE-005-027
 
@@ -109,6 +109,12 @@ Stages MUST be implemented in order. No parallelization. Each stage lands a sing
 | STAGE-005-027 | HA entity + battery detail endpoints (drill-down backend) | GET /entities + /batteries returning per-entity/per-device rows (entity_id, domain, last-changed age, level) from VM per-series gauges; the deferred detail-endpoint split (021's D-PANEL-ENDPOINT-SPLIT). Backend; OpenAPI regen; 3a+3b. |
 | STAGE-005-028 | Entity + battery drill-down widgets (frontend) | Consume 027 detail endpoints: drill-lists of the actual unavailable/stale entities + low/critical battery devices, added below 023's count tiles on the Health tab. Frontend; 3a (Desktop + Mobile). |
 | STAGE-005-029 | HA persistent-notification detail (live re-query + privacy + safe render) | Notification BODY list (title + safely-rendered message) on the Integration-status section; live HA re-query (NOT VM — bodies kept out of metrics per 012 privacy); privacy review + safe text render. Deferred from 024. Backend + frontend; 3a+3b. |
+
+### Wave G — Metrics screen integration (S30)
+
+| # | Stage | Theme |
+|---|---|---|
+| STAGE-005-030 | Metrics page tabs (System + Home Assistant) | ✓ Complete — Route-based tabs on the Metrics screen: System tab (host-overview embed) + Home Assistant tab (home-assistant embed); wires the 026 dashboard into the app UI. |
 
 ## Cross-stage acceptance criteria
 
