@@ -11,8 +11,10 @@ import { AlertsLayout } from '@/routes/alerts/AlertsLayout'
 import { ActiveAlertsTab } from '@/routes/alerts/ActiveAlertsTab'
 import { ManageRulesTab } from '@/routes/alerts/ManageRulesTab'
 import { LoginPage } from '@/routes/Login'
-import { MetricsPage } from '@/routes/Metrics'
 import { OverviewPage } from '@/routes/Overview'
+import { MetricsLayout } from '@/routes/metrics/MetricsLayout'
+import { MetricsSystemTab } from '@/routes/metrics/MetricsSystemTab'
+import { MetricsHomeAssistantTab } from '@/routes/metrics/MetricsHomeAssistantTab'
 import { InventoryLayout } from '@/routes/inventory/Inventory'
 import { CronsListPage } from '@/routes/inventory/CronsList'
 import { CronDetailPage } from '@/routes/inventory/CronDetailPage'
@@ -124,10 +126,31 @@ const alertsManageRoute = createRoute({
   component: ManageRulesTab,
 })
 
-const metricsRoute = createRoute({
+const metricsLayoutRoute = createRoute({
   getParentRoute: () => protectedLayoutRoute,
   path: '/metrics',
-  component: MetricsPage,
+  component: MetricsLayout,
+})
+
+const metricsIndexRoute = createRoute({
+  getParentRoute: () => metricsLayoutRoute,
+  path: '/',
+  beforeLoad: () => {
+    // eslint-disable-next-line @typescript-eslint/only-throw-error -- TanStack Router redirect objects are thrown by design
+    throw redirect({ to: '/metrics/system', search: (prev) => prev })
+  },
+})
+
+const metricsSystemRoute = createRoute({
+  getParentRoute: () => metricsLayoutRoute,
+  path: 'system',
+  component: MetricsSystemTab,
+})
+
+const metricsHomeAssistantRoute = createRoute({
+  getParentRoute: () => metricsLayoutRoute,
+  path: 'home-assistant',
+  component: MetricsHomeAssistantTab,
 })
 
 /**
@@ -472,7 +495,11 @@ const routeTree = rootRoute.addChildren([
     indexRoute,
     overviewRoute,
     alertsLayoutRoute.addChildren([alertsIndexRoute, alertsActiveRoute, alertsManageRoute]),
-    metricsRoute,
+    metricsLayoutRoute.addChildren([
+      metricsIndexRoute,
+      metricsSystemRoute,
+      metricsHomeAssistantRoute,
+    ]),
     logsLayoutRoute.addChildren([
       logsIndexRoute,
       logsQueryRoute,

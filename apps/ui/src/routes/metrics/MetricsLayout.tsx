@@ -1,0 +1,43 @@
+import { Link, Outlet } from '@tanstack/react-router'
+import type { JSX } from 'react'
+
+const TABS = [
+  { path: '/metrics/system', label: 'System' },
+  { path: '/metrics/home-assistant', label: 'Home Assistant' },
+] as const
+
+export function MetricsLayout(): JSX.Element {
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="px-2 pb-2">
+        <h1 className="text-2xl font-semibold tracking-tight">Metrics</h1>
+        <p className="text-sm text-muted-foreground">
+          Grafana dashboards for system host overview and Home Assistant.
+        </p>
+      </div>
+      <nav
+        aria-label="Metrics tabs"
+        className="flex gap-1 border-b border-border px-2 pb-2"
+        data-testid="metrics-tabs"
+      >
+        {TABS.map((tab) => (
+          <Link
+            key={tab.path}
+            to={tab.path}
+            className="shrink-0 rounded-md border border-transparent px-3 py-1.5 text-sm text-muted-foreground hover:bg-accent hover:text-foreground"
+            activeProps={{
+              className:
+                'shrink-0 rounded-md border-border bg-card px-3 py-1.5 text-sm font-medium text-foreground',
+            }}
+            data-testid={`metrics-tab-${tab.path.split('/').pop()}`}
+          >
+            {tab.label}
+          </Link>
+        ))}
+      </nav>
+      <div className="min-h-0 flex-1 overflow-hidden">
+        <Outlet />
+      </div>
+    </div>
+  )
+}
