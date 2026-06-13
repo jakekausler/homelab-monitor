@@ -92,3 +92,25 @@ def test_grafana_host_overview_dashboard_provisioned() -> None:
     tags = set(dash.get("tags", []))
     assert "homelab-monitor" in tags
     assert "host" in tags
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_grafana_home_assistant_dashboard_provisioned() -> None:
+    """home-assistant dashboard JSON loads with expected UID and panels (STAGE-005-026)."""
+    require_rig_components("grafana", "monitor")
+
+    deadline = time.time() + PLUGIN_INSTALL_TIMEOUT_S
+    _wait_for_health(deadline)
+    resp = httpx.get(f"{GRAFANA_URL}/api/dashboards/uid/home-assistant", timeout=5.0)
+    assert resp.status_code == 200, resp.text  # noqa: PLR2004
+    body = resp.json()
+    dash = body["dashboard"]
+    assert dash["uid"] == "home-assistant"
+    panels = dash.get("panels", [])
+    # Expect the 5 section rows + 15 data panels = 20 entries (flat layout, rows not collapsed)
+    assert len(panels) >= 20, f"expected >= 20 panels, got {len(panels)}"  # noqa: PLR2004
+    # Tags include both 'homelab-monitor' and 'home-assistant'
+    tags = set(dash.get("tags", []))
+    assert "homelab-monitor" in tags
+    assert "home-assistant" in tags
