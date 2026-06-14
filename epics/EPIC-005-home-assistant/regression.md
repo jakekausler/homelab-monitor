@@ -237,3 +237,11 @@
 - Parse-error counting is OUTSIDE the state gate: a disabled/unavailable automation with an UNPARSEABLE `last_triggered` STILL increments `homelab_ha_cadence_last_triggered_parse_errors` (guarded by `test_disabled_automation_unparseable_last_triggered_still_counts_parse_error`).
 - Scripts UNCHANGED: `homelab_ha_script_last_triggered_seconds` still emits regardless of script state (a script's state is run-status, not an enable flag).
 - Downstream consumers (Grafana "Idle Automations (>24h)" panel; STAGE-005-039 `HaAutomationIdle` alert) query the triggered metric directly without an enabled-join, so this series-membership filter is load-bearing for their correctness.
+
+## STAGE-005-035 — Updates drill renders versions + release link (frontend secondary line)
+
+- HA Updates drill: each update row renders as TWO lines — line 1 the title (or `entity_id` fallback) primary (`min-w-0 truncate font-medium`) with `entity_id` in the right slot (muted `text-xs`); line 2 a conditional muted secondary line carrying the version transition and a release link.
+- Version transition: when both `installed_version` and `latest_version` are present, line 2 shows `{installed} → {latest}` (U+2192 arrow, `tabular-nums`); when exactly one is present it shows that one with NO arrow; when both are null the version span is omitted.
+- Release link: `Release notes ↗` (U+2197 glyph) external link (`target="_blank" rel="noopener noreferrer"`) rendered ONLY when `release_url` is non-null. The entire secondary line is suppressed when there is no version text AND no `release_url` (no empty arrow, no crash).
+- Frontend-only: no backend / no metric / no OpenAPI change. The three fields are sourced from the live-HA-enriched STAGE-005-031 `/updates` endpoint (null when HA down or attribute absent).
+- Tests (`HaUpdatesDrill.test.tsx`): a fully-populated row renders `2.0.1 → 2.1.0` + a `Release notes` link with the correct href; an all-null row renders neither the arrow nor any link.
