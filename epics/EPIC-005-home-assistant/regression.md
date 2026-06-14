@@ -229,3 +229,11 @@
 - Long friendly_names and long entity_ids truncate cleanly (`min-w-0 truncate` on the primary span; `truncate` on the secondary); age stays right-aligned and never collapses (`shrink-0`). Rows live in a scrolling PanelSection.
 - Frontend-only: no backend / no metric / no OpenAPI change. `friendly_name` is sourced from the live-HA-enriched STAGE-005-031 `/entities` endpoint (null when HA down or entity not found).
 - Tests (`HaEntitiesDrill.test.tsx`): friendly_name renders as primary + `entity_id · domain` secondary when set; entity_id primary + secondary suppressed when null.
+
+## STAGE-005-034 — Cadence: disabled automations excluded from last_triggered
+
+- `homelab_ha_automation_last_triggered_seconds` is emitted ONLY for ENABLED (state="on") automations. With the rig up, query VM (container `homelab-vm`, port 8428): the entity_id set of `homelab_ha_automation_enabled == 0` (disabled) and the entity_id set of `homelab_ha_automation_last_triggered_seconds` must have an EMPTY intersection — NO disabled automation may carry a triggered series. Also `count(homelab_ha_automation_last_triggered_seconds)` ≤ `count(homelab_ha_automation_enabled == 1)` (triggered is a subset of enabled-on; some enabled automations have never triggered and are legitimately absent).
+- `homelab_ha_automation_enabled` STILL carries ALL on/off automations (1.0 for on, 0.0 for off) — disablement detection is preserved; 034 only decoupled idle-age from disabled automations.
+- Parse-error counting is OUTSIDE the state gate: a disabled/unavailable automation with an UNPARSEABLE `last_triggered` STILL increments `homelab_ha_cadence_last_triggered_parse_errors` (guarded by `test_disabled_automation_unparseable_last_triggered_still_counts_parse_error`).
+- Scripts UNCHANGED: `homelab_ha_script_last_triggered_seconds` still emits regardless of script state (a script's state is run-status, not an enable flag).
+- Downstream consumers (Grafana "Idle Automations (>24h)" panel; STAGE-005-039 `HaAutomationIdle` alert) query the triggered metric directly without an enabled-join, so this series-membership filter is load-bearing for their correctness.
