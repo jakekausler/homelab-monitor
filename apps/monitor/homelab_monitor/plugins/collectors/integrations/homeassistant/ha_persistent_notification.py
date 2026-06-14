@@ -32,6 +32,7 @@ from typing import TYPE_CHECKING, ClassVar, Final, cast
 
 from homelab_monitor.kernel.config import load_cardinality_caps_config
 from homelab_monitor.kernel.ha.errors import HaError
+from homelab_monitor.kernel.ha.notifications import extract_notifications
 from homelab_monitor.kernel.metrics.cardinality import CappedEmitter
 from homelab_monitor.kernel.plugins.base import BaseCollector
 from homelab_monitor.kernel.plugins.types import CollectorEvent, CollectorResult
@@ -45,24 +46,6 @@ M_PERSISTENT_NOTIFICATION: Final[str] = "homelab_ha_persistent_notification"
 
 # WS command for the one-shot snapshot.
 _WS_COMMAND: Final[str] = "persistent_notification/get"
-
-
-def _extract_notifications(result: dict[str, object] | list[object]) -> list[object]:
-    """Defensively extract the notifications list from a ``send_command`` result.
-
-    Handles:
-    (a) bare list — return as-is.
-    (b) dict wrapping the list under ``notifications`` — return that list.
-    (c) any other dict (e.g. the ``{}`` degenerate) — return [].
-    """
-    payload: object = result  # widen: runtime value may be a list.
-    if isinstance(payload, list):
-        return payload
-    notifications_dict = payload
-    candidate = notifications_dict.get("notifications")
-    if isinstance(candidate, list):
-        return cast("list[object]", candidate)
-    return []
 
 
 def _notification_labels(notification: object) -> dict[str, str] | None:
@@ -132,7 +115,7 @@ class HaPersistentNotificationCollector(BaseCollector):
                 duration_seconds=time.monotonic() - start,
             )
 
-        notifications = _extract_notifications(result)
+        notifications = extract_notifications(result)
 
         observations: list[tuple[dict[str, str], float]] = []
         for notification in notifications:

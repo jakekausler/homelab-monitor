@@ -25,3 +25,6 @@ export type HaConfigEntryRow = components['schemas']['HaConfigEntryRow']
 export type HaConfigEntryRowsResponse = components['schemas']['HaConfigEntryRowsResponse']
 export type HaRepairRow = components['schemas']['HaRepairRow']
 export type HaRepairRowsResponse = components['schemas']['HaRepairRowsResponse']
+
+export type HaNotificationRow = components['schemas']['HaNotificationRow']
+export type HaNotificationsResponse = components['schemas']['HaNotificationsResponse']

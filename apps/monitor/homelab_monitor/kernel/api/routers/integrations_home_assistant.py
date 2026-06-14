@@ -19,17 +19,19 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime
-from typing import Annotated
+from typing import Annotated, cast
 
 import httpx
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, ConfigDict
 
 from homelab_monitor.kernel.api.dependencies import (
+    get_ha_ws_client,
     get_http_client,
     get_vm_url,
     require_session,
 )
+from homelab_monitor.kernel.api.errors import HttpProblem
 from homelab_monitor.kernel.api.vm_query import (
     VmInstantSample,
     first_sample,
@@ -37,8 +39,13 @@ from homelab_monitor.kernel.api.vm_query import (
     vm_instant_query,
 )
 from homelab_monitor.kernel.auth.models import User
+from homelab_monitor.kernel.ha.errors import HaError
+from homelab_monitor.kernel.ha.notifications import extract_notifications
+from homelab_monitor.kernel.ha.websocket import HomeAssistantWebsocketClient
 
 router = APIRouter(prefix="/integrations/home-assistant", tags=["integrations"])
+
+_NOTIFICATIONS_WS_COMMAND = "persistent_notification/get"
 
 # Battery thresholds — MUST match the vmalert rules exactly.
 _BATTERY_CRITICAL_BELOW = 10
@@ -239,6 +246,25 @@ class HaRepairRowsResponse(BaseModel):
     total: int
     returned: int
     filtered_to: str | None
+
+
+class HaNotificationRow(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    notification_id: str
+    title: str | None
+    message: str
+    created_at: str | None
+
+
+class HaNotificationsResponse(BaseModel):
+    """Live persistent-notification bodies fetched from HA over the websocket."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    rows: list[HaNotificationRow]
+    total: int
+    returned: int
 
 
 def _sample_float(sample: VmInstantSample) -> float | None:
@@ -517,3 +543,55 @@ async def get_ha_repairs(
         returned=len(rows),
         filtered_to=None,
     )
+
+
+@router.get("/notifications", response_model=HaNotificationsResponse)
+async def get_ha_notifications(
+    _user: Annotated[User, Depends(require_session())],
+    ws_client: Annotated[HomeAssistantWebsocketClient, Depends(get_ha_ws_client)],
+) -> HaNotificationsResponse:
+    """Live-fetch HA persistent-notification bodies over the websocket.
+
+    Any HaError (unreachable / timeout / auth / http_error / bad_response) maps
+    to HTTP 502 ``upstream_unavailable``. The 502 body never echoes notification
+    content. Notification bodies are returned to the authenticated session but
+    are NEVER logged in this handler.
+    """
+    result = await ws_client.send_command(_NOTIFICATIONS_WS_COMMAND)
+    if isinstance(result, HaError):
+        raise HttpProblem(
+            status_code=502,
+            code="upstream_unavailable",
+            message="home assistant notifications query failed",
+        )
+
+    rows: list[HaNotificationRow] = []
+    for notification in extract_notifications(result):
+        if not isinstance(notification, dict):
+            continue
+        notification_dict = cast("dict[str, object]", notification)
+
+        nid_obj = notification_dict.get("notification_id")
+        nid = nid_obj if isinstance(nid_obj, str) else ""
+        if not nid:
+            continue
+
+        title_obj = notification_dict.get("title")
+        title = title_obj if isinstance(title_obj, str) else None
+
+        message_obj = notification_dict.get("message")
+        message = message_obj if isinstance(message_obj, str) else ""
+
+        created_at_obj = notification_dict.get("created_at")
+        created_at = created_at_obj if isinstance(created_at_obj, str) else None
+
+        rows.append(
+            HaNotificationRow(
+                notification_id=nid,
+                title=title,
+                message=message,
+                created_at=created_at,
+            )
+        )
+
+    return HaNotificationsResponse(rows=rows, total=len(rows), returned=len(rows))

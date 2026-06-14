@@ -6,6 +6,7 @@ import { useHomeAssistantSummary } from '@/api/home_assistant'
 
 import { HaConfigEntriesDrill } from './HaConfigEntriesDrill'
 import { HaIntegrationStatusWidget } from './HaIntegrationStatusWidget'
+import { HaNotificationsDrill } from './HaNotificationsDrill'
 import { HaRepairsDrill } from './HaRepairsDrill'
 import { HaUpdatesDrill } from './HaUpdatesDrill'
 import { HaUpdatesWidget } from './HaUpdatesWidget'
@@ -59,6 +60,9 @@ export function HomeAssistantStatusTab(): JSX.Element {
             </PanelSection>
             <PanelSection title="Active repairs">
               <HaRepairsDrill />
+            </PanelSection>
+            <PanelSection title="Notifications">
+              <HaNotificationsDrill />
             </PanelSection>
           </div>
         </>

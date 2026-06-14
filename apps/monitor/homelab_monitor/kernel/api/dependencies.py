@@ -31,6 +31,7 @@ if TYPE_CHECKING:
     from homelab_monitor.kernel.cron.run_repository import CronRunRepository
     from homelab_monitor.kernel.db.repository import SqliteRepository
     from homelab_monitor.kernel.dispatch.dispatcher import AlertDispatcher
+    from homelab_monitor.kernel.ha.websocket import HomeAssistantWebsocketClient
     from homelab_monitor.kernel.heartbeat.repository import HeartbeatRepo
     from homelab_monitor.kernel.logs.cron_run_failure_enrichments_repo import (
         CronRunFailureEnrichmentsRepository,
@@ -152,6 +153,16 @@ def get_http_client(request: Request) -> httpx.AsyncClient:
         attr="http_client",
         code="http_client_unavailable",
         message="http client is not initialized",
+    )
+
+
+def get_ha_ws_client(request: Request) -> HomeAssistantWebsocketClient:
+    """Get the Home Assistant websocket client from app state."""
+    return _require_state(
+        request,
+        attr="ha_ws_client",
+        code="ha_ws_client_unavailable",
+        message="ha websocket client is not initialized",
     )
 
 

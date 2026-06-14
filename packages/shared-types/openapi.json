@@ -2831,6 +2831,75 @@
         "title": "HaEntityRowsResponse",
         "type": "object"
       },
+      "HaNotificationRow": {
+        "properties": {
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "notification_id": {
+            "title": "Notification Id",
+            "type": "string"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          }
+        },
+        "required": [
+          "notification_id",
+          "title",
+          "message",
+          "created_at"
+        ],
+        "title": "HaNotificationRow",
+        "type": "object"
+      },
+      "HaNotificationsResponse": {
+        "description": "Live persistent-notification bodies fetched from HA over the websocket.",
+        "properties": {
+          "returned": {
+            "title": "Returned",
+            "type": "integer"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/HaNotificationRow"
+            },
+            "title": "Rows",
+            "type": "array"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "rows",
+          "total",
+          "returned"
+        ],
+        "title": "HaNotificationsResponse",
+        "type": "object"
+      },
       "HaRepairRow": {
         "properties": {
           "domain": {
@@ -9055,6 +9124,28 @@
           }
         },
         "summary": "Get Ha Entities",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/api/integrations/home-assistant/notifications": {
+      "get": {
+        "description": "Live-fetch HA persistent-notification bodies over the websocket.\n\nAny HaError (unreachable / timeout / auth / http_error / bad_response) maps\nto HTTP 502 ``upstream_unavailable``. The 502 body never echoes notification\ncontent. Notification bodies are returned to the authenticated session but\nare NEVER logged in this handler.",
+        "operationId": "get_ha_notifications_api_integrations_home_assistant_notifications_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HaNotificationsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Ha Notifications",
         "tags": [
           "integrations"
         ]

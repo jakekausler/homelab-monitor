@@ -5,6 +5,7 @@ import type { UseQueryResult } from '@tanstack/react-query'
 import type { ApiError } from '@/api/client'
 import {
   useHomeAssistantConfigEntries,
+  useHomeAssistantNotifications,
   useHomeAssistantRepairs,
   useHomeAssistantSummary,
   useHomeAssistantUpdates,
@@ -74,6 +75,11 @@ describe('HomeAssistantStatusTab', () => {
     )
     vi.mocked(useHomeAssistantRepairs).mockReturnValue(
       makeResult({ isPending: true }) as unknown as ReturnType<typeof useHomeAssistantRepairs>,
+    )
+    vi.mocked(useHomeAssistantNotifications).mockReturnValue(
+      makeResult({ isPending: true }) as unknown as ReturnType<
+        typeof useHomeAssistantNotifications
+      >,
     )
   })
 
