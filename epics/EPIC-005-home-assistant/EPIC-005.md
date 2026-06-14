@@ -1,12 +1,12 @@
 # EPIC-005: Home Assistant integration (collector + dispatcher channel + bidirectional events + UI panel)
 
-## Status: In Progress (36 / 41 Complete)
+## Status: In Progress (37 / 41 Complete)
 
-## Stages Counter: 36 / 41 Complete
+## Stages Counter: 37 / 41 Complete
 
-## Current Stage: STAGE-005-037
+## Current Stage: STAGE-005-038
 
-## Current Phase: STAGE-005-037 Design (Not Started)
+## Current Phase: STAGE-005-038 Design (Not Started)
 
 ## Overview
 
@@ -133,7 +133,7 @@ Appended after the EPIC-005 post-completion audit (2026-06-14): closes gaps wher
 | STAGE-005-034 | Cadence — skip disabled automations from last_triggered | ✓ Complete — Cadence collector fix: skip `state=="off"` (disabled) automations from `homelab_ha_automation_last_triggered_seconds` (keep `automation_enabled==0` for disablement detection); verify the script path; corrects the Grafana "Idle Automations" panel + unblocks clean idle data for E/F. Backend; 3a+3b. |
 | STAGE-005-035 | Updates drill — render versions + release link | ✓ Complete — Updates drill renders the `installed_version → latest_version` transition and links `release_url` (fields already on `HaUpdateRow` from 031, previously fetched-but-unrendered); mirrors the 033 render-the-already-present-field pattern. Frontend; 3a Desktop+Mobile. |
 | STAGE-005-036 | Repairs drill — render description + learn-more link | ✓ Complete — Repairs drill renders the free-text `description` and links `learn_more_url` (fields already on `HaRepairRow` from 031, previously fetched-but-unrendered). Frontend; 3a Desktop+Mobile. |
-| STAGE-005-037 | HA entity-registry fetch + exclude disabled/hidden (KEYSTONE) | Entity-registry WS fetch (`config/entity_registry/list`) + in-memory cache exposing `disabled_by`/`hidden_by`/`entity_category`; exclude disabled/hidden (optionally diagnostic/config) entities from `homelab_ha_entity_available` + z-score eligibility — removes the ~50% chronic-unavailability noise that blocks the GAP-F alerts. KEYSTONE for 039. Backend infra; 3a+3b. Soft-depends 034. |
+| STAGE-005-037 | HA entity-registry fetch + exclude disabled/hidden (KEYSTONE) | ✓ Complete — Entity-registry WS fetch (`config/entity_registry/list`) + in-memory cache exposing `disabled_by`/`hidden_by`/`entity_category`; exclude disabled/hidden (optionally diagnostic/config) entities from `homelab_ha_entity_available` + z-score eligibility — removes the ~50% chronic-unavailability noise that blocks the GAP-F alerts. KEYSTONE for 039. Backend infra; 3a+3b. Soft-depends 034. |
 | STAGE-005-038 | Script-cadence Grafana panel + cadence API + Status widget | Surface script cadence beyond Grafana: add the missing `homelab_ha_script_last_triggered_seconds` Grafana panel (parity with automations), plus (Design may split off) a cadence detail endpoint + Status-tab idle/disabled automations+scripts widget/drill. Mixed; 3a+3b (+ Desktop+Mobile for the widget). Depends 034. |
 | STAGE-005-039 | Activate availability/cadence vmalert rules | Promote the deferred OPT-IN exemplars (HaEntityUnavailable, HaEntityStale, HaAutomationIdle, HaAutomationDisabled) from commented templates to active defaults where the now-filtered data makes them viable — per-rule activate-vs-keep-opt-in grounded in real measured firing counts. Config (vmalert); 3a+3b. Depends 037 + 034. |
 | STAGE-005-040 | Anomaly surface decision (UI or document Grafana-as-home) | Resolve the z-score/anomaly surface: add a minimal anomaly endpoint+UI, OR formally document Grafana ("Top Anomaly z-scores") as the intended home — closes the implemented-without-user-location gap by explicit decision. Lowest priority. Frontend-or-docs; refinement per decision. Soft-depends 037. |
