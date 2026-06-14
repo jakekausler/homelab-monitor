@@ -3,7 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { UseQueryResult } from '@tanstack/react-query'
 
 import type { ApiError } from '@/api/client'
-import { useHomeAssistantSummary } from '@/api/home_assistant'
+import {
+  useHomeAssistantConfigEntries,
+  useHomeAssistantRepairs,
+  useHomeAssistantSummary,
+  useHomeAssistantUpdates,
+} from '@/api/home_assistant'
 import type { Schema } from '@/api/types'
 
 import { HomeAssistantStatusTab } from './HomeAssistantStatusTab'
@@ -58,6 +63,17 @@ describe('HomeAssistantStatusTab', () => {
   beforeEach(() => {
     vi.mocked(useHomeAssistantSummary).mockReturnValue(
       makeResult({ data: MOCK_DATA, isSuccess: true, status: 'success' }),
+    )
+    vi.mocked(useHomeAssistantUpdates).mockReturnValue(
+      makeResult({ isPending: true }) as unknown as ReturnType<typeof useHomeAssistantUpdates>,
+    )
+    vi.mocked(useHomeAssistantConfigEntries).mockReturnValue(
+      makeResult({ isPending: true }) as unknown as ReturnType<
+        typeof useHomeAssistantConfigEntries
+      >,
+    )
+    vi.mocked(useHomeAssistantRepairs).mockReturnValue(
+      makeResult({ isPending: true }) as unknown as ReturnType<typeof useHomeAssistantRepairs>,
     )
   })
 

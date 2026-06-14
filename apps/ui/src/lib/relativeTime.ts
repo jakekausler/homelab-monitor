@@ -83,6 +83,19 @@ export function formatDuration(seconds: number | null): string {
   return `${h}h ${m}m`
 }
 
+/**
+ * Coarse single-unit relative age with an " ago" suffix.
+ * Thresholds: <60s → "just now"; <3600s → minutes; <86400s → hours; else days.
+ * Negative inputs clamp to 0.
+ */
+export function formatAge(seconds: number): string {
+  const s = Math.max(0, Math.floor(seconds))
+  if (s < 60) return 'just now'
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`
+  return `${Math.floor(s / 86400)}d ago`
+}
+
 const LOG_TS_RE = /^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}:\d{2})(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?$/
 
 /**

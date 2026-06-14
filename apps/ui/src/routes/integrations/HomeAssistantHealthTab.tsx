@@ -4,7 +4,9 @@ import { ErrorDisplay } from '@/components/ErrorDisplay'
 
 import { useHomeAssistantSummary } from '@/api/home_assistant'
 
+import { HaBatteriesDrill } from './HaBatteriesDrill'
 import { HaBatteryWidget } from './HaBatteryWidget'
+import { HaEntitiesDrill } from './HaEntitiesDrill'
 import { HaEntityHealthWidget } from './HaEntityHealthWidget'
 import { PanelSection } from './PanelSection'
 
@@ -12,7 +14,7 @@ export function HomeAssistantHealthTab(): JSX.Element {
   const result = useHomeAssistantSummary()
 
   return (
-    <div className="space-y-4 p-4">
+    <div className="h-full space-y-4 overflow-y-auto p-4">
       {result.isPending && <p className="text-sm text-muted-foreground">Loading…</p>}
       {result.error?.status === 502 && (
         <div
@@ -34,14 +36,24 @@ export function HomeAssistantHealthTab(): JSX.Element {
         </div>
       )}
       {result.data && (
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <PanelSection title="Entity health">
-            <HaEntityHealthWidget entities={result.data.entities} />
-          </PanelSection>
-          <PanelSection title="Battery">
-            <HaBatteryWidget battery={result.data.battery} />
-          </PanelSection>
-        </div>
+        <>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <PanelSection title="Entity health">
+              <HaEntityHealthWidget entities={result.data.entities} />
+            </PanelSection>
+            <PanelSection title="Battery">
+              <HaBatteryWidget battery={result.data.battery} />
+            </PanelSection>
+          </div>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <PanelSection title="Unavailable entities">
+              <HaEntitiesDrill />
+            </PanelSection>
+            <PanelSection title="Low / critical batteries">
+              <HaBatteriesDrill />
+            </PanelSection>
+          </div>
+        </>
       )}
     </div>
   )

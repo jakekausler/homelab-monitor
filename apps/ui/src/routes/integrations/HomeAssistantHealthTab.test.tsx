@@ -3,7 +3,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { UseQueryResult } from '@tanstack/react-query'
 
 import type { ApiError } from '@/api/client'
-import { useHomeAssistantSummary } from '@/api/home_assistant'
+import {
+  useHomeAssistantBatteries,
+  useHomeAssistantEntities,
+  useHomeAssistantSummary,
+} from '@/api/home_assistant'
 import type { Schema } from '@/api/types'
 
 import { HomeAssistantHealthTab } from './HomeAssistantHealthTab'
@@ -58,6 +62,12 @@ describe('HomeAssistantHealthTab', () => {
   beforeEach(() => {
     vi.mocked(useHomeAssistantSummary).mockReturnValue(
       makeResult({ data: MOCK_DATA, isSuccess: true, status: 'success' }),
+    )
+    vi.mocked(useHomeAssistantEntities).mockReturnValue(
+      makeResult({ isPending: true }) as unknown as ReturnType<typeof useHomeAssistantEntities>,
+    )
+    vi.mocked(useHomeAssistantBatteries).mockReturnValue(
+      makeResult({ isPending: true }) as unknown as ReturnType<typeof useHomeAssistantBatteries>,
     )
   })
 
