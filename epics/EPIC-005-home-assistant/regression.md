@@ -188,6 +188,14 @@
   - No-session request to any endpoint → 401 (auth enforced, session required).
   - All endpoints draw data directly from VictoriaMetrics per-series gauges (NOT live-HA re-query). Cardinality cap (`total` vs `returned`) applies to `/entities` only (top-N=100, others naturally bounded).
 
+## STAGE-005-028 — HA drill-list widgets (frontend)
+
+- HA Health tab: the "Unavailable entities" drill-list renders ~100 entity rows (entity_id, domain, age string) below the count tiles, with a "Showing 100 of 962 — stalest first" caption when total > returned; the "Low / critical batteries" section shows rows (entity_id, level%, red <10 / amber 10–20 tint) or "All batteries healthy" when empty.
+- HA Status tab: "Pending updates" (entity_id, title-or-entity_id) or "No updates pending"; "Integration errors" (domain, title, error badge) or "No integration errors"; "Active repairs" (domain, issue_id, severity badge) or "No active repairs".
+- Both HA tab bodies SCROLL vertically when content exceeds the viewport (the drill-lists below the count tiles must be reachable); the HA header + tab bar stay fixed. Regression guard for the `h-full overflow-y-auto` tab-body fix.
+- Logs tab + Metrics tabs still show a single internal scroll (no new outer scrollbar) — confirms the scroll fix did not affect the iframe/LogViewer tabs.
+- Each drill-list shows its own loading / empty / error / 502 state independently (5 independent queries).
+
 ## STAGE-005-030 (Metrics page tabs — System + Home Assistant)
 
 - **STAGE-005-030 — Metrics page route-based tabs:** Navigate to the Metrics screen (`/metrics`) — it must redirect to `/metrics/system`. Confirm a tab bar with "System" and "Home Assistant" tabs. System tab embeds the host-overview Grafana dashboard; Home Assistant tab (`/metrics/home-assistant`) embeds the home-assistant dashboard. CRITICAL (regression from this stage's bug): confirm the iframe content is NOT clipped at the top — the full dashboard top row must be visible below the tab bar (the embed fills MetricsLayout's flex region via `h-full`, NOT a viewport calc). Confirm "Open in Grafana" works per tab and no console errors. (Note: tab switch reloads the iframe — lazy mount, expected.)
