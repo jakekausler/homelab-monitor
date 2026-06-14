@@ -1,12 +1,12 @@
 # EPIC-005: Home Assistant integration (collector + dispatcher channel + bidirectional events + UI panel)
 
-## Status: In Progress (31 / 33 Complete)
+## Status: In Progress (32 / 33 Complete)
 
-## Stages Counter: 31 / 33 Complete
+## Stages Counter: 32 / 33 Complete
 
-## Current Stage: STAGE-005-032
+## Current Stage: STAGE-005-033
 
-## Current Phase: STAGE-005-032 Design (Not Started)
+## Current Phase: STAGE-005-033 Design (Not Started)
 
 ## Overview
 
@@ -121,7 +121,7 @@ Stages MUST be implemented in order. No parallelization. Each stage lands a sing
 | # | Stage | Theme |
 |---|---|---|
 | STAGE-005-031 | HA detail live-HA enrichment | ✓ Complete — Live-HA re-query layer for 027's detail endpoints: battery device (friendly name), update versions + release_url, repair summary — fields VM per-series can't carry (deferred from 027 D-DETAIL-VM-LABELS-PRESENT). Mirrors 029's live-HA machinery. |
-| STAGE-005-032 | HA config-entry state-distinction metric | Collector change: add a state label to ha_config_entry so VM can distinguish setup_error vs setup_retry (027 ships coarse "error" only). Keeps config-entry detail VM-sourced. Deferred from 027. |
+| STAGE-005-032 | HA config-entry state-distinction metric | ✓ Complete — Collector change: add a state label to ha_config_entry so VM can distinguish setup_error vs setup_retry (027 ships coarse "error" only). Keeps config-entry detail VM-sourced. Deferred from 027. |
 | STAGE-005-033 | Entities drill — render friendly_name (frontend) | Render the live-HA `friendly_name` (added to HaEntityRow by 031) in the 028 entities drill-list, falling back to entity_id when null. Deferred from 031 D-ENRICH-ENTITY-FRIENDLY-NAME. Frontend; 3a (Desktop + Mobile). |
 
 ## Cross-stage acceptance criteria

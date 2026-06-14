@@ -213,3 +213,11 @@
 - PRIVACY: enriched values (device, friendly_name, description, learn_more_url, versions) must NEVER appear in container logs and the HA token must NEVER be logged. Re-verify: `docker logs homelab-monitor | grep -iE 'ha_token|bearer|eyJ'` → 0; grep a known friendly_name → 0.
 - Real-HA populated values confirmed: entities `friendly_name` (e.g. "Sliding Door") and batteries `device` (e.g. "Main Bathroom Toilet Motion Battery") populate from live get_states. NOTE stock HA `repairs/list_issues` has NO `summary` key — 031 reads the REAL `description` + `learn_more_url` (may be null per-issue; that's correct).
 - `/config-entries` is NOT enriched by 031 (precise state is STAGE-005-032) — confirm it still returns its error rows unchanged (no regression).
+
+## STAGE-005-032 — HA config-entry state-distinction metric (collector `state` label)
+
+- `homelab_ha_config_entry_setup_error` now carries a `state` label (final shape `{domain,title,state}` 1/0). With the prod rig up, query VM (container `homelab-vm`, port 8428) for `homelab_ha_config_entry_setup_error == 1` — every value-1 series must carry a PRECISE `state` (e.g. `setup_retry` / `setup_error` / `migration_error` / `failed_unload`), NOT a coarse "error". Real values: blink / frigate / shelly all `state=setup_retry`.
+- `/api/integrations/home-assistant/config-entries?filter=error` (authenticated GET) returns each row's PRECISE `state` from the VM label (falls back to "error" only for pre-migration series with no `state` label). Confirm NO row reports the literal "error" when the label is present.
+- `homelab_ha_config_entry_loaded` must carry NO `state` label (the loaded family stays `{domain,title}`) — D-CFGSTATE-SHAPE guard; the `state` label is on the setup_error family only.
+- vmalert `HaConfigEntryError`: `expr` is UNCHANGED (`homelab_ha_config_entry_setup_error == 1`) and still fires exactly one series per error entry (no double-count from the added label). The `summary` annotation now renders the precise state: "HA config entry in error ({{ $labels.state }}): <title> (<domain>)". Confirm firing instances propagate to Alertmanager with the state in the rendered summary.
+- `reason` (free-text) must STILL never be emitted as a metric label (collector omits it; `test_reason_never_emitted_as_label` guards this).
