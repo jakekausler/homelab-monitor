@@ -15,15 +15,33 @@ function severityVariant(severity: string): BadgeVariant {
 }
 
 function renderRow(row: HaRepairRow) {
+  const description =
+    row.description != null && row.description.trim() !== '' ? row.description : null
+  const learnMoreUrl = row.learn_more_url
   return (
-    <div className="flex items-baseline justify-between gap-2">
-      <span className="truncate">
-        <span className="font-medium">{row.issue_id}</span>{' '}
-        <span className="text-xs text-muted-foreground">{row.domain}</span>
-      </span>
-      <Badge variant={severityVariant(row.severity)} className="shrink-0">
-        {row.severity}
-      </Badge>
+    <div className="space-y-0.5">
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="truncate">
+          <span className="font-medium">{row.issue_id}</span>{' '}
+          <span className="text-xs text-muted-foreground">{row.domain}</span>
+        </span>
+        <Badge variant={severityVariant(row.severity)} className="shrink-0">
+          {row.severity}
+        </Badge>
+      </div>
+      {description != null && (
+        <p className="line-clamp-2 text-xs text-muted-foreground">{description}</p>
+      )}
+      {learnMoreUrl != null && (
+        <a
+          href={learnMoreUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-block text-xs text-muted-foreground hover:text-foreground"
+        >
+          Learn more ↗
+        </a>
+      )}
     </div>
   )
 }

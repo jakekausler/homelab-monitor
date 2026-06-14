@@ -95,4 +95,60 @@ describe('HaRepairsDrill', () => {
     render(<HaRepairsDrill />)
     expect(screen.getByText('Home Assistant metrics temporarily unavailable')).toBeInTheDocument()
   })
+
+  it('renders the description and learn-more link', () => {
+    vi.mocked(useHomeAssistantRepairs).mockReturnValue(
+      makeResult({
+        data: {
+          repairs: [
+            {
+              domain: 'cloud',
+              issue_id: 'legacy_subscription',
+              severity: 'warning',
+              description: 'Your cloud subscription is using a legacy plan.',
+              learn_more_url: 'https://example.com/repair',
+            },
+          ],
+          filtered_to: null,
+          returned: 1,
+          total: 1,
+        },
+        isSuccess: true,
+        status: 'success',
+      }),
+    )
+    render(<HaRepairsDrill />)
+    expect(screen.getByText('Your cloud subscription is using a legacy plan.')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /learn more/i })).toHaveAttribute(
+      'href',
+      'https://example.com/repair',
+    )
+  })
+
+  it('renders no description line or link when both are null', () => {
+    vi.mocked(useHomeAssistantRepairs).mockReturnValue(
+      makeResult({
+        data: {
+          repairs: [
+            {
+              domain: 'cloud',
+              issue_id: 'x',
+              severity: 'warning',
+              description: null,
+              learn_more_url: null,
+            },
+          ],
+          filtered_to: null,
+          returned: 1,
+          total: 1,
+        },
+        isSuccess: true,
+        status: 'success',
+      }),
+    )
+    render(<HaRepairsDrill />)
+    expect(screen.getByText('x')).toBeInTheDocument()
+    expect(screen.getByText('warning')).toBeInTheDocument()
+    expect(screen.queryByRole('link')).toBeNull()
+  })
 })
