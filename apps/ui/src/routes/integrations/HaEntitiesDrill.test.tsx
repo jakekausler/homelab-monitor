@@ -51,6 +51,7 @@ describe('HaEntitiesDrill', () => {
               domain: 'sensor',
               available: false,
               last_changed_age_seconds: 7200,
+              friendly_name: null,
             },
           ],
           filtered_to: 'unavailable',

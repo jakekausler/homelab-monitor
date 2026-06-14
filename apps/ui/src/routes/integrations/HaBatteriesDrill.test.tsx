@@ -45,7 +45,7 @@ describe('HaBatteriesDrill', () => {
     vi.mocked(useHomeAssistantBatteries).mockReturnValue(
       makeResult({
         data: {
-          batteries: [{ entity_id: 'sensor.door', domain: 'sensor', level: 42 }],
+          batteries: [{ entity_id: 'sensor.door', domain: 'sensor', level: 42, device: null }],
           filtered_to: 'low_or_critical',
           returned: 1,
           total: 1,
@@ -63,7 +63,7 @@ describe('HaBatteriesDrill', () => {
     vi.mocked(useHomeAssistantBatteries).mockReturnValue(
       makeResult({
         data: {
-          batteries: [{ entity_id: 'sensor.a', domain: 'sensor', level: 5 }],
+          batteries: [{ entity_id: 'sensor.a', domain: 'sensor', level: 5, device: null }],
           filtered_to: 'low_or_critical',
           returned: 1,
           total: 1,
@@ -80,7 +80,7 @@ describe('HaBatteriesDrill', () => {
     vi.mocked(useHomeAssistantBatteries).mockReturnValue(
       makeResult({
         data: {
-          batteries: [{ entity_id: 'sensor.b', domain: 'sensor', level: 15 }],
+          batteries: [{ entity_id: 'sensor.b', domain: 'sensor', level: 15, device: null }],
           filtered_to: 'low_or_critical',
           returned: 1,
           total: 1,

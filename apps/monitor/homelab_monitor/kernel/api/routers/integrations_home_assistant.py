@@ -26,6 +26,7 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, ConfigDict
 
 from homelab_monitor.kernel.api.dependencies import (
+    get_ha_client,
     get_ha_ws_client,
     get_http_client,
     get_vm_url,
@@ -39,6 +40,14 @@ from homelab_monitor.kernel.api.vm_query import (
     vm_instant_query,
 )
 from homelab_monitor.kernel.auth.models import User
+from homelab_monitor.kernel.ha.client import HaState, HomeAssistantRestClient
+from homelab_monitor.kernel.ha.enrichment import (
+    RepairEnrichment,
+    attr_str,
+    build_repairs_index,
+    build_states_index,
+    extract_issues,
+)
 from homelab_monitor.kernel.ha.errors import HaError
 from homelab_monitor.kernel.ha.notifications import extract_notifications
 from homelab_monitor.kernel.ha.websocket import HomeAssistantWebsocketClient
@@ -46,6 +55,7 @@ from homelab_monitor.kernel.ha.websocket import HomeAssistantWebsocketClient
 router = APIRouter(prefix="/integrations/home-assistant", tags=["integrations"])
 
 _NOTIFICATIONS_WS_COMMAND = "persistent_notification/get"
+_REPAIRS_WS_COMMAND = "repairs/list_issues"
 
 # Battery thresholds — MUST match the vmalert rules exactly.
 _BATTERY_CRITICAL_BELOW = 10
@@ -141,8 +151,10 @@ class HaSummaryResponse(BaseModel):
 
 
 # ── 027 detail row + response models ────────────────────────────────────────
-# VM-ONLY (locked D-DETAIL-CONSUMES-VM): fields VM cannot supply are DROPPED here
-# and deferred. SCAFFOLDING NOTES below tell reviewers the omissions are intentional.
+# Rows are SELECTED from VM (locked D-DETAIL-CONSUMES-VM). Display fields VM cannot
+# supply are filled by the STAGE-005-031 live-HA enrichment layer (see per-field
+# "Enriched by STAGE-005-031" notes). The one still-deferred field is the config-entry
+# precise `state` (coarse "error" only; precise state is STAGE-005-032 — see its note).
 
 
 class HaEntityRow(BaseModel):
@@ -152,6 +164,10 @@ class HaEntityRow(BaseModel):
     domain: str
     available: bool
     last_changed_age_seconds: float
+    # Enriched by STAGE-005-031 (live-HA get_states). None when HA is down or the
+    # entity is absent / has no friendly_name attribute. Widget rendering of this
+    # field is deferred to STAGE-005-033.
+    friendly_name: str | None
 
 
 class HaEntityRowsResponse(BaseModel):
@@ -171,8 +187,9 @@ class HaBatteryRow(BaseModel):
     entity_id: str
     domain: str
     level: float
-    # SCAFFOLDING: `device` (friendly device name) is NOT available from VM labels;
-    # deferred to STAGE-005-031. Do NOT flag the missing field in review.
+    # Enriched by STAGE-005-031 (live-HA get_states friendly_name). None when HA
+    # is down or the entity is absent / has no friendly_name attribute.
+    device: str | None
 
 
 class HaBatteryRowsResponse(BaseModel):
@@ -191,8 +208,11 @@ class HaUpdateRow(BaseModel):
 
     entity_id: str
     title: str
-    # SCAFFOLDING: `installed_version` / `latest_version` / `release_url` are NOT
-    # available from VM labels; deferred to STAGE-005-031. Intentional omission.
+    # Enriched by STAGE-005-031 (live-HA get_states attributes). None when HA is
+    # down or the entity is absent / the attribute is missing or non-str.
+    installed_version: str | None
+    latest_version: str | None
+    release_url: str | None
 
 
 class HaUpdateRowsResponse(BaseModel):
@@ -233,8 +253,11 @@ class HaRepairRow(BaseModel):
     domain: str
     issue_id: str
     severity: str
-    # SCAFFOLDING: `summary` (human-readable issue text) is NOT available from VM
-    # labels; deferred to STAGE-005-031. Intentional omission.
+    # Enriched by STAGE-005-031 (live-HA repairs/list_issues WS, `description` +
+    # `learn_more_url` keys). None when HA is down or the issue is absent /
+    # carries no such field.
+    description: str | None
+    learn_more_url: str | None
 
 
 class HaRepairRowsResponse(BaseModel):
@@ -273,6 +296,38 @@ def _sample_float(sample: VmInstantSample) -> float | None:
         return float(sample.value_str)
     except (ValueError, TypeError):
         return None
+
+
+async def _ha_states_index(
+    ha_client: HomeAssistantRestClient,
+) -> dict[str, HaState]:
+    """One bulk ``get_states()`` -> entity_id index, or empty index on HaError.
+
+    STAGE-005-031 enrichment seam: HA failure degrades to an empty index (every
+    enriched field becomes None), NEVER a 502 — VM already supplied the rows.
+    The HaError is swallowed silently (NOT logged) so no enriched/error content
+    can leak via logs (D-ENRICH-PRIVACY).
+    """
+    result = await ha_client.get_states()
+    if isinstance(result, HaError):
+        return {}
+    return build_states_index(result)
+
+
+async def _ha_repairs_index(
+    ws_client: HomeAssistantWebsocketClient,
+) -> dict[tuple[str, str], RepairEnrichment]:
+    """One ``repairs/list_issues`` WS snapshot -> (domain, issue_id) -> RepairEnrichment.
+
+    STAGE-005-031 enrichment seam: HA failure degrades to an empty index (every
+    repair's ``description`` + ``learn_more_url`` become None), NEVER a 502. The
+    HaError is swallowed silently (NOT logged) so no enriched/error content can
+    leak via logs.
+    """
+    result = await ws_client.send_command(_REPAIRS_WS_COMMAND)
+    if isinstance(result, HaError):
+        return {}
+    return build_repairs_index(extract_issues(result))
 
 
 @router.get("/summary", response_model=HaSummaryResponse)
@@ -359,6 +414,7 @@ async def get_ha_entities(
     _user: Annotated[User, Depends(require_session())],
     vm_url: Annotated[str, Depends(get_vm_url)],
     http_client: Annotated[httpx.AsyncClient, Depends(get_http_client)],
+    ha_client: Annotated[HomeAssistantRestClient, Depends(get_ha_client)],
     filter: Annotated[str, Query()] = _FILTER_UNAVAILABLE,
 ) -> HaEntityRowsResponse:
     """Return UNAVAILABLE HA entities (VM per-series), stalest-first, capped.
@@ -370,6 +426,10 @@ async def get_ha_entities(
     capped to the top ``_ENTITIES_TOP_N``. ``total`` is the full unavailable count;
     ``returned`` is after the cap. VM failure -> 502 (via vm_instant_query).
     Only ``filter=unavailable`` is supported; the value is echoed in ``filtered_to``.
+
+    STAGE-005-031: each row is enriched with ``friendly_name`` from a single live
+    ``get_states()``. HA-down / row-absent / attribute-missing -> ``friendly_name``
+    is None; the VM rows + 200 are ALWAYS preserved (HA failure is never a 502).
     """
     unavailable_samples, age_samples = await asyncio.gather(
         vm_instant_query(http_client, vm_url, _Q_ENTITY_UNAVAILABLE_SERIES),
@@ -384,6 +444,10 @@ async def get_ha_entities(
         if entity_id and age is not None:
             age_by_entity[entity_id] = age
 
+    # Live-HA enrichment snapshot (one bulk call). HaError -> empty index -> all
+    # friendly_name None; never raises, never a 502.
+    states_index = await _ha_states_index(ha_client)
+
     rows: list[HaEntityRow] = []
     for s in unavailable_samples:
         entity_id = s.labels.get("entity_id", "")
@@ -395,6 +459,7 @@ async def get_ha_entities(
                 domain=s.labels.get("domain", ""),
                 available=False,
                 last_changed_age_seconds=age_by_entity.get(entity_id, 0.0),
+                friendly_name=attr_str(states_index.get(entity_id), "friendly_name"),
             )
         )
 
@@ -415,6 +480,7 @@ async def get_ha_batteries(
     _user: Annotated[User, Depends(require_session())],
     vm_url: Annotated[str, Depends(get_vm_url)],
     http_client: Annotated[httpx.AsyncClient, Depends(get_http_client)],
+    ha_client: Annotated[HomeAssistantRestClient, Depends(get_ha_client)],
     filter: Annotated[str, Query()] = _FILTER_LOW_OR_CRITICAL,
 ) -> HaBatteryRowsResponse:
     """Return low/critical-battery HA entities (VM per-series).
@@ -424,8 +490,13 @@ async def get_ha_batteries(
     Source: ``homelab_ha_battery_level < _BATTERY_LOW_CEIL``. Naturally bounded;
     ``total`` == ``returned`` (no cap). Each sample's value_str is the battery
     level. VM failure -> 502.
+
+    STAGE-005-031: each row is enriched with ``device`` (the entity's
+    friendly_name from a single live ``get_states()``). HA-down / row-absent /
+    attribute-missing -> ``device`` None; VM rows + 200 always preserved.
     """
     samples = await vm_instant_query(http_client, vm_url, _Q_BATTERY_LOW_SERIES)
+    states_index = await _ha_states_index(ha_client)
     rows: list[HaBatteryRow] = []
     for s in samples:
         entity_id = s.labels.get("entity_id", "")
@@ -437,6 +508,7 @@ async def get_ha_batteries(
                 entity_id=entity_id,
                 domain=s.labels.get("domain", ""),
                 level=level,
+                device=attr_str(states_index.get(entity_id), "friendly_name"),
             )
         )
     return HaBatteryRowsResponse(
@@ -452,6 +524,7 @@ async def get_ha_updates(
     _user: Annotated[User, Depends(require_session())],
     vm_url: Annotated[str, Depends(get_vm_url)],
     http_client: Annotated[httpx.AsyncClient, Depends(get_http_client)],
+    ha_client: Annotated[HomeAssistantRestClient, Depends(get_ha_client)],
 ) -> HaUpdateRowsResponse:
     """Return HA entities with a pending update (VM per-series).
 
@@ -459,14 +532,29 @@ async def get_ha_updates(
 
     Source: ``homelab_ha_update_available == 1``. ``title`` is read from the
     metric's ``title`` label. VM failure -> 502.
+
+    STAGE-005-031: each row is enriched with ``installed_version`` /
+    ``latest_version`` / ``release_url`` from a single live ``get_states()``.
+    HA-down / row-absent / attribute-missing -> the field is None; VM rows + 200
+    always preserved.
     """
     samples = await vm_instant_query(http_client, vm_url, _Q_UPDATES_PENDING_SERIES)
+    states_index = await _ha_states_index(ha_client)
     rows: list[HaUpdateRow] = []
     for s in samples:
         entity_id = s.labels.get("entity_id", "")
         if not entity_id:
             continue
-        rows.append(HaUpdateRow(entity_id=entity_id, title=s.labels.get("title", "")))
+        state = states_index.get(entity_id)
+        rows.append(
+            HaUpdateRow(
+                entity_id=entity_id,
+                title=s.labels.get("title", ""),
+                installed_version=attr_str(state, "installed_version"),
+                latest_version=attr_str(state, "latest_version"),
+                release_url=attr_str(state, "release_url"),
+            )
+        )
     return HaUpdateRowsResponse(
         updates=rows,
         total=len(rows),
@@ -516,6 +604,7 @@ async def get_ha_repairs(
     _user: Annotated[User, Depends(require_session())],
     vm_url: Annotated[str, Depends(get_vm_url)],
     http_client: Annotated[httpx.AsyncClient, Depends(get_http_client)],
+    ws_client: Annotated[HomeAssistantWebsocketClient, Depends(get_ha_ws_client)],
 ) -> HaRepairRowsResponse:
     """Return open HA repair issues (VM per-series).
 
@@ -523,18 +612,29 @@ async def get_ha_repairs(
 
     Source: ``homelab_ha_repair_issue == 1``. ``severity`` from the metric label.
     VM failure -> 502.
+
+    STAGE-005-031: each row is enriched with ``description`` (free-form prose) +
+    ``learn_more_url`` (doc URL) from a live ``repairs/list_issues`` WS snapshot,
+    keyed by ``(domain, issue_id)``. HA-down / issue-absent / field-missing ->
+    both fields None; VM rows + 200 always preserved (the WS failure is swallowed
+    to None, NEVER a 502).
     """
     samples = await vm_instant_query(http_client, vm_url, _Q_REPAIR_ISSUE_SERIES)
+    repairs_index = await _ha_repairs_index(ws_client)
     rows: list[HaRepairRow] = []
     for s in samples:
         issue_id = s.labels.get("issue_id", "")
         if not issue_id:
             continue
+        domain = s.labels.get("domain", "")
+        enrichment = repairs_index.get((domain, issue_id))
         rows.append(
             HaRepairRow(
-                domain=s.labels.get("domain", ""),
+                domain=domain,
                 issue_id=issue_id,
                 severity=s.labels.get("severity", ""),
+                description=enrichment.description if enrichment is not None else None,
+                learn_more_url=(enrichment.learn_more_url if enrichment is not None else None),
             )
         )
     return HaRepairRowsResponse(

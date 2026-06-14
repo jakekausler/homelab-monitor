@@ -45,7 +45,15 @@ describe('HaRepairsDrill', () => {
     vi.mocked(useHomeAssistantRepairs).mockReturnValue(
       makeResult({
         data: {
-          repairs: [{ domain: 'cloud', issue_id: 'legacy_subscription', severity: 'warning' }],
+          repairs: [
+            {
+              domain: 'cloud',
+              issue_id: 'legacy_subscription',
+              severity: 'warning',
+              description: null,
+              learn_more_url: null,
+            },
+          ],
           filtered_to: null,
           returned: 1,
           total: 1,

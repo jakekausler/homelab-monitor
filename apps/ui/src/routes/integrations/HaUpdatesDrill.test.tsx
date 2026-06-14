@@ -45,7 +45,15 @@ describe('HaUpdatesDrill', () => {
     vi.mocked(useHomeAssistantUpdates).mockReturnValue(
       makeResult({
         data: {
-          updates: [{ entity_id: 'update.router', title: 'Router firmware 2.1' }],
+          updates: [
+            {
+              entity_id: 'update.router',
+              title: 'Router firmware 2.1',
+              installed_version: null,
+              latest_version: null,
+              release_url: null,
+            },
+          ],
           filtered_to: null,
           returned: 1,
           total: 1,
@@ -62,7 +70,15 @@ describe('HaUpdatesDrill', () => {
     vi.mocked(useHomeAssistantUpdates).mockReturnValue(
       makeResult({
         data: {
-          updates: [{ entity_id: 'update.nas', title: '   ' }],
+          updates: [
+            {
+              entity_id: 'update.nas',
+              title: '   ',
+              installed_version: null,
+              latest_version: null,
+              release_url: null,
+            },
+          ],
           filtered_to: null,
           returned: 1,
           total: 1,

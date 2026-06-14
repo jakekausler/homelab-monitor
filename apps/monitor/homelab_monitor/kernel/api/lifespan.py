@@ -616,6 +616,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
         http=http_client,  # reuse the shared pool — do NOT create a second client
         token_provider=lambda: ttl_resolver.current().get("ha_token"),
     )
+    # STAGE-005-031: expose the REST client for the HA detail enrichment layer
+    # (get_ha_client dep). Mirrors app.state.ha_ws_client below.
+    app.state.ha_client = ha_client
 
     in_memory_metrics_writer = MemoryRetainingMetricsWriter()
     prom_registry = CollectorRegistry()

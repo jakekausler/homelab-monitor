@@ -2583,6 +2583,17 @@
       },
       "HaBatteryRow": {
         "properties": {
+          "device": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device"
+          },
           "domain": {
             "title": "Domain",
             "type": "string"
@@ -2599,7 +2610,8 @@
         "required": [
           "entity_id",
           "domain",
-          "level"
+          "level",
+          "device"
         ],
         "title": "HaBatteryRow",
         "type": "object"
@@ -2778,6 +2790,17 @@
             "title": "Entity Id",
             "type": "string"
           },
+          "friendly_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Friendly Name"
+          },
           "last_changed_age_seconds": {
             "title": "Last Changed Age Seconds",
             "type": "number"
@@ -2787,7 +2810,8 @@
           "entity_id",
           "domain",
           "available",
-          "last_changed_age_seconds"
+          "last_changed_age_seconds",
+          "friendly_name"
         ],
         "title": "HaEntityRow",
         "type": "object"
@@ -2902,6 +2926,17 @@
       },
       "HaRepairRow": {
         "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
           "domain": {
             "title": "Domain",
             "type": "string"
@@ -2909,6 +2944,17 @@
           "issue_id": {
             "title": "Issue Id",
             "type": "string"
+          },
+          "learn_more_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Learn More Url"
           },
           "severity": {
             "title": "Severity",
@@ -2918,7 +2964,9 @@
         "required": [
           "domain",
           "issue_id",
-          "severity"
+          "severity",
+          "description",
+          "learn_more_url"
         ],
         "title": "HaRepairRow",
         "type": "object"
@@ -3020,6 +3068,39 @@
             "title": "Entity Id",
             "type": "string"
           },
+          "installed_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Installed Version"
+          },
+          "latest_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest Version"
+          },
+          "release_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Release Url"
+          },
           "title": {
             "title": "Title",
             "type": "string"
@@ -3027,7 +3108,10 @@
         },
         "required": [
           "entity_id",
-          "title"
+          "title",
+          "installed_version",
+          "latest_version",
+          "release_url"
         ],
         "title": "HaUpdateRow",
         "type": "object"
@@ -8999,7 +9083,7 @@
     },
     "/api/integrations/home-assistant/batteries": {
       "get": {
-        "description": "Return low/critical-battery HA entities (VM per-series).\n\nAuth: cookie session required. CSRF NOT enforced on GET.\n\nSource: ``homelab_ha_battery_level < _BATTERY_LOW_CEIL``. Naturally bounded;\n``total`` == ``returned`` (no cap). Each sample's value_str is the battery\nlevel. VM failure -> 502.",
+        "description": "Return low/critical-battery HA entities (VM per-series).\n\nAuth: cookie session required. CSRF NOT enforced on GET.\n\nSource: ``homelab_ha_battery_level < _BATTERY_LOW_CEIL``. Naturally bounded;\n``total`` == ``returned`` (no cap). Each sample's value_str is the battery\nlevel. VM failure -> 502.\n\nSTAGE-005-031: each row is enriched with ``device`` (the entity's\nfriendly_name from a single live ``get_states()``). HA-down / row-absent /\nattribute-missing -> ``device`` None; VM rows + 200 always preserved.",
         "operationId": "get_ha_batteries_api_integrations_home_assistant_batteries_get",
         "parameters": [
           {
@@ -9087,7 +9171,7 @@
     },
     "/api/integrations/home-assistant/entities": {
       "get": {
-        "description": "Return UNAVAILABLE HA entities (VM per-series), stalest-first, capped.\n\nAuth: cookie session required. CSRF NOT enforced on GET.\n\nSource: ``homelab_ha_entity_available == 0`` joined per ``entity_id`` with\n``homelab_ha_entity_last_changed_seconds`` (the age). Ordered by age DESC and\ncapped to the top ``_ENTITIES_TOP_N``. ``total`` is the full unavailable count;\n``returned`` is after the cap. VM failure -> 502 (via vm_instant_query).\nOnly ``filter=unavailable`` is supported; the value is echoed in ``filtered_to``.",
+        "description": "Return UNAVAILABLE HA entities (VM per-series), stalest-first, capped.\n\nAuth: cookie session required. CSRF NOT enforced on GET.\n\nSource: ``homelab_ha_entity_available == 0`` joined per ``entity_id`` with\n``homelab_ha_entity_last_changed_seconds`` (the age). Ordered by age DESC and\ncapped to the top ``_ENTITIES_TOP_N``. ``total`` is the full unavailable count;\n``returned`` is after the cap. VM failure -> 502 (via vm_instant_query).\nOnly ``filter=unavailable`` is supported; the value is echoed in ``filtered_to``.\n\nSTAGE-005-031: each row is enriched with ``friendly_name`` from a single live\n``get_states()``. HA-down / row-absent / attribute-missing -> ``friendly_name``\nis None; the VM rows + 200 are ALWAYS preserved (HA failure is never a 502).",
         "operationId": "get_ha_entities_api_integrations_home_assistant_entities_get",
         "parameters": [
           {
@@ -9153,7 +9237,7 @@
     },
     "/api/integrations/home-assistant/repairs": {
       "get": {
-        "description": "Return open HA repair issues (VM per-series).\n\nAuth: cookie session required. CSRF NOT enforced on GET.\n\nSource: ``homelab_ha_repair_issue == 1``. ``severity`` from the metric label.\nVM failure -> 502.",
+        "description": "Return open HA repair issues (VM per-series).\n\nAuth: cookie session required. CSRF NOT enforced on GET.\n\nSource: ``homelab_ha_repair_issue == 1``. ``severity`` from the metric label.\nVM failure -> 502.\n\nSTAGE-005-031: each row is enriched with ``description`` (free-form prose) +\n``learn_more_url`` (doc URL) from a live ``repairs/list_issues`` WS snapshot,\nkeyed by ``(domain, issue_id)``. HA-down / issue-absent / field-missing ->\nboth fields None; VM rows + 200 always preserved (the WS failure is swallowed\nto None, NEVER a 502).",
         "operationId": "get_ha_repairs_api_integrations_home_assistant_repairs_get",
         "responses": {
           "200": {
@@ -9197,7 +9281,7 @@
     },
     "/api/integrations/home-assistant/updates": {
       "get": {
-        "description": "Return HA entities with a pending update (VM per-series).\n\nAuth: cookie session required. CSRF NOT enforced on GET.\n\nSource: ``homelab_ha_update_available == 1``. ``title`` is read from the\nmetric's ``title`` label. VM failure -> 502.",
+        "description": "Return HA entities with a pending update (VM per-series).\n\nAuth: cookie session required. CSRF NOT enforced on GET.\n\nSource: ``homelab_ha_update_available == 1``. ``title`` is read from the\nmetric's ``title`` label. VM failure -> 502.\n\nSTAGE-005-031: each row is enriched with ``installed_version`` /\n``latest_version`` / ``release_url`` from a single live ``get_states()``.\nHA-down / row-absent / attribute-missing -> the field is None; VM rows + 200\nalways preserved.",
         "operationId": "get_ha_updates_api_integrations_home_assistant_updates_get",
         "responses": {
           "200": {

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Callable
 from typing import cast
@@ -12,6 +13,10 @@ import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from pytest_httpx import HTTPXMock
+from structlog.testing import capture_logs
+
+from homelab_monitor.kernel.ha.client import HaState
+from homelab_monitor.kernel.ha.errors import HaError
 
 _VM_URL = "http://vm-test:8428"
 _VM_QUERY_RE = re.compile(r"http://vm-test:8428/api/v1/query\b.*")
@@ -59,6 +64,54 @@ def _callback_for(
         return httpx.Response(200, json=responses.get(query, _empty_vector_response()))
 
     return _cb
+
+
+class _FakeRest:
+    """HA REST client double: a fixed get_states result (list[HaState] | HaError)."""
+
+    def __init__(self, result: object) -> None:
+        self._result = result
+
+    async def get_states(self) -> object:
+        return self._result
+
+
+class _FakeWs:
+    """HA WS client double: a fixed send_command result (dict | list | HaError)."""
+
+    def __init__(self, result: object) -> None:
+        self._result = result
+
+    async def send_command(self, type_: str, **fields: object) -> object:
+        del type_, fields
+        return self._result
+
+
+def _app(client: AsyncClient) -> FastAPI:
+    return cast(FastAPI, client._transport.app)  # pyright: ignore[reportAttributeAccessIssue, reportPrivateUsage, reportUnknownMemberType]
+
+
+def _state(entity_id: str, attributes: dict[str, object]) -> HaState:
+    """Construct an HaState (other fields empty)."""
+    return HaState(
+        entity_id=entity_id,
+        state="on",
+        attributes=attributes,
+        last_changed="",
+        last_updated="",
+    )
+
+
+@pytest.fixture(autouse=True)
+def _default_ha_clients(authenticated_client: AsyncClient) -> None:  # pyright: ignore[reportUnusedFunction]
+    """Default both HA clients to an HaError so enrichment degrades to None.
+
+    Existing 027 tests don't set the clients; without this they'd 503 from
+    get_ha_client / get_ha_ws_client. Enrichment tests override per-test.
+    """
+    app = _app(authenticated_client)
+    app.state.ha_client = _FakeRest(HaError(reason="unreachable", message="boom"))
+    app.state.ha_ws_client = _FakeWs(HaError(reason="unreachable", message="boom"))
 
 
 # ── Entities endpoint tests ────────────────────────────────────────────────────────
@@ -761,3 +814,503 @@ async def test_repairs_requires_session(authenticated_client: AsyncClient) -> No
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as anon:
         resp = await anon.get("/api/integrations/home-assistant/repairs")
     assert resp.status_code == _HTTP_UNAUTH
+
+
+# ── STAGE-005-031: live-HA enrichment tests ─────────────────────────────────
+
+
+def _set_rest(client: AsyncClient, result: object) -> None:
+    _app(client).state.ha_client = _FakeRest(result)
+
+
+def _set_ws(client: AsyncClient, result: object) -> None:
+    _app(client).state.ha_ws_client = _FakeWs(result)
+
+
+# --- batteries: device enrichment ---
+
+
+@pytest.mark.asyncio
+async def test_batteries_enriches_device_from_friendly_name(
+    authenticated_client: AsyncClient,
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Batteries: device filled from the matching entity's friendly_name."""
+    monkeypatch.setenv("HOMELAB_MONITOR_VM_URL", _VM_URL)
+    responses = {
+        "homelab_ha_battery_level < 20": _series_response(
+            [({"entity_id": "sensor.x", "domain": "sensor"}, "5")]
+        ),
+    }
+    httpx_mock.add_callback(
+        _callback_for(responses), url=_VM_QUERY_RE, method="GET", is_reusable=True
+    )
+    _set_rest(authenticated_client, [_state("sensor.x", {"friendly_name": "Front Door"})])
+    resp = await authenticated_client.get("/api/integrations/home-assistant/batteries")
+    assert resp.status_code == _HTTP_OK
+    body = resp.json()
+    assert body["batteries"][0]["device"] == "Front Door"
+
+
+@pytest.mark.asyncio
+async def test_batteries_ha_down_device_none_still_200(
+    authenticated_client: AsyncClient,
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Batteries: get_states HaError -> rows still 200, device None (NOT 502)."""
+    monkeypatch.setenv("HOMELAB_MONITOR_VM_URL", _VM_URL)
+    responses = {
+        "homelab_ha_battery_level < 20": _series_response(
+            [({"entity_id": "sensor.x", "domain": "sensor"}, "5")]
+        ),
+    }
+    httpx_mock.add_callback(
+        _callback_for(responses), url=_VM_QUERY_RE, method="GET", is_reusable=True
+    )
+    _set_rest(authenticated_client, HaError(reason="unreachable", message="down"))
+    resp = await authenticated_client.get("/api/integrations/home-assistant/batteries")
+    assert resp.status_code == _HTTP_OK
+    body = resp.json()
+    assert body["total"] == 1
+    assert body["batteries"][0]["device"] is None
+
+
+@pytest.mark.asyncio
+async def test_batteries_row_not_in_snapshot_device_none(
+    authenticated_client: AsyncClient,
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Batteries: VM row whose entity is absent from the HA snapshot -> device None."""
+    monkeypatch.setenv("HOMELAB_MONITOR_VM_URL", _VM_URL)
+    responses = {
+        "homelab_ha_battery_level < 20": _series_response(
+            [({"entity_id": "sensor.x", "domain": "sensor"}, "5")]
+        ),
+    }
+    httpx_mock.add_callback(
+        _callback_for(responses), url=_VM_QUERY_RE, method="GET", is_reusable=True
+    )
+    _set_rest(authenticated_client, [_state("sensor.other", {"friendly_name": "Elsewhere"})])
+    resp = await authenticated_client.get("/api/integrations/home-assistant/batteries")
+    assert resp.status_code == _HTTP_OK
+    assert resp.json()["batteries"][0]["device"] is None
+
+
+@pytest.mark.asyncio
+async def test_batteries_attribute_missing_device_none(
+    authenticated_client: AsyncClient,
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Batteries: entity present but no friendly_name attribute -> device None."""
+    monkeypatch.setenv("HOMELAB_MONITOR_VM_URL", _VM_URL)
+    responses = {
+        "homelab_ha_battery_level < 20": _series_response(
+            [({"entity_id": "sensor.x", "domain": "sensor"}, "5")]
+        ),
+    }
+    httpx_mock.add_callback(
+        _callback_for(responses), url=_VM_QUERY_RE, method="GET", is_reusable=True
+    )
+    _set_rest(authenticated_client, [_state("sensor.x", {"battery_level": 5})])
+    resp = await authenticated_client.get("/api/integrations/home-assistant/batteries")
+    assert resp.status_code == _HTTP_OK
+    assert resp.json()["batteries"][0]["device"] is None
+
+
+# --- entities: friendly_name enrichment ---
+
+
+@pytest.mark.asyncio
+async def test_entities_enriches_friendly_name(
+    authenticated_client: AsyncClient,
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Entities: friendly_name filled from the matching entity."""
+    monkeypatch.setenv("HOMELAB_MONITOR_VM_URL", _VM_URL)
+    responses = {
+        "homelab_ha_entity_available == 0": _series_response(
+            [({"entity_id": "light.a", "domain": "light"}, "0")]
+        ),
+        "homelab_ha_entity_last_changed_seconds": _series_response(
+            [({"entity_id": "light.a"}, "100")]
+        ),
+    }
+    httpx_mock.add_callback(
+        _callback_for(responses), url=_VM_QUERY_RE, method="GET", is_reusable=True
+    )
+    _set_rest(authenticated_client, [_state("light.a", {"friendly_name": "Hallway Light"})])
+    resp = await authenticated_client.get("/api/integrations/home-assistant/entities")
+    assert resp.status_code == _HTTP_OK
+    assert resp.json()["entities"][0]["friendly_name"] == "Hallway Light"
+
+
+@pytest.mark.asyncio
+async def test_entities_ha_down_friendly_name_none_still_200(
+    authenticated_client: AsyncClient,
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Entities: get_states HaError -> rows 200, friendly_name None (NOT 502)."""
+    monkeypatch.setenv("HOMELAB_MONITOR_VM_URL", _VM_URL)
+    responses = {
+        "homelab_ha_entity_available == 0": _series_response(
+            [({"entity_id": "light.a", "domain": "light"}, "0")]
+        ),
+        "homelab_ha_entity_last_changed_seconds": _series_response(
+            [({"entity_id": "light.a"}, "100")]
+        ),
+    }
+    httpx_mock.add_callback(
+        _callback_for(responses), url=_VM_QUERY_RE, method="GET", is_reusable=True
+    )
+    _set_rest(authenticated_client, HaError(reason="timeout", message="slow"))
+    resp = await authenticated_client.get("/api/integrations/home-assistant/entities")
+    assert resp.status_code == _HTTP_OK
+    assert resp.json()["entities"][0]["friendly_name"] is None
+
+
+# --- updates: version + release_url enrichment ---
+
+
+@pytest.mark.asyncio
+async def test_updates_enriches_versions_and_release_url(
+    authenticated_client: AsyncClient,
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Updates: installed/latest version + release_url filled from attributes."""
+    monkeypatch.setenv("HOMELAB_MONITOR_VM_URL", _VM_URL)
+    responses = {
+        "homelab_ha_update_available == 1": _series_response(
+            [({"entity_id": "update.core", "title": "Core"}, "1")]
+        ),
+    }
+    httpx_mock.add_callback(
+        _callback_for(responses), url=_VM_QUERY_RE, method="GET", is_reusable=True
+    )
+    _set_rest(
+        authenticated_client,
+        [
+            _state(
+                "update.core",
+                {
+                    "installed_version": "2026.5.1",
+                    "latest_version": "2026.6.0",
+                    "release_url": "https://example.com/release",
+                },
+            )
+        ],
+    )
+    resp = await authenticated_client.get("/api/integrations/home-assistant/updates")
+    assert resp.status_code == _HTTP_OK
+    row = resp.json()["updates"][0]
+    assert row["installed_version"] == "2026.5.1"
+    assert row["latest_version"] == "2026.6.0"
+    assert row["release_url"] == "https://example.com/release"
+
+
+@pytest.mark.asyncio
+async def test_updates_ha_down_versions_none_still_200(
+    authenticated_client: AsyncClient,
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Updates: get_states HaError -> rows 200, all version fields None (NOT 502)."""
+    monkeypatch.setenv("HOMELAB_MONITOR_VM_URL", _VM_URL)
+    responses = {
+        "homelab_ha_update_available == 1": _series_response(
+            [({"entity_id": "update.core", "title": "Core"}, "1")]
+        ),
+    }
+    httpx_mock.add_callback(
+        _callback_for(responses), url=_VM_QUERY_RE, method="GET", is_reusable=True
+    )
+    _set_rest(authenticated_client, HaError(reason="auth", message="bad token", status=401))
+    resp = await authenticated_client.get("/api/integrations/home-assistant/updates")
+    assert resp.status_code == _HTTP_OK
+    row = resp.json()["updates"][0]
+    assert row["installed_version"] is None
+    assert row["latest_version"] is None
+    assert row["release_url"] is None
+
+
+@pytest.mark.asyncio
+async def test_updates_attribute_missing_versions_none(
+    authenticated_client: AsyncClient,
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Updates: entity present but no version attributes -> fields None."""
+    monkeypatch.setenv("HOMELAB_MONITOR_VM_URL", _VM_URL)
+    responses = {
+        "homelab_ha_update_available == 1": _series_response(
+            [({"entity_id": "update.core", "title": "Core"}, "1")]
+        ),
+    }
+    httpx_mock.add_callback(
+        _callback_for(responses), url=_VM_QUERY_RE, method="GET", is_reusable=True
+    )
+    _set_rest(authenticated_client, [_state("update.core", {"title": "Core"})])
+    resp = await authenticated_client.get("/api/integrations/home-assistant/updates")
+    assert resp.status_code == _HTTP_OK
+    row = resp.json()["updates"][0]
+    assert row["installed_version"] is None
+    assert row["latest_version"] is None
+    assert row["release_url"] is None
+
+
+# --- repairs: description + learn_more_url enrichment ---
+
+
+@pytest.mark.asyncio
+async def test_repairs_enriches_fields_bare_list(
+    authenticated_client: AsyncClient,
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Repairs: description + learn_more_url filled from a bare-list WS issues snapshot."""
+    monkeypatch.setenv("HOMELAB_MONITOR_VM_URL", _VM_URL)
+    responses = {
+        "homelab_ha_repair_issue == 1": _series_response(
+            [({"domain": "zwave", "issue_id": "battery_low", "severity": "warning"}, "1")]
+        ),
+    }
+    httpx_mock.add_callback(
+        _callback_for(responses), url=_VM_QUERY_RE, method="GET", is_reusable=True
+    )
+    _set_ws(
+        authenticated_client,
+        [
+            {
+                "domain": "zwave",
+                "issue_id": "battery_low",
+                "description": "Z-Wave battery low",
+                "learn_more_url": "https://example.com/zwave",
+            }
+        ],
+    )
+    resp = await authenticated_client.get("/api/integrations/home-assistant/repairs")
+    assert resp.status_code == _HTTP_OK
+    row = resp.json()["repairs"][0]
+    assert row["description"] == "Z-Wave battery low"
+    assert row["learn_more_url"] == "https://example.com/zwave"
+
+
+@pytest.mark.asyncio
+async def test_repairs_enriches_fields_dict_wrapped(
+    authenticated_client: AsyncClient,
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Repairs: description + learn_more_url filled from a {"issues":[...]} WS snapshot."""
+    monkeypatch.setenv("HOMELAB_MONITOR_VM_URL", _VM_URL)
+    responses = {
+        "homelab_ha_repair_issue == 1": _series_response(
+            [({"domain": "mqtt", "issue_id": "conn", "severity": "critical"}, "1")]
+        ),
+    }
+    httpx_mock.add_callback(
+        _callback_for(responses), url=_VM_QUERY_RE, method="GET", is_reusable=True
+    )
+    _set_ws(
+        authenticated_client,
+        {
+            "issues": [
+                {
+                    "domain": "mqtt",
+                    "issue_id": "conn",
+                    "description": "MQTT lost",
+                    "learn_more_url": "https://example.com/mqtt",
+                }
+            ]
+        },
+    )
+    resp = await authenticated_client.get("/api/integrations/home-assistant/repairs")
+    assert resp.status_code == _HTTP_OK
+    row = resp.json()["repairs"][0]
+    assert row["description"] == "MQTT lost"
+    assert row["learn_more_url"] == "https://example.com/mqtt"
+
+
+@pytest.mark.asyncio
+async def test_repairs_ha_down_fields_none_still_200(
+    authenticated_client: AsyncClient,
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Repairs: send_command HaError -> rows 200, both fields None (NOT 502)."""
+    monkeypatch.setenv("HOMELAB_MONITOR_VM_URL", _VM_URL)
+    responses = {
+        "homelab_ha_repair_issue == 1": _series_response(
+            [({"domain": "zwave", "issue_id": "battery_low", "severity": "warning"}, "1")]
+        ),
+    }
+    httpx_mock.add_callback(
+        _callback_for(responses), url=_VM_QUERY_RE, method="GET", is_reusable=True
+    )
+    _set_ws(authenticated_client, HaError(reason="unreachable", message="ws down"))
+    resp = await authenticated_client.get("/api/integrations/home-assistant/repairs")
+    assert resp.status_code == _HTTP_OK
+    body = resp.json()
+    assert body["total"] == 1
+    assert body["repairs"][0]["description"] is None
+    assert body["repairs"][0]["learn_more_url"] is None
+
+
+@pytest.mark.asyncio
+async def test_repairs_issue_not_in_snapshot_fields_none(
+    authenticated_client: AsyncClient,
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Repairs: VM row absent from the WS snapshot -> both enriched fields None."""
+    monkeypatch.setenv("HOMELAB_MONITOR_VM_URL", _VM_URL)
+    responses = {
+        "homelab_ha_repair_issue == 1": _series_response(
+            [({"domain": "zwave", "issue_id": "battery_low", "severity": "warning"}, "1")]
+        ),
+    }
+    httpx_mock.add_callback(
+        _callback_for(responses), url=_VM_QUERY_RE, method="GET", is_reusable=True
+    )
+    _set_ws(
+        authenticated_client,
+        [
+            {
+                "domain": "other",
+                "issue_id": "different",
+                "description": "elsewhere",
+                "learn_more_url": "https://example.com/elsewhere",
+            }
+        ],
+    )
+    resp = await authenticated_client.get("/api/integrations/home-assistant/repairs")
+    assert resp.status_code == _HTTP_OK
+    row = resp.json()["repairs"][0]
+    assert row["description"] is None
+    assert row["learn_more_url"] is None
+
+
+@pytest.mark.asyncio
+async def test_repairs_missing_fields_none(
+    authenticated_client: AsyncClient,
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Repairs: issue present but no description / learn_more_url keys -> both None."""
+    monkeypatch.setenv("HOMELAB_MONITOR_VM_URL", _VM_URL)
+    responses = {
+        "homelab_ha_repair_issue == 1": _series_response(
+            [({"domain": "zwave", "issue_id": "battery_low", "severity": "warning"}, "1")]
+        ),
+    }
+    httpx_mock.add_callback(
+        _callback_for(responses), url=_VM_QUERY_RE, method="GET", is_reusable=True
+    )
+    _set_ws(
+        authenticated_client,
+        [{"domain": "zwave", "issue_id": "battery_low", "translation_key": "tk"}],
+    )
+    resp = await authenticated_client.get("/api/integrations/home-assistant/repairs")
+    assert resp.status_code == _HTTP_OK
+    row = resp.json()["repairs"][0]
+    assert row["description"] is None
+    assert row["learn_more_url"] is None
+
+
+# --- VM-down still 502 (enrichment doesn't change the VM-down contract) ---
+
+
+@pytest.mark.asyncio
+async def test_batteries_vm_down_still_502_with_enrichment(
+    authenticated_client: AsyncClient,
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Batteries: VM error -> 502 even though the HA client is healthy."""
+    monkeypatch.setenv("HOMELAB_MONITOR_VM_URL", _VM_URL)
+    httpx_mock.add_exception(httpx.ConnectError("refused"), is_reusable=True)
+    _set_rest(authenticated_client, [_state("sensor.x", {"friendly_name": "X"})])
+    resp = await authenticated_client.get("/api/integrations/home-assistant/batteries")
+    assert resp.status_code == _HTTP_BAD_GATEWAY
+    assert resp.json()["error"]["code"] == "upstream_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_repairs_vm_down_still_502_with_enrichment(
+    authenticated_client: AsyncClient,
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Repairs: VM error -> 502 even though the WS client is healthy."""
+    monkeypatch.setenv("HOMELAB_MONITOR_VM_URL", _VM_URL)
+    httpx_mock.add_exception(httpx.ConnectError("refused"), is_reusable=True)
+    _set_ws(
+        authenticated_client,
+        [{"domain": "z", "issue_id": "i", "description": "d", "learn_more_url": "u"}],
+    )
+    resp = await authenticated_client.get("/api/integrations/home-assistant/repairs")
+    assert resp.status_code == _HTTP_BAD_GATEWAY
+    assert resp.json()["error"]["code"] == "upstream_unavailable"
+
+
+# --- MANDATORY: enriched values never logged (mirror the 029 sentinel test) ---
+
+
+@pytest.mark.asyncio
+async def test_enriched_values_never_logged(
+    authenticated_client: AsyncClient,
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Sentinels appear in the RESPONSE but in NO captured log record.
+
+    Injects a sentinel friendly_name (battery device) AND a sentinel repair
+    description; asserts each appears in the respective response body but never
+    in any structlog event (D-ENRICH-PRIVACY: enriched fields are never logged).
+    """
+    monkeypatch.setenv("HOMELAB_MONITOR_VM_URL", _VM_URL)
+    device_sentinel = "DEVICE-NAME-SENTINEL-9f3a"
+    description_sentinel = "REPAIR-DESC-SENTINEL-9f3a"
+
+    battery_resp = {
+        "homelab_ha_battery_level < 20": _series_response(
+            [({"entity_id": "sensor.x", "domain": "sensor"}, "5")]
+        ),
+    }
+    repair_resp = {
+        "homelab_ha_repair_issue == 1": _series_response(
+            [({"domain": "zwave", "issue_id": "battery_low", "severity": "warning"}, "1")]
+        ),
+    }
+    # Both query strings map through one callback (unknown -> empty vector).
+    combined = {**battery_resp, **repair_resp}
+    httpx_mock.add_callback(
+        _callback_for(combined), url=_VM_QUERY_RE, method="GET", is_reusable=True
+    )
+
+    _set_rest(authenticated_client, [_state("sensor.x", {"friendly_name": device_sentinel})])
+    _set_ws(
+        authenticated_client,
+        [{"domain": "zwave", "issue_id": "battery_low", "description": description_sentinel}],
+    )
+
+    with capture_logs() as captured:
+        batt = await authenticated_client.get("/api/integrations/home-assistant/batteries")
+        rep = await authenticated_client.get("/api/integrations/home-assistant/repairs")
+
+    assert batt.status_code == _HTTP_OK
+    assert rep.status_code == _HTTP_OK
+    # Present in the response bodies delivered to the authenticated session.
+    assert device_sentinel in batt.text
+    assert description_sentinel in rep.text
+    # Absent from EVERY captured log event.
+    for event in captured:
+        serialized = json.dumps(event)
+        assert device_sentinel not in serialized
+        assert description_sentinel not in serialized
