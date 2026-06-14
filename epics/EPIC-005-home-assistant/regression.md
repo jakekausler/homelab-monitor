@@ -221,3 +221,11 @@
 - `homelab_ha_config_entry_loaded` must carry NO `state` label (the loaded family stays `{domain,title}`) — D-CFGSTATE-SHAPE guard; the `state` label is on the setup_error family only.
 - vmalert `HaConfigEntryError`: `expr` is UNCHANGED (`homelab_ha_config_entry_setup_error == 1`) and still fires exactly one series per error entry (no double-count from the added label). The `summary` annotation now renders the precise state: "HA config entry in error ({{ $labels.state }}): <title> (<domain>)". Confirm firing instances propagate to Alertmanager with the state in the rendered summary.
 - `reason` (free-text) must STILL never be emitted as a metric label (collector omits it; `test_reason_never_emitted_as_label` guards this).
+
+## STAGE-005-033 — Entities drill renders friendly_name (frontend two-line row)
+
+- HA Health tab → "Unavailable entities" drill: each entity row renders as TWO lines — line 1 the human-readable `friendly_name` (primary, `font-medium`) + relative age (right); line 2 the raw `entity_id · domain` (muted `text-xs text-muted-foreground`). The `·` separator is U+00B7.
+- Fallback: when `friendly_name` is null / "" / whitespace, line 1 shows `entity_id` and the secondary line is SUPPRESSED (no `entity_id`-over-`entity_id` double render). Guarded by `hasName = Boolean(row.friendly_name?.trim())`.
+- Long friendly_names and long entity_ids truncate cleanly (`min-w-0 truncate` on the primary span; `truncate` on the secondary); age stays right-aligned and never collapses (`shrink-0`). Rows live in a scrolling PanelSection.
+- Frontend-only: no backend / no metric / no OpenAPI change. `friendly_name` is sourced from the live-HA-enriched STAGE-005-031 `/entities` endpoint (null when HA down or entity not found).
+- Tests (`HaEntitiesDrill.test.tsx`): friendly_name renders as primary + `entity_id · domain` secondary when set; entity_id primary + secondary suppressed when null.
