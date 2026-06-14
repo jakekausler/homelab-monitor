@@ -5,6 +5,9 @@ in the ``automation`` and ``script`` domains, and emits raw cadence metrics:
 
 - ``homelab_ha_automation_last_triggered_seconds{entity_id}`` — seconds since the
   automation's ``last_triggered`` attribute (now_utc - last_triggered), clamped >= 0.
+  Emitted ONLY for ENABLED (state ``on``) automations; disabled (``off``),
+  ``unavailable``, ``unknown``, and any other non-``on`` state automations are excluded.
+  Their ``automation_enabled`` series still carries them (0.0 for ``off``, skipped for others).
 - ``homelab_ha_script_last_triggered_seconds{entity_id}`` — same, for scripts.
 - ``homelab_ha_automation_enabled{entity_id}`` — 1.0 when state is ``on``, 0.0 when
   ``off``; any other state (``unavailable`` / ``unknown`` / empty / unexpected) is SKIPPED.
@@ -133,13 +136,13 @@ class HaCadenceCollector(BaseCollector):
                 elif state.state == _STATE_OFF:
                     automation_enabled_obs.append((labels, 0.0))
 
-                # Last-triggered: distinguish missing (skip, no error) from
-                # present-but-unparseable (count error, skip).
+                # Last-triggered (enabled automations only): distinguish missing
+                # (skip, no error) from present-but-unparseable (count error, skip).
                 lt = state.attributes.get(_LAST_TRIGGERED_ATTR)
                 seconds, err = _triggered_seconds_or_error(lt, now)
                 if err:
                     parse_errors += 1
-                elif seconds is not None:
+                elif seconds is not None and state.state == _STATE_ON:
                     automation_triggered_obs.append((labels, seconds))
 
             elif domain == _SCRIPT_DOMAIN:

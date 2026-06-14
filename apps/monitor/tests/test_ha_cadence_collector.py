@@ -212,6 +212,69 @@ async def test_automation_unparseable_last_triggered_counts_error() -> None:
     assert errors[0].labels == {}
 
 
+async def test_disabled_automation_with_last_triggered_emits_no_triggered_series() -> None:
+    """DISABLED (state='off') automation with valid last_triggered -> no triggered series,
+    but automation_enabled IS emitted at 0.0. Core behavior-change lock."""
+    triggered = (datetime.now(UTC) - timedelta(seconds=90)).isoformat()
+    states = [_automation_state("automation.disabled_one", "off", last_triggered=triggered)]
+    writer = InMemoryMetricsWriter()
+    ctx = _ctx(writer, _FakeHaStates(states))
+
+    await HaCadenceCollector().run(ctx)  # type: ignore[arg-type]
+
+    # No triggered series for a disabled automation.
+    assert _gauges(writer, M_AUTOMATION_LAST_TRIGGERED) == []
+    # No parse error (the timestamp was valid).
+    assert _gauges(writer, M_PARSE_ERRORS) == []
+    # Enabled series IS still emitted at 0.0.
+    enabled = {g.labels["entity_id"]: g.value for g in _gauges(writer, M_AUTOMATION_ENABLED)}
+    assert enabled == {"automation.disabled_one": 0.0}
+
+
+async def test_unavailable_automation_with_last_triggered_emits_no_triggered_series() -> None:
+    """UNAVAILABLE automation with valid last_triggered -> no triggered series AND no
+    enabled series (unavailable is skipped by the enabled gate too). Locks the
+    '== on' (not '!= off') form of the gate."""
+    triggered = (datetime.now(UTC) - timedelta(seconds=60)).isoformat()
+    states = [
+        _automation_state("automation.unavailable_one", "unavailable", last_triggered=triggered)
+    ]
+    writer = InMemoryMetricsWriter()
+    ctx = _ctx(writer, _FakeHaStates(states))
+
+    await HaCadenceCollector().run(ctx)  # type: ignore[arg-type]
+
+    # No triggered series.
+    assert _gauges(writer, M_AUTOMATION_LAST_TRIGGERED) == []
+    # No parse error.
+    assert _gauges(writer, M_PARSE_ERRORS) == []
+    # No enabled series (unavailable is skipped by the on/off gate).
+    enabled_ids = {g.labels["entity_id"] for g in _gauges(writer, M_AUTOMATION_ENABLED)}
+    assert "automation.unavailable_one" not in enabled_ids
+
+
+async def test_disabled_automation_unparseable_last_triggered_still_counts_parse_error() -> None:
+    """DISABLED (state='off') automation with unparseable last_triggered ->
+    parse error IS counted even though the automation is disabled and emits no
+    triggered series. Locks 'parse-error counting is OUTSIDE the state gate'."""
+    states = [_automation_state("automation.disabled_bad", "off", last_triggered="not-a-date")]
+    writer = InMemoryMetricsWriter()
+    ctx = _ctx(writer, _FakeHaStates(states))
+
+    await HaCadenceCollector().run(ctx)  # type: ignore[arg-type]
+
+    # No triggered series (disabled + no valid timestamp).
+    assert _gauges(writer, M_AUTOMATION_LAST_TRIGGERED) == []
+    # Parse error IS incremented — the bad timestamp is counted regardless of enabled state.
+    errors = _gauges(writer, M_PARSE_ERRORS)
+    assert len(errors) == 1
+    assert errors[0].value == 1.0
+    assert errors[0].labels == {}
+    # Enabled series is 0.0 (off automations still appear in enabled).
+    enabled = {g.labels["entity_id"]: g.value for g in _gauges(writer, M_AUTOMATION_ENABLED)}
+    assert enabled == {"automation.disabled_bad": 0.0}
+
+
 async def test_script_last_triggered_emitted() -> None:
     """A script with last_triggered emits script_last_triggered_seconds, no enabled metric."""
     triggered = (datetime.now(UTC) - timedelta(seconds=45)).isoformat()
