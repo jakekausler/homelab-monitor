@@ -1,12 +1,12 @@
 # EPIC-005: Home Assistant integration (collector + dispatcher channel + bidirectional events + UI panel)
 
-## Status: Complete (33 / 33 Complete)
+## Status: In Progress (33 / 41 Complete)
 
-## Stages Counter: 33 / 33 Complete
+## Stages Counter: 33 / 41 Complete
 
-## Current Stage: — (EPIC-005 complete)
+## Current Stage: STAGE-005-034
 
-## Current Phase: — (EPIC-005 complete)
+## Current Phase: STAGE-005-034 Design (Not Started)
 
 ## Overview
 
@@ -123,6 +123,21 @@ Stages MUST be implemented in order. No parallelization. Each stage lands a sing
 | STAGE-005-031 | HA detail live-HA enrichment | ✓ Complete — Live-HA re-query layer for 027's detail endpoints: battery device (friendly name), update versions + release_url, repair summary — fields VM per-series can't carry (deferred from 027 D-DETAIL-VM-LABELS-PRESENT). Mirrors 029's live-HA machinery. |
 | STAGE-005-032 | HA config-entry state-distinction metric | ✓ Complete — Collector change: add a state label to ha_config_entry so VM can distinguish setup_error vs setup_retry (027 ships coarse "error" only). Keeps config-entry detail VM-sourced. Deferred from 027. |
 | STAGE-005-033 | Entities drill — render friendly_name (frontend) | ✓ Complete — Render the live-HA `friendly_name` (added to HaEntityRow by 031) in the 028 entities drill-list, falling back to entity_id when null. Deferred from 031 D-ENRICH-ENTITY-FRIENDLY-NAME. Frontend; 3a (Desktop + Mobile). |
+
+### Wave I — Audit-gap closure + dashboard readability (S34–S41)
+
+Appended after the EPIC-005 post-completion audit (2026-06-14): closes gaps where collectors/data were implemented but produced noise, were never surfaced, or where deferred alert exemplars can now be activated; plus a final interactive Grafana review. Flips the epic back to In Progress (33 → 41).
+
+| # | Stage | Theme |
+|---|---|---|
+| STAGE-005-034 | Cadence — skip disabled automations from last_triggered | Cadence collector fix: skip `state=="off"` (disabled) automations from `homelab_ha_automation_last_triggered_seconds` (keep `automation_enabled==0` for disablement detection); verify the script path; corrects the Grafana "Idle Automations" panel + unblocks clean idle data for E/F. Backend; 3a+3b. |
+| STAGE-005-035 | Updates drill — render versions + release link | Updates drill renders the `installed_version → latest_version` transition and links `release_url` (fields already on `HaUpdateRow` from 031, previously fetched-but-unrendered); mirrors the 033 render-the-already-present-field pattern. Frontend; 3a Desktop+Mobile. |
+| STAGE-005-036 | Repairs drill — render description + learn-more link | Repairs drill renders the free-text `description` and links `learn_more_url` (fields already on `HaRepairRow` from 031, previously fetched-but-unrendered). Frontend; 3a Desktop+Mobile. |
+| STAGE-005-037 | HA entity-registry fetch + exclude disabled/hidden (KEYSTONE) | Entity-registry WS fetch (`config/entity_registry/list`) + in-memory cache exposing `disabled_by`/`hidden_by`/`entity_category`; exclude disabled/hidden (optionally diagnostic/config) entities from `homelab_ha_entity_available` + z-score eligibility — removes the ~50% chronic-unavailability noise that blocks the GAP-F alerts. KEYSTONE for 039. Backend infra; 3a+3b. Soft-depends 034. |
+| STAGE-005-038 | Script-cadence Grafana panel + cadence API + Status widget | Surface script cadence beyond Grafana: add the missing `homelab_ha_script_last_triggered_seconds` Grafana panel (parity with automations), plus (Design may split off) a cadence detail endpoint + Status-tab idle/disabled automations+scripts widget/drill. Mixed; 3a+3b (+ Desktop+Mobile for the widget). Depends 034. |
+| STAGE-005-039 | Activate availability/cadence vmalert rules | Promote the deferred OPT-IN exemplars (HaEntityUnavailable, HaEntityStale, HaAutomationIdle, HaAutomationDisabled) from commented templates to active defaults where the now-filtered data makes them viable — per-rule activate-vs-keep-opt-in grounded in real measured firing counts. Config (vmalert); 3a+3b. Depends 037 + 034. |
+| STAGE-005-040 | Anomaly surface decision (UI or document Grafana-as-home) | Resolve the z-score/anomaly surface: add a minimal anomaly endpoint+UI, OR formally document Grafana ("Top Anomaly z-scores") as the intended home — closes the implemented-without-user-location gap by explicit decision. Lowest priority. Frontend-or-docs; refinement per decision. Soft-depends 037. |
+| STAGE-005-041 | Grafana dashboard review & readability pass (System + HA) — interactive | Interactive, user-driven pass to ensure EVERY metric is surfaced correctly + readably on BOTH the System/host-overview dashboard and the Home Assistant dashboard: inventory metric→panel coverage, propose+apply panel additions/edits/reorg, rebuild rig, iterate with the user until dual sign-off (System dashboard AND HA dashboard). Final observability polish. Depends 034–040. |
 
 ## Cross-stage acceptance criteria
 
