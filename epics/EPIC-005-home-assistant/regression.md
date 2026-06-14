@@ -245,3 +245,11 @@
 - Release link: `Release notes ↗` (U+2197 glyph) external link (`target="_blank" rel="noopener noreferrer"`) rendered ONLY when `release_url` is non-null. The entire secondary line is suppressed when there is no version text AND no `release_url` (no empty arrow, no crash).
 - Frontend-only: no backend / no metric / no OpenAPI change. The three fields are sourced from the live-HA-enriched STAGE-005-031 `/updates` endpoint (null when HA down or attribute absent).
 - Tests (`HaUpdatesDrill.test.tsx`): a fully-populated row renders `2.0.1 → 2.1.0` + a `Release notes` link with the correct href; an all-null row renders neither the arrow nor any link.
+
+## STAGE-005-036 — Repairs drill renders description + learn-more link (frontend secondary region)
+
+- HA Repairs drill: each repair row keeps its primary line (issue_id + domain + severity Badge) and gains a conditional secondary region below it: the `description` as a `line-clamp-2` muted text block (plain text — NOT `dangerouslySetInnerHTML`) and a `Learn more ↗` (U+2197) external link.
+- The `Learn more ↗` link sits on its OWN line below the clamped description (a flat sibling of the `<p>`, never nested inside it), so the 2-line clamp can never hide the link. Link is `target="_blank" rel="noopener noreferrer"`, hidden when `learn_more_url` is null.
+- Description renders only when non-null/non-whitespace (guard `row.description != null && row.description.trim() !== ''`); both fields degrade independently; when both are null the secondary region is absent and only the primary line renders.
+- Frontend-only: no backend / no metric / no OpenAPI change. `description` + `learn_more_url` are sourced from the live-HA-enriched STAGE-005-031 `/repairs` endpoint (null when HA down or the issue carries no such field); the never-logged privacy posture holds (render-only, no client logging).
+- Tests (`HaRepairsDrill.test.tsx`): a row with description + learn_more_url renders the text + a `Learn more` link with the correct href; an all-null row renders the primary line (issue_id + severity) with no description text and no link.
