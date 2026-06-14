@@ -37,6 +37,14 @@ from homelab_monitor.kernel.plugins.types import CollectorConfig
 # Helpers
 # ---------------------------------------------------------------------------
 
+# A FinishedAt anchor that is always recent relative to the current wall-clock,
+# so the reconciler's PRUNE phase (default 7-day retention) never ages out a
+# just-enriched row mid-tick. A hardcoded date here is a time-bomb: once the
+# 7-day window slides past it, every enrich+prune tick deletes its own row and
+# the read-back assertions see 0 rows. Keep this strictly within retention.
+_RECENT_FINISHED_AT: str = (datetime.now(UTC) - timedelta(hours=1)).isoformat()
+_RECENT_FINISHED_AT_2: str = (datetime.now(UTC) - timedelta(hours=1, seconds=1)).isoformat()
+
 
 def _ctx(
     repo: SqliteRepository,
@@ -152,7 +160,7 @@ async def test_crashed_container_enriched_and_counter_emitted(
         name="crashy",
         status="exited",
         exit_code=1,
-        finished_at="2026-06-07T00:00:00Z",
+        finished_at=_RECENT_FINISHED_AT,
     )
     await _seed_docker_container(
         repo,
@@ -204,7 +212,7 @@ async def test_second_tick_dedups(
         name="crashy",
         status="exited",
         exit_code=1,
-        finished_at="2026-06-07T00:00:00Z",
+        finished_at=_RECENT_FINISHED_AT,
     )
 
     vm = MemoryRetainingMetricsWriter()
@@ -256,7 +264,7 @@ async def test_degraded_vl_still_inserts_and_emits(
         name="crashy",
         status="exited",
         exit_code=1,
-        finished_at="2026-06-07T00:00:00Z",
+        finished_at=_RECENT_FINISHED_AT,
     )
 
     vm = MemoryRetainingMetricsWriter()
@@ -385,7 +393,7 @@ async def test_per_container_isolation(
         name="first-crash",
         status="exited",
         exit_code=1,
-        finished_at="2026-06-07T00:00:00Z",
+        finished_at=_RECENT_FINISHED_AT,
     )
     await _seed_docker_container(
         repo,
@@ -393,7 +401,7 @@ async def test_per_container_isolation(
         name="second-crash",
         status="exited",
         exit_code=2,
-        finished_at="2026-06-07T00:00:01Z",
+        finished_at=_RECENT_FINISHED_AT_2,
     )
 
     async with httpx.AsyncClient() as http:
@@ -449,7 +457,7 @@ async def test_prune_runs(
         name="new-crashy",
         status="exited",
         exit_code=1,
-        finished_at="2026-06-07T00:00:00Z",
+        finished_at=_RECENT_FINISHED_AT,
     )
 
     async with httpx.AsyncClient() as http:

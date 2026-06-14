@@ -2581,6 +2581,68 @@
         "title": "HTTPValidationError",
         "type": "object"
       },
+      "HaBatteryRow": {
+        "properties": {
+          "domain": {
+            "title": "Domain",
+            "type": "string"
+          },
+          "entity_id": {
+            "title": "Entity Id",
+            "type": "string"
+          },
+          "level": {
+            "title": "Level",
+            "type": "number"
+          }
+        },
+        "required": [
+          "entity_id",
+          "domain",
+          "level"
+        ],
+        "title": "HaBatteryRow",
+        "type": "object"
+      },
+      "HaBatteryRowsResponse": {
+        "description": "Low/critical battery HA entities (VM per-series).",
+        "properties": {
+          "batteries": {
+            "items": {
+              "$ref": "#/components/schemas/HaBatteryRow"
+            },
+            "title": "Batteries",
+            "type": "array"
+          },
+          "filtered_to": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Filtered To"
+          },
+          "returned": {
+            "title": "Returned",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "batteries",
+          "total",
+          "returned",
+          "filtered_to"
+        ],
+        "title": "HaBatteryRowsResponse",
+        "type": "object"
+      },
       "HaBatterySummary": {
         "properties": {
           "critical": {
@@ -2617,6 +2679,68 @@
         "title": "HaConfigEntriesSummary",
         "type": "object"
       },
+      "HaConfigEntryRow": {
+        "properties": {
+          "domain": {
+            "title": "Domain",
+            "type": "string"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "domain",
+          "title",
+          "state"
+        ],
+        "title": "HaConfigEntryRow",
+        "type": "object"
+      },
+      "HaConfigEntryRowsResponse": {
+        "description": "HA config entries in an error state (VM per-series, coarse state).",
+        "properties": {
+          "config_entries": {
+            "items": {
+              "$ref": "#/components/schemas/HaConfigEntryRow"
+            },
+            "title": "Config Entries",
+            "type": "array"
+          },
+          "filtered_to": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Filtered To"
+          },
+          "returned": {
+            "title": "Returned",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "config_entries",
+          "total",
+          "returned",
+          "filtered_to"
+        ],
+        "title": "HaConfigEntryRowsResponse",
+        "type": "object"
+      },
       "HaEntitiesSummary": {
         "properties": {
           "available": {
@@ -2638,6 +2762,135 @@
           "unavailable"
         ],
         "title": "HaEntitiesSummary",
+        "type": "object"
+      },
+      "HaEntityRow": {
+        "properties": {
+          "available": {
+            "title": "Available",
+            "type": "boolean"
+          },
+          "domain": {
+            "title": "Domain",
+            "type": "string"
+          },
+          "entity_id": {
+            "title": "Entity Id",
+            "type": "string"
+          },
+          "last_changed_age_seconds": {
+            "title": "Last Changed Age Seconds",
+            "type": "number"
+          }
+        },
+        "required": [
+          "entity_id",
+          "domain",
+          "available",
+          "last_changed_age_seconds"
+        ],
+        "title": "HaEntityRow",
+        "type": "object"
+      },
+      "HaEntityRowsResponse": {
+        "description": "Unavailable HA entities (VM per-series), capped to the stalest top-N.",
+        "properties": {
+          "entities": {
+            "items": {
+              "$ref": "#/components/schemas/HaEntityRow"
+            },
+            "title": "Entities",
+            "type": "array"
+          },
+          "filtered_to": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Filtered To"
+          },
+          "returned": {
+            "title": "Returned",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "entities",
+          "total",
+          "returned",
+          "filtered_to"
+        ],
+        "title": "HaEntityRowsResponse",
+        "type": "object"
+      },
+      "HaRepairRow": {
+        "properties": {
+          "domain": {
+            "title": "Domain",
+            "type": "string"
+          },
+          "issue_id": {
+            "title": "Issue Id",
+            "type": "string"
+          },
+          "severity": {
+            "title": "Severity",
+            "type": "string"
+          }
+        },
+        "required": [
+          "domain",
+          "issue_id",
+          "severity"
+        ],
+        "title": "HaRepairRow",
+        "type": "object"
+      },
+      "HaRepairRowsResponse": {
+        "description": "Open HA repair issues (VM per-series).",
+        "properties": {
+          "filtered_to": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Filtered To"
+          },
+          "repairs": {
+            "items": {
+              "$ref": "#/components/schemas/HaRepairRow"
+            },
+            "title": "Repairs",
+            "type": "array"
+          },
+          "returned": {
+            "title": "Returned",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "repairs",
+          "total",
+          "returned",
+          "filtered_to"
+        ],
+        "title": "HaRepairRowsResponse",
         "type": "object"
       },
       "HaSummaryResponse": {
@@ -2690,6 +2943,63 @@
           "last_seen"
         ],
         "title": "HaSummaryResponse",
+        "type": "object"
+      },
+      "HaUpdateRow": {
+        "properties": {
+          "entity_id": {
+            "title": "Entity Id",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "entity_id",
+          "title"
+        ],
+        "title": "HaUpdateRow",
+        "type": "object"
+      },
+      "HaUpdateRowsResponse": {
+        "description": "HA entities with a pending update (VM per-series).",
+        "properties": {
+          "filtered_to": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Filtered To"
+          },
+          "returned": {
+            "title": "Returned",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          },
+          "updates": {
+            "items": {
+              "$ref": "#/components/schemas/HaUpdateRow"
+            },
+            "title": "Updates",
+            "type": "array"
+          }
+        },
+        "required": [
+          "updates",
+          "total",
+          "returned",
+          "filtered_to"
+        ],
+        "title": "HaUpdateRowsResponse",
         "type": "object"
       },
       "HaUpdatesSummary": {
@@ -8618,6 +8928,160 @@
         ]
       }
     },
+    "/api/integrations/home-assistant/batteries": {
+      "get": {
+        "description": "Return low/critical-battery HA entities (VM per-series).\n\nAuth: cookie session required. CSRF NOT enforced on GET.\n\nSource: ``homelab_ha_battery_level < _BATTERY_LOW_CEIL``. Naturally bounded;\n``total`` == ``returned`` (no cap). Each sample's value_str is the battery\nlevel. VM failure -> 502.",
+        "operationId": "get_ha_batteries_api_integrations_home_assistant_batteries_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "filter",
+            "required": false,
+            "schema": {
+              "default": "low_or_critical",
+              "title": "Filter",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HaBatteryRowsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Ha Batteries",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/api/integrations/home-assistant/config-entries": {
+      "get": {
+        "description": "Return HA config entries in an error state (VM per-series, coarse state).\n\nAuth: cookie session required. CSRF NOT enforced on GET.\n\nSource: ``homelab_ha_config_entry_setup_error == 1``. ``state`` is the coarse\nliteral \"error\" \u2014 precise setup_error/setup_retry distinction is deferred to\nSTAGE-005-032. VM failure -> 502.",
+        "operationId": "get_ha_config_entries_api_integrations_home_assistant_config_entries_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "filter",
+            "required": false,
+            "schema": {
+              "default": "error",
+              "title": "Filter",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HaConfigEntryRowsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Ha Config Entries",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/api/integrations/home-assistant/entities": {
+      "get": {
+        "description": "Return UNAVAILABLE HA entities (VM per-series), stalest-first, capped.\n\nAuth: cookie session required. CSRF NOT enforced on GET.\n\nSource: ``homelab_ha_entity_available == 0`` joined per ``entity_id`` with\n``homelab_ha_entity_last_changed_seconds`` (the age). Ordered by age DESC and\ncapped to the top ``_ENTITIES_TOP_N``. ``total`` is the full unavailable count;\n``returned`` is after the cap. VM failure -> 502 (via vm_instant_query).\nOnly ``filter=unavailable`` is supported; the value is echoed in ``filtered_to``.",
+        "operationId": "get_ha_entities_api_integrations_home_assistant_entities_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "filter",
+            "required": false,
+            "schema": {
+              "default": "unavailable",
+              "title": "Filter",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HaEntityRowsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Ha Entities",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/api/integrations/home-assistant/repairs": {
+      "get": {
+        "description": "Return open HA repair issues (VM per-series).\n\nAuth: cookie session required. CSRF NOT enforced on GET.\n\nSource: ``homelab_ha_repair_issue == 1``. ``severity`` from the metric label.\nVM failure -> 502.",
+        "operationId": "get_ha_repairs_api_integrations_home_assistant_repairs_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HaRepairRowsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Ha Repairs",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
     "/api/integrations/home-assistant/summary": {
       "get": {
         "description": "Return HA panel summary counts from VictoriaMetrics instant queries.\n\nAuth: cookie session required. CSRF NOT enforced on GET.\n\nEach count defaults to 0 when its instant query returns an empty vector\n(``count(metric == 0)`` yields no sample when zero series match). Any VM\ntransport/query failure surfaces as 502 ``upstream_unavailable`` (via the\nshared ``vm_query`` helper) rather than a 200-with-zeros response.",
@@ -8635,6 +9099,28 @@
           }
         },
         "summary": "Get Ha Summary",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/api/integrations/home-assistant/updates": {
+      "get": {
+        "description": "Return HA entities with a pending update (VM per-series).\n\nAuth: cookie session required. CSRF NOT enforced on GET.\n\nSource: ``homelab_ha_update_available == 1``. ``title`` is read from the\nmetric's ``title`` label. VM failure -> 502.",
+        "operationId": "get_ha_updates_api_integrations_home_assistant_updates_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HaUpdateRowsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Ha Updates",
         "tags": [
           "integrations"
         ]
