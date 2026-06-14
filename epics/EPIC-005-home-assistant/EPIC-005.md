@@ -1,12 +1,12 @@
 # EPIC-005: Home Assistant integration (collector + dispatcher channel + bidirectional events + UI panel)
 
-## Status: In Progress (27 / 30 Complete)
+## Status: In Progress (28 / 32 Complete)
 
-## Stages Counter: 27 / 30 Complete
+## Stages Counter: 28 / 32 Complete
 
-## Current Stage: STAGE-005-027
+## Current Stage: STAGE-005-028
 
-## Current Phase: STAGE-005-027 Design (Not Started)
+## Current Phase: STAGE-005-028 Design (Not Started)
 
 ## Overview
 
@@ -106,7 +106,7 @@ Stages MUST be implemented in order. No parallelization. Each stage lands a sing
 | STAGE-005-024 | Updates + integration-status widgets | ✓ Complete — Updates-available list + config-entry/repairs/notifications summary. |
 | STAGE-005-025 | Embedded LogViewer | ✓ Complete — Scoped service:"homeassistant" via the EPIC-004 embedding contract; recent automation failures inline. (#20 inline) |
 | STAGE-005-026 | Grafana dashboard home-assistant.json | ✓ Complete — Default dashboard provisioned via deploy/grafana/dashboards/. |
-| STAGE-005-027 | HA entity + battery detail endpoints (drill-down backend) | GET /entities + /batteries returning per-entity/per-device rows (entity_id, domain, last-changed age, level) from VM per-series gauges; the deferred detail-endpoint split (021's D-PANEL-ENDPOINT-SPLIT). Backend; OpenAPI regen; 3a+3b. |
+| STAGE-005-027 | HA entity + battery detail endpoints (drill-down backend) | ✓ Complete — GET /entities + /batteries returning per-entity/per-device rows (entity_id, domain, last-changed age, level) from VM per-series gauges; the deferred detail-endpoint split (021's D-PANEL-ENDPOINT-SPLIT). Backend; OpenAPI regen; 3a+3b. |
 | STAGE-005-028 | Entity + battery drill-down widgets (frontend) | Consume 027 detail endpoints: drill-lists of the actual unavailable/stale entities + low/critical battery devices, added below 023's count tiles on the Health tab. Frontend; 3a (Desktop + Mobile). |
 | STAGE-005-029 | HA persistent-notification detail (live re-query + privacy + safe render) | Notification BODY list (title + safely-rendered message) on the Integration-status section; live HA re-query (NOT VM — bodies kept out of metrics per 012 privacy); privacy review + safe text render. Deferred from 024. Backend + frontend; 3a+3b. |
 
@@ -115,6 +115,13 @@ Stages MUST be implemented in order. No parallelization. Each stage lands a sing
 | # | Stage | Theme |
 |---|---|---|
 | STAGE-005-030 | Metrics page tabs (System + Home Assistant) | ✓ Complete — Route-based tabs on the Metrics screen: System tab (host-overview embed) + Home Assistant tab (home-assistant embed); wires the 026 dashboard into the app UI. |
+
+### Wave H — HA detail enrichment (deferred from S27, S31-S32)
+
+| # | Stage | Theme |
+|---|---|---|
+| STAGE-005-031 | HA detail live-HA enrichment | Live-HA re-query layer for 027's detail endpoints: battery device (friendly name), update versions + release_url, repair summary — fields VM per-series can't carry (deferred from 027 D-DETAIL-VM-LABELS-PRESENT). Mirrors 029's live-HA machinery. |
+| STAGE-005-032 | HA config-entry state-distinction metric | Collector change: add a state label to ha_config_entry so VM can distinguish setup_error vs setup_retry (027 ships coarse "error" only). Keeps config-entry detail VM-sourced. Deferred from 027. |
 
 ## Cross-stage acceptance criteria
 
