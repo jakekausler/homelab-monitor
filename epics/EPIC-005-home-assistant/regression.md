@@ -205,3 +205,11 @@
 ## STAGE-005-030 (Metrics page tabs — System + Home Assistant)
 
 - **STAGE-005-030 — Metrics page route-based tabs:** Navigate to the Metrics screen (`/metrics`) — it must redirect to `/metrics/system`. Confirm a tab bar with "System" and "Home Assistant" tabs. System tab embeds the host-overview Grafana dashboard; Home Assistant tab (`/metrics/home-assistant`) embeds the home-assistant dashboard. CRITICAL (regression from this stage's bug): confirm the iframe content is NOT clipped at the top — the full dashboard top row must be visible below the tab bar (the embed fills MetricsLayout's flex region via `h-full`, NOT a viewport calc). Confirm "Open in Grafana" works per tab and no console errors. (Note: tab switch reloads the iframe — lazy mount, expected.)
+
+## STAGE-005-031 — HA detail live-HA enrichment
+
+- The 027 detail endpoints now carry live-HA enrichment fields joined onto the VM-selected rows: `/batteries` → `device` (friendly name); `/updates` → `installed_version` / `latest_version` / `release_url`; `/entities` → `friendly_name`; `/repairs` → `description` + `learn_more_url`. VM still drives row SELECTION (enrichment never adds/removes/reorders rows).
+- Graceful degradation (load-bearing): HA-down (get_states/WS HaError) → enrichment fields null, VM rows + 200 still returned, NEVER 502. Per-row-not-found / attribute-missing/non-str → null. Only VM-down is 502.
+- PRIVACY: enriched values (device, friendly_name, description, learn_more_url, versions) must NEVER appear in container logs and the HA token must NEVER be logged. Re-verify: `docker logs homelab-monitor | grep -iE 'ha_token|bearer|eyJ'` → 0; grep a known friendly_name → 0.
+- Real-HA populated values confirmed: entities `friendly_name` (e.g. "Sliding Door") and batteries `device` (e.g. "Main Bathroom Toilet Motion Battery") populate from live get_states. NOTE stock HA `repairs/list_issues` has NO `summary` key — 031 reads the REAL `description` + `learn_more_url` (may be null per-issue; that's correct).
+- `/config-entries` is NOT enriched by 031 (precise state is STAGE-005-032) — confirm it still returns its error rows unchanged (no regression).
