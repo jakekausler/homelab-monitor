@@ -27,7 +27,10 @@ import time
 from datetime import UTC, datetime, timedelta
 from typing import ClassVar, Final
 
-from homelab_monitor.kernel.config import load_cardinality_caps_config
+from homelab_monitor.kernel.config import (
+    load_cardinality_caps_config,
+    load_ha_registry_config,
+)
 from homelab_monitor.kernel.ha.errors import HaError
 from homelab_monitor.kernel.metrics.cardinality import CappedEmitter
 from homelab_monitor.kernel.plugins.base import BaseCollector
@@ -100,6 +103,7 @@ class HaEntityAvailableCollector(BaseCollector):
 
         now = datetime.now(UTC)
         caps = load_cardinality_caps_config()
+        registry_cfg = load_ha_registry_config()
         available_cap = caps.cap_for(M_ENTITY_AVAILABLE)
         last_changed_cap = caps.cap_for(M_ENTITY_LAST_CHANGED_SECONDS)
 
@@ -110,6 +114,16 @@ class HaEntityAvailableCollector(BaseCollector):
         for state in result:
             domain = extract_domain(state.entity_id)
             if domain not in allow or domain in deny:
+                continue
+
+            # STAGE-005-037: drop registry-excluded (disabled/hidden/category)
+            # entities. Fail-open: no registry handle -> no exclusion. The
+            # ``continue`` precedes BOTH the available and last_changed appends,
+            # so an excluded entity emits NEITHER series.
+            registry = ctx.ha_registry
+            if registry is not None and registry.snapshot().is_excluded(
+                state.entity_id, registry_cfg
+            ):
                 continue
 
             labels = {"entity_id": state.entity_id, "domain": domain}

@@ -40,8 +40,10 @@ from typing import TYPE_CHECKING, ClassVar, Final
 
 from homelab_monitor.kernel.config import (
     AnomalyZscoreConfig,
+    HaRegistryConfig,
     load_anomaly_zscore_config,
     load_cardinality_caps_config,
+    load_ha_registry_config,
 )
 from homelab_monitor.kernel.ha.errors import HaError
 from homelab_monitor.kernel.metrics.cardinality import CappedEmitter
@@ -55,6 +57,7 @@ from homelab_monitor.plugins.collectors.integrations.homeassistant._shared impor
 
 if TYPE_CHECKING:
     from homelab_monitor.kernel.ha.client import HaState
+    from homelab_monitor.kernel.ha.entity_registry import RegistrySnapshot
 
 # Metric family name (referenced by both the cap lookup and the emit).
 M_ZSCORE: Final[str] = "homelab_ha_entity_value_zscore"
@@ -62,23 +65,28 @@ M_ZSCORE: Final[str] = "homelab_ha_entity_value_zscore"
 _STATE_CLASS_MEASUREMENT: Final[str] = "measurement"
 
 
-def _is_eligible(state: HaState, cfg: AnomalyZscoreConfig) -> bool:
-    """Return True when ``state`` should contribute a value to its rolling window.
+def _is_eligible(
+    state: HaState,
+    cfg: AnomalyZscoreConfig,
+    snapshot: RegistrySnapshot | None,
+    registry_cfg: HaRegistryConfig,
+) -> bool:
+    """Decide whether ``state`` is eligible for z-score scoring.
 
-    Precedence (excluded wins over everything; extra-include wins over the heuristic):
-      1. entity_id in ``excluded_entity_ids``      -> NOT eligible (hard exclude).
-      2. entity_id in ``extra_entity_ids``         -> eligible (force include).
-      3. state_class == "measurement" AND device_class in ``device_classes`` -> eligible.
-      4. otherwise                                 -> NOT eligible.
-
-    A parseable-float check is NOT done here — the caller does it after eligibility, so a
-    transiently-unavailable eligible sensor is skipped for the tick without leaving the
-    eligible set (it simply contributes no value that tick).
+    Precedence (LOCKED, STAGE-005-037):
+      0. ``extra_entity_ids`` force-include -> True FIRST (operator override wins
+         over the registry).
+      1. registry populated AND entity registry-excluded -> False (drop, consistent
+         with availability). Fail-open: a None / not-populated snapshot skips this.
+      2. ``excluded_entity_ids`` -> False (hard operator exclude).
+      3. measurement / device-class heuristic.
     """
-    if state.entity_id in cfg.excluded_entity_ids:
-        return False
     if state.entity_id in cfg.extra_entity_ids:
         return True
+    if snapshot is not None and snapshot.is_excluded(state.entity_id, registry_cfg):
+        return False
+    if state.entity_id in cfg.excluded_entity_ids:
+        return False
     if state.attributes.get("state_class") != _STATE_CLASS_MEASUREMENT:
         return False
     return state.attributes.get("device_class") in cfg.device_classes
@@ -134,12 +142,15 @@ class HaAnomalyZscoreCollector(BaseCollector):
             )
 
         cfg = load_anomaly_zscore_config()
+        registry_cfg = load_ha_registry_config()
+        registry = ctx.ha_registry
+        registry_snapshot = registry.snapshot() if registry is not None else None
         caps = load_cardinality_caps_config()
         zscore_cap = caps.cap_for(M_ZSCORE)
 
         observations: list[tuple[dict[str, str], float]] = []
         for state in result:
-            if not _is_eligible(state, cfg):
+            if not _is_eligible(state, cfg, registry_snapshot, registry_cfg):
                 continue
             value = parse_float_state(state.state)
             if value is None:

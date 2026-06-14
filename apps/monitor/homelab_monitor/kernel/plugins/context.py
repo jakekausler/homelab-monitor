@@ -8,6 +8,7 @@ optional field and therefore is declared last (slots-dataclass field-default rul
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import httpx
 from structlog import BoundLogger
@@ -22,14 +23,18 @@ from homelab_monitor.kernel.plugins.io import (
 from homelab_monitor.kernel.plugins.types import CollectorConfig
 from homelab_monitor.kernel.secrets.resolver import SyncSecretsResolver
 
+if TYPE_CHECKING:
+    from homelab_monitor.kernel.ha.entity_registry import HaEntityRegistryCache
+
 
 @dataclass(slots=True)
 class CollectorContext:
     """Runtime context handed to a collector's ``run`` coroutine.
 
-    All fields are required EXCEPT ``ha`` (None when the collector does not target
-    Home Assistant). Fields are listed in spec §5.2 order; ``ha`` is moved to the
-    end so the slots-dataclass field-default ordering rule is satisfied.
+    All fields are required EXCEPT ``ha`` and ``ha_registry`` (both None when the
+    collector does not target Home Assistant). Fields are listed in spec §5.2 order;
+    the two optional HA handles are moved to the end so the slots-dataclass
+    field-default ordering rule is satisfied.
     """
 
     config: CollectorConfig
@@ -42,3 +47,4 @@ class CollectorContext:
     secrets: SyncSecretsResolver
     log: BoundLogger
     ha: HomeAssistantClient | None = None
+    ha_registry: HaEntityRegistryCache | None = None

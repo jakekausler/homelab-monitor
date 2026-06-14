@@ -19,7 +19,11 @@ from structlog.stdlib import BoundLogger
 from homelab_monitor.kernel.alerts.repository import AlertRepository
 from homelab_monitor.kernel.api.sse import SseBroker
 from homelab_monitor.kernel.backup.service import BackupService
-from homelab_monitor.kernel.config import load_ha_config, load_tail_config
+from homelab_monitor.kernel.config import (
+    load_ha_config,
+    load_ha_registry_config,
+    load_tail_config,
+)
 from homelab_monitor.kernel.cron.repository import CronRepo
 from homelab_monitor.kernel.cron.run_repository import CronRunRepository
 from homelab_monitor.kernel.db.engine import dispose_engine, get_engine
@@ -32,6 +36,7 @@ from homelab_monitor.kernel.dispatch.channels.inproc_dashboard import InprocDash
 from homelab_monitor.kernel.dispatch.dispatcher import AlertDispatcher
 from homelab_monitor.kernel.events import TriggerContext
 from homelab_monitor.kernel.ha.client import HomeAssistantRestClient
+from homelab_monitor.kernel.ha.entity_registry import HaEntityRegistryCache
 from homelab_monitor.kernel.ha.websocket import HomeAssistantWebsocketClient
 from homelab_monitor.kernel.heartbeat.repository import HeartbeatRepo
 from homelab_monitor.kernel.logging import configure_logging
@@ -638,6 +643,20 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
     if ha_config.base_url:
         ha_ws_client.start_task()
     app.state.ha_ws_client = ha_ws_client
+    # 7a-reg. HA entity-registry cache (STAGE-005-037).
+    # Constructed AFTER the WS client (it sends config/entity_registry/list over
+    # it) and AFTER metrics_writer (it emits homelab_ha_entity_registry_* series).
+    # Excludes disabled/hidden/category entities from availability + z-score.
+    ha_registry_config = load_ha_registry_config()
+    ha_entity_registry = HaEntityRegistryCache(
+        ws_client=ha_ws_client,
+        config=ha_registry_config,
+        metrics_writer=metrics_writer,
+        log=log.bind(component="ha_entity_registry"),
+    )
+    if ha_config.base_url and ha_registry_config.enabled:
+        ha_entity_registry.start_task()
+    app.state.ha_entity_registry = ha_entity_registry
     in_memory_logs_writer = InMemoryLogsWriter()
     vl_url = os.environ.get("HOMELAB_MONITOR_VL_URL", "http://victorialogs:9428")
     vl_writer = VictoriaLogsWriter(
@@ -692,6 +711,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
             secrets=secrets_view,
             log=bound_log,  # pyright: ignore[reportArgumentType]
             ha=ha_client,
+            ha_registry=getattr(app.state, "ha_entity_registry", None),
         )
 
     # 7f. BuildSourcesLoader — STAGE-003-009 generic config (scope expansion).
@@ -1374,6 +1394,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
             image_events_task_handle.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await image_events_task_handle
+        # Stop HA entity-registry cache (STAGE-005-037) — before the WS client it uses.
+        ha_registry_handle = getattr(app.state, "ha_entity_registry", None)
+        if ha_registry_handle is not None:  # pragma: no branch -- always set in full boot
+            await ha_registry_handle.stop_task()
         # Stop HA WebSocket client (STAGE-005-002).
         ha_ws_handle = getattr(app.state, "ha_ws_client", None)
         if ha_ws_handle is not None:  # pragma: no branch -- always set in full boot

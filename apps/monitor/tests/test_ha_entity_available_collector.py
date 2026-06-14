@@ -41,6 +41,20 @@ class _FakeHaError:
         return HaError(reason="unreachable", message="get_states failed: down")
 
 
+class _FakeRegistry:
+    """Minimal stand-in for HaEntityRegistryCache: exposes snapshot().is_excluded."""
+
+    def __init__(self, excluded: set[str]) -> None:
+        self._excluded = excluded
+
+    def snapshot(self) -> _FakeRegistry:
+        return self
+
+    def is_excluded(self, entity_id: str, cfg: object) -> bool:
+        del cfg
+        return entity_id in self._excluded
+
+
 def _state(entity_id: str, state: str, last_changed: str) -> HaState:
     """Build an HaState with the three fields the collector reads (others empty/defaulted)."""
     return HaState(
@@ -58,10 +72,12 @@ def _ctx(
     *,
     allow: list[str] | None = None,
     deny: list[str] | None = None,
+    ha_registry: object = None,
 ) -> SimpleNamespace:
     """Build a partial CollectorContext as a SimpleNamespace.
 
-    Only the fields run() reads are populated: config (with optional ha_domains_*), vm, ha, log.
+    Only the fields run() reads are populated: config (with optional
+    ha_domains_*), vm, ha, ha_registry, log.
     Passed to .run() with `# type: ignore[arg-type]` (SimpleNamespace is not a real
     CollectorContext).
     """
@@ -74,6 +90,7 @@ def _ctx(
         config=SimpleNamespace(**config_kwargs),
         vm=writer,
         ha=ha,
+        ha_registry=ha_registry,
         log=structlog.get_logger().bind(collector="ha_entity_available"),
     )
 
@@ -377,3 +394,51 @@ async def test_empty_states_list_ok_no_per_entity_series() -> None:
     assert all(g.value == 0.0 for g in drop)
 
     assert _gauges(writer, M_ENTITY_PARSE_ERRORS) == []
+
+
+@pytest.mark.asyncio
+async def test_registry_excluded_entity_emits_no_series() -> None:
+    """A registry-excluded entity emits NEITHER available NOR last_changed."""
+    states = [
+        _state("light.kitchen", "on", "2026-06-14T12:00:00+00:00"),
+        _state("light.disabled_one", "on", "2026-06-14T12:00:00+00:00"),
+    ]
+    writer = InMemoryMetricsWriter()
+    ctx = _ctx(writer, _FakeHaStates(states), ha_registry=_FakeRegistry({"light.disabled_one"}))
+    result = await HaEntityAvailableCollector().run(ctx)  # type: ignore[arg-type]
+    assert result.ok is True
+    avail_ids = {g.labels["entity_id"] for g in _gauges(writer, "homelab_ha_entity_available")}
+    changed_ids = {
+        g.labels["entity_id"] for g in _gauges(writer, "homelab_ha_entity_last_changed_seconds")
+    }
+    assert avail_ids == {"light.kitchen"}
+    assert changed_ids == {"light.kitchen"}
+    assert "light.disabled_one" not in avail_ids
+    assert "light.disabled_one" not in changed_ids
+
+
+@pytest.mark.asyncio
+async def test_registry_none_is_fail_open() -> None:
+    """ha_registry=None -> no exclusion (current behavior preserved)."""
+    states = [_state("light.kitchen", "on", "2026-06-14T12:00:00+00:00")]
+    writer = InMemoryMetricsWriter()
+    ctx = _ctx(writer, _FakeHaStates(states), ha_registry=None)
+    result = await HaEntityAvailableCollector().run(ctx)  # type: ignore[arg-type]
+    assert result.ok is True
+    avail_ids = {g.labels["entity_id"] for g in _gauges(writer, "homelab_ha_entity_available")}
+    assert avail_ids == {"light.kitchen"}
+
+
+@pytest.mark.asyncio
+async def test_registry_excluding_nothing_is_unchanged() -> None:
+    """A populated registry that excludes nothing leaves behavior unchanged."""
+    states = [
+        _state("light.kitchen", "on", "2026-06-14T12:00:00+00:00"),
+        _state("light.den", "on", "2026-06-14T12:00:00+00:00"),
+    ]
+    writer = InMemoryMetricsWriter()
+    ctx = _ctx(writer, _FakeHaStates(states), ha_registry=_FakeRegistry(set()))
+    result = await HaEntityAvailableCollector().run(ctx)  # type: ignore[arg-type]
+    assert result.ok is True
+    avail_ids = {g.labels["entity_id"] for g in _gauges(writer, "homelab_ha_entity_available")}
+    assert avail_ids == {"light.kitchen", "light.den"}

@@ -1483,6 +1483,74 @@ def load_anomaly_zscore_config() -> AnomalyZscoreConfig:
     )
 
 
+@dataclass(frozen=True, slots=True)
+class HaRegistryConfig:
+    """Tunables for the HA entity-registry cache (STAGE-005-037).
+
+    Controls whether registry-driven exclusion is active and which classes of
+    entity are excluded from ``homelab_ha_entity_available`` /
+    ``homelab_ha_entity_last_changed_seconds`` and from z-score eligibility.
+
+    - ``enabled`` — master switch; when False the cache loop is not started and
+      no exclusion occurs (fail-open).
+    - ``exclude_disabled`` — drop entities whose registry ``disabled_by`` is set.
+    - ``exclude_hidden`` — drop entities whose registry ``hidden_by`` is set.
+    - ``exclude_categories`` — drop entities whose registry ``entity_category``
+      is in this set (lowercased; e.g. ``{"diagnostic", "config"}``).
+    - ``refresh_seconds`` — registry re-fetch interval (clamped >= 60).
+    """
+
+    enabled: bool = True
+    exclude_disabled: bool = True
+    exclude_hidden: bool = True
+    exclude_categories: frozenset[str] = frozenset()
+    refresh_seconds: int = 600
+
+
+def load_ha_registry_config() -> HaRegistryConfig:
+    """Load HaRegistryConfig from env (HOMELAB_MONITOR_HA_REGISTRY_*).
+
+    - ``HOMELAB_MONITOR_HA_REGISTRY_ENABLED`` (bool) -> ``enabled``.
+    - ``HOMELAB_MONITOR_HA_REGISTRY_EXCLUDE_DISABLED`` (bool) -> ``exclude_disabled``.
+    - ``HOMELAB_MONITOR_HA_REGISTRY_EXCLUDE_HIDDEN`` (bool) -> ``exclude_hidden``.
+    - ``HOMELAB_MONITOR_HA_REGISTRY_EXCLUDE_CATEGORIES`` (comma-separated,
+      lowercased/stripped) -> ``exclude_categories`` (empty -> empty frozenset).
+    - ``HOMELAB_MONITOR_HA_REGISTRY_REFRESH_SECONDS`` (int, clamped >= 60).
+    """
+    defaults = HaRegistryConfig()
+    enabled = defaults.enabled
+    exclude_disabled = defaults.exclude_disabled
+    exclude_hidden = defaults.exclude_hidden
+    exclude_categories = defaults.exclude_categories
+    refresh_seconds = defaults.refresh_seconds
+
+    raw_enabled = os.environ.get("HOMELAB_MONITOR_HA_REGISTRY_ENABLED")
+    if raw_enabled is not None:
+        enabled = raw_enabled.strip().lower() in ("1", "true", "yes")
+    raw_disabled = os.environ.get("HOMELAB_MONITOR_HA_REGISTRY_EXCLUDE_DISABLED")
+    if raw_disabled is not None:
+        exclude_disabled = raw_disabled.strip().lower() in ("1", "true", "yes")
+    raw_hidden = os.environ.get("HOMELAB_MONITOR_HA_REGISTRY_EXCLUDE_HIDDEN")
+    if raw_hidden is not None:
+        exclude_hidden = raw_hidden.strip().lower() in ("1", "true", "yes")
+    raw_cats = os.environ.get("HOMELAB_MONITOR_HA_REGISTRY_EXCLUDE_CATEGORIES")
+    if raw_cats is not None:
+        exclude_categories = frozenset(s.strip().lower() for s in raw_cats.split(",") if s.strip())
+    raw_refresh = os.environ.get("HOMELAB_MONITOR_HA_REGISTRY_REFRESH_SECONDS")
+    if raw_refresh is not None:
+        refresh_seconds = int(raw_refresh)
+
+    refresh_seconds = max(refresh_seconds, 60)
+
+    return HaRegistryConfig(
+        enabled=enabled,
+        exclude_disabled=exclude_disabled,
+        exclude_hidden=exclude_hidden,
+        exclude_categories=exclude_categories,
+        refresh_seconds=refresh_seconds,
+    )
+
+
 # ---------------------------------------------------------------------------
 # STAGE-005-016: HA safety binary-sensor + HA temp/humidity value collectors.
 # Both use the established frozen-dataclass + load_* env-loader pattern (read
@@ -1573,6 +1641,7 @@ __all__ = [
     "ErrorPattern",
     "ErrorRateOverride",
     "HaConfig",
+    "HaRegistryConfig",
     "HealthcheckLogConfig",
     "LogStreamBudgetConfig",
     "LogsConfig",
@@ -1595,6 +1664,7 @@ __all__ = [
     "load_disk_budget_config",
     "load_drain_config",
     "load_ha_config",
+    "load_ha_registry_config",
     "load_healthcheck_log_config",
     "load_log_stream_budget_config",
     "load_logs_config",

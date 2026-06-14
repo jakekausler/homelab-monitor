@@ -83,6 +83,10 @@ _INITIAL_BACKOFF: Final[float] = 1.0
 _COMMAND_TIMEOUT_SECONDS: Final[float] = 30.0
 _QUEUE_MAXSIZE: Final[int] = 256
 _WS_PATH: Final[str] = "/api/websocket"
+# HA's config/entity_registry/list response exceeds the websockets library 1 MiB
+# default frame limit on real installs (~1906 entities -> multi-MiB). Raise the
+# cap generously while keeping a finite OOM/DoS guard (do NOT use max_size=None).
+_WS_MAX_FRAME_BYTES: Final[int] = 32 * 1024 * 1024  # 32 MiB
 
 
 async def _default_connect(ws_url: str) -> _WsConnection:
@@ -95,7 +99,7 @@ async def _default_connect(ws_url: str) -> _WsConnection:
     """
     from websockets.asyncio.client import connect  # noqa: PLC0415
 
-    conn = await connect(ws_url)
+    conn = await connect(ws_url, max_size=_WS_MAX_FRAME_BYTES)
     return cast("_WsConnection", conn)
 
 

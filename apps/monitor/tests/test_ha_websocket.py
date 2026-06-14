@@ -22,6 +22,7 @@ from structlog.testing import capture_logs
 from homelab_monitor.kernel.ha import HomeAssistantWebsocketClient, Subscription
 from homelab_monitor.kernel.ha.errors import HaError
 from homelab_monitor.kernel.ha.websocket import (
+    _WS_MAX_FRAME_BYTES,  # pyright: ignore[reportPrivateUsage]
     _default_connect,  # pyright: ignore[reportPrivateUsage]
 )
 from homelab_monitor.kernel.plugins.io import InMemoryMetricsWriter
@@ -1071,8 +1072,9 @@ async def test_default_connect_uses_websockets_connect(monkeypatch: pytest.Monke
     runtime, so the returned object IS the sentinel that ``fake_connect`` returned.
     """
 
-    async def fake_connect(url: str) -> object:
+    async def fake_connect(url: str, *, max_size: int) -> object:
         assert url == _DEFAULT_CONNECT_URL
+        assert max_size == _WS_MAX_FRAME_BYTES
         return _FAKE_WS_SENTINEL
 
     import websockets.asyncio.client  # noqa: PLC0415

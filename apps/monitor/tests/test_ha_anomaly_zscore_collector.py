@@ -48,6 +48,20 @@ class _FakeHaError:
         return HaError(reason="unreachable", message="get_states failed: down")
 
 
+class _FakeRegistry:
+    """Minimal stand-in for HaEntityRegistryCache: exposes snapshot().is_excluded."""
+
+    def __init__(self, excluded: set[str]) -> None:
+        self._excluded = excluded
+
+    def snapshot(self) -> _FakeRegistry:
+        return self
+
+    def is_excluded(self, entity_id: str, cfg: object) -> bool:
+        del cfg
+        return entity_id in self._excluded
+
+
 def _sensor(
     entity_id: str,
     value: str,
@@ -76,12 +90,15 @@ def _plain(entity_id: str, value: str) -> HaState:
     )
 
 
-def _ctx(writer: InMemoryMetricsWriter, ha: object) -> SimpleNamespace:
+def _ctx(
+    writer: InMemoryMetricsWriter, ha: object, *, ha_registry: object = None
+) -> SimpleNamespace:
     """Partial CollectorContext as a SimpleNamespace (only fields run() reads)."""
     return SimpleNamespace(
         config=SimpleNamespace(),
         vm=writer,
         ha=ha,
+        ha_registry=ha_registry,
         log=structlog.get_logger().bind(collector="ha_anomaly_zscore"),
     )
 
@@ -380,3 +397,68 @@ async def test_window_resize_on_config_change(monkeypatch: pytest.MonkeyPatch) -
     assert result.ok is True
     # Still emits (>= min_samples=2 after resize keeps the last 2 values).
     assert len(_zscores(writer)) == 1
+
+
+@pytest.mark.asyncio
+async def test_registry_excluded_entity_not_eligible() -> None:
+    """A registry-excluded sensor never produces a z-score series."""
+    collector = HaAnomalyZscoreCollector()
+    registry = _FakeRegistry({"sensor.excluded"})
+    # Warm both sensors with stable values, then spike both on the final tick.
+    n = _MIN_SAMPLES + 1
+    ticks = [
+        [
+            _sensor("sensor.kept", str(_STABLE_VALUE)),
+            _sensor("sensor.excluded", str(_STABLE_VALUE)),
+        ]
+        for _ in range(n - 1)
+    ]
+    ticks.append(
+        [_sensor("sensor.kept", str(_SPIKE_VALUE)), _sensor("sensor.excluded", str(_SPIKE_VALUE))]
+    )
+    ha = _FakeHaMultiTick(ticks)
+    writer = InMemoryMetricsWriter()
+    for _ in range(n - 1):
+        await collector.run(_ctx(InMemoryMetricsWriter(), ha, ha_registry=registry))  # type: ignore[arg-type]
+    result = await collector.run(_ctx(writer, ha, ha_registry=registry))  # type: ignore[arg-type]
+    assert result.ok is True
+    z_ids = {g.labels["entity_id"] for g in _zscores(writer)}
+    assert "sensor.excluded" not in z_ids
+
+
+@pytest.mark.asyncio
+async def test_extra_entity_ids_overrides_registry_exclude(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """extra_entity_ids force-include wins over a registry exclusion."""
+    monkeypatch.setenv("HOMELAB_MONITOR_HA_ZSCORE_EXTRA_ENTITY_IDS", "sensor.forced")
+    collector = HaAnomalyZscoreCollector()
+    registry = _FakeRegistry({"sensor.forced"})  # registry says exclude...
+    n = _MIN_SAMPLES + 1
+    ticks = [[_sensor("sensor.forced", str(_STABLE_VALUE))] for _ in range(n - 1)]
+    ticks.append([_sensor("sensor.forced", str(_SPIKE_VALUE))])
+    ha = _FakeHaMultiTick(ticks)
+    writer = InMemoryMetricsWriter()
+    for _ in range(n - 1):
+        await collector.run(_ctx(InMemoryMetricsWriter(), ha, ha_registry=registry))  # type: ignore[arg-type]
+    result = await collector.run(_ctx(writer, ha, ha_registry=registry))  # type: ignore[arg-type]
+    assert result.ok is True
+    z_ids = {g.labels["entity_id"] for g in _zscores(writer)}
+    assert "sensor.forced" in z_ids  # ...but extra_entity_ids forces it in
+
+
+@pytest.mark.asyncio
+async def test_registry_none_no_exclusion() -> None:
+    """ha_registry=None -> registry exclusion is skipped (heuristic governs)."""
+    collector = HaAnomalyZscoreCollector()
+    n = _MIN_SAMPLES + 1
+    ticks = [[_sensor("sensor.cpu", str(_STABLE_VALUE))] for _ in range(n - 1)]
+    ticks.append([_sensor("sensor.cpu", str(_SPIKE_VALUE))])
+    ha = _FakeHaMultiTick(ticks)
+    writer = InMemoryMetricsWriter()
+    for _ in range(n - 1):
+        await collector.run(_ctx(InMemoryMetricsWriter(), ha, ha_registry=None))  # type: ignore[arg-type]
+    result = await collector.run(_ctx(writer, ha, ha_registry=None))  # type: ignore[arg-type]
+    assert result.ok is True
+    z_ids = {g.labels["entity_id"] for g in _zscores(writer)}
+    assert "sensor.cpu" in z_ids

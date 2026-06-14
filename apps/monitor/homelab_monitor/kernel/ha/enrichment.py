@@ -35,6 +35,21 @@ class RepairEnrichment:
     learn_more_url: str | None
 
 
+@dataclass(frozen=True, slots=True)
+class RegistryEntry:
+    """One HA entity-registry entry, reduced to the fields the cache needs.
+
+    All three classification fields degrade INDEPENDENTLY to ``None`` when HA
+    omits the key or supplies a non-``str`` value (mirrors ``attr_str``). The
+    cache NEVER logs ``entity_id`` and NEVER emits it as a metric label.
+    """
+
+    entity_id: str
+    disabled_by: str | None
+    hidden_by: str | None
+    entity_category: str | None
+
+
 def build_states_index(states: list[HaState]) -> dict[str, HaState]:
     """Index HA states by ``entity_id``.
 
@@ -123,5 +138,60 @@ def build_repairs_index(
         index[(domain, issue_id)] = RepairEnrichment(
             description=description,
             learn_more_url=learn_more_url,
+        )
+    return index
+
+
+def extract_registry(result: dict[str, object] | list[object]) -> list[object]:
+    """Defensively extract the entity-registry list from a ``send_command`` result.
+
+    HA's ``config/entity_registry/list`` returns a BARE list of entry dicts, but
+    this mirrors ``extract_issues``' defensiveness:
+    (a) bare list — return as-is.
+    (b) dict wrapping the list under ``entities`` — return that list.
+    (c) any other dict (e.g. the ``{}`` degenerate) — return [].
+    """
+    payload: object = result  # widen: runtime value may be a list.
+    if isinstance(payload, list):
+        return payload
+    candidate = payload.get("entities")
+    if isinstance(candidate, list):
+        return cast("list[object]", candidate)
+    return []
+
+
+def _entry_str(entry: dict[str, object], key: str) -> str | None:
+    """Return ``entry[key]`` only when it is a ``str``; else ``None``.
+
+    Mirrors ``attr_str`` for the untyped registry-entry dict: missing key or a
+    non-``str`` value (None, bool, dict, list, int) -> ``None``. Never coerces.
+    """
+    value = entry.get(key)
+    if isinstance(value, str):
+        return value
+    return None
+
+
+def build_registry_index(entries: list[object]) -> dict[str, RegistryEntry]:
+    """Index entity-registry entries by ``entity_id`` -> ``RegistryEntry``.
+
+    Skips non-dict entries and entries missing a non-empty ``entity_id`` (str).
+    ``disabled_by`` / ``hidden_by`` / ``entity_category`` are each read via the
+    isinstance-guarded ``_entry_str`` (non-str or missing -> ``None``). Later
+    entries win on a duplicate ``entity_id`` (last-write).
+    """
+    index: dict[str, RegistryEntry] = {}
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        entry_dict = cast("dict[str, object]", entry)
+        entity_id = _entry_str(entry_dict, "entity_id")
+        if not entity_id:
+            continue
+        index[entity_id] = RegistryEntry(
+            entity_id=entity_id,
+            disabled_by=_entry_str(entry_dict, "disabled_by"),
+            hidden_by=_entry_str(entry_dict, "hidden_by"),
+            entity_category=_entry_str(entry_dict, "entity_category"),
         )
     return index
