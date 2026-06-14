@@ -263,3 +263,10 @@
 - FAIL-OPEN: when the registry snapshot is not populated (fetch never succeeded / HA down), NO exclusion is applied — the metric is never silently blinded. Exclusion is gated on `snapshot.is_populated`.
 - PRIVACY: registry entity_ids/names are NEVER emitted as metric labels or logged (the 3 self-metrics carry only a `result` label on the fetch counter). Guarded by a sentinel test.
 - Config `HOMELAB_MONITOR_HA_REGISTRY_*` (enabled kill-switch default true; exclude_disabled/exclude_hidden default true; exclude_categories default empty; refresh_seconds clamp ≥60).
+
+## STAGE-005-038 — Script-cadence Grafana panels (parity with automation cadence)
+
+- `deploy/grafana/dashboards/home-assistant.json` gains two panels in the "Automation & Script Cadence" row (renamed from "Automation Cadence"): "Idle Scripts (>24h)" (stat, `count(homelab_ha_script_last_triggered_seconds > 86400)`, panel id=21) and "Oldest-Triggered Scripts" (timeseries, `topk(10, homelab_ha_script_last_triggered_seconds)`, legend `{{entity_id}}`, panel id=22). With the rig up, query VM (`homelab-vm`:8428): `count(homelab_ha_script_last_triggered_seconds)` must be a positive count (~19 on this HA) and `topk(10, ...)` must return series with real age-in-seconds values + a populated `entity_id` label.
+- The two new panels sit at gridPos y=40 (stat x=0 w=6 h=4; timeseries x=6 w=12 h=8); the "Anomalies & Collector Health" row (id=18) and its children (id=19 "Top Anomaly z-scores", id=20 "Collector Run Health") were shifted +8 (row y=48, children y=49) to stay contiguous and non-overlapping. The dashboard JSON must remain valid (22 panels; `jq . deploy/grafana/dashboards/home-assistant.json` parses).
+- Grafana re-provisions the bind-mounted dashboards dir every 30s (`updateIntervalSeconds: 30`, `allowUiUpdates: false`) — editing the JSON hot-reloads with NO container restart; confirm no provisioning errors in `docker logs homelab-grafana` for the home-assistant dashboard.
+- Config/Grafana-only: NO backend / metric / API / OpenAPI / frontend change. The in-app cadence API + Status-tab widget are STAGE-005-042 (split off in 038 Design via D-CADENCE-SURFACE-SPLIT).
