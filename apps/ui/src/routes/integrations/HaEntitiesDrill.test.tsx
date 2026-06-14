@@ -41,7 +41,7 @@ function makeResult(
 }
 
 describe('HaEntitiesDrill', () => {
-  it('renders entity rows with entity_id, domain, and age', () => {
+  it('renders entity rows with entity_id as primary and suppresses secondary line when friendly_name is null', () => {
     vi.mocked(useHomeAssistantEntities).mockReturnValue(
       makeResult({
         data: {
@@ -64,7 +64,34 @@ describe('HaEntitiesDrill', () => {
     )
     render(<HaEntitiesDrill />)
     expect(screen.getByText('sensor.kitchen')).toBeInTheDocument()
-    expect(screen.getByText('sensor')).toBeInTheDocument()
+    expect(screen.queryByText('sensor')).not.toBeInTheDocument()
+    expect(screen.getByText('2h ago')).toBeInTheDocument()
+  })
+
+  it('renders friendly_name as primary and shows entity_id · domain secondary line when friendly_name is set', () => {
+    vi.mocked(useHomeAssistantEntities).mockReturnValue(
+      makeResult({
+        data: {
+          entities: [
+            {
+              entity_id: 'sensor.kitchen',
+              domain: 'sensor',
+              available: false,
+              last_changed_age_seconds: 7200,
+              friendly_name: 'Kitchen Sensor',
+            },
+          ],
+          filtered_to: 'unavailable',
+          returned: 1,
+          total: 1,
+        },
+        isSuccess: true,
+        status: 'success',
+      }),
+    )
+    render(<HaEntitiesDrill />)
+    expect(screen.getByText('Kitchen Sensor')).toBeInTheDocument()
+    expect(screen.getByText('sensor.kitchen · sensor')).toBeInTheDocument()
     expect(screen.getByText('2h ago')).toBeInTheDocument()
   })
 
