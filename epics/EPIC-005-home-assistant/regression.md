@@ -196,6 +196,12 @@
 - Logs tab + Metrics tabs still show a single internal scroll (no new outer scrollbar) — confirms the scroll fix did not affect the iframe/LogViewer tabs.
 - Each drill-list shows its own loading / empty / error / 502 state independently (5 independent queries).
 
+## STAGE-005-029 — HA persistent-notification detail (live re-query + safe render)
+- HA Status tab: a "Notifications" section lists current HA persistent notifications as cards (title, relative timestamp from created_at, wrapped multi-line message body) or "No notifications" when empty.
+- The notification message + title render as TEXT-ONLY, ESCAPED — a body containing `<script>`/`<img onerror>`/`[x](javascript:...)`/markdown must appear as LITERAL text, never as DOM/HTML (no `dangerouslySetInnerHTML`). Regression guard for the safe-render contract.
+- Backend `GET /api/integrations/home-assistant/notifications` live-queries HA over WS (NOT VM), requires a session (401 without), and maps any HaError → 502 (including auth → 502, NOT 401).
+- PRIVACY: notification bodies + titles must NEVER appear in container logs and the HA token must NEVER be logged. Re-verify via `docker logs homelab-monitor | grep -iE 'ha_token|bearer|eyJ'` → 0 and a body-substring grep → 0.
+
 ## STAGE-005-030 (Metrics page tabs — System + Home Assistant)
 
 - **STAGE-005-030 — Metrics page route-based tabs:** Navigate to the Metrics screen (`/metrics`) — it must redirect to `/metrics/system`. Confirm a tab bar with "System" and "Home Assistant" tabs. System tab embeds the host-overview Grafana dashboard; Home Assistant tab (`/metrics/home-assistant`) embeds the home-assistant dashboard. CRITICAL (regression from this stage's bug): confirm the iframe content is NOT clipped at the top — the full dashboard top row must be visible below the tab bar (the embed fills MetricsLayout's flex region via `h-full`, NOT a viewport calc). Confirm "Open in Grafana" works per tab and no console errors. (Note: tab switch reloads the iframe — lazy mount, expected.)
