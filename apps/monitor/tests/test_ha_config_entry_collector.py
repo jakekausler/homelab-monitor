@@ -85,8 +85,10 @@ async def test_loaded_state_emits_loaded_1_error_0() -> None:
     assert len(error) == 1
     assert loaded[0].value == 1.0
     assert loaded[0].labels == {"domain": "hue", "title": "Philips Hue"}
+    assert "state" not in loaded[0].labels  # loaded family stays {domain,title}
     assert error[0].value == 0.0
-    assert error[0].labels == {"domain": "hue", "title": "Philips Hue"}
+    # Error family now carries the precise `state` even on a value-0 (loaded) row.
+    assert error[0].labels == {"domain": "hue", "title": "Philips Hue", "state": "loaded"}
 
 
 @pytest.mark.parametrize(
@@ -104,6 +106,9 @@ async def test_error_states_emit_loaded_0_error_1(state: str) -> None:
     error = _gauges(writer, M_CONFIG_ENTRY_SETUP_ERROR)
     assert loaded[0].value == 0.0
     assert error[0].value == 1.0
+    # STAGE-005-032: error family carries the precise state on value-1 rows.
+    assert error[0].labels["state"] == state
+    assert "state" not in loaded[0].labels  # loaded family unchanged
 
 
 @pytest.mark.parametrize(
@@ -121,6 +126,9 @@ async def test_neutral_states_emit_both_zero(state: str) -> None:
     error = _gauges(writer, M_CONFIG_ENTRY_SETUP_ERROR)
     assert loaded[0].value == 0.0
     assert error[0].value == 0.0
+    # D-CFGSTATE-LABEL-SCOPE: state label present even when the error value is 0.0.
+    assert error[0].labels["state"] == state
+    assert "state" not in loaded[0].labels  # loaded family unchanged
 
 
 # --- label defaulting / skipping ---

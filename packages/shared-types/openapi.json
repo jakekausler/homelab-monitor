@@ -9127,7 +9127,7 @@
     },
     "/api/integrations/home-assistant/config-entries": {
       "get": {
-        "description": "Return HA config entries in an error state (VM per-series, coarse state).\n\nAuth: cookie session required. CSRF NOT enforced on GET.\n\nSource: ``homelab_ha_config_entry_setup_error == 1``. ``state`` is the coarse\nliteral \"error\" \u2014 precise setup_error/setup_retry distinction is deferred to\nSTAGE-005-032. VM failure -> 502.",
+        "description": "Return HA config entries in an error state (VM per-series, precise state).\n\nAuth: cookie session required. CSRF NOT enforced on GET.\n\nSource: ``homelab_ha_config_entry_setup_error == 1``. ``state`` is the precise\nHA ConfigEntryState read from the series' ``state`` label (STAGE-005-032),\nfalling back to \"error\" for pre-migration series with no ``state`` label.\nVM failure -> 502.",
         "operationId": "get_ha_config_entries_api_integrations_home_assistant_config_entries_get",
         "parameters": [
           {

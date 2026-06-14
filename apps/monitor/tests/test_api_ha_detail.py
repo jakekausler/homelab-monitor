@@ -583,12 +583,12 @@ async def test_updates_requires_session(authenticated_client: AsyncClient) -> No
 
 
 @pytest.mark.asyncio
-async def test_config_entries_coarse_error_state(
+async def test_config_entries_falls_back_to_error_without_state_label(
     authenticated_client: AsyncClient,
     httpx_mock: HTTPXMock,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Config-entries: state is always 'error' (coarse; precise state deferred)."""
+    """Config-entries: pre-migration series with NO state label -> state 'error'."""
     monkeypatch.setenv("HOMELAB_MONITOR_VM_URL", _VM_URL)
     responses = {
         "homelab_ha_config_entry_setup_error == 1": _series_response(
@@ -615,6 +615,37 @@ async def test_config_entries_coarse_error_state(
     assert body["config_entries"][0]["state"] == "error"
     assert body["config_entries"][1]["domain"] == "zwave"
     assert body["config_entries"][1]["state"] == "error"
+
+
+@pytest.mark.asyncio
+async def test_config_entries_precise_state_from_label(
+    authenticated_client: AsyncClient,
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Config-entries: precise state read from the VM `state` label (STAGE-005-032)."""
+    monkeypatch.setenv("HOMELAB_MONITOR_VM_URL", _VM_URL)
+    responses = {
+        "homelab_ha_config_entry_setup_error == 1": _series_response(
+            [
+                ({"domain": "hue", "title": "Philips Hue", "state": "setup_retry"}, "1"),
+                ({"domain": "zwave", "title": "Z-Wave", "state": "setup_error"}, "1"),
+            ]
+        ),
+    }
+    httpx_mock.add_callback(
+        _callback_for(responses),
+        url=_VM_QUERY_RE,
+        method="GET",
+        is_reusable=True,
+    )
+    resp = await authenticated_client.get("/api/integrations/home-assistant/config-entries")
+    assert resp.status_code == _HTTP_OK
+    body = resp.json()
+    assert body["config_entries"][0]["domain"] == "hue"
+    assert body["config_entries"][0]["state"] == "setup_retry"
+    assert body["config_entries"][1]["domain"] == "zwave"
+    assert body["config_entries"][1]["state"] == "setup_error"
 
 
 @pytest.mark.asyncio

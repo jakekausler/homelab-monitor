@@ -6,8 +6,10 @@ subscription — see Design D-WS-TO-METRIC-BRIDGE) and emits two cardinality-cap
 1/0 gauge families per config entry:
 
 - ``homelab_ha_config_entry_loaded{domain, title}`` — 1.0 iff ``state == "loaded"``.
-- ``homelab_ha_config_entry_setup_error{domain, title}`` — 1.0 iff state is one of
-  ``setup_error`` / ``setup_retry`` / ``migration_error`` / ``failed_unload``.
+- ``homelab_ha_config_entry_setup_error{domain, title, state}`` — 1.0 iff state is
+  one of ``setup_error`` / ``setup_retry`` / ``migration_error`` / ``failed_unload``.
+  The ``state`` label carries the precise HA ConfigEntryState on BOTH value-1 and
+  value-0 rows (STAGE-005-032); the ``loaded`` family stays ``{domain, title}``.
 
 All other states (``not_loaded`` / ``setup_in_progress`` / unknown) yield (0.0, 0.0)
 for both families. The ``reason`` field is panel-only and is NEVER emitted as a label.
@@ -167,9 +169,12 @@ class HaConfigEntryCollector(BaseCollector):
             labels = _entry_labels(entry)
             if labels is None:
                 continue
-            loaded_val, error_val = _state_gauges(_entry_state(entry))
+            state = _entry_state(entry)
+            loaded_val, error_val = _state_gauges(state)
             loaded_obs.append((labels, loaded_val))
-            error_obs.append((labels, error_val))
+            # D-CFGSTATE-LABEL-SCOPE: the error family carries the precise `state`
+            # on EVERY row (value-1 AND value-0); the loaded family stays bare.
+            error_obs.append(({**labels, "state": state}, error_val))
 
         caps = load_cardinality_caps_config()
         loaded_cap = caps.cap_for(M_CONFIG_ENTRY_LOADED)

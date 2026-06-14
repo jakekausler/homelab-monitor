@@ -36,7 +36,7 @@
 #   homelab_ha_update_available{entity_id,title}         1/0
 #   homelab_ha_automation_last_triggered_seconds{entity_id}
 #   homelab_ha_automation_enabled{entity_id}             1/0
-#   homelab_ha_config_entry_setup_error{domain,title}    1/0
+#   homelab_ha_config_entry_setup_error{domain,title,state}    1/0
 #
 # Test counterpart: deploy/vmalert/metrics/__tests__/home-assistant.tests.yaml
 # (forward-compatible static fixture; see that file's header for the manual runner).
@@ -73,7 +73,7 @@ groups:
           target_kind: container
           integration: home_assistant
         annotations:
-          summary: "HA config entry in error: {{ $labels.title }} ({{ $labels.domain }})"
+          summary: "HA config entry in error ({{ $labels.state }}): {{ $labels.title }} ({{ $labels.domain }})"
           description: >-
             Config entry {{ $labels.title }} (domain {{ $labels.domain }}) has been
             in a setup-error state for at least 5 minutes. This is the persistent-

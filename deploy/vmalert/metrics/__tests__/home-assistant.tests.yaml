@@ -45,10 +45,10 @@ tests:
         exp_alerts: []
 
   # === HaConfigEntryError (for: 5m) ===
-  # FIRE: setup_error==1 held past 5m. Asserts passthrough domain/title labels.
+  # FIRE: setup_error==1 held past 5m. Asserts passthrough domain/title/state labels (STAGE-005-032).
   - interval: 30s
     input_series:
-      - series: 'homelab_ha_config_entry_setup_error{domain="zwave_js",title="Z-Wave JS"}'
+      - series: 'homelab_ha_config_entry_setup_error{domain="zwave_js",title="Z-Wave JS",state="setup_error"}'
         values: '1+0x20'
     alert_rule_test:
       - eval_time: 6m
@@ -61,8 +61,9 @@ tests:
               integration: home_assistant
               domain: zwave_js
               title: Z-Wave JS
+              state: setup_error
             exp_annotations:
-              summary: "HA config entry in error: Z-Wave JS (zwave_js)"
+              summary: "HA config entry in error (setup_error): Z-Wave JS (zwave_js)"
 
   # NO-FIRE: setup_error==0.
   - interval: 30s

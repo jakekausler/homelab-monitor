@@ -231,8 +231,10 @@ class HaConfigEntryRow(BaseModel):
 
     domain: str
     title: str
-    # `state` is the COARSE literal "error" — VM cannot distinguish setup_error vs
-    # setup_retry. SCAFFOLDING: precise state deferred to STAGE-005-032.
+    # Precise HA ConfigEntryState (setup_error / setup_retry / migration_error /
+    # failed_unload) sourced from the `state` VM label on
+    # homelab_ha_config_entry_setup_error (STAGE-005-032). Falls back to "error"
+    # for pre-migration series that predate the label.
     state: str
 
 
@@ -570,13 +572,14 @@ async def get_ha_config_entries(
     http_client: Annotated[httpx.AsyncClient, Depends(get_http_client)],
     filter: Annotated[str, Query()] = _FILTER_ERROR,
 ) -> HaConfigEntryRowsResponse:
-    """Return HA config entries in an error state (VM per-series, coarse state).
+    """Return HA config entries in an error state (VM per-series, precise state).
 
     Auth: cookie session required. CSRF NOT enforced on GET.
 
-    Source: ``homelab_ha_config_entry_setup_error == 1``. ``state`` is the coarse
-    literal "error" — precise setup_error/setup_retry distinction is deferred to
-    STAGE-005-032. VM failure -> 502.
+    Source: ``homelab_ha_config_entry_setup_error == 1``. ``state`` is the precise
+    HA ConfigEntryState read from the series' ``state`` label (STAGE-005-032),
+    falling back to "error" for pre-migration series with no ``state`` label.
+    VM failure -> 502.
     """
     samples = await vm_instant_query(http_client, vm_url, _Q_CONFIG_ENTRY_ERROR_SERIES)
     rows: list[HaConfigEntryRow] = []
@@ -588,7 +591,9 @@ async def get_ha_config_entries(
             HaConfigEntryRow(
                 domain=domain,
                 title=s.labels.get("title", ""),
-                state=_FILTER_ERROR,
+                # Precise state from the VM label; fall back to the coarse "error"
+                # for pre-migration series that lack a `state` label.
+                state=s.labels.get("state", _FILTER_ERROR),
             )
         )
     return HaConfigEntryRowsResponse(
