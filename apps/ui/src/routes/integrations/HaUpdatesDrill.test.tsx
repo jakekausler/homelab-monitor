@@ -66,6 +66,88 @@ describe('HaUpdatesDrill', () => {
     expect(screen.getByText('Router firmware 2.1')).toBeInTheDocument()
   })
 
+  it('renders the version transition and release link', () => {
+    vi.mocked(useHomeAssistantUpdates).mockReturnValue(
+      makeResult({
+        data: {
+          updates: [
+            {
+              entity_id: 'update.router',
+              title: 'Router firmware',
+              installed_version: '2.0.1',
+              latest_version: '2.1.0',
+              release_url: 'https://example.com/notes',
+            },
+          ],
+          filtered_to: null,
+          returned: 1,
+          total: 1,
+        },
+        isSuccess: true,
+        status: 'success',
+      }),
+    )
+    render(<HaUpdatesDrill />)
+    expect(screen.getByText('2.0.1 → 2.1.0')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /release notes/i })).toHaveAttribute(
+      'href',
+      'https://example.com/notes',
+    )
+  })
+
+  it('renders only the present version with no arrow when one side is null', () => {
+    vi.mocked(useHomeAssistantUpdates).mockReturnValue(
+      makeResult({
+        data: {
+          updates: [
+            {
+              entity_id: 'update.router',
+              title: 'Router firmware',
+              installed_version: null,
+              latest_version: '2.1.0',
+              release_url: null,
+            },
+          ],
+          filtered_to: null,
+          returned: 1,
+          total: 1,
+        },
+        isSuccess: true,
+        status: 'success',
+      }),
+    )
+    render(<HaUpdatesDrill />)
+    expect(screen.getByText('2.1.0')).toBeInTheDocument()
+    expect(screen.queryByText(/→/)).not.toBeInTheDocument()
+  })
+
+  it('renders neither arrow nor link when version fields and release_url are null', () => {
+    vi.mocked(useHomeAssistantUpdates).mockReturnValue(
+      makeResult({
+        data: {
+          updates: [
+            {
+              entity_id: 'update.x',
+              title: 'Thing',
+              installed_version: null,
+              latest_version: null,
+              release_url: null,
+            },
+          ],
+          filtered_to: null,
+          returned: 1,
+          total: 1,
+        },
+        isSuccess: true,
+        status: 'success',
+      }),
+    )
+    render(<HaUpdatesDrill />)
+    expect(screen.getByText('Thing')).toBeInTheDocument()
+    expect(screen.queryByRole('link')).toBeNull()
+    expect(screen.queryByText(/→/)).not.toBeInTheDocument()
+  })
+
   it('falls back to entity_id when the title is empty', () => {
     vi.mocked(useHomeAssistantUpdates).mockReturnValue(
       makeResult({
