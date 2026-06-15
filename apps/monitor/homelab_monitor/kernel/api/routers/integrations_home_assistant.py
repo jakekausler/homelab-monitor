@@ -99,6 +99,20 @@ _Q_REPAIR_ISSUE_SERIES = "homelab_ha_repair_issue == 1"
 # Cardinality cap for the entities endpoint (~984 unavailable possible).
 _ENTITIES_TOP_N = 100
 
+# STAGE-005-042: HA cadence (idle/disabled automations + idle scripts).
+# homelab_ha_automation_enabled is the AUTHORITATIVE automation universe (0/1 gauge,
+# ~80 series). *_last_triggered_seconds series are absent when never triggered.
+# There is NO script_enabled metric — script_last_triggered IS the script universe;
+# never-run scripts have no series and are therefore invisible to this endpoint.
+_Q_AUTOMATION_ENABLED = "homelab_ha_automation_enabled"
+_Q_AUTOMATION_LAST_TRIGGERED = "homelab_ha_automation_last_triggered_seconds"
+_Q_SCRIPT_LAST_TRIGGERED = "homelab_ha_script_last_triggered_seconds"
+
+# Idle threshold: a row is "idle" when last-triggered age exceeds this many seconds.
+_CADENCE_IDLE_SECONDS = 86400.0
+# Cap mirrors _ENTITIES_TOP_N.
+_CADENCE_TOP_N = 100
+
 # Default filter literals echoed back in `filtered_to`.
 _FILTER_UNAVAILABLE = "unavailable"
 _FILTER_LOW_OR_CRITICAL = "low_or_critical"
@@ -178,6 +192,41 @@ class HaEntityRowsResponse(BaseModel):
     entities: list[HaEntityRow]
     total: int
     returned: int
+    filtered_to: str | None
+
+
+class HaCadenceAutomationRow(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    entity_id: str
+    enabled: bool
+    # None = never triggered (no last_triggered series for this automation).
+    last_triggered_age_seconds: float | None
+    # Enriched from live get_states(); None when HA is down or attr absent.
+    friendly_name: str | None
+
+
+class HaCadenceScriptRow(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    entity_id: str
+    # None = never triggered. (Script universe = the last_triggered series only;
+    # never-run scripts have no series and are invisible.)
+    last_triggered_age_seconds: float | None
+    friendly_name: str | None
+
+
+class HaCadenceResponse(BaseModel):
+    """Idle/disabled HA automations + idle (>24h) HA scripts (VM per-series)."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    automations: list[HaCadenceAutomationRow]
+    scripts: list[HaCadenceScriptRow]
+    automations_total: int
+    automations_returned: int
+    scripts_total: int
+    scripts_returned: int
     filtered_to: str | None
 
 
@@ -474,6 +523,123 @@ async def get_ha_entities(
         total=total,
         returned=len(capped),
         filtered_to=filter,
+    )
+
+
+@router.get("/cadence", response_model=HaCadenceResponse)
+async def get_ha_cadence(
+    _user: Annotated[User, Depends(require_session())],
+    vm_url: Annotated[str, Depends(get_vm_url)],
+    http_client: Annotated[httpx.AsyncClient, Depends(get_http_client)],
+    ha_client: Annotated[HomeAssistantRestClient, Depends(get_ha_client)],
+) -> HaCadenceResponse:
+    """Return idle-or-disabled HA automations and idle (>24h) HA scripts.
+
+    Auth: cookie session required. CSRF NOT enforced on GET.
+
+    AUTOMATIONS: the universe is ``homelab_ha_automation_enabled`` (0/1 gauge).
+    A row is INCLUDED iff it is ENABLED AND (never triggered (no
+    ``homelab_ha_automation_last_triggered_seconds`` series) OR its trigger age
+    exceeds 24h). Disabled automations are EXCLUDED entirely.
+    Never-triggered counts as idle and sorts FIRST.
+
+    SCRIPTS: the universe IS ``homelab_ha_script_last_triggered_seconds`` (there
+    is no script-enabled metric). A row is INCLUDED iff its trigger age exceeds
+    24h. Never-run scripts have NO series and are therefore invisible here.
+
+    Both collections are sorted most-idle-first (None age first, then age DESC)
+    and capped to ``_CADENCE_TOP_N``. ``*_total`` is the pre-cap filtered count;
+    ``*_returned`` is the post-cap count. VM failure -> 502 (via vm_instant_query).
+
+    Each row is enriched with ``friendly_name`` from a single live ``get_states()``.
+    HA-down / row-absent / attribute-missing -> ``friendly_name`` is None; the VM
+    rows + 200 are ALWAYS preserved (HA failure is never a 502).
+    """
+    enabled_samples, automation_age_samples, script_age_samples = await asyncio.gather(
+        vm_instant_query(http_client, vm_url, _Q_AUTOMATION_ENABLED),
+        vm_instant_query(http_client, vm_url, _Q_AUTOMATION_LAST_TRIGGERED),
+        vm_instant_query(http_client, vm_url, _Q_SCRIPT_LAST_TRIGGERED),
+    )
+
+    # entity_id -> automation trigger age (seconds). Absent -> never triggered.
+    automation_age_by_entity: dict[str, float] = {}
+    for s in automation_age_samples:
+        entity_id = s.labels.get("entity_id", "")
+        age = _sample_float(s)
+        if entity_id and age is not None:
+            automation_age_by_entity[entity_id] = age
+
+    # Live-HA enrichment snapshot (one bulk call). HaError -> empty index -> all
+    # friendly_name None; never raises, never a 502.
+    states_index = await _ha_states_index(ha_client)
+
+    # AUTOMATIONS: iterate the enabled-gauge universe.
+    automations: list[HaCadenceAutomationRow] = []
+    for s in enabled_samples:
+        entity_id = s.labels.get("entity_id", "")
+        if not entity_id:
+            continue
+        enabled = _sample_float(s) == 1.0
+        age = automation_age_by_entity.get(entity_id)
+        # idle-or-disabled: disabled, never-triggered, or stale >24h.
+        if (not enabled) or (age is not None and age <= _CADENCE_IDLE_SECONDS):
+            continue
+        automations.append(
+            HaCadenceAutomationRow(
+                entity_id=entity_id,
+                enabled=enabled,
+                last_triggered_age_seconds=age,
+                friendly_name=attr_str(states_index.get(entity_id), "friendly_name"),
+            )
+        )
+
+    # SCRIPTS: the last-triggered series IS the universe.
+    scripts: list[HaCadenceScriptRow] = []
+    for s in script_age_samples:
+        entity_id = s.labels.get("entity_id", "")
+        if not entity_id:
+            continue
+        age = _sample_float(s)
+        if age is None or age <= _CADENCE_IDLE_SECONDS:
+            continue
+        scripts.append(
+            HaCadenceScriptRow(
+                entity_id=entity_id,
+                last_triggered_age_seconds=age,
+                friendly_name=attr_str(states_index.get(entity_id), "friendly_name"),
+            )
+        )
+
+    # Most-idle-first: None (never triggered) sorts ahead of all real ages; among
+    # non-None ages, larger age (more idle) sorts first.
+    # Key (age is not None, -(age or 0)): False<True -> None rows first; then
+    # -age ascending == age descending. (Confirmed correct.)
+    automations.sort(
+        key=lambda r: (
+            r.last_triggered_age_seconds is not None,
+            -(r.last_triggered_age_seconds or 0.0),
+        )
+    )
+    scripts.sort(
+        key=lambda r: (
+            r.last_triggered_age_seconds is not None,
+            -(r.last_triggered_age_seconds or 0.0),
+        )
+    )
+
+    automations_total = len(automations)
+    scripts_total = len(scripts)
+    capped_automations = automations[:_CADENCE_TOP_N]
+    capped_scripts = scripts[:_CADENCE_TOP_N]
+
+    return HaCadenceResponse(
+        automations=capped_automations,
+        scripts=capped_scripts,
+        automations_total=automations_total,
+        automations_returned=len(capped_automations),
+        scripts_total=scripts_total,
+        scripts_returned=len(capped_scripts),
+        filtered_to="idle_24h",
     )
 
 

@@ -11,6 +11,7 @@ type HaUpdateRowsResponse = components['schemas']['HaUpdateRowsResponse']
 type HaConfigEntryRowsResponse = components['schemas']['HaConfigEntryRowsResponse']
 type HaRepairRowsResponse = components['schemas']['HaRepairRowsResponse']
 type HaNotificationsResponse = components['schemas']['HaNotificationsResponse']
+type HaCadenceResponse = components['schemas']['HaCadenceResponse']
 
 export const haQueryKeys = {
   summary: ['integrations', 'home-assistant', 'summary'] as const,
@@ -21,6 +22,7 @@ export const haQueryKeys = {
     ['integrations', 'home-assistant', 'config-entries', filter] as const,
   repairs: ['integrations', 'home-assistant', 'repairs'] as const,
   notifications: ['integrations', 'home-assistant', 'notifications'] as const,
+  cadence: ['integrations', 'home-assistant', 'cadence'] as const,
 }
 
 const REFETCH_INTERVAL_MS = 30_000
@@ -109,6 +111,17 @@ export function useHomeAssistantNotifications(): UseQueryResult<HaNotificationsR
     queryFn: async () => {
       const result = await apiClient.GET('/api/integrations/home-assistant/notifications', {})
       return unwrap<HaNotificationsResponse>(result)
+    },
+    refetchInterval: REFETCH_INTERVAL_MS,
+  })
+}
+
+export function useHomeAssistantCadence(): UseQueryResult<HaCadenceResponse, ApiError> {
+  return useQuery({
+    queryKey: haQueryKeys.cadence,
+    queryFn: async () => {
+      const result = await apiClient.GET('/api/integrations/home-assistant/cadence', {})
+      return unwrap<HaCadenceResponse>(result)
     },
     refetchInterval: REFETCH_INTERVAL_MS,
   })

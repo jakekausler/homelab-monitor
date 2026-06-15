@@ -4,6 +4,8 @@ import { ErrorDisplay } from '@/components/ErrorDisplay'
 
 import { useHomeAssistantSummary } from '@/api/home_assistant'
 
+import { HaCadenceAutomationsDrill } from './HaCadenceAutomationsDrill'
+import { HaCadenceScriptsDrill } from './HaCadenceScriptsDrill'
 import { HaConfigEntriesDrill } from './HaConfigEntriesDrill'
 import { HaIntegrationStatusWidget } from './HaIntegrationStatusWidget'
 import { HaNotificationsDrill } from './HaNotificationsDrill'
@@ -63,6 +65,14 @@ export function HomeAssistantStatusTab(): JSX.Element {
             </PanelSection>
             <PanelSection title="Notifications">
               <HaNotificationsDrill />
+            </PanelSection>
+          </div>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <PanelSection title="Idle automations">
+              <HaCadenceAutomationsDrill />
+            </PanelSection>
+            <PanelSection title="Idle scripts">
+              <HaCadenceScriptsDrill />
             </PanelSection>
           </div>
         </>

@@ -28,3 +28,7 @@ export type HaRepairRowsResponse = components['schemas']['HaRepairRowsResponse']
 
 export type HaNotificationRow = components['schemas']['HaNotificationRow']
 export type HaNotificationsResponse = components['schemas']['HaNotificationsResponse']
+
+export type HaCadenceAutomationRow = components['schemas']['HaCadenceAutomationRow']
+export type HaCadenceScriptRow = components['schemas']['HaCadenceScriptRow']
+export type HaCadenceResponse = components['schemas']['HaCadenceResponse']

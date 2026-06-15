@@ -1345,3 +1345,204 @@ async def test_enriched_values_never_logged(
         serialized = json.dumps(event)
         assert device_sentinel not in serialized
         assert description_sentinel not in serialized
+
+
+# --- STAGE-005-042: /cadence endpoint -------------------------------------
+
+_CADENCE_PATH = "/api/integrations/home-assistant/cadence"
+_AGE_FRESH = "3600"  # 1h, within 24h -> not idle
+_AGE_IDLE = "90000"  # 25h, idle
+
+
+@pytest.mark.asyncio
+async def test_cadence_excludes_disabled_automation(
+    authenticated_client: AsyncClient,
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A disabled automation is excluded even when it would otherwise be idle."""
+    monkeypatch.setenv("HOMELAB_MONITOR_VM_URL", _VM_URL)
+    responses = {
+        "homelab_ha_automation_enabled": _series_response(
+            [({"entity_id": "automation.lights"}, "0")]  # disabled
+        ),
+        "homelab_ha_automation_last_triggered_seconds": _series_response(
+            [({"entity_id": "automation.lights"}, _AGE_FRESH)]  # recent
+        ),
+        "homelab_ha_script_last_triggered_seconds": _empty_vector_response(),
+    }
+    httpx_mock.add_callback(
+        _callback_for(responses), url=_VM_QUERY_RE, method="GET", is_reusable=True
+    )
+    resp = await authenticated_client.get(_CADENCE_PATH)
+    assert resp.status_code == _HTTP_OK
+    body = resp.json()
+    assert body["automations_total"] == 0
+    assert body["automations_returned"] == 0
+    assert body["automations"] == []
+    assert body["filtered_to"] == "idle_24h"
+
+
+@pytest.mark.asyncio
+async def test_cadence_includes_never_triggered_automation_first(
+    authenticated_client: AsyncClient,
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Never-triggered automation (enabled, absent from last_triggered) is included,
+    age None, and sorts FIRST."""
+    monkeypatch.setenv("HOMELAB_MONITOR_VM_URL", _VM_URL)
+    responses = {
+        "homelab_ha_automation_enabled": _series_response(
+            [
+                ({"entity_id": "automation.never"}, "1"),  # enabled, never triggered
+                ({"entity_id": "automation.idle"}, "1"),  # enabled, idle 25h
+                ({}, "1"),  # empty entity_id -> skipped by guard
+            ]
+        ),
+        "homelab_ha_automation_last_triggered_seconds": _series_response(
+            [
+                ({"entity_id": "automation.idle"}, _AGE_IDLE),
+                ({}, "5000"),  # empty entity_id -> skipped in age dict
+            ]
+        ),
+        "homelab_ha_script_last_triggered_seconds": _series_response(
+            [({}, "90000")]  # empty entity_id -> skipped by scripts guard
+        ),
+    }
+    httpx_mock.add_callback(
+        _callback_for(responses), url=_VM_QUERY_RE, method="GET", is_reusable=True
+    )
+    resp = await authenticated_client.get(_CADENCE_PATH)
+    assert resp.status_code == _HTTP_OK
+    body = resp.json()
+    assert body["automations_total"] == 2  # noqa: PLR2004
+    # never-triggered sorts first (None ahead of real ages).
+    assert body["automations"][0]["entity_id"] == "automation.never"
+    assert body["automations"][0]["last_triggered_age_seconds"] is None
+    assert body["automations"][1]["entity_id"] == "automation.idle"
+    assert body["automations"][1]["last_triggered_age_seconds"] == 90000.0  # noqa: PLR2004
+
+
+@pytest.mark.asyncio
+async def test_cadence_excludes_enabled_recently_triggered_automation(
+    authenticated_client: AsyncClient,
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Enabled + triggered <24h -> EXCLUDED."""
+    monkeypatch.setenv("HOMELAB_MONITOR_VM_URL", _VM_URL)
+    responses = {
+        "homelab_ha_automation_enabled": _series_response(
+            [({"entity_id": "automation.active"}, "1")]
+        ),
+        "homelab_ha_automation_last_triggered_seconds": _series_response(
+            [({"entity_id": "automation.active"}, _AGE_FRESH)]
+        ),
+        "homelab_ha_script_last_triggered_seconds": _empty_vector_response(),
+    }
+    httpx_mock.add_callback(
+        _callback_for(responses), url=_VM_QUERY_RE, method="GET", is_reusable=True
+    )
+    resp = await authenticated_client.get(_CADENCE_PATH)
+    assert resp.status_code == _HTTP_OK
+    body = resp.json()
+    assert body["automations_total"] == 0
+    assert body["automations_returned"] == 0
+    assert body["automations"] == []
+
+
+@pytest.mark.asyncio
+async def test_cadence_scripts_idle_included_recent_excluded(
+    authenticated_client: AsyncClient,
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Script idle >24h included; script triggered <24h excluded."""
+    monkeypatch.setenv("HOMELAB_MONITOR_VM_URL", _VM_URL)
+    responses = {
+        "homelab_ha_automation_enabled": _empty_vector_response(),
+        "homelab_ha_automation_last_triggered_seconds": _empty_vector_response(),
+        "homelab_ha_script_last_triggered_seconds": _series_response(
+            [
+                ({"entity_id": "script.idle"}, _AGE_IDLE),
+                ({"entity_id": "script.recent"}, _AGE_FRESH),
+            ]
+        ),
+    }
+    httpx_mock.add_callback(
+        _callback_for(responses), url=_VM_QUERY_RE, method="GET", is_reusable=True
+    )
+    resp = await authenticated_client.get(_CADENCE_PATH)
+    assert resp.status_code == _HTTP_OK
+    body = resp.json()
+    assert body["scripts_total"] == 1
+    assert body["scripts_returned"] == 1
+    assert len(body["scripts"]) == 1
+    assert body["scripts"][0]["entity_id"] == "script.idle"
+    assert body["scripts"][0]["last_triggered_age_seconds"] == 90000.0  # noqa: PLR2004
+
+
+@pytest.mark.asyncio
+async def test_cadence_enriches_friendly_name(
+    authenticated_client: AsyncClient,
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """friendly_name filled from live get_states() for both collections."""
+    monkeypatch.setenv("HOMELAB_MONITOR_VM_URL", _VM_URL)
+    responses = {
+        "homelab_ha_automation_enabled": _series_response([({"entity_id": "automation.x"}, "1")]),
+        "homelab_ha_automation_last_triggered_seconds": _empty_vector_response(),
+        "homelab_ha_script_last_triggered_seconds": _series_response(
+            [({"entity_id": "script.y"}, _AGE_IDLE)]
+        ),
+    }
+    httpx_mock.add_callback(
+        _callback_for(responses), url=_VM_QUERY_RE, method="GET", is_reusable=True
+    )
+    _set_rest(
+        authenticated_client,
+        [
+            _state("automation.x", {"friendly_name": "Morning Routine"}),
+            _state("script.y", {"friendly_name": "Backup Job"}),
+        ],
+    )
+    resp = await authenticated_client.get(_CADENCE_PATH)
+    assert resp.status_code == _HTTP_OK
+    body = resp.json()
+    assert body["automations"][0]["friendly_name"] == "Morning Routine"
+    assert body["scripts"][0]["friendly_name"] == "Backup Job"
+
+
+@pytest.mark.asyncio
+async def test_cadence_ha_down_friendly_name_none_still_200(
+    authenticated_client: AsyncClient,
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """HA down (default _FakeRest -> HaError) -> friendly_name None but still 200 + rows."""
+    monkeypatch.setenv("HOMELAB_MONITOR_VM_URL", _VM_URL)
+    responses = {
+        "homelab_ha_automation_enabled": _series_response([({"entity_id": "automation.x"}, "1")]),
+        "homelab_ha_automation_last_triggered_seconds": _empty_vector_response(),
+        "homelab_ha_script_last_triggered_seconds": _empty_vector_response(),
+    }
+    httpx_mock.add_callback(
+        _callback_for(responses), url=_VM_QUERY_RE, method="GET", is_reusable=True
+    )
+    # No _set_rest override -> autouse fixture leaves HA as HaError.
+    resp = await authenticated_client.get(_CADENCE_PATH)
+    assert resp.status_code == _HTTP_OK
+    body = resp.json()
+    assert body["automations"][0]["friendly_name"] is None
+    assert body["automations"][0]["entity_id"] == "automation.x"
+
+
+@pytest.mark.asyncio
+async def test_cadence_requires_session(authenticated_client: AsyncClient) -> None:
+    """Missing session -> 401."""
+    app = cast(FastAPI, authenticated_client._transport.app)  # pyright: ignore[reportAttributeAccessIssue, reportPrivateUsage, reportUnknownMemberType]
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as anon:
+        resp = await anon.get(_CADENCE_PATH)
+    assert resp.status_code == _HTTP_UNAUTH

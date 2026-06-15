@@ -2673,6 +2673,142 @@
         "title": "HaBatterySummary",
         "type": "object"
       },
+      "HaCadenceAutomationRow": {
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "entity_id": {
+            "title": "Entity Id",
+            "type": "string"
+          },
+          "friendly_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Friendly Name"
+          },
+          "last_triggered_age_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Triggered Age Seconds"
+          }
+        },
+        "required": [
+          "entity_id",
+          "enabled",
+          "last_triggered_age_seconds",
+          "friendly_name"
+        ],
+        "title": "HaCadenceAutomationRow",
+        "type": "object"
+      },
+      "HaCadenceResponse": {
+        "description": "Idle/disabled HA automations + idle (>24h) HA scripts (VM per-series).",
+        "properties": {
+          "automations": {
+            "items": {
+              "$ref": "#/components/schemas/HaCadenceAutomationRow"
+            },
+            "title": "Automations",
+            "type": "array"
+          },
+          "automations_returned": {
+            "title": "Automations Returned",
+            "type": "integer"
+          },
+          "automations_total": {
+            "title": "Automations Total",
+            "type": "integer"
+          },
+          "filtered_to": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Filtered To"
+          },
+          "scripts": {
+            "items": {
+              "$ref": "#/components/schemas/HaCadenceScriptRow"
+            },
+            "title": "Scripts",
+            "type": "array"
+          },
+          "scripts_returned": {
+            "title": "Scripts Returned",
+            "type": "integer"
+          },
+          "scripts_total": {
+            "title": "Scripts Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "automations",
+          "scripts",
+          "automations_total",
+          "automations_returned",
+          "scripts_total",
+          "scripts_returned",
+          "filtered_to"
+        ],
+        "title": "HaCadenceResponse",
+        "type": "object"
+      },
+      "HaCadenceScriptRow": {
+        "properties": {
+          "entity_id": {
+            "title": "Entity Id",
+            "type": "string"
+          },
+          "friendly_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Friendly Name"
+          },
+          "last_triggered_age_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Triggered Age Seconds"
+          }
+        },
+        "required": [
+          "entity_id",
+          "last_triggered_age_seconds",
+          "friendly_name"
+        ],
+        "title": "HaCadenceScriptRow",
+        "type": "object"
+      },
       "HaConfigEntriesSummary": {
         "properties": {
           "error": {
@@ -9120,6 +9256,28 @@
           }
         },
         "summary": "Get Ha Batteries",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/api/integrations/home-assistant/cadence": {
+      "get": {
+        "description": "Return idle-or-disabled HA automations and idle (>24h) HA scripts.\n\nAuth: cookie session required. CSRF NOT enforced on GET.\n\nAUTOMATIONS: the universe is ``homelab_ha_automation_enabled`` (0/1 gauge).\nA row is INCLUDED iff it is ENABLED AND (never triggered (no\n``homelab_ha_automation_last_triggered_seconds`` series) OR its trigger age\nexceeds 24h). Disabled automations are EXCLUDED entirely.\nNever-triggered counts as idle and sorts FIRST.\n\nSCRIPTS: the universe IS ``homelab_ha_script_last_triggered_seconds`` (there\nis no script-enabled metric). A row is INCLUDED iff its trigger age exceeds\n24h. Never-run scripts have NO series and are therefore invisible here.\n\nBoth collections are sorted most-idle-first (None age first, then age DESC)\nand capped to ``_CADENCE_TOP_N``. ``*_total`` is the pre-cap filtered count;\n``*_returned`` is the post-cap count. VM failure -> 502 (via vm_instant_query).\n\nEach row is enriched with ``friendly_name`` from a single live ``get_states()``.\nHA-down / row-absent / attribute-missing -> ``friendly_name`` is None; the VM\nrows + 200 are ALWAYS preserved (HA failure is never a 502).",
+        "operationId": "get_ha_cadence_api_integrations_home_assistant_cadence_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HaCadenceResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Ha Cadence",
         "tags": [
           "integrations"
         ]
