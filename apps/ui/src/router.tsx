@@ -14,6 +14,10 @@ import { LoginPage } from '@/routes/Login'
 import { OverviewPage } from '@/routes/Overview'
 import { MetricsLayout } from '@/routes/metrics/MetricsLayout'
 import { MetricsSystemTab } from '@/routes/metrics/MetricsSystemTab'
+import { MetricsContainersTab } from '@/routes/metrics/MetricsContainersTab'
+import { MetricsCollectorsTab } from '@/routes/metrics/MetricsCollectorsTab'
+import { MetricsHeartbeatsTab } from '@/routes/metrics/MetricsHeartbeatsTab'
+import { MetricsStorageLogsTab } from '@/routes/metrics/MetricsStorageLogsTab'
 import { MetricsHomeAssistantTab } from '@/routes/metrics/MetricsHomeAssistantTab'
 import { InventoryLayout } from '@/routes/inventory/Inventory'
 import { CronsListPage } from '@/routes/inventory/CronsList'
@@ -145,6 +149,30 @@ const metricsSystemRoute = createRoute({
   getParentRoute: () => metricsLayoutRoute,
   path: 'system',
   component: MetricsSystemTab,
+})
+
+const metricsContainersRoute = createRoute({
+  getParentRoute: () => metricsLayoutRoute,
+  path: 'containers',
+  component: MetricsContainersTab,
+})
+
+const metricsCollectorsRoute = createRoute({
+  getParentRoute: () => metricsLayoutRoute,
+  path: 'collectors',
+  component: MetricsCollectorsTab,
+})
+
+const metricsHeartbeatsRoute = createRoute({
+  getParentRoute: () => metricsLayoutRoute,
+  path: 'heartbeats',
+  component: MetricsHeartbeatsTab,
+})
+
+const metricsStorageLogsRoute = createRoute({
+  getParentRoute: () => metricsLayoutRoute,
+  path: 'storage-logs',
+  component: MetricsStorageLogsTab,
 })
 
 const metricsHomeAssistantRoute = createRoute({
@@ -498,6 +526,10 @@ const routeTree = rootRoute.addChildren([
     metricsLayoutRoute.addChildren([
       metricsIndexRoute,
       metricsSystemRoute,
+      metricsContainersRoute,
+      metricsCollectorsRoute,
+      metricsHeartbeatsRoute,
+      metricsStorageLogsRoute,
       metricsHomeAssistantRoute,
     ]),
     logsLayoutRoute.addChildren([

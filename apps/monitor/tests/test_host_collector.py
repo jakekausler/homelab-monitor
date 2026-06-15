@@ -221,7 +221,9 @@ async def test_run_emits_disk_metrics_with_extra_mountpoints(
 ) -> None:
     _patch_psutil_happy_path(monkeypatch)
     writer = MemoryRetainingMetricsWriter()
-    cfg = HostCollectorConfig(name="host", extra_mountpoints=["/rackstation"])
+    cfg = HostCollectorConfig(
+        name="host", extra_mountpoints=["/rackstation"], disk_mountpoint_relabel={}
+    )
     await HostCollector().run(_ctx(writer, cfg))
     disk = [e for e in writer.snapshot() if e.name == "homelab_host_disk_bytes"]
     mountpoints = {e.labels["mountpoint"] for e in disk}
@@ -243,7 +245,7 @@ async def test_run_excludes_loop_and_ram_devices(monkeypatch: pytest.MonkeyPatch
 
     monkeypatch.setattr(host_module.psutil, "disk_partitions", _parts)
     writer = MemoryRetainingMetricsWriter()
-    cfg = HostCollectorConfig(name="host", extra_mountpoints=[])
+    cfg = HostCollectorConfig(name="host", extra_mountpoints=[], disk_mountpoint_relabel={})
     await HostCollector().run(_ctx(writer, cfg))
     disk_mps = {
         e.labels["mountpoint"] for e in writer.snapshot() if e.name == "homelab_host_disk_bytes"
@@ -331,7 +333,9 @@ async def test_run_handles_extra_mountpoint_unmounted(
 
     monkeypatch.setattr(host_module.psutil, "disk_usage", _disk_usage)
     writer = MemoryRetainingMetricsWriter()
-    cfg = HostCollectorConfig(name="host", extra_mountpoints=["/rackstation"])
+    cfg = HostCollectorConfig(
+        name="host", extra_mountpoints=["/rackstation"], disk_mountpoint_relabel={}
+    )
     result = await HostCollector().run(_ctx(writer, cfg))
     # No error: silent skip on extra_mountpoints unmounted
     assert result.ok
@@ -344,7 +348,7 @@ async def test_run_handles_extra_mountpoint_unmounted(
 async def test_run_returns_ok_true_when_all_succeed(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_psutil_happy_path(monkeypatch)
     writer = MemoryRetainingMetricsWriter()
-    cfg = HostCollectorConfig(name="host")
+    cfg = HostCollectorConfig(name="host", disk_mountpoint_relabel={})
     result = await HostCollector().run(_ctx(writer, cfg))
     assert result.ok is True
     assert result.errors == []
@@ -366,7 +370,7 @@ async def test_run_returns_ok_false_when_disk_usage_partition_fails(
 
     monkeypatch.setattr(host_module.psutil, "disk_usage", _disk_usage_raise)
     writer = MemoryRetainingMetricsWriter()
-    cfg = HostCollectorConfig(name="host", extra_mountpoints=[])
+    cfg = HostCollectorConfig(name="host", extra_mountpoints=[], disk_mountpoint_relabel={})
     result = await HostCollector().run(_ctx(writer, cfg))
     assert result.ok is False
     assert any("disk_usage" in e for e in result.errors)
@@ -378,7 +382,7 @@ async def test_metrics_emitted_count_matches_actual_writes(
 ) -> None:
     _patch_psutil_happy_path(monkeypatch)
     writer = MemoryRetainingMetricsWriter()
-    cfg = HostCollectorConfig(name="host", extra_mountpoints=[])
+    cfg = HostCollectorConfig(name="host", extra_mountpoints=[], disk_mountpoint_relabel={})
     result = await HostCollector().run(_ctx(writer, cfg))
     # `recorded` includes append-only history. For one fresh tick with no
     # repeats, len(recorded) == metrics_emitted.
@@ -408,7 +412,7 @@ async def test_disk_partitions_with_total_zero_skipped(
 
     monkeypatch.setattr(host_module.psutil, "disk_usage", _disk_usage)
     writer = MemoryRetainingMetricsWriter()
-    cfg = HostCollectorConfig(name="host", extra_mountpoints=[])
+    cfg = HostCollectorConfig(name="host", extra_mountpoints=[], disk_mountpoint_relabel={})
     result = await HostCollector().run(_ctx(writer, cfg))
     assert result.ok
     mountpoints = {
@@ -432,7 +436,9 @@ async def test_extra_mountpoints_with_total_zero_skipped(
 
     monkeypatch.setattr(host_module.psutil, "disk_usage", _disk_usage)
     writer = MemoryRetainingMetricsWriter()
-    cfg = HostCollectorConfig(name="host", extra_mountpoints=["/zero_extra", "/good_extra"])
+    cfg = HostCollectorConfig(
+        name="host", extra_mountpoints=["/zero_extra", "/good_extra"], disk_mountpoint_relabel={}
+    )
     result = await HostCollector().run(_ctx(writer, cfg))
     assert result.ok
     mountpoints = {
@@ -458,7 +464,9 @@ async def test_extra_mountpoint_already_in_partitions_skipped(
 
     writer = MemoryRetainingMetricsWriter()
     # /shared is in BOTH the partitions list AND extra_mountpoints — duplicate
-    cfg = HostCollectorConfig(name="host", extra_mountpoints=["/shared"])
+    cfg = HostCollectorConfig(
+        name="host", extra_mountpoints=["/shared"], disk_mountpoint_relabel={}
+    )
     result = await HostCollector().run(_ctx(writer, cfg))
     assert result.ok
 
@@ -471,6 +479,122 @@ async def test_extra_mountpoint_already_in_partitions_skipped(
         and e.labels.get("type") == "used"
     ]
     assert len(shared_used_entries) == 1
+
+
+@pytest.mark.asyncio
+async def test_disk_relabel_default_allowlists_and_relabels(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Default relabel map: only /config and /host-compose are emitted, relabeled."""
+    _patch_psutil_happy_path(monkeypatch)
+
+    def _parts(all: bool = False) -> list[_Part]:
+        del all
+        return [
+            _Part(device="/dev/sda1", mountpoint="/config", fstype="ext4"),
+            _Part(device="/dev/sdb1", mountpoint="/host-compose", fstype="ext4"),
+            _Part(device="/dev/sdc1", mountpoint="/etc/hosts", fstype="ext4"),
+            _Part(device="/dev/sdd1", mountpoint="/run/secrets", fstype="tmpfs"),
+        ]
+
+    monkeypatch.setattr(host_module.psutil, "disk_partitions", _parts)
+    writer = MemoryRetainingMetricsWriter()
+    # Default disk_mountpoint_relabel={"/config": "/", "/host-compose": "/storage"}
+    cfg = HostCollectorConfig(name="host", extra_mountpoints=[])
+    await HostCollector().run(_ctx(writer, cfg))
+    disk_mps = {
+        e.labels["mountpoint"] for e in writer.snapshot() if e.name == "homelab_host_disk_bytes"
+    }
+    # /config → "/" and /host-compose → "/storage"; junk paths are filtered
+    assert disk_mps == {"/", "/storage"}
+    # Raw container paths must NOT appear
+    assert "/config" not in disk_mps
+    assert "/host-compose" not in disk_mps
+    assert "/etc/hosts" not in disk_mps
+    assert "/run/secrets" not in disk_mps
+
+
+@pytest.mark.asyncio
+async def test_disk_relabel_empty_map_emits_all_unrelabeled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Empty relabel map disables allowlist; all non-excluded mountpoints emitted raw."""
+    _patch_psutil_happy_path(monkeypatch)
+
+    def _parts(all: bool = False) -> list[_Part]:
+        del all
+        return [
+            _Part(device="/dev/sda1", mountpoint="/", fstype="ext4"),
+            _Part(device="/dev/sdb1", mountpoint="/data", fstype="ext4"),
+        ]
+
+    monkeypatch.setattr(host_module.psutil, "disk_partitions", _parts)
+    writer = MemoryRetainingMetricsWriter()
+    cfg = HostCollectorConfig(name="host", extra_mountpoints=[], disk_mountpoint_relabel={})
+    await HostCollector().run(_ctx(writer, cfg))
+    disk_mps = {
+        e.labels["mountpoint"] for e in writer.snapshot() if e.name == "homelab_host_disk_bytes"
+    }
+    assert disk_mps == {"/", "/data"}
+
+
+@pytest.mark.asyncio
+async def test_disk_relabel_key_fails_disk_usage_handled_gracefully(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Allowlisted mountpoint that raises disk_usage is recorded as error, others proceed."""
+    _patch_psutil_happy_path(monkeypatch)
+
+    def _parts(all: bool = False) -> list[_Part]:
+        del all
+        return [
+            _Part(device="/dev/sda1", mountpoint="/config", fstype="ext4"),
+            _Part(device="/dev/sdb1", mountpoint="/host-compose", fstype="ext4"),
+        ]
+
+    def _disk_usage(mp: str) -> _Usage:
+        if mp == "/config":
+            raise OSError("simulated failure")
+        return _Usage(total=1000, used=400, percent=40.0)
+
+    monkeypatch.setattr(host_module.psutil, "disk_partitions", _parts)
+    monkeypatch.setattr(host_module.psutil, "disk_usage", _disk_usage)
+    writer = MemoryRetainingMetricsWriter()
+    cfg = HostCollectorConfig(name="host", extra_mountpoints=[])
+    result = await HostCollector().run(_ctx(writer, cfg))
+    # Error recorded for /config; /host-compose → /storage still emitted
+    assert result.ok is False
+    assert any("disk_usage /config" in e for e in result.errors)
+    disk_mps = {
+        e.labels["mountpoint"] for e in writer.snapshot() if e.name == "homelab_host_disk_bytes"
+    }
+    assert "/storage" in disk_mps
+    assert "/" not in disk_mps  # /config failed, never mapped to /
+
+
+@pytest.mark.asyncio
+async def test_disk_relabel_extra_mountpoints_in_map_are_emitted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """extra_mountpoints that ARE in the relabel map are emitted with friendly label."""
+    _patch_psutil_happy_path(monkeypatch)
+
+    def _parts(all: bool = False) -> list[_Part]:
+        del all
+        return []  # No disk_partitions results
+
+    monkeypatch.setattr(host_module.psutil, "disk_partitions", _parts)
+    writer = MemoryRetainingMetricsWriter()
+    cfg = HostCollectorConfig(
+        name="host",
+        extra_mountpoints=["/host-compose"],
+        disk_mountpoint_relabel={"/host-compose": "/storage"},
+    )
+    await HostCollector().run(_ctx(writer, cfg))
+    disk_mps = {
+        e.labels["mountpoint"] for e in writer.snapshot() if e.name == "homelab_host_disk_bytes"
+    }
+    assert disk_mps == {"/storage"}
 
 
 @pytest.mark.asyncio

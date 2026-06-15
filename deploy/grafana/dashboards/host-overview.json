@@ -23,7 +23,7 @@
     {
       "id": 1,
       "type": "timeseries",
-      "title": "CPU %",
+      "title": "CPU usage (all cores)",
       "datasource": { "type": "prometheus", "uid": "victoriametrics" },
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
       "fieldConfig": {
@@ -43,8 +43,37 @@
         {
           "refId": "A",
           "datasource": { "type": "prometheus", "uid": "victoriametrics" },
-          "expr": "homelab_host_cpu_percent",
-          "legendFormat": "cpu={{cpu}}",
+          "expr": "homelab_host_cpu_percent{cpu=\"all\"}",
+          "legendFormat": "all",
+          "range": true
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "CPU usage per core",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "color": { "mode": "palette-classic" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "expr": "sort_by_label_numeric(label_replace(label_replace(homelab_host_cpu_percent{cpu!=\"all\"}, \"core\", \"$1\", \"cpu\", \"(.*)\"), \"core\", \"0$1\", \"core\", \"^([0-9])$\"), \"core\")",
+          "legendFormat": "core {{core}}",
           "range": true
         }
       ]
@@ -52,9 +81,9 @@
     {
       "id": 2,
       "type": "timeseries",
-      "title": "Load average",
+      "title": "Load average (1m)",
       "datasource": { "type": "prometheus", "uid": "victoriametrics" },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
       "fieldConfig": {
         "defaults": {
           "unit": "short",
@@ -71,47 +100,102 @@
         {
           "refId": "A",
           "datasource": { "type": "prometheus", "uid": "victoriametrics" },
-          "expr": "homelab_host_load_average",
-          "legendFormat": "load {{period}}",
+          "expr": "homelab_host_load_average{period=\"1m\"}",
+          "legendFormat": "1m",
+          "range": true
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Load average (1m / 5m / 15m)",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "color": { "mode": "palette-classic" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "expr": "homelab_host_load_average{period=\"1m\"}",
+          "legendFormat": "1m",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "expr": "homelab_host_load_average{period=\"5m\"}",
+          "legendFormat": "5m",
+          "range": true
+        },
+        {
+          "refId": "C",
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "expr": "homelab_host_load_average{period=\"15m\"}",
+          "legendFormat": "15m",
           "range": true
         }
       ]
     },
     {
       "id": 3,
-      "type": "gauge",
-      "title": "Memory used %",
+      "type": "timeseries",
+      "title": "Memory & swap",
       "datasource": { "type": "prometheus", "uid": "victoriametrics" },
-      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 8 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
       "fieldConfig": {
         "defaults": {
-          "unit": "percent",
-          "min": 0,
-          "max": 100,
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              { "color": "green", "value": null },
-              { "color": "yellow", "value": 75 },
-              { "color": "red", "value": 90 }
+          "unit": "bytes",
+          "color": { "mode": "palette-classic" }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "RAM total" },
+            "properties": [
+              {
+                "id": "custom.lineStyle",
+                "value": { "fill": "dash", "dash": [10, 10] }
+              }
             ]
           }
-        },
-        "overrides": []
+        ]
       },
       "options": {
-        "orientation": "auto",
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
-        "showThresholdLabels": false,
-        "showThresholdMarkers": true
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "none" }
       },
       "targets": [
         {
           "refId": "A",
           "datasource": { "type": "prometheus", "uid": "victoriametrics" },
-          "expr": "100 * homelab_host_memory_bytes{type=\"used\"} / homelab_host_memory_bytes{type=\"total\"}",
-          "legendFormat": "mem%",
-          "instant": true
+          "expr": "homelab_host_memory_bytes{type=\"used\"}",
+          "legendFormat": "RAM used",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "expr": "homelab_host_swap_bytes{type=\"used\"}",
+          "legendFormat": "Swap used",
+          "range": true
+        },
+        {
+          "refId": "C",
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "expr": "homelab_host_memory_bytes{type=\"total\"}",
+          "legendFormat": "RAM total",
+          "range": true
         }
       ]
     },
@@ -120,7 +204,7 @@
       "type": "bargauge",
       "title": "Disk used % per mountpoint",
       "datasource": { "type": "prometheus", "uid": "victoriametrics" },
-      "gridPos": { "h": 8, "w": 18, "x": 6, "y": 8 },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
       "fieldConfig": {
         "defaults": {
           "unit": "percent",
@@ -130,8 +214,8 @@
             "mode": "absolute",
             "steps": [
               { "color": "green", "value": null },
-              { "color": "yellow", "value": 75 },
-              { "color": "red", "value": 90 }
+              { "color": "yellow", "value": 85 },
+              { "color": "red", "value": 95 }
             ]
           }
         },
@@ -156,9 +240,9 @@
     {
       "id": 5,
       "type": "timeseries",
-      "title": "Network throughput (bytes/s)",
+      "title": "Network download",
       "datasource": { "type": "prometheus", "uid": "victoriametrics" },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
       "fieldConfig": {
         "defaults": {
           "unit": "Bps",
@@ -174,8 +258,63 @@
         {
           "refId": "A",
           "datasource": { "type": "prometheus", "uid": "victoriametrics" },
-          "expr": "rate(homelab_host_net_bytes_total[5m])",
-          "legendFormat": "{{iface}} {{direction}}",
+          "expr": "rate(homelab_host_net_bytes_total{iface=\"eth0\",direction=\"rx\"}[1m])",
+          "legendFormat": "1m",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "expr": "rate(homelab_host_net_bytes_total{iface=\"eth0\",direction=\"rx\"}[5m])",
+          "legendFormat": "5m",
+          "range": true
+        },
+        {
+          "refId": "C",
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "expr": "rate(homelab_host_net_bytes_total{iface=\"eth0\",direction=\"rx\"}[15m])",
+          "legendFormat": "15m",
+          "range": true
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Network upload",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps",
+          "color": { "mode": "palette-classic" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "expr": "rate(homelab_host_net_bytes_total{iface=\"eth0\",direction=\"tx\"}[1m])",
+          "legendFormat": "1m",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "expr": "rate(homelab_host_net_bytes_total{iface=\"eth0\",direction=\"tx\"}[5m])",
+          "legendFormat": "5m",
+          "range": true
+        },
+        {
+          "refId": "C",
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "expr": "rate(homelab_host_net_bytes_total{iface=\"eth0\",direction=\"tx\"}[15m])",
+          "legendFormat": "15m",
           "range": true
         }
       ]
@@ -185,10 +324,10 @@
       "type": "stat",
       "title": "Uptime",
       "datasource": { "type": "prometheus", "uid": "victoriametrics" },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 32 },
       "fieldConfig": {
         "defaults": {
-          "unit": "s",
+          "unit": "dtdurations",
           "color": { "mode": "thresholds" },
           "thresholds": {
             "mode": "absolute",
@@ -225,6 +364,6 @@
   "timezone": "browser",
   "title": "Host Overview",
   "uid": "host-overview",
-  "version": 1,
+  "version": 4,
   "weekStart": ""
 }

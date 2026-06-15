@@ -3,6 +3,10 @@ import type { JSX } from 'react'
 
 const TABS = [
   { path: '/metrics/system', label: 'System' },
+  { path: '/metrics/containers', label: 'Containers' },
+  { path: '/metrics/collectors', label: 'Collectors' },
+  { path: '/metrics/heartbeats', label: 'Heartbeats' },
+  { path: '/metrics/storage-logs', label: 'Storage & Logs' },
   { path: '/metrics/home-assistant', label: 'Home Assistant' },
 ] as const
 
@@ -17,7 +21,7 @@ export function MetricsLayout(): JSX.Element {
       </div>
       <nav
         aria-label="Metrics tabs"
-        className="flex gap-1 border-b border-border px-2 pb-2"
+        className="-mx-2 flex gap-1 overflow-x-auto border-b border-border px-2 pb-2"
         data-testid="metrics-tabs"
       >
         {TABS.map((tab) => (

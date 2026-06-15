@@ -65,6 +65,15 @@ class HostCollectorConfig(CollectorConfig):
     extra_mountpoints: list[str] = Field(default_factory=lambda: ["/rackstation"])
     top_n_processes: int = Field(default=10, ge=1, le=100)
     exclude_disk_devs: list[str] = Field(default_factory=lambda: ["loop", "ram"])
+    disk_mountpoint_relabel: dict[str, str] = Field(
+        default_factory=lambda: {"/config": "/", "/host-compose": "/storage"}
+    )
+    # Keys are container-internal mountpoints (compose bind-mounts seen inside
+    # the container). Values are the friendly host paths to emit as the
+    # `mountpoint` label. When non-empty, acts as an ALLOWLIST: only mountpoints
+    # that are keys in this map are emitted, relabeled to the mapped value.
+    # Set to {} to disable allowlist filtering and emit all mountpoints with
+    # their raw labels (preserves pre-STAGE-005-041 behavior).
 
 
 class HostCollector(BaseCollector):
@@ -98,13 +107,20 @@ class HostCollector(BaseCollector):
         exclude_disk_devs: list[str] = list(
             getattr(ctx.config, "exclude_disk_devs", ["loop", "ram"])
         )
+        disk_mountpoint_relabel: dict[str, str] = dict(
+            getattr(
+                ctx.config, "disk_mountpoint_relabel", {"/config": "/", "/host-compose": "/storage"}
+            )
+        )
 
         for n, errs in [
             self._collect_cpu(ctx),
             self._collect_load_average(ctx),
             self._collect_memory(ctx),
             self._collect_swap(ctx),
-            self._collect_disk_usage(ctx, extra_mountpoints, exclude_disk_devs),
+            self._collect_disk_usage(
+                ctx, extra_mountpoints, exclude_disk_devs, disk_mountpoint_relabel
+            ),
             self._collect_disk_io(ctx, exclude_disk_devs),
             self._collect_net_io(ctx),
             self._collect_uptime(ctx),
@@ -182,62 +198,86 @@ class HostCollector(BaseCollector):
         ctx: CollectorContext,
         extra_mountpoints: list[str],
         exclude_disk_devs: list[str],
+        disk_mountpoint_relabel: dict[str, str],
     ) -> tuple[int, list[str]]:
         exclude_pattern = _build_exclude_pattern(exclude_disk_devs)
         emitted = 0
         errors: list[str] = []
-        # mountpoints already emitted from psutil.disk_partitions(); deduplicates
-        # against extra_mountpoints
+        # Tracks emitted friendly labels to deduplicate across both loops.
         seen: set[str] = set()
+        use_allowlist = bool(disk_mountpoint_relabel)
 
         try:
             for part in psutil.disk_partitions(all=False):
                 if exclude_pattern is not None and exclude_pattern.match(part.device):
                     continue
-                try:
-                    usage = psutil.disk_usage(part.mountpoint)
-                except (FileNotFoundError, PermissionError, OSError) as exc:
-                    errors.append(f"disk_usage {part.mountpoint}: {exc}")
-                    continue
-                if usage.total == 0:
-                    continue
-                ctx.vm.write_gauge(
-                    "homelab_host_disk_bytes",
-                    float(usage.used),
-                    {"mountpoint": part.mountpoint, "type": "used"},
-                )
-                ctx.vm.write_gauge(
-                    "homelab_host_disk_bytes",
-                    float(usage.total),
-                    {"mountpoint": part.mountpoint, "type": "total"},
-                )
-                emitted += 2
-                seen.add(part.mountpoint)
+                if use_allowlist:
+                    if part.mountpoint not in disk_mountpoint_relabel:
+                        continue
+                    friendly = disk_mountpoint_relabel[part.mountpoint]
+                else:
+                    friendly = part.mountpoint
+                count, err = self._emit_disk_mountpoint(ctx, part.mountpoint, friendly, seen)
+                emitted += count
+                if err is not None:
+                    errors.append(err)
         except Exception as exc:  # pragma: no cover -- defensive psutil failure
             errors.append(f"disk_partitions: {exc}")
 
         for mp in extra_mountpoints:
-            if mp in seen:
-                continue
-            try:
-                usage = psutil.disk_usage(mp)
-            except (FileNotFoundError, PermissionError, OSError):
-                continue
-            if usage.total == 0:
-                continue
-            ctx.vm.write_gauge(
-                "homelab_host_disk_bytes",
-                float(usage.used),
-                {"mountpoint": mp, "type": "used"},
-            )
-            ctx.vm.write_gauge(
-                "homelab_host_disk_bytes",
-                float(usage.total),
-                {"mountpoint": mp, "type": "total"},
-            )
-            emitted += 2
+            # Under allowlist mode, extra_mountpoints are filtered too.
+            # The default extra_mountpoints=["/rackstation"] is intentionally
+            # excluded because /rackstation is not a key in the default relabel
+            # map — operators who want it must add it to disk_mountpoint_relabel.
+            if use_allowlist:
+                if mp not in disk_mountpoint_relabel:
+                    continue
+                friendly = disk_mountpoint_relabel[mp]
+            else:
+                friendly = mp
+            count, _err = self._emit_disk_mountpoint(ctx, mp, friendly, seen)
+            emitted += count
+            # _err intentionally discarded: extra_mountpoints silently skips
+            # unmounted/inaccessible paths (no error recorded, preserving
+            # original behavior).
 
         return emitted, errors
+
+    def _emit_disk_mountpoint(
+        self,
+        ctx: CollectorContext,
+        raw_mp: str,
+        friendly: str,
+        seen: set[str],
+    ) -> tuple[int, str | None]:
+        """Emit disk usage gauges for one mountpoint.
+
+        Returns (emitted_count, error_string_or_None).
+        emitted_count is 0 or 2.
+        error_string is non-None only when disk_usage() raises; the caller
+        decides whether to record or discard it (partition loop records,
+        extra_mountpoints loop discards).
+        """
+        if friendly in seen:
+            return 0, None
+        try:
+            usage = psutil.disk_usage(raw_mp)
+        except (FileNotFoundError, PermissionError, OSError) as exc:
+            return 0, f"disk_usage {raw_mp}: {exc}"
+        if usage.total == 0:
+            return 0, None
+        ctx.vm.write_gauge(
+            "homelab_host_disk_bytes",
+            float(usage.used),
+            {"mountpoint": friendly, "type": "used"},
+        )
+        ctx.vm.write_gauge(
+            "homelab_host_disk_bytes",
+            float(usage.total),
+            {"mountpoint": friendly, "type": "total"},
+        )
+        seen.add(friendly)
+        return 2, None
 
     def _collect_disk_io(
         self,
