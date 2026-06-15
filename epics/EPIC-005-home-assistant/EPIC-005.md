@@ -1,12 +1,12 @@
 # EPIC-005: Home Assistant integration (collector + dispatcher channel + bidirectional events + UI panel)
 
-## Status: In Progress (40 / 42 Complete)
+## Status: In Progress (41 / 42 Complete)
 
-## Stages Counter: 40 / 42 Complete
+## Stages Counter: 41 / 42 Complete
 
-## Current Stage: STAGE-005-041
+## Current Stage: STAGE-005-042
 
-## Current Phase: STAGE-005-041 Design (Not Started)
+## Current Phase: STAGE-005-042 Design (Not Started)
 
 ## Overview
 
@@ -137,7 +137,7 @@ Appended after the EPIC-005 post-completion audit (2026-06-14): closes gaps wher
 | STAGE-005-038 | Script-cadence Grafana panel + cadence API + Status widget | ✓ Complete — Surface script cadence beyond Grafana: add the missing `homelab_ha_script_last_triggered_seconds` Grafana panel (parity with automations), plus (Design may split off) a cadence detail endpoint + Status-tab idle/disabled automations+scripts widget/drill. Mixed; 3a+3b (+ Desktop+Mobile for the widget). Depends 034. (SPLIT in Design: 038 shipped the Grafana panel only; the cadence API + Status widget moved to STAGE-005-042.) |
 | STAGE-005-039 | Activate availability/cadence vmalert rules | ✓ Complete — Promote the deferred OPT-IN exemplars (HaEntityUnavailable, HaEntityStale, HaAutomationIdle, HaAutomationDisabled) from commented templates to active defaults where the now-filtered data makes them viable — per-rule activate-vs-keep-opt-in grounded in real measured firing counts. Config (vmalert); 3a+3b. Depends 037 + 034. (MEASURED → kept all four OPT-IN; comments updated with real counts + a NO-FIRE regression fixture added.) |
 | STAGE-005-040 | Anomaly surface decision (UI or document Grafana-as-home) | ✓ Complete — Resolve the z-score/anomaly surface: add a minimal anomaly endpoint+UI, OR formally document Grafana ("Top Anomaly z-scores") as the intended home — closes the implemented-without-user-location gap by explicit decision. Lowest priority. Frontend-or-docs; refinement per decision. Soft-depends 037. (RE-SCOPED: Design chose document-Grafana-as-home + an in-app deep-link; the deep-link was REVERTED on user decision during Refinement — anomaly stays Grafana-only, reachable via the embedded Metrics tab — and the stage instead fixed the pre-existing /metrics/* SPA-refresh 404 bug.) |
-| STAGE-005-041 | Grafana dashboard review & readability pass (System + HA) — interactive | Interactive, user-driven pass to ensure EVERY metric is surfaced correctly + readably on BOTH the System/host-overview dashboard and the Home Assistant dashboard: inventory metric→panel coverage, propose+apply panel additions/edits/reorg, rebuild rig, iterate with the user until dual sign-off (System dashboard AND HA dashboard). Final observability polish. Depends 034–040. (Reviews the **Grafana** dashboard surface only; the in-app cadence widget is STAGE-005-042, outside this Grafana-dashboard scope.) |
+| STAGE-005-041 | Grafana dashboard review & readability pass (System + HA) — interactive | ✓ Complete — Interactive, user-driven pass to ensure EVERY metric is surfaced correctly + readably on BOTH the System/host-overview dashboard and the Home Assistant dashboard: inventory metric→panel coverage, propose+apply panel additions/edits/reorg, rebuild rig, iterate with the user until dual sign-off (System dashboard AND HA dashboard). Final observability polish. Depends 034–040. (Reviews the **Grafana** dashboard surface only; the in-app cadence widget is STAGE-005-042, outside this Grafana-dashboard scope.) |
 | STAGE-005-042 | HA cadence detail API + Status-tab idle/disabled cadence widget | Split off from 038 (D-CADENCE-SURFACE-SPLIT): the in-app cadence surface — a cadence detail endpoint + Status-tab widget/drill listing idle (>24h) + disabled automations + idle scripts, mirroring the `/entities` endpoint + `HaEntitiesDrill` pattern. Backend 3a+3b + frontend Desktop+Mobile. Runs AFTER 041 (the in-app widget is NOT a Grafana panel, so it is outside 041's Grafana-dashboard review scope — no forward-dependency violation). Depends 038 + 034; soft-depends 037. |
 
 ## Cross-stage acceptance criteria
