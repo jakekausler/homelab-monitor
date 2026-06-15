@@ -17,16 +17,24 @@
 # device-down rollup (design rule #7): both are OPT-IN (commented) rather than
 # active defaults. Root reason: without a per-entity "expected available" baseline,
 # a blanket `entity_available == 0` rule fires on chronic integration/cloud noise.
-# Measured on a real homelab during STAGE-005-015 Refinement 3b: ~50% of 1906 HA
-# entities are chronically unavailable (Frigate-linked, smart-plug ancillary, Plex
-# session players, cloud integrations); domain does NOT discriminate (sensor 52%,
-# binary_sensor 69%, switch 41% chronic). Per-entity scoping belongs in the
-# 005-005 user-rule machinery (deploy/vmalert/metrics-user/*.yaml). For rule #7:
-# there is NO `device` label on HA metrics yet. A per-device rollup needs
-# HA core.device_registry sourced via the WS API plus a CollectorContext change to
-# attach a `device` label to entity series. That is a future EPIC-005 stage.
-# HaUnreachable (#18, HA-itself-down) remains the only default-on availability
-# signal. Both #1 and #7 await the device-availability facility or user scoping.
+# Post-STAGE-005-037 (entity-registry WS fetch + cache, disabling disabled/hidden
+# entities from emitting series): total entities dropped ~1844→1117, and
+# unavailable entities dropped ~924→197 (17.6%). That is a significant reduction,
+# but the remaining 197 are still chronic integration/cloud noise (Frigate-linked,
+# smart-plug ancillary, Plex session players, cloud integrations) — `for:` cannot
+# reduce chronic state. Rule #1 remains OPT-IN.
+# D-ALERT-FILTER-FORM resolved (STAGE-005-037): 037 chose DROP (disabled/hidden
+# entities emit NO series), so the active-form expr is the bare
+# `homelab_ha_entity_available == 0` — no `{registry_visible="1"}` filter is
+# needed. If a future session flips 037 to LABEL instead of DROP, the expr MUST
+# gain a `{registry_visible="1"}` selector to avoid re-acquiring disabled noise.
+# Per-entity scoping belongs in the 005-005 user-rule machinery
+# (deploy/vmalert/metrics-user/*.yaml). For rule #7: there is NO `device` label
+# on HA metrics yet. A per-device rollup needs HA core.device_registry sourced
+# via the WS API plus a CollectorContext change to attach a `device` label to
+# entity series. That is a future EPIC-005 stage. HaUnreachable (#18,
+# HA-itself-down) remains the only default-on availability signal. Both #1 and
+# #7 await the device-availability facility or user scoping.
 #
 # Metric contracts (verified):
 #   homelab_ha_up{}                                      1/0
@@ -154,10 +162,13 @@ groups:
 #      # HaEntityStale (#2): a sensor that has not changed value in too long.
 #      # OPT-IN because device_class is NOT a label here, so a single global
 #      # threshold would false-fire on legitimately-slow sensors (e.g. a door
-#      # that is simply closed all day) while missing fast ones. Scope per-entity
-#      # instead. Catches the "frozen freezer" case a z-score cannot (a stuck
-#      # reading looks perfectly stable to anomaly detection). Per-entity overrides
-#      # belong in the 005-005 user-rule machinery.
+#      # that is simply closed all day) while missing fast ones. Measured on this
+#      # homelab post-STAGE-005-037: blanket `homelab_ha_entity_last_changed_seconds`
+#      # > threshold fires 865 entities @1h / 618 @24h / 525 @7d — confirming the
+#      # device-class-threshold problem is real and a global rule is unworkable.
+#      # Scope per-entity instead. Catches the "frozen freezer" case a z-score
+#      # cannot (a stuck reading looks perfectly stable to anomaly detection).
+#      # Per-entity overrides belong in the 005-005 user-rule machinery.
 #      - alert: HaEntityStale
 #        expr: homelab_ha_entity_last_changed_seconds{entity_id="sensor.freezer_temp"} > 7200
 #        for: 15m
@@ -173,9 +184,14 @@ groups:
 #
 #      # HaAutomationIdle (#16): an automation that has not triggered in too long.
 #      # OPT-IN because seasonal/occasional automations legitimately idle for
-#      # months (e.g. a "freeze warning" automation in summer). The default
-#      # threshold (24h) is encoded here per STAGE-005-009; per-automation
-#      # overrides belong in the 005-005 user-rule machinery.
+#      # months (e.g. a "freeze warning" automation in summer). Measured on this
+#      # homelab post-STAGE-005-037: blanket `homelab_ha_automation_last_triggered_seconds`
+#      # > threshold fires 20 automations @24h / 18 @7d / 9 @30d (of 43 enabled).
+#      # Even 9 @30d is seasonal-contaminated (freeze-warning automations idle
+#      # all summer, easily exceeding 90d). A global threshold cannot distinguish
+#      # seasonal idle from broken. The default threshold (24h) is encoded here
+#      # per STAGE-005-009; per-automation overrides belong in the 005-005
+#      # user-rule machinery.
 #      - alert: HaAutomationIdle
 #        expr: homelab_ha_automation_last_triggered_seconds{entity_id="automation.example"} > 86400
 #        for: 15m
@@ -191,8 +207,10 @@ groups:
 #
 #      # HaAutomationDisabled (#17): an automation that is turned off.
 #      # OPT-IN because disabling an automation is usually intentional, so a global
-#      # rule would be pure noise. Scope per-automation via the 005-005 user-rule
-#      # machinery if you want to be warned that a specific automation is off.
+#      # rule would be pure noise. Measured on this homelab post-STAGE-005-037:
+#      # 35 disabled of 80 total automations — intentional state, mass-fire → stays
+#      # opt-in. Scope per-automation via the 005-005 user-rule machinery if you
+#      # want to be warned that a specific automation is off.
 #      - alert: HaAutomationDisabled
 #        expr: homelab_ha_automation_enabled{entity_id="automation.example"} == 0
 #        for: 15m
@@ -208,11 +226,15 @@ groups:
 #
 #      # HaEntityUnavailable (#1): an entity that has been unavailable for too long.
 #      # OPT-IN — DEMOTED from active default during STAGE-005-015 Refinement 3b
-#      # based on real measurement: ~50% of 1906 HA entities are chronically
-#      # unavailable on this homelab (Frigate-linked, smart-plug ancillary, Plex
-#      # session players, cloud integrations). Domain does NOT discriminate — chronic
-#      # and actionable entities share sensor/binary_sensor/switch domains. A blanket
-#      # rule = ~924 firing instances = a failed (noisy) rule. Per-entity scoping
+#      # and re-confirmed OPT-IN during STAGE-005-039 after STAGE-005-037 registry
+#      # filtering. Post-037: disabled/hidden entities no longer emit
+#      # `homelab_ha_entity_available` series, dropping total ~1844→1117 and
+#      # unavailable ~924→197 (17.6%). The remaining 197 are still chronic
+#      # integration/cloud noise (Frigate-linked, smart-plug ancillary, Plex
+#      # session players, cloud integrations) — `for:` cannot reduce chronic state.
+#      # A blanket rule = 197 firing instances = still a failed (noisy) rule.
+#      # Active-form expr is the bare `homelab_ha_entity_available == 0` (no
+#      # `{registry_visible="1"}` filter needed; 037 chose DROP). Per-entity scoping
 #      # belongs in the 005-005 user-rule machinery: select the specific entity_ids
 #      # you care about and author rules there. The proper default form awaits the
 #      # device-availability facility (deferred design rule #7). HaUnreachable (#18)

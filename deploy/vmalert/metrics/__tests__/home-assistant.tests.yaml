@@ -163,3 +163,66 @@ tests:
       - eval_time: 16m
         alertname: HaUpdatesPending
         exp_alerts: []
+
+  # =============================================================================
+  # STAGE-005-039 REGRESSION: OPT-IN rules must NOT fire as active defaults.
+  #
+  # The four rules below (HaEntityUnavailable, HaEntityStale, HaAutomationIdle,
+  # HaAutomationDisabled) are intentionally COMMENTED OUT in home-assistant.yaml
+  # — they are opt-in exemplars, not active defaults. These tests assert that
+  # input which WOULD trip a blanket form produces NO alerts. They pass precisely
+  # because the rules do not exist in the loaded rule_files. If a future session
+  # uncomments one of these rules without re-grounding the noise analysis, the
+  # corresponding test WILL FAIL (the alert will fire on the synthetic input),
+  # flagging the change immediately.
+  # =============================================================================
+
+  # STAGE-005-039 NO-FIRE: HaEntityUnavailable is opt-in / commented out.
+  # Input: entity_available==0 held 10m — would trip a blanket `== 0` rule.
+  # Expected: no alert (rule is not loaded).
+  - interval: 30s
+    input_series:
+      - series: 'homelab_ha_entity_available{entity_id="sensor.plex_playing",domain="sensor"}'
+        values: '0+0x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: HaEntityUnavailable
+        exp_alerts: []
+
+  # STAGE-005-039 NO-FIRE: HaEntityStale is opt-in / commented out.
+  # Input: last_changed_seconds==172800 (48h) held 20m — would trip any blanket
+  # threshold rule (>3600 @1h, >86400 @24h, >604800 @7d).
+  # Expected: no alert (rule is not loaded).
+  - interval: 30s
+    input_series:
+      - series: 'homelab_ha_entity_last_changed_seconds{entity_id="sensor.door_closed",domain="binary_sensor"}'
+        values: '172800+0x40'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: HaEntityStale
+        exp_alerts: []
+
+  # STAGE-005-039 NO-FIRE: HaAutomationIdle is opt-in / commented out.
+  # Input: last_triggered_seconds==2592000 (30d) held 20m — would trip any
+  # blanket threshold rule (>86400 @24h, >604800 @7d, >2592000 @30d).
+  # Expected: no alert (rule is not loaded).
+  - interval: 30s
+    input_series:
+      - series: 'homelab_ha_automation_last_triggered_seconds{entity_id="automation.freeze_warning"}'
+        values: '2592000+0x40'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: HaAutomationIdle
+        exp_alerts: []
+
+  # STAGE-005-039 NO-FIRE: HaAutomationDisabled is opt-in / commented out.
+  # Input: automation_enabled==0 held 20m — would trip a blanket `== 0` rule.
+  # Expected: no alert (rule is not loaded).
+  - interval: 30s
+    input_series:
+      - series: 'homelab_ha_automation_enabled{entity_id="automation.holiday_lights"}'
+        values: '0+0x40'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: HaAutomationDisabled
+        exp_alerts: []
