@@ -1,12 +1,12 @@
 # EPIC-005: Home Assistant integration (collector + dispatcher channel + bidirectional events + UI panel)
 
-## Status: In Progress (38 / 42 Complete)
+## Status: In Progress (39 / 42 Complete)
 
-## Stages Counter: 38 / 42 Complete
+## Stages Counter: 39 / 42 Complete
 
-## Current Stage: STAGE-005-039
+## Current Stage: STAGE-005-040
 
-## Current Phase: STAGE-005-039 Design (Not Started)
+## Current Phase: STAGE-005-040 Design (Not Started)
 
 ## Overview
 
@@ -135,7 +135,7 @@ Appended after the EPIC-005 post-completion audit (2026-06-14): closes gaps wher
 | STAGE-005-036 | Repairs drill — render description + learn-more link | ✓ Complete — Repairs drill renders the free-text `description` and links `learn_more_url` (fields already on `HaRepairRow` from 031, previously fetched-but-unrendered). Frontend; 3a Desktop+Mobile. |
 | STAGE-005-037 | HA entity-registry fetch + exclude disabled/hidden (KEYSTONE) | ✓ Complete — Entity-registry WS fetch (`config/entity_registry/list`) + in-memory cache exposing `disabled_by`/`hidden_by`/`entity_category`; exclude disabled/hidden (optionally diagnostic/config) entities from `homelab_ha_entity_available` + z-score eligibility — removes the ~50% chronic-unavailability noise that blocks the GAP-F alerts. KEYSTONE for 039. Backend infra; 3a+3b. Soft-depends 034. |
 | STAGE-005-038 | Script-cadence Grafana panel + cadence API + Status widget | ✓ Complete — Surface script cadence beyond Grafana: add the missing `homelab_ha_script_last_triggered_seconds` Grafana panel (parity with automations), plus (Design may split off) a cadence detail endpoint + Status-tab idle/disabled automations+scripts widget/drill. Mixed; 3a+3b (+ Desktop+Mobile for the widget). Depends 034. (SPLIT in Design: 038 shipped the Grafana panel only; the cadence API + Status widget moved to STAGE-005-042.) |
-| STAGE-005-039 | Activate availability/cadence vmalert rules | Promote the deferred OPT-IN exemplars (HaEntityUnavailable, HaEntityStale, HaAutomationIdle, HaAutomationDisabled) from commented templates to active defaults where the now-filtered data makes them viable — per-rule activate-vs-keep-opt-in grounded in real measured firing counts. Config (vmalert); 3a+3b. Depends 037 + 034. |
+| STAGE-005-039 | Activate availability/cadence vmalert rules | ✓ Complete — Promote the deferred OPT-IN exemplars (HaEntityUnavailable, HaEntityStale, HaAutomationIdle, HaAutomationDisabled) from commented templates to active defaults where the now-filtered data makes them viable — per-rule activate-vs-keep-opt-in grounded in real measured firing counts. Config (vmalert); 3a+3b. Depends 037 + 034. (MEASURED → kept all four OPT-IN; comments updated with real counts + a NO-FIRE regression fixture added.) |
 | STAGE-005-040 | Anomaly surface decision (UI or document Grafana-as-home) | Resolve the z-score/anomaly surface: add a minimal anomaly endpoint+UI, OR formally document Grafana ("Top Anomaly z-scores") as the intended home — closes the implemented-without-user-location gap by explicit decision. Lowest priority. Frontend-or-docs; refinement per decision. Soft-depends 037. |
 | STAGE-005-041 | Grafana dashboard review & readability pass (System + HA) — interactive | Interactive, user-driven pass to ensure EVERY metric is surfaced correctly + readably on BOTH the System/host-overview dashboard and the Home Assistant dashboard: inventory metric→panel coverage, propose+apply panel additions/edits/reorg, rebuild rig, iterate with the user until dual sign-off (System dashboard AND HA dashboard). Final observability polish. Depends 034–040. (Reviews the **Grafana** dashboard surface only; the in-app cadence widget is STAGE-005-042, outside this Grafana-dashboard scope.) |
 | STAGE-005-042 | HA cadence detail API + Status-tab idle/disabled cadence widget | Split off from 038 (D-CADENCE-SURFACE-SPLIT): the in-app cadence surface — a cadence detail endpoint + Status-tab widget/drill listing idle (>24h) + disabled automations + idle scripts, mirroring the `/entities` endpoint + `HaEntitiesDrill` pattern. Backend 3a+3b + frontend Desktop+Mobile. Runs AFTER 041 (the in-app widget is NOT a Grafana panel, so it is outside 041's Grafana-dashboard review scope — no forward-dependency violation). Depends 038 + 034; soft-depends 037. |
