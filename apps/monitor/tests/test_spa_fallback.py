@@ -149,10 +149,17 @@ async def test_spa_fallback_rejects_api_misses(
 
 
 @pytest.mark.asyncio
-async def test_spa_fallback_rejects_metrics_misses(
+async def test_spa_fallback_serves_metrics_client_routes(
     tmp_path: Path, master_key: bytes, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """GET /metrics (nonexistent) returns 404 JSON (not HTML fallback)."""
+    """GET /metrics/<sub> (client route) returns index.html on hard reload.
+
+    Regression: the SPA catch-all previously used ``startswith("metrics")``,
+    which 404'd the entire ``/metrics/*`` client subtree (e.g. /metrics/system,
+    /metrics/home-assistant) on browser refresh. Only the EXACT Prometheus
+    scrape path ``/metrics`` is backend-owned; nested client routes must fall
+    through to index.html so the TanStack router can handle them.
+    """
     ui_dir = tmp_path / "ui"
     ui_dir.mkdir()
     index_html = ui_dir / "index.html"
@@ -166,11 +173,11 @@ async def test_spa_fallback_rejects_metrics_misses(
 
     app = create_app(lifespan_enabled=False)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        resp = await client.get("/metrics/nonexistent")
-        assert resp.status_code == 404  # noqa: PLR2004
-        # Should be JSON (FastAPI default), not HTML
-        assert resp.headers.get("content-type") == "application/json"
-        assert TEST_INDEX_MARKER not in resp.text
+        for path in ("/metrics/system", "/metrics/home-assistant"):
+            resp = await client.get(path)
+            assert resp.status_code == 200, path  # noqa: PLR2004
+            assert resp.headers.get("content-type") == "text/html; charset=utf-8", path
+            assert TEST_INDEX_MARKER in resp.text, path
 
 
 @pytest.mark.asyncio

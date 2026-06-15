@@ -118,7 +118,14 @@ def create_app(*, lifespan_enabled: bool = True) -> FastAPI:
         async def spa_fallback(  # pyright: ignore[reportUnusedFunction]
             spa_path: str,
         ) -> FileResponse:
-            if spa_path.startswith(("api/", "metrics")):
+            # Exclude backend-owned prefixes from SPA fallback. Use a real path
+            # boundary: "api/<x>" must 404 as JSON, and the EXACT Prometheus
+            # scrape path "metrics" (owned by observability.router, registered
+            # before this catch-all) must not be shadowed. Do NOT exclude the
+            # whole "/metrics/*" subtree — those are client routes
+            # (/metrics/system, /metrics/home-assistant) and MUST fall through
+            # to index.html so the SPA router handles them on hard reload.
+            if spa_path.startswith("api/") or spa_path == "metrics":
                 raise HTTPException(status_code=404)
             candidate = (ui_dir / spa_path).resolve()
             if spa_path and candidate.is_file() and candidate.is_relative_to(ui_dir.resolve()):
