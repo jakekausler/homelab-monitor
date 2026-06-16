@@ -1,12 +1,12 @@
 # EPIC-005A: Alert backfill for EPICs 001-004
 
-## Status: In Progress (4 / 9 Complete)
+## Status: In Progress (5 / 9 Complete)
 
-## Stages Counter: 4 / 9 Complete
+## Stages Counter: 5 / 9 Complete
 
-## Current Stage: STAGE-005A-005
+## Current Stage: STAGE-005A-006
 
-## Current Phase: STAGE-005A-005 Design (Not Started)
+## Current Phase: STAGE-005A-006 Design (Not Started)
 
 ## Overview
 
@@ -121,7 +121,7 @@ descending user-visible value; 009 is sequenced last (added after the original 8
 | STAGE-005A-002 | Disk-fill rules (host fs + per-slot budgets) | ✓ Complete — `disk_fill.yaml`: host filesystem fill `/` + `/storage` (85/95, for-duration) AND per-slot self-disk `used/budget` (vl/vm/sqlite/runbook); resolve the vl-slot overlap with `vl_health.yaml`. No projection rule (user). |
 | STAGE-005A-003 | Collector health rules | ✓ Complete — `collector_health.yaml`: failure-rate, run-duration/timeout, last-error-age, and a silent-death rule (`rate(success_total)==0`). Quarantine DROPPED (existing synthetic alert). Failure/error-age metrics absent until first failure — test mirror plants them. |
 | STAGE-005A-004 | Container lifecycle + resource + probe enablement | ✓ Complete — `container_lifecycle.yaml`: restart-loop, bad exit code, stuck-non-running (whitelist), registry-skip; per-container CPU/mem **share-of-host** (no limits exist → not %); **enable label-based probes** so `DockerProbeFailing` goes live + `DockerProbeSlow`; remove the leaked `fixture.yaml`. EPIC-003 done → all container wiring lands here. |
-| STAGE-005A-005 | Cron / heartbeat duration-anomaly rules | `cron_duration.yaml`: run-duration anomaly on `homelab_heartbeat_last_duration_seconds` vs rolling baseline (too-slow; too-fast optional). Staleness already covered (002 of EPIC-002). Smallest stage. |
+| STAGE-005A-005 | Cron / heartbeat duration-anomaly rules | ✓ Complete — `cron_duration.yaml`: run-duration anomaly on `homelab_heartbeat_last_duration_seconds` vs rolling baseline (too-slow; too-fast optional). Staleness already covered (002 of EPIC-002). Smallest stage. |
 | STAGE-005A-006 | Logging + Drain anomaly rules | `log_drain_health.yaml` (+ optional logs rule): signature-cardinality-warn, Drain-cycle stall, `metric_family_dropped_series`, and the coarse per-service signature-spike (the user's "log anomalies", from `signature_spike.yml.tmpl`). Must not double-fire `ServiceErrorRateSpike`/`NewLogSignature`. |
 | STAGE-005A-007 | Build / config health + self-disk-shrink rules | `self_and_build.yaml`: self-disk auto-shrink fired (`self_disk_shrink_total`), build-sources config load==0, compose unreadable==0, build-source hash skipped. (Aggregate self-disk + per-slot are elsewhere.) Low-severity silent-degradation signals. |
 | STAGE-005A-008 | Watched-directory size collector + config-driven `:ro` mounts + alerts + Grafana panel | NEW `homelab_host_directory_bytes{path}` collector (du-with-timeout), `watched_directories` config (default `/tmp` 1G/4G, `/var` 10G/25G), generated `:ro` mounts via the existing override-generator + NEW collision/overlap validation, absolute-threshold alerts, and a Grafana bargauge panel parallel to the disk-mountpoint panel. Backend + host-integration + dashboard; Design may split into 008a/008b. |
