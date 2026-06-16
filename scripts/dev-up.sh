@@ -370,14 +370,14 @@ up_prod() {
   fi
 
   _log "building + starting full prod stack..."
-  docker compose --env-file "${REPO_ROOT}/deploy/compose/.env" -f "${COMPOSE_FILE}" up -d --build \
+  docker compose --env-file "${REPO_ROOT}/deploy/compose/.env" -f "${COMPOSE_FILE}" -f "${REPO_ROOT}/deploy/compose/docker-compose.override.yml" -f "${REPO_ROOT}/deploy/compose/docker-compose.watched-dirs.yml" up -d --build \
     || _die "docker compose up --build failed"
 
   wait_for_url "http://127.0.0.1:${HOMELAB_MONITOR_PORT:-9090}/api/healthz" "monitor" 90 || true
 
   # Bootstrap admin user inside the container (DB lives in the volume).
   _log "bootstrapping admin user inside the monitor container..."
-  docker compose --env-file "${REPO_ROOT}/deploy/compose/.env" -f "${COMPOSE_FILE}" exec -T monitor bash -c "
+  docker compose --env-file "${REPO_ROOT}/deploy/compose/.env" -f "${COMPOSE_FILE}" -f "${REPO_ROOT}/deploy/compose/docker-compose.override.yml" -f "${REPO_ROOT}/deploy/compose/docker-compose.watched-dirs.yml" exec -T monitor bash -c "
     printf '%s\n%s\n' '${HM_DEV_ADMIN_PASSWORD:-admin-dev-password}' '${HM_DEV_ADMIN_PASSWORD:-admin-dev-password}' \
       | hm user create '${HM_DEV_ADMIN_USERNAME:-admin}' 2>/dev/null \
       || echo '[bootstrap] admin user already exists'

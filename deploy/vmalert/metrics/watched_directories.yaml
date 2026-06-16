@@ -1,0 +1,64 @@
+# vmalert METRICS rules for watched-directory absolute size thresholds (STAGE-005A-008).
+# Severity vocabulary: info / warning / critical (spec §8.2; 'error' removed STAGE-005A-003).
+#
+# PER-PATH rules (one warn + one crit per watched directory). Thresholds match
+# the baked WatchedDirSizeCollectorConfig defaults:
+#   /tmp  warn 1 GiB (1073741824)   crit 4 GiB  (4294967296)
+#   /var  warn 10 GiB (10737418240) crit 25 GiB (26843545600)
+# Adding/removing a watched directory means adding/removing its warn+crit pair
+# here AND updating the baked config + the generated compose mounts.
+#
+# All rules use source_tool: vmalert-metrics + target_kind: host.
+# homelab_host_directory_bytes is emitted by WatchedDirSizeCollector with a
+# single `path` label (the friendly host path).
+
+groups:
+  - name: watched_directories
+    interval: 60s
+    rules:
+
+      # --- /tmp ---
+      - alert: WatchedDirectoryTmpWarn
+        expr: homelab_host_directory_bytes{path="/tmp"} > 1073741824
+        for: 5m
+        labels:
+          severity: warning
+          source_tool: vmalert-metrics
+          target_kind: host
+        annotations:
+          summary: "Watched directory {{ $labels.path }} over warn threshold"
+          description: "Watched directory {{ $labels.path }} is {{ humanize1024 $value }}B, over its 1 GiB warn threshold."
+
+      - alert: WatchedDirectoryTmpCrit
+        expr: homelab_host_directory_bytes{path="/tmp"} > 4294967296
+        for: 5m
+        labels:
+          severity: critical
+          source_tool: vmalert-metrics
+          target_kind: host
+        annotations:
+          summary: "Watched directory {{ $labels.path }} over critical threshold"
+          description: "Watched directory {{ $labels.path }} is {{ humanize1024 $value }}B, over its 4 GiB critical threshold."
+
+      # --- /var ---
+      - alert: WatchedDirectoryVarWarn
+        expr: homelab_host_directory_bytes{path="/var"} > 10737418240
+        for: 5m
+        labels:
+          severity: warning
+          source_tool: vmalert-metrics
+          target_kind: host
+        annotations:
+          summary: "Watched directory {{ $labels.path }} over warn threshold"
+          description: "Watched directory {{ $labels.path }} is {{ humanize1024 $value }}B, over its 10 GiB warn threshold."
+
+      - alert: WatchedDirectoryVarCrit
+        expr: homelab_host_directory_bytes{path="/var"} > 26843545600
+        for: 5m
+        labels:
+          severity: critical
+          source_tool: vmalert-metrics
+          target_kind: host
+        annotations:
+          summary: "Watched directory {{ $labels.path }} over critical threshold"
+          description: "Watched directory {{ $labels.path }} is {{ humanize1024 $value }}B, over its 25 GiB critical threshold."

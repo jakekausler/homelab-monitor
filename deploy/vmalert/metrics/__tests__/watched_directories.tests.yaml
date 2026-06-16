@@ -1,0 +1,146 @@
+# Rule unit-test fixtures for deploy/vmalert/metrics/watched_directories.yaml.
+# Schema: Prometheus / vmalert rule unit-test format. Run manually via promtool:
+#   docker run --rm --entrypoint promtool \
+#     -v $(pwd)/deploy/vmalert/metrics:/rules \
+#     prom/prometheus:v2.47.0 \
+#     test rules /rules/__tests__/watched_directories.tests.yaml
+#
+# All 4 rules are PROMTOOL-VALIDATABLE (plain gauge > literal threshold; the
+# instant-vector filter preserves the input `path` label). Each rule gets a
+# FIRE (value over threshold) + NO-FIRE (value under threshold) block.
+# 60s interval, for: 5m = 5 steps; plant flat x6, eval at 6m.
+
+rule_files:
+  - ../watched_directories.yaml
+
+evaluation_interval: 60s
+
+tests:
+
+  # ===========================================================================
+  # RULE: WatchedDirectoryTmpWarn  (> 1073741824)
+  # ===========================================================================
+
+  # FIRE: /tmp at 2 GiB (> 1 GiB warn) held for >5m.
+  - interval: 60s
+    input_series:
+      - series: 'homelab_host_directory_bytes{path="/tmp"}'
+        values: '2147483648+0x6'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: WatchedDirectoryTmpWarn
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              source_tool: vmalert-metrics
+              target_kind: host
+              path: /tmp
+            exp_annotations:
+              summary: "Watched directory /tmp over warn threshold"
+              description: "Watched directory /tmp is 2GiB, over its 1 GiB warn threshold."
+
+  # NO-FIRE: /tmp at 512 MiB (< 1 GiB warn).
+  - interval: 60s
+    input_series:
+      - series: 'homelab_host_directory_bytes{path="/tmp"}'
+        values: '536870912+0x6'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: WatchedDirectoryTmpWarn
+        exp_alerts: []
+
+  # ===========================================================================
+  # RULE: WatchedDirectoryTmpCrit  (> 4294967296)
+  # ===========================================================================
+
+  # FIRE: /tmp at 5 GiB (> 4 GiB crit) held for >5m.
+  - interval: 60s
+    input_series:
+      - series: 'homelab_host_directory_bytes{path="/tmp"}'
+        values: '5368709120+0x6'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: WatchedDirectoryTmpCrit
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              source_tool: vmalert-metrics
+              target_kind: host
+              path: /tmp
+            exp_annotations:
+              summary: "Watched directory /tmp over critical threshold"
+              description: "Watched directory /tmp is 5GiB, over its 4 GiB critical threshold."
+
+  # NO-FIRE: /tmp at 2 GiB (< 4 GiB crit).
+  - interval: 60s
+    input_series:
+      - series: 'homelab_host_directory_bytes{path="/tmp"}'
+        values: '2147483648+0x6'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: WatchedDirectoryTmpCrit
+        exp_alerts: []
+
+  # ===========================================================================
+  # RULE: WatchedDirectoryVarWarn  (> 10737418240)
+  # ===========================================================================
+
+  # FIRE: /var at 12 GiB (> 10 GiB warn) held for >5m.
+  - interval: 60s
+    input_series:
+      - series: 'homelab_host_directory_bytes{path="/var"}'
+        values: '12884901888+0x6'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: WatchedDirectoryVarWarn
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              source_tool: vmalert-metrics
+              target_kind: host
+              path: /var
+            exp_annotations:
+              summary: "Watched directory /var over warn threshold"
+              description: "Watched directory /var is 12GiB, over its 10 GiB warn threshold."
+
+  # NO-FIRE: /var at 5 GiB (< 10 GiB warn).
+  - interval: 60s
+    input_series:
+      - series: 'homelab_host_directory_bytes{path="/var"}'
+        values: '5368709120+0x6'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: WatchedDirectoryVarWarn
+        exp_alerts: []
+
+  # ===========================================================================
+  # RULE: WatchedDirectoryVarCrit  (> 26843545600)
+  # ===========================================================================
+
+  # FIRE: /var at 30 GiB (> 25 GiB crit) held for >5m.
+  - interval: 60s
+    input_series:
+      - series: 'homelab_host_directory_bytes{path="/var"}'
+        values: '32212254720+0x6'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: WatchedDirectoryVarCrit
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              source_tool: vmalert-metrics
+              target_kind: host
+              path: /var
+            exp_annotations:
+              summary: "Watched directory /var over critical threshold"
+              description: "Watched directory /var is 30GiB, over its 25 GiB critical threshold."
+
+  # NO-FIRE: /var at 12 GiB (< 25 GiB crit).
+  - interval: 60s
+    input_series:
+      - series: 'homelab_host_directory_bytes{path="/var"}'
+        values: '12884901888+0x6'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: WatchedDirectoryVarCrit
+        exp_alerts: []

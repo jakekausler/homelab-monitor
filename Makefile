@@ -83,17 +83,28 @@ uv:
 # Compose / container helpers (STAGE-001-015).
 # ---------------------------------------------------------------------------
 
+# NOTE (STAGE-005A-008): every prod `docker compose` invocation explicitly -f's
+# BOTH docker-compose.override.yml (build-context mounts) AND
+# docker-compose.watched-dirs.yml (watched-dir :ro mounts) on top of the base
+# docker-compose.yml. This is REQUIRED because compose's implicit auto-merge of
+# docker-compose.override.yml is DISABLED as soon as any explicit -f is given —
+# so without these flags the build-mounts override silently never applied in prod
+# (a latent bug fixed here) and the watched-dir mounts would never apply either.
+# Merge order matters: base -> override -> watched-dirs (volumes lists APPEND).
+# docker-compose.watched-dirs.yml is committed (and regenerable via
+# `make generate-watched-dirs-mounts`); it MUST exist or compose errors on -f.
+
 compose-build:
-	docker compose -f deploy/compose/docker-compose.yml build
+	docker compose -f deploy/compose/docker-compose.yml -f deploy/compose/docker-compose.override.yml -f deploy/compose/docker-compose.watched-dirs.yml build
 
 compose-up:
-	docker compose -f deploy/compose/docker-compose.yml up -d
+	docker compose -f deploy/compose/docker-compose.yml -f deploy/compose/docker-compose.override.yml -f deploy/compose/docker-compose.watched-dirs.yml up -d
 
 compose-down:
-	docker compose -f deploy/compose/docker-compose.yml down
+	docker compose -f deploy/compose/docker-compose.yml -f deploy/compose/docker-compose.override.yml -f deploy/compose/docker-compose.watched-dirs.yml down
 
 compose-logs:
-	docker compose -f deploy/compose/docker-compose.yml logs -f
+	docker compose -f deploy/compose/docker-compose.yml -f deploy/compose/docker-compose.override.yml -f deploy/compose/docker-compose.watched-dirs.yml logs -f
 
 integration:
 	bash scripts/run-integration.sh
@@ -157,7 +168,7 @@ verify-ci:
 	$(MAKE) verify
 	@command -v code-review-graph >/dev/null 2>&1 || { echo "ERROR: code-review-graph missing — run 'make crg-init'"; exit 1; }
 	uv tool run code-review-graph build
-	docker compose -f deploy/compose/docker-compose.yml config -q
+	docker compose -f deploy/compose/docker-compose.yml -f deploy/compose/docker-compose.override.yml -f deploy/compose/docker-compose.watched-dirs.yml config -q
 
 ## generate-build-mounts: Regenerate deploy/compose/docker-compose.override.yml from build-sources.yaml
 generate-build-mounts:
@@ -169,3 +180,11 @@ test-generate-build-mounts:
 	@echo "    container_prefix: /host-build-contexts/programs" >> /tmp/test-bs.yaml
 	@BUILD_SOURCES_PATH=/tmp/test-bs.yaml OUT_OVERRIDE=/tmp/test-override.yml bash scripts/generate-compose-override.sh
 	@grep 'storage/programs:/storage/programs:ro' /tmp/test-override.yml && echo "PASS" || (echo "FAIL" && exit 1)
+
+## generate-watched-dirs-mounts: Regenerate deploy/compose/docker-compose.watched-dirs.yml
+generate-watched-dirs-mounts:
+	@bash scripts/generate-watched-dirs-mounts.sh
+
+## test-generate-watched-dirs: Run the watched-dir collision-validator pytest
+test-generate-watched-dirs:
+	uv run --directory $(MONITOR_DIR) pytest --no-cov tests/test_watched_dirs_validator.py

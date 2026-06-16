@@ -208,6 +208,27 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
         degraded.append("self_disk")
 
     try:
+        from homelab_monitor.plugins.collectors.builtin.watched_dir_size import (  # noqa: PLC0415
+            WatchedDirSizeCollector,
+        )
+
+        loader.register(
+            WatchedDirSizeCollector,
+            {
+                "name": "watched_dir_size",
+                "interval_seconds": int(WatchedDirSizeCollector.interval.total_seconds()),
+                "timeout_seconds": int(WatchedDirSizeCollector.timeout.total_seconds()),
+            },
+        )
+    except Exception as exc:  # pragma: no cover -- defensive
+        log.warning(
+            "lifespan.collector_register_failed",
+            name="watched_dir_size",
+            error=str(exc),
+        )
+        degraded.append("watched_dir_size")
+
+    try:
         loader.register(
             LogStreamBudgetCollector,
             {

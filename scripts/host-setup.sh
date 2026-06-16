@@ -502,7 +502,7 @@ Paste these into deploy/dev/dev.env (or your production env):
   HM_CRON_HOST_GID=$GID_VAL
   HM_HOST_HOSTNAME=$HOSTNAME_VAL
 
-Then restart the monitor: docker compose up -d --force-recreate monitor
+Then restart the monitor: make compose-up
 EOF
 
 # Handle env file writing if requested
