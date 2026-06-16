@@ -1,8 +1,8 @@
 # EPIC-005A: Alert backfill for EPICs 001-004
 
-## Status: In Progress (1 / 8 Complete)
+## Status: In Progress (1 / 9 Complete)
 
-## Stages Counter: 1 / 8 Complete
+## Stages Counter: 1 / 9 Complete
 
 ## Current Stage: STAGE-005A-002
 
@@ -107,11 +107,13 @@ and user-authorable rules must not contradict each other.
   vmalert (EPIC-005-013 pattern), NOT Netdata's models. Where a signal genuinely needs ML, defer to 015.
 - **EPIC-016 (ISP/WAN)** owns WAN/latency/DNS rules.
 
-## Stage decomposition (8 stages)
+## Stage decomposition (9 stages)
 
 Stages 001-007 are alerting-only (vmalert rule files + test mirrors). Stage 008 is the new-collector +
-mounts + panel feature. Stages 001-003, 005-007 are independent and MAY be reordered; 004 (probe
-enablement) and 008 (collector+mounts) are the heaviest. Listed by descending user-visible value.
+mounts + panel feature; stage 009 (added 2026-06-15, user request) is a temperature collector + sustained
+alerts + a Grafana panel. Stages 001-003, 005-007 are independent and MAY be reordered; 004 (probe
+enablement), 008 (collector+mounts), and 009 (temp collector) are the heaviest. Listed roughly by
+descending user-visible value; 009 is sequenced last (added after the original 8).
 
 | # | Stage | Theme |
 |---|---|---|
@@ -123,6 +125,7 @@ enablement) and 008 (collector+mounts) are the heaviest. Listed by descending us
 | STAGE-005A-006 | Logging + Drain anomaly rules | `log_drain_health.yaml` (+ optional logs rule): signature-cardinality-warn, Drain-cycle stall, `metric_family_dropped_series`, and the coarse per-service signature-spike (the user's "log anomalies", from `signature_spike.yml.tmpl`). Must not double-fire `ServiceErrorRateSpike`/`NewLogSignature`. |
 | STAGE-005A-007 | Build / config health + self-disk-shrink rules | `self_and_build.yaml`: self-disk auto-shrink fired (`self_disk_shrink_total`), build-sources config load==0, compose unreadable==0, build-source hash skipped. (Aggregate self-disk + per-slot are elsewhere.) Low-severity silent-degradation signals. |
 | STAGE-005A-008 | Watched-directory size collector + config-driven `:ro` mounts + alerts + Grafana panel | NEW `homelab_host_directory_bytes{path}` collector (du-with-timeout), `watched_directories` config (default `/tmp` 1G/4G, `/var` 10G/25G), generated `:ro` mounts via the existing override-generator + NEW collision/overlap validation, absolute-threshold alerts, and a Grafana bargauge panel parallel to the disk-mountpoint panel. Backend + host-integration + dashboard; Design may split into 008a/008b. |
+| STAGE-005A-009 | Host temperature metrics + sustained alerts + Grafana panel | NEW `homelab_host_temperature_celsius{chip,sensor}` collector (psutil sensors_temperatures — k10temp/nvme/amdgpu confirmed live; readable via default container sysfs, NO compose change). Per-sensor sustained warn/critical threshold rules (CPU/NVMe/GPU) + a per-sensor rolling-baseline thermal anomaly rule, AND a single full-width time-series Grafana panel on host-overview plotting all sensors. Backend + host-integration + dashboard. |
 
 ## Cross-stage acceptance criteria
 
