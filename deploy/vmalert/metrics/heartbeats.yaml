@@ -1,5 +1,5 @@
 # vmalert heartbeat metric rules. Picked up by the vmalert-metrics sidecar.
-# Severity vocabulary: info / warning / error / critical (spec §8.2).
+# Severity vocabulary: info / warning / critical (spec §8.2; 'error' removed STAGE-005A-003).
 # routing_channel routes the notification: cron-health vs monitoring-health.
 #
 # These rules read series emitted by HeartbeatStateCollector

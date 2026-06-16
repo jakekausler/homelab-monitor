@@ -1,0 +1,37 @@
+# Cadence-relative cron run-duration backstop rule (STAGE-005A-005).
+# Severity vocabulary: info / warning / critical (spec §8.2; 'error' removed STAGE-005A-003).
+#
+# This file holds CronRunDurationNearCadence, which uses MetricsQL label_value()
+# to read the cadence_seconds label as a numeric scalar per-series. label_value()
+# is VictoriaMetrics-only; promtool cannot parse it and would reject the entire
+# rule file by design (preventing promtool validation of any other rules in that
+# file). By splitting this rule into its own file, we preserve promtool validation
+# of the PromQL-portable CronRunDurationAnomalous rule in cron_duration.yaml.
+#
+# CronRunDurationNearCadence is validated via live-MetricsQL replay against the rig
+# in Refinement 3a (see deploy/vmalert/metrics/__tests__/cron_duration.tests.yaml
+# for the commented-out recipe). This rule loads normally in prod vmalert (the
+# *.yaml glob picks it up; vmalert supports label_value).
+
+groups:
+  - name: cron_duration_cadence
+    interval: 30s
+    rules:
+
+      # --- Backstop: run duration exceeds 50% of cadence interval ---
+      # NOTE: uses MetricsQL label_value() — VM-only, NOT promtool-validatable.
+      # Validate via live-MetricsQL replay in Refinement 3a
+      # (see __tests__/cron_duration.tests.yaml for the commented-out recipe).
+      - alert: CronRunDurationNearCadence
+        expr: |
+          homelab_heartbeat_last_duration_seconds{wrapper_installed="yes"}
+            > 0.5 * label_value(homelab_heartbeat_last_duration_seconds{wrapper_installed="yes"}, "cadence_seconds")
+        for: 15m
+        labels:
+          severity: warning
+          source_tool: vmalert-metrics
+          target_kind: cron
+          routing_channel: cron-health
+        annotations:
+          summary: "Cron {{ $labels.name }} on {{ $labels.host }} run duration exceeds 50% of cadence (possible hang)"
+          description: 'Cron {{ $labels.name }} ran for {{ $value }}s, exceeding 50% of its scheduled cadence interval. The job may be hanging or severely degraded.'

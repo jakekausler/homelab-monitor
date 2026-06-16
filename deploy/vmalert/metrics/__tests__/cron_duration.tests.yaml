@@ -1,0 +1,103 @@
+# Rule unit-test fixtures for deploy/vmalert/metrics/cron_duration.yaml (Rule 1 only).
+# Schema: Prometheus / vmalert rule unit-test format.
+# Run manually (vmalert has NO unit-test mode — use promtool for PromQL-portable rules):
+#   docker run --rm --entrypoint promtool \
+#     -v $(pwd)/deploy/vmalert/metrics:/rules \
+#     prom/prometheus:v2.47.0 \
+#     test rules /rules/__tests__/cron_duration.tests.yaml
+# (No make target wires this yet — forward-compatible static fixture, NOT CI-run.
+#  Consistent with every other __tests__/*.tests.yaml in this directory.)
+#
+# CronRunDurationAnomalous (Rule 1) is promtool-validatable:
+#   FIRE + NO-FIRE fixtures are active below.
+#   Window: [1d] = 86400s = 2880 samples at 30s.
+#   Baseline 100s; at eval the [1d] window includes the 32 spike samples so avg ≈104 → clamp_min(3*104,120) ≈313.
+#   Spike 500s > 300 → FIRE after for:15m (32 samples past onset).
+#   eval_time = 2880 × 30s + 16m = 1440m + 16m = 1456m.
+#
+# CronRunDurationNearCadence (Rule 2) is now in cron_duration_cadence.yaml.
+#   It uses label_value() (MetricsQL-only) and is validated via live-MetricsQL
+#   replay against the rig in Refinement 3a (see the commented-out recipe below).
+#   Splitting Rule 2 allows promtool to validate this file cleanly without rejection
+#   from unparseable label_value() constructs.
+
+rule_files:
+  - ../cron_duration.yaml
+
+evaluation_interval: 30s
+
+tests:
+
+  # ===========================================================================
+  # 1. CronRunDurationAnomalous (for: 15m) — 3x 1d baseline, floor 120s
+  # Baseline: 100s for 1d (2880 samples at 30s). Spike: 500s for 16m (32 samples).
+  # avg_over_time[1d] at eval ≈104 (window includes spike tail); clamp_min(3*104,120) ≈313. 500 > 313 → FIRE after 15m.
+  # Eval at 1440m + 16m = 1456m.
+  # NO-FIRE: flat at 100s throughout — 100 < 300 floor threshold, never fires.
+  # ===========================================================================
+
+  # FIRE: 100s baseline for 1d, then 500s for 16m.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_heartbeat_last_duration_seconds{wrapper_installed="yes",name="backup.sh",host="intelnuc"}'
+        values: '100+0x2880 500+0x32'
+    alert_rule_test:
+      - eval_time: 1456m
+        alertname: CronRunDurationAnomalous
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              source_tool: vmalert-metrics
+              target_kind: cron
+              routing_channel: cron-health
+              wrapper_installed: "yes"
+              name: backup.sh
+              host: intelnuc
+            exp_annotations:
+              summary: "Cron backup.sh on intelnuc run duration anomalously high (3x 1d baseline, floor 120s)"
+              description: "Cron backup.sh ran for 500s, exceeding 3x its 1-day baseline duration (floor 120s). Possible slowdown or hang."
+
+  # NO-FIRE: flat 100s throughout — always below the 300s threshold.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_heartbeat_last_duration_seconds{wrapper_installed="yes",name="backup.sh",host="intelnuc"}'
+        values: '100+0x2920'
+    alert_rule_test:
+      - eval_time: 1456m
+        alertname: CronRunDurationAnomalous
+        exp_alerts: []
+
+  # ===========================================================================
+  # 2. CronRunDurationNearCadence — LIVE-REPLAY-ONLY (label_value is VM-only).
+  # promtool returns got:[] by design — do NOT change the production expr.
+  # Validate via live-MetricsQL replay against the rig in Refinement 3a.
+  #
+  # Planted-series recipe for live replay:
+  #   backup.sh: duration=50000s, cadence_seconds="86400"
+  #     → 50000 > 0.5 * 86400 = 43200 → FIRE
+  #   rtlamr-watchdog.sh: duration=30s, cadence_seconds="300"
+  #     → 30 > 0.5 * 300 = 150 → SILENT (no-fire)
+  #
+  # - interval: 30s
+  #   input_series:
+  #     - series: 'homelab_heartbeat_last_duration_seconds{wrapper_installed="yes",name="backup.sh",host="intelnuc",cadence_seconds="86400"}'
+  #       values: '50000+0x32'
+  #     - series: 'homelab_heartbeat_last_duration_seconds{wrapper_installed="yes",name="rtlamr-watchdog.sh",host="intelnuc",cadence_seconds="300"}'
+  #       values: '30+0x32'
+  #   alert_rule_test:
+  #     - eval_time: 16m
+  #       alertname: CronRunDurationNearCadence
+  #       exp_alerts:
+  #         - exp_labels:
+  #             severity: warning
+  #             source_tool: vmalert-metrics
+  #             target_kind: cron
+  #             routing_channel: cron-health
+  #             wrapper_installed: "yes"
+  #             name: backup.sh
+  #             host: intelnuc
+  #             cadence_seconds: "86400"
+  #           exp_annotations:
+  #             summary: "Cron backup.sh on intelnuc run duration exceeds 50% of cadence (possible hang)"
+  #             description: "Cron backup.sh ran for 50000s, exceeding 50% of its scheduled cadence interval. The job may be hanging or severely degraded."
+  # ===========================================================================

@@ -1,0 +1,35 @@
+# vmalert METRICS rules for cron run-duration anomalies (STAGE-005A-005).
+# Severity vocabulary: info / warning / critical (spec §8.2; 'error' removed STAGE-005A-003).
+#
+# Targets homelab_heartbeat_last_duration_seconds{wrapper_installed="yes"},
+# a persisted last-value gauge re-emitted every 30s until the next cron run.
+#
+# This file holds CronRunDurationAnomalous (Rule 1), which uses only avg_over_time
+# over a 1d window and clamp_min — fully promtool-validatable (PromQL-portable).
+#
+# The companion rule CronRunDurationNearCadence (Rule 2) is in cron_duration_cadence.yaml
+# because it uses MetricsQL label_value() (VM-only, promtool-unparseable). Splitting
+# enables promtool validation of this file without rejection from unparseable constructs.
+
+groups:
+  - name: cron_duration
+    interval: 30s
+    rules:
+
+      # --- Anomaly: run duration 3x 1d baseline, floor 120s ---
+      # clamp_min floor of 120s prevents false-fires on fast-running crons
+      # where 3x of 20s = 60s would otherwise trip it (floor raises threshold
+      # to 120s minimum). Fully promtool-validatable.
+      - alert: CronRunDurationAnomalous
+        expr: |
+          homelab_heartbeat_last_duration_seconds{wrapper_installed="yes"}
+            > clamp_min(3 * avg_over_time(homelab_heartbeat_last_duration_seconds{wrapper_installed="yes"}[1d]), 120)
+        for: 15m
+        labels:
+          severity: warning
+          source_tool: vmalert-metrics
+          target_kind: cron
+          routing_channel: cron-health
+        annotations:
+          summary: "Cron {{ $labels.name }} on {{ $labels.host }} run duration anomalously high (3x 1d baseline, floor 120s)"
+          description: 'Cron {{ $labels.name }} ran for {{ $value }}s, exceeding 3x its 1-day baseline duration (floor 120s). Possible slowdown or hang.'
