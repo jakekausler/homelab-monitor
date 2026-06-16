@@ -1,0 +1,167 @@
+# Rule unit-test fixtures for deploy/vmalert/metrics/self_and_build.yaml.
+# Schema: Prometheus / vmalert rule unit-test format.
+# Run manually (vmalert has NO unit-test mode — use promtool, which understands the
+# same Prometheus rule-test schema):
+#   docker run --rm --entrypoint promtool \
+#     -v $(pwd)/deploy/vmalert/metrics:/rules \
+#     prom/prometheus:v2.47.0 \
+#     test rules /rules/__tests__/self_and_build.tests.yaml
+# (No make target wires this yet — forward-compatible static fixture, NOT CI-run.
+#  Consistent with every other __tests__/*.tests.yaml in this directory.)
+#
+# All four rules are PROMTOOL-VALIDATABLE (no subqueries, no label_value, no
+# cross-metric binary ops, no empty-label-aggregate gates) — every FIRE + NO-FIRE
+# below executes directly in promtool; NO live-replay is needed.
+#
+# Label-preservation notes (matched in exp_labels below):
+#   - increase(counter[w]) > 0 keeps the counter's labels (Rule 1 keeps tier).
+#   - gauge == 0 is an instant-vector filter that PRESERVES input labels; planting
+#     the bare metric with no extra labels → alert carries ONLY the rule labels
+#     (Rules 2 & 3).
+#   - count by(reason,name)(...) > 0 keeps ONLY reason + name (instance/job dropped
+#     by the aggregation) plus the rule labels (Rule 4).
+
+rule_files:
+  - ../self_and_build.yaml
+
+evaluation_interval: 30s
+
+tests:
+
+  # ===========================================================================
+  # RULE 1. SelfDiskShrinkFired (for: 0s) — counter increase[10m] > 0
+  # Counter needs a rise within the 10m window. Same idiom as container_crash:
+  # plant '0 0 1 1 1' and eval at 60s — increase()[10m] sees the 0->1 step → > 0
+  # → fires immediately (for: 0s). tier label is preserved through increase().
+  # ===========================================================================
+
+  # FIRE: counter steps 0 -> 1 within the window → increase[10m] > 0.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_self_disk_shrink_total{tier="v1"}'
+        values: '0 0 1 1 1'
+    alert_rule_test:
+      - eval_time: 60s
+        alertname: SelfDiskShrinkFired
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              source_tool: vmalert-metrics
+              target_kind: self_disk
+              tier: v1
+            exp_annotations:
+              summary: "Self-disk auto-shrink fired (tier v1)"
+              description: "The self-disk auto-shrink path fired 1 time(s) in the last 10m (tier v1). Self-disk usage crossed 95% and the shrink decision was logged."
+
+  # NO-FIRE: flat counter (no increase in window) → increase[10m] == 0 → silent.
+  # (The baseline reality is an ABSENT series; a flat counter is the promtool-
+  #  expressible equivalent and also produces no alert.)
+  - interval: 30s
+    input_series:
+      - series: 'homelab_self_disk_shrink_total{tier="v1"}'
+        values: '3+0x5'
+    alert_rule_test:
+      - eval_time: 60s
+        alertname: SelfDiskShrinkFired
+        exp_alerts: []
+
+  # ===========================================================================
+  # RULE 2. BuildSourcesConfigLoadFailed (for: 5m) — gauge == 0
+  # 30s interval; for:5m = 10 steps. Plant flat for >5m (x12), eval at 6m.
+  # Bare metric, no extra labels → alert carries only the rule labels.
+  # ===========================================================================
+
+  # FIRE: gauge held at 0 for >5m.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_build_sources_config_loaded'
+        values: '0+0x12'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: BuildSourcesConfigLoadFailed
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              source_tool: vmalert-metrics
+              target_kind: build_config
+            exp_annotations:
+              summary: "build-sources config failed to load"
+              description: "homelab_build_sources_config_loaded has been 0 for over 5 minutes. The local-build-update collector cannot read its build-sources config; local-build image-update tracking is degraded."
+
+  # NO-FIRE: gauge held at 1 (healthy).
+  - interval: 30s
+    input_series:
+      - series: 'homelab_build_sources_config_loaded'
+        values: '1+0x12'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: BuildSourcesConfigLoadFailed
+        exp_alerts: []
+
+  # ===========================================================================
+  # RULE 3. DockerComposeUnreadable (for: 5m) — gauge == 0
+  # Same shape as Rule 2. Bare metric, no extra labels → only rule labels.
+  # ===========================================================================
+
+  # FIRE: gauge held at 0 (unreadable) for >5m.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_docker_compose_readable'
+        values: '0+0x12'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: DockerComposeUnreadable
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              source_tool: vmalert-metrics
+              target_kind: build_config
+            exp_annotations:
+              summary: "docker-compose file unreadable"
+              description: "homelab_docker_compose_readable has been 0 for over 5 minutes. The local-build-update collector cannot read the docker-compose file; local-build container resolution is degraded."
+
+  # NO-FIRE: gauge held at 1 (readable).
+  - interval: 30s
+    input_series:
+      - series: 'homelab_docker_compose_readable'
+        values: '1+0x12'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: DockerComposeUnreadable
+        exp_alerts: []
+
+  # ===========================================================================
+  # RULE 4. BuildSourceHashSkipped (for: 5m) — count by(reason,name)(...) > 0
+  # 30s interval; plant a single {reason,name} series at 1 for >5m, eval at 6m.
+  # count by(reason,name) keeps ONLY reason + name (instance/job dropped); the
+  # > 0 fires one alert. exp_labels = rule labels + reason + name (NO instance/job).
+  # ===========================================================================
+
+  # FIRE: one skip series held at 1 for >5m.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_build_source_hash_skipped_total{reason="permission_denied",name="foo"}'
+        values: '1+0x12'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: BuildSourceHashSkipped
+        exp_alerts:
+          - exp_labels:
+              severity: info
+              source_tool: vmalert-metrics
+              target_kind: build_config
+              reason: permission_denied
+              name: foo
+            exp_annotations:
+              summary: "build-source hash skipped for foo (permission_denied)"
+              description: "The local-build-update collector skipped hashing the build source for container foo (reason: permission_denied) for over 5 minutes. Image-content drift for that container is not being tracked."
+
+  # NO-FIRE: no skip series planted (absent) → count(...) empty → silent.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_build_sources_config_loaded'
+        values: '1+0x12'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: BuildSourceHashSkipped
+        exp_alerts: []

@@ -1,0 +1,88 @@
+# vmalert METRICS rules for self-disk-shrink + local-build-update-collector health
+# (STAGE-005A-007).
+# Severity vocabulary: info / warning / critical (spec §8.2; 'error' removed STAGE-005A-003).
+#
+# All rules use source_tool: vmalert-metrics. target_kind varies per rule
+# (self_disk for the disk-shrink counter; build_config for the build-collector gauges).
+#
+# Metric shapes (verified against source + live VictoriaMetrics):
+#   - homelab_self_disk_shrink_total — COUNTER (write_counter, +1), label `tier`
+#     (value "v1"). ABSENT at baseline; emitted only when self-disk used_pct > 95%
+#     plus a 5-min cooldown elapses. increase([10m]) > 0 detects a fresh shrink event.
+#   - homelab_build_sources_config_loaded — GAUGE, no metric-specific labels.
+#     1 = config loaded healthy, 0 = load failed. Emitted every tick. == 0 + for:5m.
+#   - homelab_docker_compose_readable — GAUGE, no metric-specific labels.
+#     1 = readable, 0 = unreadable. Emitted every tick. == 0 + for:5m.
+#   - homelab_build_source_hash_skipped_total — GAUGE despite the _total suffix
+#     (write_gauge, SET 1.0), labels `reason` (context_missing | context_too_large |
+#     permission_denied) + `name` (container). ABSENT at baseline; set to 1.0 per
+#     {reason,name} when a skip happens. count by(reason,name)(...) > 0 surfaces one
+#     alert per skipping container, preserving reason + name.
+#
+# All four exprs are promtool-validatable (no subqueries, no label_value, no
+# cross-metric binary ops). See __tests__/self_and_build.tests.yaml for FIRE/NO-FIRE.
+
+groups:
+  - name: self_and_build
+    interval: 30s
+    rules:
+
+      # --- Rule 1: self-disk auto-shrink fired ---
+      # homelab_self_disk_shrink_total is a counter, absent until the first shrink.
+      # increase([10m]) > 0 fires the moment a shrink event lands; for:0s = immediate.
+      # The `tier` label (v1) is preserved through increase() and surfaced in the
+      # annotation alongside the increment count.
+      - alert: SelfDiskShrinkFired
+        expr: increase(homelab_self_disk_shrink_total[10m]) > 0
+        for: 0s
+        labels:
+          severity: warning
+          source_tool: vmalert-metrics
+          target_kind: self_disk
+        annotations:
+          summary: "Self-disk auto-shrink fired (tier {{ $labels.tier }})"
+          description: "The self-disk auto-shrink path fired {{ $value }} time(s) in the last 10m (tier {{ $labels.tier }}). Self-disk usage crossed 95% and the shrink decision was logged."
+
+      # --- Rule 2: build-sources config failed to load ---
+      # homelab_build_sources_config_loaded is a gauge emitted every tick: 1 healthy,
+      # 0 = load failed. == 0 held for 5m means the build-sources config is broken.
+      - alert: BuildSourcesConfigLoadFailed
+        expr: homelab_build_sources_config_loaded == 0
+        for: 5m
+        labels:
+          severity: warning
+          source_tool: vmalert-metrics
+          target_kind: build_config
+        annotations:
+          summary: "build-sources config failed to load"
+          description: "homelab_build_sources_config_loaded has been 0 for over 5 minutes. The local-build-update collector cannot read its build-sources config; local-build image-update tracking is degraded."
+
+      # --- Rule 3: docker-compose file unreadable ---
+      # homelab_docker_compose_readable is a gauge: 1 readable, 0 unreadable.
+      # == 0 held for 5m means the compose file the collector relies on is unreadable.
+      - alert: DockerComposeUnreadable
+        expr: homelab_docker_compose_readable == 0
+        for: 5m
+        labels:
+          severity: warning
+          source_tool: vmalert-metrics
+          target_kind: build_config
+        annotations:
+          summary: "docker-compose file unreadable"
+          description: "homelab_docker_compose_readable has been 0 for over 5 minutes. The local-build-update collector cannot read the docker-compose file; local-build container resolution is degraded."
+
+      # --- Rule 4: build-source hash skipped ---
+      # homelab_build_source_hash_skipped_total is a GAUGE (set 1.0 per {reason,name})
+      # despite the _total suffix; absent until a skip happens. count by(reason,name)
+      # surfaces one alert per {reason,name}, dropping instance/job. > 0 fires when any
+      # skip is present for 5m. reason + name are surfaced in the annotation.
+      - alert: BuildSourceHashSkipped
+        expr: count by(reason,name)(homelab_build_source_hash_skipped_total) > 0
+        for: 5m
+        labels:
+          severity: info
+          source_tool: vmalert-metrics
+          target_kind: build_config
+        annotations:
+          summary: "build-source hash skipped for {{ $labels.name }} ({{ $labels.reason }})"
+          description: "The local-build-update collector skipped hashing the build source for container {{ $labels.name }} (reason: {{ $labels.reason }}) for over 5 minutes. Image-content drift for that container is not being tracked."
