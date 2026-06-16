@@ -1,0 +1,113 @@
+# vmalert METRICS rules for host temperature monitoring (STAGE-005A-009).
+# Severity vocabulary: info / warning / critical (spec §8.2; 'error' removed STAGE-005A-003).
+#
+# All rules carry source_tool: vmalert-metrics + target_kind: host.
+# Metric: homelab_host_temperature_celsius{chip, sensor} (gauge, °C), emitted by
+# the host collector's _collect_temperatures() helper.
+#
+# Per-sensor sustained thresholds are HARDCODED-absolute (D-009-HW-LIMITS): the
+# limit metrics homelab_host_temperature_{high,critical}_celsius exist for
+# DASHBOARD reference only and are deliberately NOT joined into the NVMe rule —
+# a cross-metric name join is the epic's #1 §4.1 empty-join trap (silent dead
+# rule). Thresholds are conservative starting points above this host's idle
+# baseline (k10temp ~54 / nvme ~46 / amdgpu ~42) and below throttle, tuned in
+# Refinement 3b against real load data.
+#
+# `for: 10m` / `for: 15m` intentionally won't fire in the fast rig — by design.
+#
+# The anomaly rule (HostTempAnomalous) uses a PLAIN avg_over_time(metric[6h])
+# range vector (NOT a [6h:5m] subquery) and is a same-metric self-comparison, so
+# it is NOT a cross-metric join and promtool CAN evaluate it. All 7 alert entries
+# are promtool-validatable (no live-replay needed).
+
+groups:
+  - name: host_temperature
+    interval: 30s
+    rules:
+
+      # --- CPU package (k10temp / AMD Tctl) sustained hot ---
+      - alert: HostCpuTempHot
+        expr: avg_over_time(homelab_host_temperature_celsius{chip="k10temp"}[5m]) > 85
+        for: 10m
+        labels:
+          severity: warning
+          source_tool: vmalert-metrics
+          target_kind: host
+        annotations:
+          summary: "Host CPU temperature hot (k10temp > 85°C for 10m)"
+          description: 'Host CPU sensor {{ $labels.chip }}/{{ $labels.sensor }} at {{ $value }}°C (avg over 5m, sustained 10m)'
+
+      - alert: HostCpuTempCritical
+        expr: avg_over_time(homelab_host_temperature_celsius{chip="k10temp"}[5m]) > 92
+        for: 10m
+        labels:
+          severity: critical
+          source_tool: vmalert-metrics
+          target_kind: host
+        annotations:
+          summary: "Host CPU temperature critical (k10temp > 92°C for 10m)"
+          description: 'Host CPU sensor {{ $labels.chip }}/{{ $labels.sensor }} at {{ $value }}°C (avg over 5m, sustained 10m)'
+
+      # --- NVMe SSD (nvme / Composite) sustained hot ---
+      - alert: HostNvmeTempHot
+        expr: avg_over_time(homelab_host_temperature_celsius{chip="nvme"}[5m]) > 80
+        for: 10m
+        labels:
+          severity: warning
+          source_tool: vmalert-metrics
+          target_kind: host
+        annotations:
+          summary: "Host NVMe temperature hot (nvme > 80°C for 10m)"
+          description: 'Host NVMe sensor {{ $labels.chip }}/{{ $labels.sensor }} at {{ $value }}°C (avg over 5m, sustained 10m)'
+
+      - alert: HostNvmeTempCritical
+        expr: avg_over_time(homelab_host_temperature_celsius{chip="nvme"}[5m]) > 90
+        for: 10m
+        labels:
+          severity: critical
+          source_tool: vmalert-metrics
+          target_kind: host
+        annotations:
+          summary: "Host NVMe temperature critical (nvme > 90°C for 10m)"
+          description: 'Host NVMe sensor {{ $labels.chip }}/{{ $labels.sensor }} at {{ $value }}°C (avg over 5m, sustained 10m)'
+
+      # --- GPU (amdgpu / edge) sustained hot ---
+      - alert: HostGpuTempHot
+        expr: avg_over_time(homelab_host_temperature_celsius{chip="amdgpu"}[5m]) > 90
+        for: 10m
+        labels:
+          severity: warning
+          source_tool: vmalert-metrics
+          target_kind: host
+        annotations:
+          summary: "Host GPU temperature hot (amdgpu > 90°C for 10m)"
+          description: 'Host GPU sensor {{ $labels.chip }}/{{ $labels.sensor }} at {{ $value }}°C (avg over 5m, sustained 10m)'
+
+      - alert: HostGpuTempCritical
+        expr: avg_over_time(homelab_host_temperature_celsius{chip="amdgpu"}[5m]) > 100
+        for: 10m
+        labels:
+          severity: critical
+          source_tool: vmalert-metrics
+          target_kind: host
+        annotations:
+          summary: "Host GPU temperature critical (amdgpu > 100°C for 10m)"
+          description: 'Host GPU sensor {{ $labels.chip }}/{{ $labels.sensor }} at {{ $value }}°C (avg over 5m, sustained 10m)'
+
+      # --- Per-sensor rolling-baseline thermal anomaly (info) ---
+      # clamp_min(1.4 * 6h-avg, 60) floor stops a cool sensor's benign warmup
+      # from firing. K=1.4 (small — temps don't swing like CPU% due to thermal
+      # mass). Per-series: {chip,sensor} carry through, so one rule covers all
+      # sensors. PLAIN [6h] range vector → promtool-evaluable.
+      - alert: HostTempAnomalous
+        expr: |
+          homelab_host_temperature_celsius
+            > clamp_min(1.4 * avg_over_time(homelab_host_temperature_celsius[6h]), 60)
+        for: 15m
+        labels:
+          severity: info
+          source_tool: vmalert-metrics
+          target_kind: host
+        annotations:
+          summary: "Host temperature anomalously high (1.4x 6h baseline, floor 60°C)"
+          description: 'Host sensor {{ $labels.chip }}/{{ $labels.sensor }} at {{ $value }}°C exceeds 1.4x its 6-hour baseline (floor 60°C)'

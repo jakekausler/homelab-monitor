@@ -74,6 +74,13 @@ class HostCollectorConfig(CollectorConfig):
     # that are keys in this map are emitted, relabeled to the mapped value.
     # Set to {} to disable allowlist filtering and emit all mountpoints with
     # their raw labels (preserves pre-STAGE-005-041 behavior).
+    exclude_temp_sensors: list[str] = Field(default_factory=lambda: [])
+    # Prefix-match drops for temperature sensors (STAGE-005A-009). Each entry is
+    # matched against BOTH the bare `chip` and the resolved `chip:sensor` string
+    # using the same anchored-prefix idiom as exclude_disk_devs
+    # (_build_exclude_pattern). Default [] = emit all sensors.
+    # NOTE: matching is a start-anchored PREFIX (not exact) — `nvme` also matches
+    # a chip `nvme2`, same as exclude_disk_devs (`loop` matches `loop0`).
 
 
 class HostCollector(BaseCollector):
@@ -112,6 +119,7 @@ class HostCollector(BaseCollector):
                 ctx.config, "disk_mountpoint_relabel", {"/config": "/", "/host-compose": "/storage"}
             )
         )
+        exclude_temp_sensors: list[str] = list(getattr(ctx.config, "exclude_temp_sensors", []))
 
         for n, errs in [
             self._collect_cpu(ctx),
@@ -124,6 +132,7 @@ class HostCollector(BaseCollector):
             self._collect_disk_io(ctx, exclude_disk_devs),
             self._collect_net_io(ctx),
             self._collect_uptime(ctx),
+            self._collect_temperatures(ctx, exclude_temp_sensors),
         ]:
             emitted += n
             errors.extend(errs)
@@ -343,6 +352,73 @@ class HostCollector(BaseCollector):
             return 1, []
         except Exception as exc:  # pragma: no cover -- defensive psutil failure
             return 0, [f"uptime: {exc}"]
+
+    def _collect_temperatures(
+        self,
+        ctx: CollectorContext,
+        exclude_temp_sensors: list[str],
+    ) -> tuple[int, list[str]]:
+        """Emit per-sensor host temperatures.
+
+        Reads ``psutil.sensors_temperatures()`` -> ``dict[chip, list[shwtemp]]``
+        where ``shwtemp`` is a namedtuple ``(label, current, high, critical)``.
+
+        Emits ``homelab_host_temperature_celsius{chip, sensor}`` (gauge) for every
+        sensor. ``sensor`` is the psutil ``label`` when non-empty, else the
+        synthesized stringified index of the entry within that chip's list.
+
+        Additionally emits ``homelab_host_temperature_high_celsius`` /
+        ``homelab_host_temperature_critical_celsius{chip, sensor}`` ONLY when
+        psutil reports a non-None ``high`` / ``critical`` for that sensor
+        (None-guarded — only nvme reports them on this host).
+
+        ``exclude_temp_sensors`` drops a sensor whose ``chip`` OR resolved
+        ``chip:sensor`` string prefix-matches an entry, using the same anchored
+        idiom as ``exclude_disk_devs`` (``_build_exclude_pattern``).
+
+        Platform/availability guard: ``sensors_temperatures`` is Linux/FreeBSD-
+        only. When absent, OR when it returns an empty dict / no sensors, this
+        emits nothing and returns ``(0, [])`` — a host without sensors is normal,
+        NOT a failure. Only a raised exception is recorded as an error.
+        """
+        if not hasattr(psutil, "sensors_temperatures"):
+            return 0, []
+        exclude_pattern = _build_exclude_pattern(exclude_temp_sensors)
+        try:
+            by_chip = psutil.sensors_temperatures() or {}
+            emitted = 0
+            for chip, entries in by_chip.items():
+                for idx, entry in enumerate(entries):
+                    label = (entry.label or "").strip()
+                    sensor = label if label else str(idx)
+                    if exclude_pattern is not None and (
+                        exclude_pattern.match(chip) or exclude_pattern.match(f"{chip}:{sensor}")
+                    ):
+                        continue
+                    labels = {"chip": chip, "sensor": sensor}
+                    ctx.vm.write_gauge(
+                        "homelab_host_temperature_celsius",
+                        float(entry.current),
+                        labels,
+                    )
+                    emitted += 1
+                    if entry.high is not None:
+                        ctx.vm.write_gauge(
+                            "homelab_host_temperature_high_celsius",
+                            float(entry.high),
+                            labels,
+                        )
+                        emitted += 1
+                    if entry.critical is not None:
+                        ctx.vm.write_gauge(
+                            "homelab_host_temperature_critical_celsius",
+                            float(entry.critical),
+                            labels,
+                        )
+                        emitted += 1
+            return emitted, []
+        except Exception as exc:  # pragma: no cover -- exercised via monkeypatched raise
+            return 0, [f"temperatures: {exc}"]
 
     def _collect_process_states(
         self, ctx: CollectorContext

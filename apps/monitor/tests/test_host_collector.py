@@ -55,6 +55,13 @@ class _NetIO(NamedTuple):
     bytes_sent: int
 
 
+class _ShwTemp(NamedTuple):
+    label: str
+    current: float
+    high: float | None
+    critical: float | None
+
+
 class _MemInfo(NamedTuple):
     rss: int
 
@@ -94,6 +101,23 @@ def _ctx(writer: MemoryRetainingMetricsWriter, cfg: CollectorConfig) -> Collecto
 
 def _cpu_percent_stub(interval: float | None = None, percpu: bool = False) -> float | list[float]:
     return [5.0, 10.0] if percpu else 7.5
+
+
+def _sensors_temperatures_stub() -> dict[str, list[_ShwTemp]]:
+    """Real-shaped psutil.sensors_temperatures() for this host's 3 chips.
+
+    nvme reports high/critical (89.85/93.85); k10temp and amdgpu report None.
+    """
+    return {
+        "k10temp": [_ShwTemp(label="Tctl", current=54.0, high=None, critical=None)],
+        "nvme": [_ShwTemp(label="Composite", current=46.0, high=89.85, critical=93.85)],
+        "amdgpu": [_ShwTemp(label="edge", current=42.0, high=None, critical=None)],
+    }
+
+
+def _no_sensors_stub() -> dict[str, list[_ShwTemp]]:
+    """Deterministic empty sensors result (host without temperature sensors)."""
+    return {}
 
 
 def _patch_psutil_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -165,6 +189,11 @@ def _patch_psutil_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
         host_module.psutil,
         "process_iter",
         _process_iter_stub,
+    )
+    monkeypatch.setattr(
+        host_module.psutil,
+        "sensors_temperatures",
+        _no_sensors_stub,  # default: no sensors — temp-specific tests override this
     )
 
 
@@ -751,3 +780,131 @@ async def test_run_emits_uptime_seconds_fallback_to_psutil_when_no_host_proc(
     up = [e for e in writer.snapshot() if e.name == "homelab_host_uptime_seconds"]
     assert len(up) == 1
     assert up[0].value == 100.0  # noqa: PLR2004  (psutil mock: time=100_offset - boot=0_offset)
+
+
+# ---------------------------------------------------------------------------
+# STAGE-005A-009 — host temperature collection
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_run_emits_temperature_series_with_chip_sensor_labels(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Happy path: 3 temp series emitted; only nvme emits high/crit limit metrics."""
+    _patch_psutil_happy_path(monkeypatch)
+    monkeypatch.setattr(host_module.psutil, "sensors_temperatures", _sensors_temperatures_stub)
+    writer = MemoryRetainingMetricsWriter()
+    cfg = HostCollectorConfig(name="host")
+    result = await HostCollector().run(_ctx(writer, cfg))
+    assert result.ok
+
+    temps = [e for e in writer.snapshot() if e.name == "homelab_host_temperature_celsius"]
+    by_labels = {(e.labels["chip"], e.labels["sensor"]): e.value for e in temps}
+    assert by_labels == {
+        ("k10temp", "Tctl"): 54.0,
+        ("nvme", "Composite"): 46.0,
+        ("amdgpu", "edge"): 42.0,
+    }
+
+    # Only nvme reports non-None high/critical -> only nvme emits the limit metrics.
+    highs = [e for e in writer.snapshot() if e.name == "homelab_host_temperature_high_celsius"]
+    crits = [e for e in writer.snapshot() if e.name == "homelab_host_temperature_critical_celsius"]
+    assert {(e.labels["chip"], e.labels["sensor"]) for e in highs} == {("nvme", "Composite")}
+    assert {(e.labels["chip"], e.labels["sensor"]) for e in crits} == {("nvme", "Composite")}
+    assert highs[0].value == 89.85  # noqa: PLR2004
+    assert crits[0].value == 93.85  # noqa: PLR2004
+
+
+@pytest.mark.asyncio
+async def test_run_temperature_empty_label_falls_back_to_index(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A chip whose entry has an empty label gets sensor='<index>'."""
+    _patch_psutil_happy_path(monkeypatch)
+
+    def _stub() -> dict[str, list[_ShwTemp]]:
+        return {
+            "acpitz": [
+                _ShwTemp(label="", current=40.0, high=None, critical=None),
+                _ShwTemp(label="", current=41.0, high=None, critical=None),
+            ]
+        }
+
+    monkeypatch.setattr(host_module.psutil, "sensors_temperatures", _stub)
+    writer = MemoryRetainingMetricsWriter()
+    cfg = HostCollectorConfig(name="host")
+    await HostCollector().run(_ctx(writer, cfg))
+    sensors = {
+        e.labels["sensor"]
+        for e in writer.snapshot()
+        if e.name == "homelab_host_temperature_celsius"
+    }
+    assert sensors == {"0", "1"}
+
+
+@pytest.mark.asyncio
+async def test_run_temperature_exclude_drops_chip_and_chip_sensor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """exclude_temp_sensors drops by bare chip prefix AND by chip:sensor prefix."""
+    _patch_psutil_happy_path(monkeypatch)
+    monkeypatch.setattr(host_module.psutil, "sensors_temperatures", _sensors_temperatures_stub)
+    writer = MemoryRetainingMetricsWriter()
+    # "amdgpu" drops the whole amdgpu chip; "nvme:Composite" drops that one sensor.
+    cfg = HostCollectorConfig(name="host", exclude_temp_sensors=["amdgpu", "nvme:Composite"])
+    await HostCollector().run(_ctx(writer, cfg))
+    pairs = {
+        (e.labels["chip"], e.labels["sensor"])
+        for e in writer.snapshot()
+        if e.name == "homelab_host_temperature_celsius"
+    }
+    assert pairs == {("k10temp", "Tctl")}
+    # nvme excluded -> its high/crit limit metrics must also be absent.
+    assert not [e for e in writer.snapshot() if e.name == "homelab_host_temperature_high_celsius"]
+
+
+@pytest.mark.asyncio
+async def test_run_temperature_absent_sensors_temperatures_is_not_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When psutil lacks sensors_temperatures, emit nothing and stay ok."""
+    _patch_psutil_happy_path(monkeypatch)
+    monkeypatch.delattr(host_module.psutil, "sensors_temperatures", raising=False)
+    writer = MemoryRetainingMetricsWriter()
+    cfg = HostCollectorConfig(name="host")
+    result = await HostCollector().run(_ctx(writer, cfg))
+    assert result.ok is True
+    assert not [e for e in writer.snapshot() if e.name == "homelab_host_temperature_celsius"]
+
+
+@pytest.mark.asyncio
+async def test_run_temperature_psutil_raises_records_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A raised sensors_temperatures() is recorded as an error, ok becomes False."""
+    _patch_psutil_happy_path(monkeypatch)
+
+    def _raise() -> dict[str, list[_ShwTemp]]:
+        raise OSError("simulated sensor failure")
+
+    monkeypatch.setattr(host_module.psutil, "sensors_temperatures", _raise)
+    writer = MemoryRetainingMetricsWriter()
+    cfg = HostCollectorConfig(name="host")
+    result = await HostCollector().run(_ctx(writer, cfg))
+    assert result.ok is False
+    assert any("temperatures" in e for e in result.errors)
+
+
+@pytest.mark.asyncio
+async def test_run_temperature_empty_dict_is_not_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An empty sensors dict emits nothing and stays ok (host without sensors)."""
+    _patch_psutil_happy_path(monkeypatch)
+    monkeypatch.setattr(host_module.psutil, "sensors_temperatures", _no_sensors_stub)
+    writer = MemoryRetainingMetricsWriter()
+    cfg = HostCollectorConfig(name="host")
+    result = await HostCollector().run(_ctx(writer, cfg))
+    assert result.ok is True
+    assert not [e for e in writer.snapshot() if e.name == "homelab_host_temperature_celsius"]

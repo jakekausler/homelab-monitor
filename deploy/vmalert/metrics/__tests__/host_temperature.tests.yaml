@@ -1,0 +1,270 @@
+# Rule unit-test fixtures for deploy/vmalert/metrics/host_temperature.yaml.
+# Schema: Prometheus / vmalert rule unit-test format (promtool-evaluable).
+# Run manually (vmalert has NO unit-test mode — use promtool):
+#   docker run --rm --entrypoint promtool \
+#     -v $(pwd)/deploy/vmalert/metrics:/rules \
+#     prom/prometheus:v2.47.0 \
+#     test rules /rules/__tests__/host_temperature.tests.yaml
+#
+# ANNOTATION NOTE: every rule's `description` embeds {{ $value }}. Per the house
+# convention (see host_anomalies.tests.yaml header), fire-cases whose rendered
+# annotation carries {{ $value }} assert exp_labels ONLY and omit exp_annotations.
+#
+# SUSTAINED RULES: plant a flat series across >10m+5m at 30s (41 samples = 0..20m),
+# eval at 16m. FIRE = above threshold; NO-FIRE = below.
+#
+# ANOMALY RULE: plant a 6h flat baseline (50°C, 721 samples) then a spike
+# (75°C, 33 samples), eval at 376m past the for:15m.
+# clamp_min(1.4 * avg_over_time(...[6h]), 60): baseline avg ~51 -> threshold ~71.6;
+# spike current 75 > 71.6 -> FIRE. Flat-50 NO-FIRE: 50 > clamp_min(70,60)=70 is false.
+#
+# All 7 alert entries are promtool-validatable (no [6h:5m] subqueries, no
+# cross-metric joins) — see host_temperature.yaml header.
+
+rule_files:
+  - ../host_temperature.yaml
+
+evaluation_interval: 30s
+
+tests:
+
+  # ===========================================================================
+  # 1. HostCpuTempHot (warning, for: 10m) — k10temp avg[5m] > 85
+  # ===========================================================================
+
+  # FIRE: k10temp/Tctl flat at 88 (>85, <92) for >15m.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_host_temperature_celsius{chip="k10temp",sensor="Tctl",host="homelab"}'
+        values: '88+0x40'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: HostCpuTempHot
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              source_tool: vmalert-metrics
+              target_kind: host
+              chip: k10temp
+              sensor: Tctl
+              host: homelab
+            exp_annotations:
+              summary: "Host CPU temperature hot (k10temp > 85°C for 10m)"
+              description: "Host CPU sensor k10temp/Tctl at 88°C (avg over 5m, sustained 10m)"
+
+  # NO-FIRE: k10temp/Tctl flat at 70 (<85).
+  - interval: 30s
+    input_series:
+      - series: 'homelab_host_temperature_celsius{chip="k10temp",sensor="Tctl",host="homelab"}'
+        values: '70+0x40'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: HostCpuTempHot
+        exp_alerts: []
+
+  # ===========================================================================
+  # 2. HostCpuTempCritical (critical, for: 10m) — k10temp avg[5m] > 92
+  # ===========================================================================
+
+  # FIRE: k10temp/Tctl flat at 95 (>92).
+  - interval: 30s
+    input_series:
+      - series: 'homelab_host_temperature_celsius{chip="k10temp",sensor="Tctl",host="homelab"}'
+        values: '95+0x40'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: HostCpuTempCritical
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              source_tool: vmalert-metrics
+              target_kind: host
+              chip: k10temp
+              sensor: Tctl
+              host: homelab
+            exp_annotations:
+              summary: "Host CPU temperature critical (k10temp > 92°C for 10m)"
+              description: "Host CPU sensor k10temp/Tctl at 95°C (avg over 5m, sustained 10m)"
+
+  # NO-FIRE: k10temp/Tctl flat at 88 (<92).
+  - interval: 30s
+    input_series:
+      - series: 'homelab_host_temperature_celsius{chip="k10temp",sensor="Tctl",host="homelab"}'
+        values: '88+0x40'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: HostCpuTempCritical
+        exp_alerts: []
+
+  # ===========================================================================
+  # 3. HostNvmeTempHot (warning, for: 10m) — nvme avg[5m] > 80
+  # ===========================================================================
+
+  # FIRE: nvme/Composite flat at 85 (>80, <90).
+  - interval: 30s
+    input_series:
+      - series: 'homelab_host_temperature_celsius{chip="nvme",sensor="Composite",host="homelab"}'
+        values: '85+0x40'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: HostNvmeTempHot
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              source_tool: vmalert-metrics
+              target_kind: host
+              chip: nvme
+              sensor: Composite
+              host: homelab
+            exp_annotations:
+              summary: "Host NVMe temperature hot (nvme > 80°C for 10m)"
+              description: "Host NVMe sensor nvme/Composite at 85°C (avg over 5m, sustained 10m)"
+
+  # NO-FIRE: nvme/Composite flat at 70 (<80).
+  - interval: 30s
+    input_series:
+      - series: 'homelab_host_temperature_celsius{chip="nvme",sensor="Composite",host="homelab"}'
+        values: '70+0x40'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: HostNvmeTempHot
+        exp_alerts: []
+
+  # ===========================================================================
+  # 4. HostNvmeTempCritical (critical, for: 10m) — nvme avg[5m] > 90
+  # ===========================================================================
+
+  # FIRE: nvme/Composite flat at 95 (>90).
+  - interval: 30s
+    input_series:
+      - series: 'homelab_host_temperature_celsius{chip="nvme",sensor="Composite",host="homelab"}'
+        values: '95+0x40'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: HostNvmeTempCritical
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              source_tool: vmalert-metrics
+              target_kind: host
+              chip: nvme
+              sensor: Composite
+              host: homelab
+            exp_annotations:
+              summary: "Host NVMe temperature critical (nvme > 90°C for 10m)"
+              description: "Host NVMe sensor nvme/Composite at 95°C (avg over 5m, sustained 10m)"
+
+  # NO-FIRE: nvme/Composite flat at 85 (<90).
+  - interval: 30s
+    input_series:
+      - series: 'homelab_host_temperature_celsius{chip="nvme",sensor="Composite",host="homelab"}'
+        values: '85+0x40'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: HostNvmeTempCritical
+        exp_alerts: []
+
+  # ===========================================================================
+  # 5. HostGpuTempHot (warning, for: 10m) — amdgpu avg[5m] > 90
+  # ===========================================================================
+
+  # FIRE: amdgpu/edge flat at 95 (>90, <100).
+  - interval: 30s
+    input_series:
+      - series: 'homelab_host_temperature_celsius{chip="amdgpu",sensor="edge",host="homelab"}'
+        values: '95+0x40'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: HostGpuTempHot
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              source_tool: vmalert-metrics
+              target_kind: host
+              chip: amdgpu
+              sensor: edge
+              host: homelab
+            exp_annotations:
+              summary: "Host GPU temperature hot (amdgpu > 90°C for 10m)"
+              description: "Host GPU sensor amdgpu/edge at 95°C (avg over 5m, sustained 10m)"
+
+  # NO-FIRE: amdgpu/edge flat at 80 (<90).
+  - interval: 30s
+    input_series:
+      - series: 'homelab_host_temperature_celsius{chip="amdgpu",sensor="edge",host="homelab"}'
+        values: '80+0x40'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: HostGpuTempHot
+        exp_alerts: []
+
+  # ===========================================================================
+  # 6. HostGpuTempCritical (critical, for: 10m) — amdgpu avg[5m] > 100
+  # ===========================================================================
+
+  # FIRE: amdgpu/edge flat at 105 (>100).
+  - interval: 30s
+    input_series:
+      - series: 'homelab_host_temperature_celsius{chip="amdgpu",sensor="edge",host="homelab"}'
+        values: '105+0x40'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: HostGpuTempCritical
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              source_tool: vmalert-metrics
+              target_kind: host
+              chip: amdgpu
+              sensor: edge
+              host: homelab
+            exp_annotations:
+              summary: "Host GPU temperature critical (amdgpu > 100°C for 10m)"
+              description: "Host GPU sensor amdgpu/edge at 105°C (avg over 5m, sustained 10m)"
+
+  # NO-FIRE: amdgpu/edge flat at 95 (<100).
+  - interval: 30s
+    input_series:
+      - series: 'homelab_host_temperature_celsius{chip="amdgpu",sensor="edge",host="homelab"}'
+        values: '95+0x40'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: HostGpuTempCritical
+        exp_alerts: []
+
+  # ===========================================================================
+  # 7. HostTempAnomalous (info, for: 15m) — 1.4x 6h baseline, floor 60°C
+  # Baseline: 50°C for 6h (721 samples). Spike: 75°C for 16m (33 samples).
+  # 6h-window avg at 376m ~= 51.1 -> clamp_min(1.4*51.1, 60) = 71.6. 75 > 71.6 -> FIRE.
+  # NO-FIRE: flat 50 -> clamp_min(1.4*50,60)=70. 50 > 70 false.
+  # ===========================================================================
+
+  # FIRE: 50°C baseline for 6h, then 75°C for 16m on k10temp/Tctl.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_host_temperature_celsius{chip="k10temp",sensor="Tctl",host="homelab"}'
+        values: '50+0x720 75+0x32'
+    alert_rule_test:
+      - eval_time: 376m
+        alertname: HostTempAnomalous
+        exp_alerts:
+          - exp_labels:
+              severity: info
+              source_tool: vmalert-metrics
+              target_kind: host
+              chip: k10temp
+              sensor: Tctl
+              host: homelab
+            exp_annotations:
+              summary: "Host temperature anomalously high (1.4x 6h baseline, floor 60°C)"
+              description: "Host sensor k10temp/Tctl at 75°C exceeds 1.4x its 6-hour baseline (floor 60°C)"
+
+  # NO-FIRE: flat 50°C throughout — 50 < clamp_min(1.4*50,60)=70.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_host_temperature_celsius{chip="k10temp",sensor="Tctl",host="homelab"}'
+        values: '50+0x760'
+    alert_rule_test:
+      - eval_time: 376m
+        alertname: HostTempAnomalous
+        exp_alerts: []
