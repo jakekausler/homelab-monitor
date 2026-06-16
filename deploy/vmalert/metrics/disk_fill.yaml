@@ -1,0 +1,91 @@
+# vmalert METRICS rules for disk fill thresholds (STAGE-005A-002).
+# Severity vocabulary locked: info / warning / error / critical (spec §8.2).
+#
+# All rules carry source_tool: vmalert-metrics.
+#
+# Rules 1-2 (HostDiskFill*): host filesystem fill per mountpoint.
+#   Division MUST use `ignoring(type)` — bare division of two series that differ
+#   only by the `type` label returns empty without the modifier. Confirmed live.
+#
+# Rules 3-4 (SelfDiskSlotFill*): self_disk slot fill vs budget.
+#   Both numerator (homelab_self_disk_used_bytes) and denominator
+#   (homelab_self_disk_budget_bytes) already share the `{slot}` label — no
+#   ignoring() needed; the join is native per-slot.
+#   The `{slot!="vl"}` filter on used_bytes excludes the VL slot, which is
+#   covered by the dedicated VictoriaLogsDisk* rules in vl_health.yaml.
+#   The `(budget > 0)` guard on the denominator drops any zero-budget slot
+#   before division, preventing spurious +Inf series.
+#
+# All 4 rules are promtool-validatable (plain division + ignoring(type),
+# no rate-subquery, no count()-broadcast) — unlike the anomaly rules in
+# host_anomalies.yaml which required MetricsQL replay for some cases.
+
+groups:
+  - name: disk_fill
+    interval: 30s
+    rules:
+
+      # --- Host filesystem fill: warning at 85% ---
+      - alert: HostDiskFillWarning
+        expr: >-
+          100 * homelab_host_disk_bytes{type="used"}
+          / ignoring(type) homelab_host_disk_bytes{type="total"} > 85
+        for: 15m
+        labels:
+          severity: warning
+          source_tool: vmalert-metrics
+          target_kind: host
+        annotations:
+          summary: "Host filesystem {{ $labels.mountpoint }} above 85% full"
+          description: >-
+            Host {{ $labels.host }} mountpoint {{ $labels.mountpoint }} is
+            {{ $value }}% full (threshold: 85%). Investigate disk usage.
+
+      # --- Host filesystem fill: critical at 95% ---
+      - alert: HostDiskFillCritical
+        expr: >-
+          100 * homelab_host_disk_bytes{type="used"}
+          / ignoring(type) homelab_host_disk_bytes{type="total"} > 95
+        for: 10m
+        labels:
+          severity: critical
+          source_tool: vmalert-metrics
+          target_kind: host
+        annotations:
+          summary: "Host filesystem {{ $labels.mountpoint }} above 95% full"
+          description: >-
+            Host {{ $labels.host }} mountpoint {{ $labels.mountpoint }} is
+            {{ $value }}% full (threshold: 95%). Immediate action required.
+
+      # --- Self-disk slot fill: warning at 85% of budget ---
+      # slot="vl" excluded — covered by VictoriaLogsDiskWarning in vl_health.yaml.
+      - alert: SelfDiskSlotFillWarning
+        expr: >-
+          100 * homelab_self_disk_used_bytes{slot!="vl"}
+          / (homelab_self_disk_budget_bytes > 0) > 85
+        for: 15m
+        labels:
+          severity: warning
+          source_tool: vmalert-metrics
+          target_kind: self_disk
+        annotations:
+          summary: "Self-disk slot {{ $labels.slot }} above 85% of budget"
+          description: >-
+            Self-disk slot {{ $labels.slot }} is {{ $value }}% of its budget
+            (threshold: 85%). Review data retention or expand budget.
+
+      # --- Self-disk slot fill: critical at 95% of budget ---
+      - alert: SelfDiskSlotFillCritical
+        expr: >-
+          100 * homelab_self_disk_used_bytes{slot!="vl"}
+          / (homelab_self_disk_budget_bytes > 0) > 95
+        for: 10m
+        labels:
+          severity: critical
+          source_tool: vmalert-metrics
+          target_kind: self_disk
+        annotations:
+          summary: "Self-disk slot {{ $labels.slot }} above 95% of budget"
+          description: >-
+            Self-disk slot {{ $labels.slot }} is {{ $value }}% of its budget
+            (threshold: 95%). Immediate action required.

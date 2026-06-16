@@ -1,0 +1,208 @@
+# Rule unit-test fixtures for deploy/vmalert/metrics/disk_fill.yaml.
+# Schema: Prometheus / vmalert rule unit-test format.
+# Run manually (vmalert has NO unit-test mode — use promtool, which understands the
+# same Prometheus rule-test schema, for ALL four rules here):
+#   docker run --rm --entrypoint promtool \
+#     -v $(pwd)/deploy/vmalert/metrics:/rules \
+#     prom/prometheus:v2.47.0 \
+#     test rules /rules/__tests__/disk_fill.tests.yaml
+# NOTE: All 4 rules in disk_fill.yaml are promtool-validatable (plain division +
+#   ignoring(type), no rate-subquery, no count()-broadcast). Unlike the anomaly
+#   rules in host_anomalies.yaml, all FIRE fixtures here produce real results under
+#   the PromQL engine used by promtool.
+# (No make target wires this yet — forward-compatible static fixture, NOT CI-run.
+#  Consistent with every other __tests__/*.tests.yaml in this directory.)
+#
+# ANNOTATION NOTE: all four rules embed {{ $labels.mountpoint }} / {{ $labels.slot }}
+# in the summary (static label) and {{ $value }} in the description. The fire-cases
+# assert exp_labels + BOTH summary AND description: promtool renders {{ $value }}
+# deterministically from the planted integer byte values, so the description string is
+# stable and asserted exactly (e.g. "...86.91792673412711% full...").
+
+rule_files:
+  - ../disk_fill.yaml
+
+evaluation_interval: 30s
+
+tests:
+
+  # ===========================================================================
+  # 1. HostDiskFillWarning (for: 15m, rule threshold 85%; planted input ratio 87% -> FIRE)
+  # used=933274131898 bytes (~870 GB), total=1073741824000 bytes (1000 GB)
+  # ratio = 87% > 85 → FIRE at eval 16m.
+  # ===========================================================================
+
+  # FIRE: mountpoint "/" at 87% for >15m.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_host_disk_bytes{type="used",mountpoint="/",host="homelab"}'
+        values: '933274131898+0x33'
+      - series: 'homelab_host_disk_bytes{type="total",mountpoint="/",host="homelab"}'
+        values: '1073741824000+0x33'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: HostDiskFillWarning
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              source_tool: vmalert-metrics
+              target_kind: host
+              mountpoint: /
+              host: homelab
+            exp_annotations:
+              summary: "Host filesystem / above 85% full"
+              description: "Host homelab mountpoint / is 86.91792673412711% full (threshold: 85%). Investigate disk usage."
+
+  # NO-FIRE: mountpoint "/" at 46% (below 85% threshold).
+  - interval: 30s
+    input_series:
+      - series: 'homelab_host_disk_bytes{type="used",mountpoint="/",host="homelab"}'
+        values: '494161612800+0x33'
+      - series: 'homelab_host_disk_bytes{type="total",mountpoint="/",host="homelab"}'
+        values: '1073741824000+0x33'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: HostDiskFillWarning
+        exp_alerts: []
+
+  # ===========================================================================
+  # 2. HostDiskFillCritical (for: 10m, rule threshold 95%; planted input ratio 97% -> FIRE)
+  # used=1041522327552 bytes (~970 GB), total=1073741824000 bytes (1000 GB)
+  # ratio = 97% > 95 → FIRE at eval 11m.
+  # ===========================================================================
+
+  # FIRE: mountpoint "/" at 97% for >10m.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_host_disk_bytes{type="used",mountpoint="/",host="homelab"}'
+        values: '1041522327552+0x23'
+      - series: 'homelab_host_disk_bytes{type="total",mountpoint="/",host="homelab"}'
+        values: '1073741824000+0x23'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: HostDiskFillCritical
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              source_tool: vmalert-metrics
+              target_kind: host
+              mountpoint: /
+              host: homelab
+            exp_annotations:
+              summary: "Host filesystem / above 95% full"
+              description: "Host homelab mountpoint / is 96.99932556152343% full (threshold: 95%). Immediate action required."
+
+  # NO-FIRE: mountpoint "/" at 87% (above warn, but below 95% crit threshold).
+  - interval: 30s
+    input_series:
+      - series: 'homelab_host_disk_bytes{type="used",mountpoint="/",host="homelab"}'
+        values: '933274131898+0x23'
+      - series: 'homelab_host_disk_bytes{type="total",mountpoint="/",host="homelab"}'
+        values: '1073741824000+0x23'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: HostDiskFillCritical
+        exp_alerts: []
+
+  # ===========================================================================
+  # 3. SelfDiskSlotFillWarning (for: 15m, rule threshold 85%; planted input ratio 87% -> FIRE)
+  # used=9341534003 bytes (~8.7 GB), budget=10737418240 bytes (10 GB)
+  # ratio = 87% > 85 → FIRE at eval 16m. slot="vm" (non-vl).
+  # ===========================================================================
+
+  # FIRE: slot "vm" at 87% of budget for >15m.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_self_disk_used_bytes{slot="vm",host="homelab"}'
+        values: '9341534003+0x33'
+      - series: 'homelab_self_disk_budget_bytes{slot="vm",host="homelab"}'
+        values: '10737418240+0x33'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: SelfDiskSlotFillWarning
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              source_tool: vmalert-metrics
+              target_kind: self_disk
+              slot: vm
+              host: homelab
+            exp_annotations:
+              summary: "Self-disk slot vm above 85% of budget"
+              description: "Self-disk slot vm is 86.99981498531997% of its budget (threshold: 85%). Review data retention or expand budget."
+
+  # NO-FIRE: slot "vm" at 46% of budget (below 85% threshold).
+  - interval: 30s
+    input_series:
+      - series: 'homelab_self_disk_used_bytes{slot="vm",host="homelab"}'
+        values: '4941616128+0x33'
+      - series: 'homelab_self_disk_budget_bytes{slot="vm",host="homelab"}'
+        values: '10737418240+0x33'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: SelfDiskSlotFillWarning
+        exp_alerts: []
+
+  # NO-FIRE (vl exclusion): slot "vl" at 99% of budget — MUST NOT fire because
+  # the rule filters slot!="vl". This proves the exclusion is active.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_self_disk_used_bytes{slot="vl",host="homelab"}'
+        values: '10630051226+0x33'
+      - series: 'homelab_self_disk_budget_bytes{slot="vl",host="homelab"}'
+        values: '10737418240+0x33'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: SelfDiskSlotFillWarning
+        exp_alerts: []
+
+  # ===========================================================================
+  # 4. SelfDiskSlotFillCritical (for: 10m, rule threshold 95%; planted input ratio 97% -> FIRE)
+  # used=10415223275 bytes (~9.7 GB), budget=10737418240 bytes (10 GB)
+  # ratio = 97% > 95 → FIRE at eval 11m. slot="vm" (non-vl).
+  # ===========================================================================
+
+  # FIRE: slot "vm" at 97% of budget for >10m.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_self_disk_used_bytes{slot="vm",host="homelab"}'
+        values: '10415223275+0x23'
+      - series: 'homelab_self_disk_budget_bytes{slot="vm",host="homelab"}'
+        values: '10737418240+0x23'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: SelfDiskSlotFillCritical
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              source_tool: vmalert-metrics
+              target_kind: self_disk
+              slot: vm
+              host: homelab
+            exp_annotations:
+              summary: "Self-disk slot vm above 95% of budget"
+              description: "Self-disk slot vm is 96.99932555668056% of its budget (threshold: 95%). Immediate action required."
+
+  # NO-FIRE: slot "vm" at 87% of budget (above warn, below 95% crit threshold).
+  - interval: 30s
+    input_series:
+      - series: 'homelab_self_disk_used_bytes{slot="vm",host="homelab"}'
+        values: '9341534003+0x23'
+      - series: 'homelab_self_disk_budget_bytes{slot="vm",host="homelab"}'
+        values: '10737418240+0x23'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: SelfDiskSlotFillCritical
+        exp_alerts: []
+
+  # NO-FIRE (vl exclusion): slot "vl" at 99% of budget — MUST NOT fire.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_self_disk_used_bytes{slot="vl",host="homelab"}'
+        values: '10630051226+0x23'
+      - series: 'homelab_self_disk_budget_bytes{slot="vl",host="homelab"}'
+        values: '10737418240+0x23'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: SelfDiskSlotFillCritical
+        exp_alerts: []
