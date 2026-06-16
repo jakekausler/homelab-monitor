@@ -1528,7 +1528,7 @@ def _user_rule_to_response(r: LogUserRule) -> LogUserRuleResponse:
         rule_name=r.rule_name,
         expr=r.expr,
         expr_kind=cast(Literal["logsql", "metricsql"], r.expr_kind),
-        severity=cast(Literal["info", "warning", "error", "critical"], r.severity),
+        severity=cast(Literal["info", "warning", "critical"], r.severity),
         summary=r.summary,
         description=r.description,
         for_duration=r.for_duration,

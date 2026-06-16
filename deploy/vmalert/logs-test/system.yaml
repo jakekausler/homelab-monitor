@@ -21,7 +21,7 @@ groups:
       - alert: KernelOOM
         expr: '_time:30s service:="kernel" "Out of memory" "kill_process" | stats by (host) count() as oom_count | filter oom_count:>0'
         labels:
-          severity: error
+          severity: critical
           source_tool: vmalert-logs
           target_kind: host
         annotations:

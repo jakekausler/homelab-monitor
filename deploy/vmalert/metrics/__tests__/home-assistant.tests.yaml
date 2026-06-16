@@ -55,7 +55,7 @@ tests:
         alertname: HaConfigEntryError
         exp_alerts:
           - exp_labels:
-              severity: error
+              severity: warning
               source_tool: vmalert-metrics
               target_kind: container
               integration: home_assistant
@@ -87,7 +87,7 @@ tests:
         alertname: HaBatteryCritical
         exp_alerts:
           - exp_labels:
-              severity: error
+              severity: critical
               source_tool: vmalert-metrics
               target_kind: container
               integration: home_assistant

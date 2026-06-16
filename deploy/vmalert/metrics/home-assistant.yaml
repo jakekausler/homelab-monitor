@@ -76,7 +76,7 @@ groups:
         expr: homelab_ha_config_entry_setup_error == 1
         for: 5m
         labels:
-          severity: error
+          severity: warning
           source_tool: vmalert-metrics
           target_kind: container
           integration: home_assistant
@@ -96,7 +96,7 @@ groups:
         expr: homelab_ha_battery_level < 10
         for: 10m
         labels:
-          severity: error
+          severity: critical
           source_tool: vmalert-metrics
           target_kind: container
           integration: home_assistant

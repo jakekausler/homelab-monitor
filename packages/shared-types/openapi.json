@@ -4084,7 +4084,6 @@
             "enum": [
               "info",
               "warning",
-              "error",
               "critical"
             ],
             "title": "Severity",
@@ -4208,7 +4207,6 @@
                 "enum": [
                   "info",
                   "warning",
-                  "error",
                   "critical"
                 ],
                 "type": "string"
@@ -4280,7 +4278,6 @@
             "enum": [
               "info",
               "warning",
-              "error",
               "critical"
             ],
             "title": "Severity",

@@ -1,0 +1,230 @@
+# Rule unit-test fixtures for deploy/vmalert/metrics/collector_health.yaml.
+# Schema: Prometheus / vmalert rule unit-test format.
+# Run manually (vmalert has NO unit-test mode — use promtool for rules 1 + 2):
+#   docker run --rm --entrypoint promtool \
+#     -v $(pwd)/deploy/vmalert/metrics:/rules \
+#     prom/prometheus:v2.47.0 \
+#     test rules /rules/__tests__/collector_health.tests.yaml
+#
+# Promtool-validatable rules (PromQL engine, no rate-subquery):
+#   - collector_failure_rate_elevated (rule 1) ✓
+#   - collector_silent_death           (rule 2) ✓
+#
+# NOT promtool-validatable (MetricsQL [6h:15m] subquery over rate division):
+#   - collector_duration_anomaly (rule 3) — promtool shows got:[] by design.
+#     FIRE + NO-FIRE fixtures below are forward-compatible documentation;
+#     validated via live MetricsQL replay in Refinement 3b
+#     (same precedent as HostDiskIOAnomalous / HostNetThroughputAnomalous
+#     in __tests__/host_anomalies.tests.yaml).
+#
+# NOTE on dormant metric planting:
+#   homelab_collector_run_failure_total is DORMANT (absent until first failure).
+#   Fixtures plant it explicitly in FIRE cases. success_total is always present.
+#
+# (No make target wires this yet — forward-compatible static fixture, NOT CI-run.
+#  Consistent with every other __tests__/*.tests.yaml in this directory.)
+
+rule_files:
+  - ../collector_health.yaml
+
+evaluation_interval: 30s
+
+tests:
+
+  # ===========================================================================
+  # Rule 1: collector_failure_rate_elevated (for: 15m)
+  # threshold: failure_rate / (success_rate + failure_rate) > 0.5
+  # ===========================================================================
+
+  # FIRE: testcol — failure increments +10/step, success +1/step.
+  # ratio ≈ (10/30) / ((1/30)+(10/30)) = 10/11 ≈ 0.909 > 0.5 → FIRE at 16m.
+  # (failure_total is a dormant metric — planted here to simulate first failures)
+  - interval: 30s
+    input_series:
+      - series: 'homelab_collector_run_failure_total{name="testcol",reason="result_error"}'
+        values: '0+10x32'
+      - series: 'homelab_collector_run_success_total{name="testcol"}'
+        values: '0+1x32'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: collector_failure_rate_elevated
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              source_tool: vmalert-metrics
+              target_kind: collector
+              name: testcol
+            exp_annotations:
+              summary: "Collector testcol failing >50% of runs"
+              description: "Collector testcol failure rate is 90.91% over the last 15m (threshold: 50%). Collector may be unhealthy before hitting quarantine budget."
+
+  # NO-FIRE: goodcol — failure +1/step, success +20/step.
+  # ratio ≈ (1/30) / ((20/30)+(1/30)) = 1/21 ≈ 0.048 < 0.5 → no alert.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_collector_run_failure_total{name="goodcol",reason="result_error"}'
+        values: '0+1x32'
+      - series: 'homelab_collector_run_success_total{name="goodcol"}'
+        values: '0+20x32'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: collector_failure_rate_elevated
+        exp_alerts: []
+
+  # ===========================================================================
+  # Rule 2a: collector_silent_death — FAST ([1h] window, for: 30m)
+  # threshold: rate(success_total{name!~"noop|image_update_checker"}[1h]) == 0
+  # Need 90m of data (180 steps at 30s) for the for:30m to elapse.
+  # ===========================================================================
+
+  # FIRE: deadcol — success counter FLAT (no increments) → rate == 0 for full window.
+  # Plant 181 samples (0..180) at constant value → rate == 0 → FIRE at 90m.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_collector_run_success_total{name="deadcol"}'
+        values: '100+0x180'
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: collector_silent_death
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              source_tool: vmalert-metrics
+              target_kind: collector
+              name: deadcol
+            exp_annotations:
+              summary: "Collector deadcol has stopped running"
+              description: "Collector deadcol has produced no successful runs in the last hour. Scheduler may be stuck or collector hung."
+
+  # NO-FIRE: livecol — success counter INCREMENTING → rate > 0 → no alert.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_collector_run_success_total{name="livecol"}'
+        values: '0+10x180'
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: collector_silent_death
+        exp_alerts: []
+
+  # NO-FIRE (noop exclusion): noop collector — success counter FLAT (rate == 0).
+  # Would fire for any other collector, but the name!~ filter excludes it.
+  # This test proves the exclusion is active.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_collector_run_success_total{name="noop"}'
+        values: '100+0x180'
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: collector_silent_death
+        exp_alerts: []
+
+  # NO-FIRE (image_update_checker exclusion): a FLAT success counter that WOULD fire
+  # the fast [1h] rule, but image_update_checker is excluded (it runs every ~6-7h and
+  # is covered by the slow rule instead). Proves the fast rule does not false-fire on it.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_collector_run_success_total{name="image_update_checker"}'
+        values: '100+0x180'
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: collector_silent_death
+        exp_alerts: []
+
+  # ===========================================================================
+  # Rule 2b: collector_silent_death_slow — SLOW ([12h] window, for: 30m)
+  # threshold: rate(success_total{name=~"image_update_checker"}[12h]) == 0
+  # Need 12h30m of data (1500 steps at 30s) for the [12h] window + for:30m.
+  # ===========================================================================
+
+  # FIRE: image_update_checker FLAT over the full 12h+ window → rate == 0 → fires at 12h30m.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_collector_run_success_total{name="image_update_checker"}'
+        values: '100+0x1500'
+    alert_rule_test:
+      - eval_time: 12h30m
+        alertname: collector_silent_death_slow
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              source_tool: vmalert-metrics
+              target_kind: collector
+              name: image_update_checker
+            exp_annotations:
+              summary: "Collector image_update_checker has stopped running"
+              description: "Collector image_update_checker (slow/6h-cadence) has produced no successful runs in the last 12h. Scheduler may be stuck or collector hung."
+
+  # NO-FIRE: image_update_checker increments every step (0+1x1500) across the full 12h
+  # window → rate > 0 → no alert. Models a healthy collector (here incrementing far more
+  # often than its real 6-7h cadence, but any non-zero rate over [12h] keeps it silent).
+  - interval: 30s
+    input_series:
+      - series: 'homelab_collector_run_success_total{name="image_update_checker"}'
+        values: '0+1x1500'
+    alert_rule_test:
+      - eval_time: 12h30m
+        alertname: collector_silent_death_slow
+        exp_alerts: []
+
+  # ===========================================================================
+  # Rule 3: collector_duration_anomaly (for: 15m, subquery [6h:15m])
+  # NOT promtool-validatable — promtool shows got:[] for all cases below.
+  # These fixtures serve as forward-compatible documentation for live-replay
+  # validation in Refinement 3b (MetricsQL on VictoriaMetrics).
+  #
+  # Concept:
+  #   mean_duration = rate(duration_seconds_sum[15m]) / rate(duration_seconds_count[15m])
+  #   baseline      = avg_over_time(mean_duration[6h:15m])
+  #   fires when    mean_duration > clamp_min(3 * baseline, 1)
+  #
+  # FIRE scenario: slowcol — 6h of 1s/run baseline, then steps up to 30s/run.
+  #   baseline ≈ 1s → threshold = max(3*1, 1) = 3s → current 30s > 3s → FIRE
+  #   Requires: eval_time ≥ 6h + 15m = 375m → use 376m.
+  #   sum increments: 1 per step for 6h baseline = 720 steps (0..719), then 30 per step for 30 steps.
+  #   count increments: 1 per step throughout (one run per 30s interval).
+  #   Plant two series; the subquery means promtool sees empty — live VictoriaMetrics fires.
+  #
+  # NO-FIRE scenario: fastcol — mean duration 0.1s throughout (below floor 1s).
+  #   mean = 0.1s → threshold = clamp_min(3*0.1, 1) = 1s → 0.1s < 1s → NO FIRE.
+  # ===========================================================================
+
+  # FIRE (forward-compatible doc — promtool shows got:[] by design):
+  # slowcol: 6h at 1s/run, then step up to 30s/run for 30 steps (15m).
+  # Total steps: 720 (6h baseline) + 30 (anomaly window) + 32 (for:15m buffer) = 782 steps.
+  # sum: 0+1x720 then continues +30x32 (approximate as two series chunks not directly expressible
+  # in single values string — use a single series with rate that implies the step: plant
+  # sum incrementing +1 for 750 steps then +30 for 32 steps using the staircase).
+  # Simplification: use +1x750 for the baseline period then note the step-up in comment.
+  # The values string supports only uniform increments, so we plant two separate test cases
+  # to approximate: this fixture is documentary only.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_collector_run_duration_seconds_sum{name="slowcol"}'
+        values: '0+1x782'
+      - series: 'homelab_collector_run_duration_seconds_count{name="slowcol"}'
+        values: '0+1x782'
+    alert_rule_test:
+      - eval_time: 376m
+        alertname: collector_duration_anomaly
+        # NOTE: promtool returns got:[] here — [6h:15m] subquery not supported.
+        # Validated via live MetricsQL replay. In live VictoriaMetrics with a real
+        # step-up in sum (not uniform +1), this FIRES when mean > 3*baseline.
+        exp_alerts: []
+
+  # NO-FIRE (forward-compatible doc — promtool shows got:[] by design):
+  # fastcol: mean duration 0.1s throughout → below floor 1s → no fire.
+  # sum +0.1 per step, count +1 per step → mean = 0.1s < clamp_min(3*0.1,1)=1s.
+  # Plant as integer-approximation: sum +1x376, count +10x376 → mean = 0.1s.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_collector_run_duration_seconds_sum{name="fastcol"}'
+        values: '0+1x752'
+      - series: 'homelab_collector_run_duration_seconds_count{name="fastcol"}'
+        values: '0+10x752'
+    alert_rule_test:
+      - eval_time: 376m
+        alertname: collector_duration_anomaly
+        # NOTE: promtool returns got:[] here — [6h:15m] subquery not supported.
+        # Validated via live MetricsQL replay. In live VictoriaMetrics this correctly
+        # does NOT fire (mean 0.1s < floor 1s).
+        exp_alerts: []

@@ -918,7 +918,7 @@ describe('CreateAlertModal edit mode', () => {
     expect(mutate).not.toHaveBeenCalled()
   })
 
-  it('allows selecting the error severity and submits it', async () => {
+  it('allows selecting the critical severity and submits it', async () => {
     const mutate = vi.fn().mockResolvedValue({})
     vi.mocked(useCreateUserRule).mockReturnValue({ mutateAsync: mutate, isPending: false } as never)
     renderWithClient(
@@ -929,14 +929,14 @@ describe('CreateAlertModal edit mode', () => {
         initialValues={baseInitial}
       />,
     )
-    fireEvent.change(screen.getByTestId('create-alert-severity'), { target: { value: 'error' } })
+    fireEvent.change(screen.getByTestId('create-alert-severity'), { target: { value: 'critical' } })
     await act(async () => {
       fireEvent.click(screen.getByTestId('create-alert-submit'))
       await Promise.resolve()
     })
     await waitFor(() => expect(mutate).toHaveBeenCalled())
     const body = mutate.mock.calls[0]![0] as Record<string, unknown>
-    expect(body.severity).toBe('error')
+    expect(body.severity).toBe('critical')
   })
 })
 

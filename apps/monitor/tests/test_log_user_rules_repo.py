@@ -430,20 +430,33 @@ async def test_create_metricsql_without_stats_ok(repo: SqliteRepository) -> None
     assert rule.expr == "up == 0"
 
 
-async def test_create_rule_with_error_severity_round_trips(repo: SqliteRepository) -> None:
-    """A rule created with severity='error' persists and reads back unchanged."""
+async def test_create_rule_rejects_error_severity(repo: SqliteRepository) -> None:
+    """severity='error' is no longer a valid alert severity and is rejected."""
+    user_repo = LogUserRulesRepository(repo)
+    with pytest.raises(UserRuleValidationError, match="severity"):
+        await user_repo.create(
+            rule_name="ErrorSevRule",
+            expr="up == 0",
+            expr_kind="metricsql",
+            severity="error",  # type: ignore[arg-type]  # intentionally invalid
+            summary="host down",
+        )
+
+
+async def test_create_rule_with_critical_severity_round_trips(repo: SqliteRepository) -> None:
+    """A rule created with severity='critical' persists and reads back unchanged."""
     user_repo = LogUserRulesRepository(repo)
     created = await user_repo.create(
-        rule_name="ErrorSevRule",
+        rule_name="CriticalSevRule",
         expr="up == 0",
         expr_kind="metricsql",
-        severity="error",
+        severity="critical",
         summary="host down",
     )
-    assert created.severity == "error"
+    assert created.severity == "critical"
     fetched = await user_repo.get(created.id)
     assert fetched is not None
-    assert fetched.severity == "error"
+    assert fetched.severity == "critical"
 
 
 async def test_update_to_invalid_expr_raises(repo: SqliteRepository) -> None:

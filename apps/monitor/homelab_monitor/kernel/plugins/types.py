@@ -78,7 +78,7 @@ class SuggestionEvent(BaseModel):
     kind: Literal["suggestion"] = "suggestion"
     title: str
     body: str
-    severity: Literal["info", "warning", "error"] = "info"
+    severity: Literal["info", "warning"] = "info"
 
 
 class AlertForwardEvent(BaseModel):
@@ -89,7 +89,7 @@ class AlertForwardEvent(BaseModel):
     kind: Literal["alert_forward"] = "alert_forward"
     fingerprint: str
     summary: str
-    severity: Literal["info", "warning", "error", "critical"] = "warning"
+    severity: Literal["info", "warning", "critical"] = "warning"
 
 
 class LogSignatureEvent(BaseModel):

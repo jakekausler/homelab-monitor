@@ -597,10 +597,10 @@ async def test_create_with_dryrun_mock_failure(
     assert "boom" in error["message"]
 
 
-async def test_create_user_rule_error_severity_201(
+async def test_create_user_rule_error_severity_422(
     authenticated_client: AsyncClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """POST a metricsql rule with severity='error' returns 201 and echoes it."""
+    """POST with severity='error' is rejected (422): error is no longer a valid alert severity."""
     monkeypatch.setenv("HOMELAB_MONITOR_VMALERT_USER_LOGS_DIR", str(tmp_path / "logs"))
     monkeypatch.setenv("HOMELAB_MONITOR_VMALERT_USER_METRICS_DIR", str(tmp_path / "metrics"))
     response = await authenticated_client.post(
@@ -614,8 +614,7 @@ async def test_create_user_rule_error_severity_201(
         },
         headers=_csrf(authenticated_client),
     )
-    assert response.status_code == 201  # noqa: PLR2004
-    assert response.json()["severity"] == "error"
+    assert response.status_code == 422  # noqa: PLR2004
 
 
 async def test_create_metricsql_bare_selector_400(
@@ -694,7 +693,7 @@ async def test_patch_user_rule_writes_audit(
     rule_id = created.json()["id"]
     resp = await authenticated_client.patch(
         f"/api/logs/user-rules/{rule_id}",
-        json={"severity": "error"},
+        json={"severity": "critical"},
         headers=csrf,
     )
     assert resp.status_code == 200  # noqa: PLR2004

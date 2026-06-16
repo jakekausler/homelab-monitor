@@ -1,0 +1,115 @@
+# vmalert METRICS rules for collector health (STAGE-005A-003).
+# Severity vocabulary: info / warning / error / critical (spec §8.2).
+#
+# All rules use source_tool: vmalert-metrics + target_kind: collector.
+# Collector-identity label is `name` (verified live against homelab_collector_run_* metrics).
+#
+# Rule 3 (collector_duration_anomaly) uses a MetricsQL subquery [6h:15m] over an
+# inline rate division. VictoriaMetrics supports this. promtool shows got:[] for
+# this rule by design — validated via live MetricsQL replay in Refinement 3b
+# (same pattern as HostDiskIOAnomalous / HostNetThroughputAnomalous in host_anomalies.yaml).
+#
+# `for: 15m` / `for: 30m` thresholds intentionally won't fire in the fast
+# `make test-fast` rig. The integration test pipeline handles synthetic firing.
+
+groups:
+  - name: collector_health
+    interval: 30s
+    rules:
+
+      # --- Rule 1: elevated failure rate (>50% of runs failing) ---
+      # failure_total and success_total are separate counter metric names.
+      # sum without(reason) collapses failure_total to per-{name} so the inner +
+      # and outer / both match success_total's {name}-only label set (one alert per
+      # collector, even if it failed for multiple reasons). Result is keyed by {name}.
+      # failure_total is DORMANT (absent until first failure); the rule only evaluates
+      # collectors that have at least one failure — correct behavior.
+      - alert: collector_failure_rate_elevated
+        expr: |
+          sum without(reason) (rate(homelab_collector_run_failure_total[15m]))
+            / (
+                rate(homelab_collector_run_success_total[15m])
+                  + sum without(reason) (rate(homelab_collector_run_failure_total[15m]))
+              )
+            > 0.5
+        for: 15m
+        labels:
+          severity: warning
+          source_tool: vmalert-metrics
+          target_kind: collector
+        annotations:
+          summary: "Collector {{ $labels.name }} failing >50% of runs"
+          description: "Collector {{ $labels.name }} failure rate is {{ $value | humanizePercentage }} over the last 15m (threshold: 50%). Collector may be unhealthy before hitting quarantine budget."
+
+      # --- Rule 2a: collector silent death — FAST collectors ([1h] window) ---
+      # success_total is always present for all 31 collectors (emitted on every run);
+      # a stopped counter yields rate==0 exactly. [1h] + for: 30m ≈ 90m of silence
+      # before firing. Covers the ~30 collectors that run every 10s–5min.
+      # EXCLUSIONS: noop (a deliberate no-op) and image_update_checker (legitimately
+      # runs every ~6-7h — it hits rate-limited registries; its silent-death is the
+      # paired SLOW rule below). LINKED PAIR: a future collector with a >1h cadence
+      # must be ADDED to this exclusion AND to the slow rule's name=~ set.
+      - alert: collector_silent_death
+        expr: |
+          rate(homelab_collector_run_success_total{name!~"noop|image_update_checker"}[1h]) == 0
+        for: 30m
+        labels:
+          severity: critical
+          source_tool: vmalert-metrics
+          target_kind: collector
+        annotations:
+          summary: "Collector {{ $labels.name }} has stopped running"
+          description: "Collector {{ $labels.name }} has produced no successful runs in the last hour. Scheduler may be stuck or collector hung."
+
+      # --- Rule 2b: collector silent death — SLOW collectors ([12h] window) ---
+      # image_update_checker runs every ~6-7h by design (rate-limited registry checks),
+      # so the [1h] fast rule would chronically false-fire on it. A [12h] window safely
+      # exceeds its ~7h cadence (every 12h window contains >=1 run when healthy), while
+      # still catching a genuinely-stuck checker after ~12.5h. NOTE: on a fresh deploy
+      # the [12h] rate() reads 0 until 12h of history accrues — a one-time ~12.5h
+      # post-deploy window where this could fire spuriously (accepted).
+      - alert: collector_silent_death_slow
+        expr: |
+          rate(homelab_collector_run_success_total{name=~"image_update_checker"}[12h]) == 0
+        for: 30m
+        labels:
+          severity: critical
+          source_tool: vmalert-metrics
+          target_kind: collector
+        annotations:
+          summary: "Collector {{ $labels.name }} has stopped running"
+          description: "Collector {{ $labels.name }} (slow/6h-cadence) has produced no successful runs in the last 12h. Scheduler may be stuck or collector hung."
+
+      # --- Rule 3: duration anomaly (mean runtime > 3x 6h baseline, floor 1s) ---
+      # No histogram buckets exist for homelab_collector_run_duration_seconds —
+      # mean-via-sum/count is the only available duration signal.
+      # Per-collector baseline (via {name} label propagation) handles the wide spread
+      # of normal durations across 31 collectors.
+      # clamp_min(..., 1) floor suppresses noise on sub-second fast collectors
+      # (prevents 3x of 0.1s = 0.3s from firing).
+      # [6h:15m] subquery mirrors HostMemoryAnomalous's [6h:5m] form; 15m matches
+      # the inner rate window.
+      # NOT promtool-validatable — validated via live MetricsQL replay in Refinement 3b.
+      - alert: collector_duration_anomaly
+        expr: |
+          (
+            rate(homelab_collector_run_duration_seconds_sum[15m])
+              / rate(homelab_collector_run_duration_seconds_count[15m])
+          )
+            > clamp_min(
+                3 * avg_over_time(
+                  (
+                    rate(homelab_collector_run_duration_seconds_sum[15m])
+                      / rate(homelab_collector_run_duration_seconds_count[15m])
+                  )[6h:15m]
+                ),
+                1
+              )
+        for: 15m
+        labels:
+          severity: info
+          source_tool: vmalert-metrics
+          target_kind: collector
+        annotations:
+          summary: "Collector {{ $labels.name }} running slower than its baseline"
+          description: "Collector {{ $labels.name }} mean run duration {{ $value }}s exceeds 3x its 6-hour baseline (floor 1s)."

@@ -39,7 +39,7 @@ groups:
         expr: '_time:5m service:="homeassistant" ("Error while executing automation" OR "Error executing script") | stats by (host) count() as fail_count | filter fail_count:>0'
         for: 0m
         labels:
-          severity: error
+          severity: warning
           source_tool: vmalert-logs
           target_kind: container
           integration: home_assistant
@@ -52,7 +52,7 @@ groups:
         expr: '_time:5m service:="homeassistant" ("Error during setup of component" OR "ConfigEntryNotReady") | stats by (host) count() as setup_fail_count | filter setup_fail_count:>0'
         for: 0m
         labels:
-          severity: error
+          severity: warning
           source_tool: vmalert-logs
           target_kind: container
           integration: home_assistant

@@ -55,7 +55,7 @@ function makeRule(overrides: {
   rule_name: string
   expr?: string
   expr_kind?: 'logsql' | 'metricsql'
-  severity?: 'info' | 'warning' | 'error' | 'critical'
+  severity?: 'info' | 'warning' | 'critical'
   enabled?: boolean
   summary?: string
   description?: string

@@ -201,7 +201,7 @@ const formSchema = z.object({
     .regex(RULE_NAME_REGEX, 'Letters, digits, underscore; must not start with a digit'),
   expr: z.string().min(1, 'Expression is required'),
   expr_kind: z.enum(['logsql', 'metricsql']),
-  severity: z.enum(['info', 'warning', 'error', 'critical']),
+  severity: z.enum(['info', 'warning', 'critical']),
   for_duration: z
     .string()
     .regex(FOR_DURATION_REGEX, 'Use durations like 5m, 30s, 1h, 2h30m, or 0s'),

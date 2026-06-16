@@ -24,7 +24,7 @@ groups:
         expr: homelab_self_disk_used_pct > 85
         for: 5m
         labels:
-          severity: error
+          severity: critical
         annotations:
           summary: "Self disk usage error"
           description: "Disk usage is {{ $value }}% (error at 85%)"
