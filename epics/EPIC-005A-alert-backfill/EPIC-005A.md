@@ -1,12 +1,12 @@
 # EPIC-005A: Alert backfill for EPICs 001-004
 
-## Status: Not Started (0 / 8 Complete)
+## Status: In Progress (1 / 8 Complete)
 
-## Stages Counter: 0 / 8 Complete
+## Stages Counter: 1 / 8 Complete
 
-## Current Stage: STAGE-005A-001
+## Current Stage: STAGE-005A-002
 
-## Current Phase: STAGE-005A-001 Design (Not Started)
+## Current Phase: STAGE-005A-002 Design (Not Started)
 
 ## Overview
 
@@ -115,7 +115,7 @@ enablement) and 008 (collector+mounts) are the heaviest. Listed by descending us
 
 | # | Stage | Theme |
 |---|---|---|
-| STAGE-005A-001 | Host machine threshold + anomaly rules | `host_anomalies.yaml`: CPU/mem critical tiers + rolling-baseline anomaly (EPIC-005-013 pattern), swap-in-use, load-avg vs core count, process-count explosion, reboot detection (uptime reset), optional disk-IO/net saturation. (Disk-fill is 002.) |
+| STAGE-005A-001 | Host machine threshold + anomaly rules | ✓ Complete — `host_anomalies.yaml`: CPU/mem critical tiers + rolling-baseline anomaly (EPIC-005-013 pattern), swap-in-use, load-avg vs core count, process-count explosion, reboot detection (uptime reset), optional disk-IO/net saturation. (Disk-fill is 002.) |
 | STAGE-005A-002 | Disk-fill rules (host fs + per-slot budgets) | `disk_fill.yaml`: host filesystem fill `/` + `/storage` (85/95, for-duration) AND per-slot self-disk `used/budget` (vl/vm/sqlite/runbook); resolve the vl-slot overlap with `vl_health.yaml`. No projection rule (user). |
 | STAGE-005A-003 | Collector health rules | `collector_health.yaml`: failure-rate, run-duration/timeout, last-error-age, and a silent-death rule (`rate(success_total)==0`). Quarantine DROPPED (existing synthetic alert). Failure/error-age metrics absent until first failure — test mirror plants them. |
 | STAGE-005A-004 | Container lifecycle + resource + probe enablement | `container_lifecycle.yaml`: restart-loop, bad exit code, stuck-non-running (whitelist), registry-skip; per-container CPU/mem **share-of-host** (no limits exist → not %); **enable label-based probes** so `DockerProbeFailing` goes live + `DockerProbeSlow`; remove the leaked `fixture.yaml`. EPIC-003 done → all container wiring lands here. |
