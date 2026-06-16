@@ -1,12 +1,12 @@
 # EPIC-005A: Alert backfill for EPICs 001-004
 
-## Status: In Progress (6 / 9 Complete)
+## Status: In Progress (7 / 9 Complete)
 
-## Stages Counter: 6 / 9 Complete
+## Stages Counter: 7 / 9 Complete
 
-## Current Stage: STAGE-005A-007
+## Current Stage: STAGE-005A-008
 
-## Current Phase: STAGE-005A-007 Design (Not Started)
+## Current Phase: STAGE-005A-008 Design (Not Started)
 
 ## Overview
 
@@ -123,7 +123,7 @@ descending user-visible value; 009 is sequenced last (added after the original 8
 | STAGE-005A-004 | Container lifecycle + resource + probe enablement | ✓ Complete — `container_lifecycle.yaml`: restart-loop, bad exit code, stuck-non-running (whitelist), registry-skip; per-container CPU/mem **share-of-host** (no limits exist → not %); **enable label-based probes** so `DockerProbeFailing` goes live + `DockerProbeSlow`; remove the leaked `fixture.yaml`. EPIC-003 done → all container wiring lands here. |
 | STAGE-005A-005 | Cron / heartbeat duration-anomaly rules | ✓ Complete — `cron_duration.yaml`: run-duration anomaly on `homelab_heartbeat_last_duration_seconds` vs rolling baseline (too-slow; too-fast optional). Staleness already covered (002 of EPIC-002). Smallest stage. |
 | STAGE-005A-006 | Logging + Drain anomaly rules | ✓ Complete — `log_drain_health.yaml` (+ optional logs rule): signature-cardinality-warn, Drain-cycle stall, `metric_family_dropped_series`, and the coarse per-service signature-spike (the user's "log anomalies", from `signature_spike.yml.tmpl`). Must not double-fire `ServiceErrorRateSpike`/`NewLogSignature`. |
-| STAGE-005A-007 | Build / config health + self-disk-shrink rules | `self_and_build.yaml`: self-disk auto-shrink fired (`self_disk_shrink_total`), build-sources config load==0, compose unreadable==0, build-source hash skipped. (Aggregate self-disk + per-slot are elsewhere.) Low-severity silent-degradation signals. |
+| STAGE-005A-007 | Build / config health + self-disk-shrink rules | ✓ Complete — `self_and_build.yaml`: self-disk auto-shrink fired (`self_disk_shrink_total`), build-sources config load==0, compose unreadable==0, build-source hash skipped. (Aggregate self-disk + per-slot are elsewhere.) Low-severity silent-degradation signals. |
 | STAGE-005A-008 | Watched-directory size collector + config-driven `:ro` mounts + alerts + Grafana panel | NEW `homelab_host_directory_bytes{path}` collector (du-with-timeout), `watched_directories` config (default `/tmp` 1G/4G, `/var` 10G/25G), generated `:ro` mounts via the existing override-generator + NEW collision/overlap validation, absolute-threshold alerts, and a Grafana bargauge panel parallel to the disk-mountpoint panel. Backend + host-integration + dashboard; Design may split into 008a/008b. |
 | STAGE-005A-009 | Host temperature metrics + sustained alerts + Grafana panel | NEW `homelab_host_temperature_celsius{chip,sensor}` collector (psutil sensors_temperatures — k10temp/nvme/amdgpu confirmed live; readable via default container sysfs, NO compose change). Per-sensor sustained warn/critical threshold rules (CPU/NVMe/GPU) + a per-sensor rolling-baseline thermal anomaly rule, AND a single full-width time-series Grafana panel on host-overview plotting all sensors. Backend + host-integration + dashboard. |
 
