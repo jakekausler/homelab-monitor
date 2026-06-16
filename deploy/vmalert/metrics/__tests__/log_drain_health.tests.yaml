@@ -1,0 +1,249 @@
+# Rule unit-test fixtures for deploy/vmalert/metrics/log_drain_health.yaml.
+# Schema: Prometheus / vmalert rule unit-test format.
+# Run manually (vmalert has NO unit-test mode — use promtool, which understands the
+# same Prometheus rule-test schema, for the threshold rules):
+#   docker run --rm --entrypoint promtool \
+#     -v $(pwd)/deploy/vmalert/metrics:/rules \
+#     prom/prometheus:v2.47.0 \
+#     test rules /rules/__tests__/log_drain_health.tests.yaml
+# (No make target wires this yet — forward-compatible static fixture, NOT CI-run.
+#  Consistent with every other __tests__/*.tests.yaml in this directory.)
+#
+# PROMTOOL-VALIDATABLE rules (active FIRE + NO-FIRE below):
+#   - CardinalityBudgetExceeded   (== 1)
+#   - DrainStall                  (increase==0 and on() (sum(...)>1))
+#   - DrainNoProgress             (increase==0 and increase>0 and on() (sum(...)>1))
+#   - MetricFamilyDroppedSeries   (> 0)
+#
+# DrainStall / DrainNoProgress gate on `... and on() (sum(homelab_log_stream_lines_per_sec) > 1)`.
+# The `and on()` modifier makes the binary `and` match on NO labels, so the
+# empty-label {} sum() gate broadcasts against the labeled left side while keeping
+# the LEFT operand's (drain-counter) labels. Verified live: fires in promtool and
+# preserves the left labels; valid MetricsQL that stays empty at healthy baseline.
+#
+# LIVE-REPLAY-ONLY rules (NOT promtool-validatable — fixtures kept COMMENTED below
+# with planted-series recipes; validated by live-MetricsQL replay against the rig
+# in Refinement 3a):
+#   - ServiceLogVolumeSpike — uses a [7d:5m] subquery promtool does not evaluate
+#       (got:[] by design).
+
+rule_files:
+  - ../log_drain_health.yaml
+
+evaluation_interval: 30s
+
+tests:
+
+  # ===========================================================================
+  # RULE 1. CardinalityBudgetExceeded (for: 5m) — gauge == 1
+  # 30s interval; for:5m = 10 steps. Plant flat for 7m (x14), eval at 6m.
+  # ===========================================================================
+
+  # FIRE: gauge held at 1 for >5m.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_log_signature_cardinality_warn{service="drain"}'
+        values: '1+0x14'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: CardinalityBudgetExceeded
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              source_tool: vmalert-metrics
+              category: log-anomaly
+              anomaly_kind: cardinality_budget_exceeded
+              target_kind: log_signature
+              service: drain
+            exp_annotations:
+              summary: "Log-signature cardinality budget exceeded"
+              description: |
+                A service's distinct log-signature count exceeded its cardinality
+                budget (homelab_log_signature_cardinality_warn == 1) for over 5
+                minutes. New signatures for that service may stop being tracked.
+
+                Investigate which service is generating excess distinct templates:
+                /logs/signatures
+
+  # NO-FIRE: gauge held at 0.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_log_signature_cardinality_warn{service="drain"}'
+        values: '0+0x14'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: CardinalityBudgetExceeded
+        exp_alerts: []
+
+  # ===========================================================================
+  # RULE 4. MetricFamilyDroppedSeries (for: 5m) — gauge > 0
+  # Plant 7 dropped series for family=homelab_ha_sensor_value, flat for 7m.
+  # > 0 keeps {family}; {{ $value }} renders 7, {{ $labels.family }} renders the family.
+  # ===========================================================================
+
+  # FIRE: dropped-series count = 7 (>0), held >5m.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_metric_family_dropped_series{family="homelab_ha_sensor_value"}'
+        values: '7+0x14'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: MetricFamilyDroppedSeries
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              source_tool: vmalert-metrics
+              category: log-anomaly
+              anomaly_kind: metric_series_dropped
+              target_kind: metric_family
+              family: homelab_ha_sensor_value
+            exp_annotations:
+              summary: "Cardinality guard dropped series for homelab_ha_sensor_value"
+              description: |
+                The cardinality guard dropped 7 series for metric family
+                homelab_ha_sensor_value for over 5 minutes. You are now blind to that
+                family's data. Investigate the source of excess cardinality or raise
+                the per-family cap.
+
+  # NO-FIRE: zero dropped series.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_metric_family_dropped_series{family="homelab_ha_sensor_value"}'
+        values: '0+0x14'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: MetricFamilyDroppedSeries
+        exp_alerts: []
+
+  # ===========================================================================
+  # RULE 2. DrainStall (for: 5m) — PROMTOOL-VALIDATABLE via the `and on() (sum>1)`
+  # gate. 30s interval; eval past 20m+5m = 25m. The `and on()` keeps the LEFT
+  # (drain-counter) operand's labels and broadcasts the empty-label sum() gate.
+  # ===========================================================================
+
+  # FIRE: cycle-count counter FLAT over the whole window → increase[20m] == 0
+  # (cycles stopped); logs still arriving (sum=2 > 1) → gate true. Result carries
+  # the planted drain-counter labels (on() keeps the LEFT operand's labels).
+  - interval: 30s
+    input_series:
+      - series: 'homelab_drain_cycle_duration_seconds_count{instance="monitor:9090",job="monitor",service="homelab-monitor"}'
+        values: '5+0x80'
+      - series: 'homelab_log_stream_lines_per_sec{exported_service="svcA"}'
+        values: '2+0x80'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: DrainStall
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              source_tool: vmalert-metrics
+              category: log-anomaly
+              anomaly_kind: drain_stall
+              target_kind: drain_pipeline
+              instance: monitor:9090
+              job: monitor
+              service: homelab-monitor
+            exp_annotations:
+              summary: "Drain log-clustering pipeline stalled (zero cycles in 20m)"
+              description: |
+                The Drain log-clustering pipeline has run ZERO cycles in the last 20
+                minutes while logs are still arriving (sum of log_stream_lines_per_sec
+                > 1). The entire log-anomaly detection layer is blind: no new
+                signatures, spikes, or silences can be detected until Drain resumes.
+
+                Check the drain_consumer / collector health: /collectors
+
+  # NO-FIRE: cycle-count counter RISING '0+1x80' → increase[20m] = 40 > 0 → the
+  # `increase(...count[20m]) == 0` left side is false → silent.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_drain_cycle_duration_seconds_count{instance="monitor:9090",job="monitor",service="homelab-monitor"}'
+        values: '0+1x80'
+      - series: 'homelab_log_stream_lines_per_sec{exported_service="svcA"}'
+        values: '2+0x80'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: DrainStall
+        exp_alerts: []
+
+  # ===========================================================================
+  # RULE 3. DrainNoProgress (for: 5m) — PROMTOOL-VALIDATABLE via the same
+  # `and on() (sum>1)` gate as RULE 2. 30s interval; eval at 25m. The first `and`
+  # (no on()) matches lines_total against count on their shared labels; `and on()`
+  # then broadcasts the sum() gate while keeping those labels.
+  # ===========================================================================
+
+  # FIRE: lines_total FLAT → increase[20m] == 0 (no lines processed); cycle-count
+  # RISING → increase[20m] = 40 > 0 (cycles ARE running → guard passes). Because
+  # cycle count is rising, RULE 2 (DrainStall) is correctly SILENT here → proves the
+  # two rules are mutually exclusive. sum() = 2 > 1 → gate true. Asserted
+  # alertname-scoped to DrainNoProgress.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_drain_cycle_lines_total{instance="monitor:9090",job="monitor",service="homelab-monitor"}'
+        values: '100+0x80'
+      - series: 'homelab_drain_cycle_duration_seconds_count{instance="monitor:9090",job="monitor",service="homelab-monitor"}'
+        values: '0+1x80'
+      - series: 'homelab_log_stream_lines_per_sec{exported_service="svcA"}'
+        values: '2+0x80'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: DrainNoProgress
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              source_tool: vmalert-metrics
+              category: log-anomaly
+              anomaly_kind: drain_no_progress
+              target_kind: drain_pipeline
+              instance: monitor:9090
+              job: monitor
+              service: homelab-monitor
+            exp_annotations:
+              summary: "Drain cycles running but processing zero lines"
+              description: |
+                Drain cycles are still running (cycle count increased in the last 20m)
+                but they processed ZERO lines while logs are arriving
+                (sum of log_stream_lines_per_sec > 1). The loop is alive but stuck —
+                distinct from DrainStall (which fires only when cycles stop entirely).
+                The `increase(...count[20m]) > 0` guard makes DrainStall and
+                DrainNoProgress mutually exclusive.
+
+                Check the drain_consumer / collector health: /collectors
+
+  # NO-FIRE: lines_total ALSO rising '0+1x80' → increase[20m] = 40 > 0 → the
+  # `increase(...lines_total[20m]) == 0` left side is false → silent.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_drain_cycle_lines_total{instance="monitor:9090",job="monitor",service="homelab-monitor"}'
+        values: '0+1x80'
+      - series: 'homelab_drain_cycle_duration_seconds_count{instance="monitor:9090",job="monitor",service="homelab-monitor"}'
+        values: '0+1x80'
+      - series: 'homelab_log_stream_lines_per_sec{exported_service="svcA"}'
+        values: '2+0x80'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: DrainNoProgress
+        exp_alerts: []
+
+  # ===========================================================================
+  # RULE 5. ServiceLogVolumeSpike — LIVE-REPLAY-ONLY ([7d:5m] subquery; promtool
+  # renders got:[] by design). Recipe preserved for the Refinement 3a live replay.
+  #
+  # FIRE recipe (per-service spike clears 4x baseline AND the 50-line floor):
+  #   Plant homelab_log_signature_count{service_key="chatty",...} so that
+  #   sum by (service_key)(sum_over_time(...[5m])) ≈ 20 lines/5m across a 7d
+  #   baseline, then spikes to ≈ 300 lines/5m.
+  #   clamp_min(4 * 20, 50) = clamp_min(80, 50) = 80. 300 > 80 → fires (warning),
+  #   {{ $labels.service_key }} = chatty, {{ $value }} ≈ 300.
+  # NO-FIRE recipe (floor protects a quiet service):
+  #   Plant service_key="quiet" baseline ≈ 10/5m, spiking only to ≈ 40/5m.
+  #   clamp_min(4 * 10, 50) = clamp_min(40, 50) = 50. 40 < 50 → stays silent
+  #   (the 50-line floor suppresses small absolute volumes even at >4x baseline).
+  #
+  # Because the gauge is gappy and per-cycle, plant one template_hash series per
+  # service summing to the target per-5m volume; build the 7d baseline with a long
+  # flat stretch then append the spike stretch (mirror the host_anomalies 6h
+  # baseline idiom, scaled to 7d). Validated by live-MetricsQL replay in 3a, not
+  # promtool.
+  # ===========================================================================

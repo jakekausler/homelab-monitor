@@ -1,0 +1,147 @@
+# vmalert METRICS rules for log/Drain pipeline-health anomaly detection
+# (STAGE-005A-006). Category: log-anomaly. These rules watch the HEALTH of the
+# log-clustering (Drain) pipeline itself and the cardinality guard — i.e. they
+# detect when the log-anomaly detection LAYER is blind, stalled, or shedding data,
+# plus a per-service log-volume spike.
+#
+# Label convention (matches every sibling log-anomaly rule, e.g.
+# error_rate_spike.yaml / log_anomaly.yaml / signature_silent.yaml):
+#   severity, source_tool: vmalert-metrics, category: log-anomaly,
+#   + per-rule anomaly_kind + target_kind.
+#
+# Metric facts (verified live):
+#   homelab_log_signature_cardinality_warn{instance,job,service} — instance-level
+#     gauge 0/1 (NO service_key label); 1 = a service's distinct-signature count
+#     exceeded its budget.
+#   homelab_drain_cycle_duration_seconds_count — per-cycle summary COUNTER; drain
+#     runs every 5min, so increase[20m] ≈ 4 at baseline.
+#   homelab_drain_cycle_lines_total — COUNTER (lines drained).
+#   homelab_log_stream_lines_per_sec — per-exported_service gauge;
+#     sum(...) ≈ 5 at baseline (the "logs are arriving" gate).
+#   homelab_metric_family_dropped_series{family} — gauge = dropped-series count for
+#     a metric family (cardinality guard); 0 = healthy.
+#   homelab_log_signature_count{service_key,template_hash,severity} — per-cycle
+#     line-count GAUGE (gappy). sum_over_time(...[5m]) — NOT increase() (it is a
+#     gauge, not a counter).
+#
+# PROMTOOL vs LIVE-REPLAY (see __tests__/log_drain_health.tests.yaml):
+#   - CardinalityBudgetExceeded (== 1) and MetricFamilyDroppedSeries (> 0) are
+#     promtool-validatable (plain threshold on a gauge).
+#   - DrainStall and DrainNoProgress use `... and on() (sum(homelab_log_stream_lines_per_sec) > 1)`.
+#     The `and on()` modifier makes the binary `and` match on NO labels, so the
+#     empty-label sum() gate broadcasts against the labeled left side while keeping
+#     the LEFT operand's labels. This is promtool-compatible (verified live: fires
+#     in promtool and keeps the drain-counter labels; valid MetricsQL that stays
+#     empty at healthy baseline). These are PROMTOOL-VALIDATABLE.
+#   - ServiceLogVolumeSpike uses a [7d:5m] subquery → LIVE-REPLAY-ONLY (the only one).
+groups:
+  - name: log_drain_health
+    interval: 30s
+    rules:
+      # --- RULE 1: cardinality budget exceeded (promtool-validatable) ---
+      - alert: CardinalityBudgetExceeded
+        expr: homelab_log_signature_cardinality_warn == 1
+        for: 5m
+        labels:
+          severity: warning
+          source_tool: vmalert-metrics
+          category: log-anomaly
+          anomaly_kind: cardinality_budget_exceeded
+          target_kind: log_signature
+        annotations:
+          summary: "Log-signature cardinality budget exceeded"
+          description: |
+            A service's distinct log-signature count exceeded its cardinality
+            budget (homelab_log_signature_cardinality_warn == 1) for over 5
+            minutes. New signatures for that service may stop being tracked.
+
+            Investigate which service is generating excess distinct templates:
+            /logs/signatures
+
+      # --- RULE 2: drain pipeline stalled (promtool-validatable — on() gate) ---
+      - alert: DrainStall
+        expr: |
+          increase(homelab_drain_cycle_duration_seconds_count[20m]) == 0
+            and on() (sum(homelab_log_stream_lines_per_sec) > 1)
+        for: 5m
+        labels:
+          severity: critical
+          source_tool: vmalert-metrics
+          category: log-anomaly
+          anomaly_kind: drain_stall
+          target_kind: drain_pipeline
+        annotations:
+          summary: "Drain log-clustering pipeline stalled (zero cycles in 20m)"
+          description: |
+            The Drain log-clustering pipeline has run ZERO cycles in the last 20
+            minutes while logs are still arriving (sum of log_stream_lines_per_sec
+            > 1). The entire log-anomaly detection layer is blind: no new
+            signatures, spikes, or silences can be detected until Drain resumes.
+
+            Check the drain_consumer / collector health: /collectors
+
+      # --- RULE 3: drain running but no progress (promtool-validatable — on() gate) ---
+      - alert: DrainNoProgress
+        expr: |
+          increase(homelab_drain_cycle_lines_total[20m]) == 0
+            and increase(homelab_drain_cycle_duration_seconds_count[20m]) > 0
+            and on() (sum(homelab_log_stream_lines_per_sec) > 1)
+        for: 5m
+        labels:
+          severity: warning
+          source_tool: vmalert-metrics
+          category: log-anomaly
+          anomaly_kind: drain_no_progress
+          target_kind: drain_pipeline
+        annotations:
+          summary: "Drain cycles running but processing zero lines"
+          description: |
+            Drain cycles are still running (cycle count increased in the last 20m)
+            but they processed ZERO lines while logs are arriving
+            (sum of log_stream_lines_per_sec > 1). The loop is alive but stuck —
+            distinct from DrainStall (which fires only when cycles stop entirely).
+            The `increase(...count[20m]) > 0` guard makes DrainStall and
+            DrainNoProgress mutually exclusive.
+
+            Check the drain_consumer / collector health: /collectors
+
+      # --- RULE 4: cardinality guard dropped series (promtool-validatable) ---
+      - alert: MetricFamilyDroppedSeries
+        expr: homelab_metric_family_dropped_series > 0
+        for: 5m
+        labels:
+          severity: warning
+          source_tool: vmalert-metrics
+          category: log-anomaly
+          anomaly_kind: metric_series_dropped
+          target_kind: metric_family
+        annotations:
+          summary: "Cardinality guard dropped series for {{ $labels.family }}"
+          description: |
+            The cardinality guard dropped {{ $value }} series for metric family
+            {{ $labels.family }} for over 5 minutes. You are now blind to that
+            family's data. Investigate the source of excess cardinality or raise
+            the per-family cap.
+
+      # --- RULE 5: per-service log-volume spike (LIVE-REPLAY-ONLY — [7d:5m] subquery) ---
+      # The [7d:5m] subquery is not promtool-evaluatable (promtool renders got:[]).
+      # Validated via live-MetricsQL replay against the rig in Refinement 3a.
+      - alert: ServiceLogVolumeSpike
+        expr: |
+          sum by (service_key) (sum_over_time(homelab_log_signature_count[5m]))
+            > clamp_min(4 * avg_over_time((sum by (service_key) (sum_over_time(homelab_log_signature_count[5m])))[7d:5m]), 50)
+        for: 10m
+        labels:
+          severity: warning
+          source_tool: vmalert-metrics
+          category: log-anomaly
+          anomaly_kind: service_volume_spike
+          target_kind: log_service
+        annotations:
+          summary: "Log-signature volume spike in {{ $labels.service_key }}"
+          description: |
+            Service {{ $labels.service_key }} produced {{ $value }} log-signature
+            lines in the last 5m window, exceeding 4x its 7-day baseline (floor 50
+            lines/5m). A sudden flood of log activity for this service.
+
+            Recent lines (Explorer): /logs?q={{ $labels.service_key }}
