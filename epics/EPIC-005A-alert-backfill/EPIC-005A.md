@@ -1,12 +1,12 @@
 # EPIC-005A: Alert backfill for EPICs 001-004
 
-## Status: In Progress (1 / 9 Complete)
+## Status: In Progress (2 / 9 Complete)
 
-## Stages Counter: 1 / 9 Complete
+## Stages Counter: 2 / 9 Complete
 
-## Current Stage: STAGE-005A-002
+## Current Stage: STAGE-005A-003
 
-## Current Phase: STAGE-005A-002 Design (Not Started)
+## Current Phase: STAGE-005A-003 Design (Not Started)
 
 ## Overview
 
@@ -118,7 +118,7 @@ descending user-visible value; 009 is sequenced last (added after the original 8
 | # | Stage | Theme |
 |---|---|---|
 | STAGE-005A-001 | Host machine threshold + anomaly rules | ✓ Complete — `host_anomalies.yaml`: CPU/mem critical tiers + rolling-baseline anomaly (EPIC-005-013 pattern), swap-in-use, load-avg vs core count, process-count explosion, reboot detection (uptime reset), optional disk-IO/net saturation. (Disk-fill is 002.) |
-| STAGE-005A-002 | Disk-fill rules (host fs + per-slot budgets) | `disk_fill.yaml`: host filesystem fill `/` + `/storage` (85/95, for-duration) AND per-slot self-disk `used/budget` (vl/vm/sqlite/runbook); resolve the vl-slot overlap with `vl_health.yaml`. No projection rule (user). |
+| STAGE-005A-002 | Disk-fill rules (host fs + per-slot budgets) | ✓ Complete — `disk_fill.yaml`: host filesystem fill `/` + `/storage` (85/95, for-duration) AND per-slot self-disk `used/budget` (vl/vm/sqlite/runbook); resolve the vl-slot overlap with `vl_health.yaml`. No projection rule (user). |
 | STAGE-005A-003 | Collector health rules | `collector_health.yaml`: failure-rate, run-duration/timeout, last-error-age, and a silent-death rule (`rate(success_total)==0`). Quarantine DROPPED (existing synthetic alert). Failure/error-age metrics absent until first failure — test mirror plants them. |
 | STAGE-005A-004 | Container lifecycle + resource + probe enablement | `container_lifecycle.yaml`: restart-loop, bad exit code, stuck-non-running (whitelist), registry-skip; per-container CPU/mem **share-of-host** (no limits exist → not %); **enable label-based probes** so `DockerProbeFailing` goes live + `DockerProbeSlow`; remove the leaked `fixture.yaml`. EPIC-003 done → all container wiring lands here. |
 | STAGE-005A-005 | Cron / heartbeat duration-anomaly rules | `cron_duration.yaml`: run-duration anomaly on `homelab_heartbeat_last_duration_seconds` vs rolling baseline (too-slow; too-fast optional). Staleness already covered (002 of EPIC-002). Smallest stage. |
