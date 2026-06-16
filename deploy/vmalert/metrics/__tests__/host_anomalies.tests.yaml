@@ -1,0 +1,596 @@
+# Rule unit-test fixtures for deploy/vmalert/metrics/host_anomalies.yaml.
+# Schema: Prometheus / vmalert rule unit-test format.
+# Run manually (vmalert has NO unit-test mode — use promtool, which understands the
+# same Prometheus rule-test schema, for the threshold/division rules):
+#   docker run --rm --entrypoint promtool \
+#     -v $(pwd)/deploy/vmalert/metrics:/rules \
+#     prom/prometheus:v2.47.0 \
+#     test rules /rules/__tests__/host_anomalies.tests.yaml
+# NOTE: promtool (Prometheus engine) CANNOT validate the inline rate-subquery anomaly rules
+#   HostDiskIOAnomalous / HostNetThroughputAnomalous — those use a MetricsQL `rate(...)[w:s]`
+#   subquery promtool does not evaluate, so their FIRE fixtures show `got:[]` under promtool by
+#   design; they are validated by live-MetricsQL replay against the rig instead (Refinement 3b).
+#   The load rules (HostHighLoad/HostCriticalLoad) ARE promtool-validatable because their exprs
+#   use scalar(count(...)) — engine-portable to both PromQL and MetricsQL.
+# (No make target wires this yet — forward-compatible static fixture, NOT CI-run.
+#  Consistent with every other __tests__/*.tests.yaml in this directory.)
+#
+# ANNOTATION NOTE: summaries are static; several rules' `description` annotations embed
+# {{ $value }}. Per the house convention (see home-assistant.tests.yaml), fire-cases whose
+# rendered annotation carries {{ $value }} assert exp_labels ONLY and omit exp_annotations.
+#
+# LOAD RULE NOTE: HostHighLoad / HostCriticalLoad use count(cpu!="all") for core count.
+# Tests plant 16 per-core series (cpu="0".."15") so count()=16, thresholds=32 and 64.
+#
+# ANOMALY RULE NOTE: Rules 8-11 use avg_over_time over a 6h window. Tests plant a
+# 6h baseline stretch (720 samples at 30s) then a spike stretch, evaluating past
+# the for:15m duration after spike onset (at 6h+16m = 376m).
+
+rule_files:
+  - ../host_anomalies.yaml
+
+evaluation_interval: 30s
+
+tests:
+
+  # ===========================================================================
+  # 1. HostCriticalCPU (for: 10m)
+  # ===========================================================================
+
+  # FIRE: CPU held above 95% for well over 10m.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_host_cpu_percent{cpu="all",host="homelab"}'
+        values: '97+0x30'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: HostCriticalCPU
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              source_tool: vmalert-metrics
+              target_kind: host
+              cpu: all
+              host: homelab
+            exp_annotations:
+              summary: "Host CPU above 95% for 10m"
+              description: "Host homelab CPU at 97% (avg over 5m, sustained 10m)"
+
+  # NO-FIRE: CPU at 94% (below threshold).
+  - interval: 30s
+    input_series:
+      - series: 'homelab_host_cpu_percent{cpu="all",host="homelab"}'
+        values: '94+0x30'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: HostCriticalCPU
+        exp_alerts: []
+
+  # ===========================================================================
+  # 2. HostCriticalMemory (for: 10m)
+  # ===========================================================================
+
+  # FIRE: used/total > 0.95 for >10m. Use concrete byte values: 15.6GB used / 16GB total = 0.975.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_host_memory_bytes{type="used",host="homelab"}'
+        values: '16750000000+0x30'
+      - series: 'homelab_host_memory_bytes{type="total",host="homelab"}'
+        values: '17179869184+0x30'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: HostCriticalMemory
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              source_tool: vmalert-metrics
+              target_kind: host
+              host: homelab
+            exp_annotations:
+              summary: "Host memory above 95% for 10m"
+              description: "Host homelab memory utilization 97.5%"
+
+  # NO-FIRE: used/total = 0.20 (this host's idle baseline — 20% RAM used).
+  - interval: 30s
+    input_series:
+      - series: 'homelab_host_memory_bytes{type="used",host="homelab"}'
+        values: '3435973836+0x30'
+      - series: 'homelab_host_memory_bytes{type="total",host="homelab"}'
+        values: '17179869184+0x30'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: HostCriticalMemory
+        exp_alerts: []
+
+  # ===========================================================================
+  # 3. HostHighLoad (for: 10m) — threshold: load > 2 * count(cores) = 32
+  # Plant 16 per-core series so count()=16; load series at 40 (>32).
+  # ===========================================================================
+
+  # FIRE: load=40 > 32, held >10m.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_host_cpu_percent{cpu="0",host="homelab"}'
+        values: '10+0x30'
+      - series: 'homelab_host_cpu_percent{cpu="1",host="homelab"}'
+        values: '10+0x30'
+      - series: 'homelab_host_cpu_percent{cpu="2",host="homelab"}'
+        values: '10+0x30'
+      - series: 'homelab_host_cpu_percent{cpu="3",host="homelab"}'
+        values: '10+0x30'
+      - series: 'homelab_host_cpu_percent{cpu="4",host="homelab"}'
+        values: '10+0x30'
+      - series: 'homelab_host_cpu_percent{cpu="5",host="homelab"}'
+        values: '10+0x30'
+      - series: 'homelab_host_cpu_percent{cpu="6",host="homelab"}'
+        values: '10+0x30'
+      - series: 'homelab_host_cpu_percent{cpu="7",host="homelab"}'
+        values: '10+0x30'
+      - series: 'homelab_host_cpu_percent{cpu="8",host="homelab"}'
+        values: '10+0x30'
+      - series: 'homelab_host_cpu_percent{cpu="9",host="homelab"}'
+        values: '10+0x30'
+      - series: 'homelab_host_cpu_percent{cpu="10",host="homelab"}'
+        values: '10+0x30'
+      - series: 'homelab_host_cpu_percent{cpu="11",host="homelab"}'
+        values: '10+0x30'
+      - series: 'homelab_host_cpu_percent{cpu="12",host="homelab"}'
+        values: '10+0x30'
+      - series: 'homelab_host_cpu_percent{cpu="13",host="homelab"}'
+        values: '10+0x30'
+      - series: 'homelab_host_cpu_percent{cpu="14",host="homelab"}'
+        values: '10+0x30'
+      - series: 'homelab_host_cpu_percent{cpu="15",host="homelab"}'
+        values: '10+0x30'
+      - series: 'homelab_host_load_average{period="15m",host="homelab"}'
+        values: '40+0x30'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: HostHighLoad
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              source_tool: vmalert-metrics
+              target_kind: host
+              period: 15m
+              host: homelab
+            exp_annotations:
+              summary: "Host load average above 2x core count for 10m"
+              description: "Host homelab 15m load 40 exceeds 2x core count"
+
+  # NO-FIRE: load=20 (≤ 32 threshold).
+  - interval: 30s
+    input_series:
+      - series: 'homelab_host_cpu_percent{cpu="0",host="homelab"}'
+        values: '10+0x30'
+      - series: 'homelab_host_cpu_percent{cpu="1",host="homelab"}'
+        values: '10+0x30'
+      - series: 'homelab_host_cpu_percent{cpu="2",host="homelab"}'
+        values: '10+0x30'
+      - series: 'homelab_host_cpu_percent{cpu="3",host="homelab"}'
+        values: '10+0x30'
+      - series: 'homelab_host_cpu_percent{cpu="4",host="homelab"}'
+        values: '10+0x30'
+      - series: 'homelab_host_cpu_percent{cpu="5",host="homelab"}'
+        values: '10+0x30'
+      - series: 'homelab_host_cpu_percent{cpu="6",host="homelab"}'
+        values: '10+0x30'
+      - series: 'homelab_host_cpu_percent{cpu="7",host="homelab"}'
+        values: '10+0x30'
+      - series: 'homelab_host_cpu_percent{cpu="8",host="homelab"}'
+        values: '10+0x30'
+      - series: 'homelab_host_cpu_percent{cpu="9",host="homelab"}'
+        values: '10+0x30'
+      - series: 'homelab_host_cpu_percent{cpu="10",host="homelab"}'
+        values: '10+0x30'
+      - series: 'homelab_host_cpu_percent{cpu="11",host="homelab"}'
+        values: '10+0x30'
+      - series: 'homelab_host_cpu_percent{cpu="12",host="homelab"}'
+        values: '10+0x30'
+      - series: 'homelab_host_cpu_percent{cpu="13",host="homelab"}'
+        values: '10+0x30'
+      - series: 'homelab_host_cpu_percent{cpu="14",host="homelab"}'
+        values: '10+0x30'
+      - series: 'homelab_host_cpu_percent{cpu="15",host="homelab"}'
+        values: '10+0x30'
+      - series: 'homelab_host_load_average{period="15m",host="homelab"}'
+        values: '20+0x30'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: HostHighLoad
+        exp_alerts: []
+
+  # ===========================================================================
+  # 4. HostCriticalLoad (for: 10m) — threshold: load > 4 * 16 = 64
+  # ===========================================================================
+
+  # FIRE: load=80 > 64.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_host_cpu_percent{cpu="0",host="homelab"}'
+        values: '10+0x30'
+      - series: 'homelab_host_cpu_percent{cpu="1",host="homelab"}'
+        values: '10+0x30'
+      - series: 'homelab_host_cpu_percent{cpu="2",host="homelab"}'
+        values: '10+0x30'
+      - series: 'homelab_host_cpu_percent{cpu="3",host="homelab"}'
+        values: '10+0x30'
+      - series: 'homelab_host_cpu_percent{cpu="4",host="homelab"}'
+        values: '10+0x30'
+      - series: 'homelab_host_cpu_percent{cpu="5",host="homelab"}'
+        values: '10+0x30'
+      - series: 'homelab_host_cpu_percent{cpu="6",host="homelab"}'
+        values: '10+0x30'
+      - series: 'homelab_host_cpu_percent{cpu="7",host="homelab"}'
+        values: '10+0x30'
+      - series: 'homelab_host_cpu_percent{cpu="8",host="homelab"}'
+        values: '10+0x30'
+      - series: 'homelab_host_cpu_percent{cpu="9",host="homelab"}'
+        values: '10+0x30'
+      - series: 'homelab_host_cpu_percent{cpu="10",host="homelab"}'
+        values: '10+0x30'
+      - series: 'homelab_host_cpu_percent{cpu="11",host="homelab"}'
+        values: '10+0x30'
+      - series: 'homelab_host_cpu_percent{cpu="12",host="homelab"}'
+        values: '10+0x30'
+      - series: 'homelab_host_cpu_percent{cpu="13",host="homelab"}'
+        values: '10+0x30'
+      - series: 'homelab_host_cpu_percent{cpu="14",host="homelab"}'
+        values: '10+0x30'
+      - series: 'homelab_host_cpu_percent{cpu="15",host="homelab"}'
+        values: '10+0x30'
+      - series: 'homelab_host_load_average{period="15m",host="homelab"}'
+        values: '80+0x30'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: HostCriticalLoad
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              source_tool: vmalert-metrics
+              target_kind: host
+              period: 15m
+              host: homelab
+            exp_annotations:
+              summary: "Host load average above 4x core count for 10m"
+              description: "Host homelab 15m load 80 exceeds 4x core count"
+
+  # NO-FIRE: load=40 (≤ 64 threshold; also tests HostCriticalLoad specifically).
+  - interval: 30s
+    input_series:
+      - series: 'homelab_host_cpu_percent{cpu="0",host="homelab"}'
+        values: '10+0x30'
+      - series: 'homelab_host_cpu_percent{cpu="1",host="homelab"}'
+        values: '10+0x30'
+      - series: 'homelab_host_cpu_percent{cpu="2",host="homelab"}'
+        values: '10+0x30'
+      - series: 'homelab_host_cpu_percent{cpu="3",host="homelab"}'
+        values: '10+0x30'
+      - series: 'homelab_host_cpu_percent{cpu="4",host="homelab"}'
+        values: '10+0x30'
+      - series: 'homelab_host_cpu_percent{cpu="5",host="homelab"}'
+        values: '10+0x30'
+      - series: 'homelab_host_cpu_percent{cpu="6",host="homelab"}'
+        values: '10+0x30'
+      - series: 'homelab_host_cpu_percent{cpu="7",host="homelab"}'
+        values: '10+0x30'
+      - series: 'homelab_host_cpu_percent{cpu="8",host="homelab"}'
+        values: '10+0x30'
+      - series: 'homelab_host_cpu_percent{cpu="9",host="homelab"}'
+        values: '10+0x30'
+      - series: 'homelab_host_cpu_percent{cpu="10",host="homelab"}'
+        values: '10+0x30'
+      - series: 'homelab_host_cpu_percent{cpu="11",host="homelab"}'
+        values: '10+0x30'
+      - series: 'homelab_host_cpu_percent{cpu="12",host="homelab"}'
+        values: '10+0x30'
+      - series: 'homelab_host_cpu_percent{cpu="13",host="homelab"}'
+        values: '10+0x30'
+      - series: 'homelab_host_cpu_percent{cpu="14",host="homelab"}'
+        values: '10+0x30'
+      - series: 'homelab_host_cpu_percent{cpu="15",host="homelab"}'
+        values: '10+0x30'
+      - series: 'homelab_host_load_average{period="15m",host="homelab"}'
+        values: '40+0x30'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: HostCriticalLoad
+        exp_alerts: []
+
+  # ===========================================================================
+  # 5. HostMemoryPressure (for: 10m) — AND gate: swap>0.5 AND mem>0.85
+  # Use byte values. swap: 8GB total. mem: 16GB total (17179869184).
+  # FIRE: swap 5GB/8GB = 0.625 > 0.5, mem 15GB/16GB = 0.937 > 0.85.
+  # NO-FIRE A: swap high (0.6) but mem low (0.20) — this host's idle baseline.
+  # NO-FIRE B: mem high (0.88) but swap low (0.10).
+  # ===========================================================================
+
+  # FIRE: both conditions true.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_host_swap_bytes{type="used",host="homelab"}'
+        values: '5368709120+0x30'
+      - series: 'homelab_host_swap_bytes{type="total",host="homelab"}'
+        values: '8589934592+0x30'
+      - series: 'homelab_host_memory_bytes{type="used",host="homelab"}'
+        values: '16106127360+0x30'
+      - series: 'homelab_host_memory_bytes{type="total",host="homelab"}'
+        values: '17179869184+0x30'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: HostMemoryPressure
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              source_tool: vmalert-metrics
+              target_kind: host
+              host: homelab
+            exp_annotations:
+              summary: "Host memory pressure: swap and RAM both elevated for 10m"
+              description: "Host homelab swap >50% AND RAM >85% simultaneously for 10m"
+
+  # NO-FIRE A: swap=0.625 > 0.5 but mem=0.20 < 0.85 (AND-gate fails).
+  - interval: 30s
+    input_series:
+      - series: 'homelab_host_swap_bytes{type="used",host="homelab"}'
+        values: '5368709120+0x30'
+      - series: 'homelab_host_swap_bytes{type="total",host="homelab"}'
+        values: '8589934592+0x30'
+      - series: 'homelab_host_memory_bytes{type="used",host="homelab"}'
+        values: '3435973836+0x30'
+      - series: 'homelab_host_memory_bytes{type="total",host="homelab"}'
+        values: '17179869184+0x30'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: HostMemoryPressure
+        exp_alerts: []
+
+  # NO-FIRE B: mem=0.88 > 0.85 but swap=0.10 < 0.5 (AND-gate fails).
+  - interval: 30s
+    input_series:
+      - series: 'homelab_host_swap_bytes{type="used",host="homelab"}'
+        values: '858993459+0x30'
+      - series: 'homelab_host_swap_bytes{type="total",host="homelab"}'
+        values: '8589934592+0x30'
+      - series: 'homelab_host_memory_bytes{type="used",host="homelab"}'
+        values: '15118310400+0x30'
+      - series: 'homelab_host_memory_bytes{type="total",host="homelab"}'
+        values: '17179869184+0x30'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: HostMemoryPressure
+        exp_alerts: []
+
+  # ===========================================================================
+  # 6. HostZombieProcesses (for: 10m)
+  # ===========================================================================
+
+  # FIRE: 25 zombies for >10m.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_host_processes_total{state="zombie",host="homelab"}'
+        values: '25+0x30'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: HostZombieProcesses
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              source_tool: vmalert-metrics
+              target_kind: host
+              state: zombie
+              host: homelab
+            exp_annotations:
+              summary: "Host zombie process count above 20 for 10m"
+              description: "Host homelab has 25 zombie processes"
+
+  # NO-FIRE: 15 zombies (below threshold).
+  - interval: 30s
+    input_series:
+      - series: 'homelab_host_processes_total{state="zombie",host="homelab"}'
+        values: '15+0x30'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: HostZombieProcesses
+        exp_alerts: []
+
+  # ===========================================================================
+  # 7. HostRecentlyRebooted (for: 0m)
+  # ===========================================================================
+
+  # FIRE: uptime=300s < 600s, fires immediately (for: 0m).
+  - interval: 30s
+    input_series:
+      - series: 'homelab_host_uptime_seconds{host="homelab"}'
+        values: '300+0x5'
+    alert_rule_test:
+      - eval_time: 30s
+        alertname: HostRecentlyRebooted
+        exp_alerts:
+          - exp_labels:
+              severity: info
+              source_tool: vmalert-metrics
+              target_kind: host
+              host: homelab
+            exp_annotations:
+              summary: "Host recently rebooted (uptime < 10m)"
+              description: "Host homelab uptime is 300s (rebooted within the last 10 minutes)"
+
+  # NO-FIRE: uptime=3600s > 600s.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_host_uptime_seconds{host="homelab"}'
+        values: '3600+0x5'
+    alert_rule_test:
+      - eval_time: 30s
+        alertname: HostRecentlyRebooted
+        exp_alerts: []
+
+  # ===========================================================================
+  # 8. HostCPUAnomalous (for: 15m) — 3x 6h baseline, floor 40%
+  # Baseline: 10% CPU for 6h (720 samples at 30s). Spike: 60% for 16m (32 samples).
+  # clamp_min(3*10, 40) = clamp_min(30, 40) = 40. 60 > 40 → FIRE after 15m.
+  # Eval at 6h+16m = 376m.
+  # NO-FIRE: flat at 10% — 10 < 40 floor, never fires.
+  # ===========================================================================
+
+  # FIRE: 10% baseline for 6h, then 60% for 16m.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_host_cpu_percent{cpu="all",host="homelab"}'
+        values: '10+0x720 60+0x32'
+    alert_rule_test:
+      - eval_time: 376m
+        alertname: HostCPUAnomalous
+        exp_alerts:
+          - exp_labels:
+              severity: info
+              source_tool: vmalert-metrics
+              target_kind: host
+              cpu: all
+              host: homelab
+            exp_annotations:
+              summary: "Host CPU anomalously high (3x 6h baseline, floor 40%)"
+              description: "Host homelab CPU 60% exceeds 3x its 6-hour baseline (floor 40%)"
+
+  # NO-FIRE: flat 10% — always below the 40% floor.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_host_cpu_percent{cpu="all",host="homelab"}'
+        values: '10+0x760'
+    alert_rule_test:
+      - eval_time: 376m
+        alertname: HostCPUAnomalous
+        exp_alerts: []
+
+  # ===========================================================================
+  # 9. HostMemoryAnomalous (for: 15m) — 2x 6h baseline ratio, floor 0.6
+  # Use byte values. total=16GB. Baseline: 20% used = 3.44GB for 6h.
+  # Spike: 85% used = 14.6GB for 16m.
+  # clamp_min(2*0.20, 0.6) = clamp_min(0.40, 0.6) = 0.6. 0.85 > 0.6 → FIRE.
+  # NO-FIRE: flat at 20% — 0.20 < 0.6 floor.
+  # ===========================================================================
+
+  # FIRE: 20% baseline for 6h, then 85% for 16m.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_host_memory_bytes{type="used",host="homelab"}'
+        values: '3435973836+0x720 14603400192+0x32'
+      - series: 'homelab_host_memory_bytes{type="total",host="homelab"}'
+        values: '17179869184+0x752'
+    alert_rule_test:
+      - eval_time: 376m
+        alertname: HostMemoryAnomalous
+        exp_alerts:
+          - exp_labels:
+              severity: info
+              source_tool: vmalert-metrics
+              target_kind: host
+              host: homelab
+            exp_annotations:
+              summary: "Host memory anomalously high (2x 6h baseline, floor 60%)"
+              description: "Host homelab memory ratio 85% exceeds 2x its 6-hour baseline (floor 60%)"
+
+  # NO-FIRE: flat at 20% — ratio=0.20 < 0.60 floor.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_host_memory_bytes{type="used",host="homelab"}'
+        values: '3435973836+0x760'
+      - series: 'homelab_host_memory_bytes{type="total",host="homelab"}'
+        values: '17179869184+0x760'
+    alert_rule_test:
+      - eval_time: 376m
+        alertname: HostMemoryAnomalous
+        exp_alerts: []
+
+  # ===========================================================================
+  # 10. HostDiskIOAnomalous (for: 15m) — 3x 6h baseline, floor 52428800 (50 MB/s)
+  # Metric: homelab_host_disk_io_bytes_total{direction,disk} (counter).
+  # We plant a counter that increases at a constant rate, then jumps.
+  # Baseline: 10 MB/s = 10485760 B/s. For a 5m rate window: increase of
+  # 10485760 * 300 = 3145728000 per 5m period.
+  # At 30s eval_interval, counter increments by 10485760*30 = 314572800 per step.
+  # Baseline 720 steps: rate(5m) ≈ 10 MB/s.
+  # Spike: 200 MB/s = 209715200 B/s per step increase = 6291456000 per step.
+  # clamp_min(3 * 10MB/s, 50MB/s) = clamp_min(30MB/s, 50MB/s) = 50 MB/s.
+  # 200 MB/s > 50 MB/s → FIRE.
+  # NO-FIRE: flat 10 MB/s throughout (rate < 50 MB/s floor).
+  # NOTE: Counter values expressed as cumulative totals; use incrementing series.
+  # Using '+<step>x<N>' notation: start at 0, increment by delta each 30s step.
+  # Baseline delta per 30s: 314572800. Spike delta: 6291456000.
+  # ===========================================================================
+
+  # FIRE: 10 MB/s baseline for 6h, then 200 MB/s for 16m.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_host_disk_io_bytes_total{direction="read",disk="sda",host="homelab"}'
+        values: '0+314572800x720 226492416000+6291456000x32'
+    alert_rule_test:
+      - eval_time: 376m
+        alertname: HostDiskIOAnomalous
+        exp_alerts:
+          - exp_labels:
+              severity: info
+              source_tool: vmalert-metrics
+              target_kind: host
+              direction: read
+              disk: sda
+              host: homelab
+            exp_annotations:
+              summary: "Host disk I/O anomalously high on sda (read)"
+
+  # NO-FIRE: flat 10 MB/s throughout — rate stays below 50 MB/s floor.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_host_disk_io_bytes_total{direction="read",disk="sda",host="homelab"}'
+        values: '0+314572800x760'
+    alert_rule_test:
+      - eval_time: 376m
+        alertname: HostDiskIOAnomalous
+        exp_alerts: []
+
+  # ===========================================================================
+  # 11. HostNetThroughputAnomalous (for: 15m) — 3x 6h baseline, floor 52428800 (50 MB/s)
+  # Same counter-rate idiom as rule 10. iface!="lo" selector active.
+  # Baseline: 10 MB/s on eth0. Spike: 200 MB/s.
+  # Same delta math as rule 10.
+  # ===========================================================================
+
+  # FIRE: 10 MB/s baseline for 6h, then 200 MB/s for 16m on eth0.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_host_net_bytes_total{direction="rx",iface="eth0",host="homelab"}'
+        values: '0+314572800x720 226492416000+6291456000x32'
+    alert_rule_test:
+      - eval_time: 376m
+        alertname: HostNetThroughputAnomalous
+        exp_alerts:
+          - exp_labels:
+              severity: info
+              source_tool: vmalert-metrics
+              target_kind: host
+              direction: rx
+              iface: eth0
+              host: homelab
+            exp_annotations:
+              summary: "Host net throughput anomalously high on eth0 (rx)"
+
+  # NO-FIRE loopback: lo traffic at 200 MB/s is excluded by iface!="lo" filter.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_host_net_bytes_total{direction="rx",iface="lo",host="homelab"}'
+        values: '0+6291456000x760'
+    alert_rule_test:
+      - eval_time: 376m
+        alertname: HostNetThroughputAnomalous
+        exp_alerts: []
+
+  # NO-FIRE: flat 10 MB/s on eth0 — below 50 MB/s floor.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_host_net_bytes_total{direction="rx",iface="eth0",host="homelab"}'
+        values: '0+314572800x760'
+    alert_rule_test:
+      - eval_time: 376m
+        alertname: HostNetThroughputAnomalous
+        exp_alerts: []

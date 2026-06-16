@@ -73,6 +73,18 @@ def test_buffering_metrics_writer_drain_clears_buffer() -> None:
     assert drained[0].name == "g2"
 
 
+def test_buffering_write_counter_absolute_buffers_gauge_kind() -> None:
+    """write_counter_absolute buffers a kind='gauge' entry; drain returns it."""
+    w = BufferingMetricsWriter()
+    w.write_counter_absolute("hl_abs", 77.0, {"d": "x"})
+    drained = w.drain()
+    assert len(drained) == 1
+    assert drained[0].kind == "gauge"
+    assert drained[0].name == "hl_abs"
+    assert drained[0].value == 77.0  # noqa: PLR2004
+    assert drained[0].labels == {"d": "x"}
+
+
 @pytest.mark.parametrize(
     "method_name",
     ["write_gauge", "write_counter", "write_summary"],

@@ -291,12 +291,12 @@ class HostCollector(BaseCollector):
             for disk_name, ctr in io_per_disk.items():
                 if exclude_pattern is not None and exclude_pattern.match(disk_name):
                     continue
-                ctx.vm.write_counter(
+                ctx.vm.write_counter_absolute(
                     "homelab_host_disk_io_bytes_total",
                     float(ctr.read_bytes),
                     {"disk": disk_name, "direction": "read"},
                 )
-                ctx.vm.write_counter(
+                ctx.vm.write_counter_absolute(
                     "homelab_host_disk_io_bytes_total",
                     float(ctr.write_bytes),
                     {"disk": disk_name, "direction": "write"},
@@ -311,12 +311,12 @@ class HostCollector(BaseCollector):
             net_per_iface = psutil.net_io_counters(pernic=True) or {}
             emitted = 0
             for iface, ctr in net_per_iface.items():
-                ctx.vm.write_counter(
+                ctx.vm.write_counter_absolute(
                     "homelab_host_net_bytes_total",
                     float(ctr.bytes_recv),
                     {"iface": iface, "direction": "rx"},
                 )
-                ctx.vm.write_counter(
+                ctx.vm.write_counter_absolute(
                     "homelab_host_net_bytes_total",
                     float(ctr.bytes_sent),
                     {"iface": iface, "direction": "tx"},

@@ -45,6 +45,10 @@ class BufferingMetricsWriter:
             MetricEntry(kind="counter", name=name, value=value, labels=dict(labels))
         )
 
+    def write_counter_absolute(self, name: str, value: float, labels: dict[str, str]) -> None:
+        """Buffer an absolute counter value (stored as gauge-kind for set-semantics)."""
+        self._entries.append(MetricEntry(kind="gauge", name=name, value=value, labels=dict(labels)))
+
     def write_summary(self, name: str, value: float, labels: dict[str, str]) -> None:
         """Buffer a summary observation."""
         self._entries.append(

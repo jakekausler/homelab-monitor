@@ -785,6 +785,11 @@ async def test_run_with_non_retaining_writer_skips_family_replace(
         ) -> None:
             self.writes += 1
 
+        def write_counter_absolute(  # pyright: ignore[reportUnusedParameter]
+            self, name: str, value: float, labels: dict[str, str]
+        ) -> None:
+            self.writes += 1
+
         def write_summary(  # pyright: ignore[reportUnusedParameter]
             self, name: str, value: float, labels: dict[str, str]
         ) -> None:

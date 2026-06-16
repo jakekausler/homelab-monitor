@@ -22,7 +22,7 @@ groups:
           description: 'Host {{ $labels.host }} CPU at {{ $value }}% (avg over 5m, sustained 10m)'
 
       - alert: HostHighMemory
-        expr: homelab_host_memory_bytes{type="used"} / homelab_host_memory_bytes{type="total"} > 0.9
+        expr: homelab_host_memory_bytes{type="used"} / ignoring(type) homelab_host_memory_bytes{type="total"} > 0.9
         for: 10m
         labels:
           severity: warning

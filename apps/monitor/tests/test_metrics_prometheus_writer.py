@@ -135,3 +135,36 @@ def test_summary_labelname_mismatch_is_skipped() -> None:
     assert 'sum_mismatch_count{a="1"} 1.0' in text
     # Mismatched labelset NOT present.
     assert 'b="2"' not in text
+
+
+def test_counter_absolute_sets_value() -> None:
+    """write_counter_absolute SETS (not increments) — second emit replaces first."""
+    reg = CollectorRegistry()
+    w = PrometheusRegistryWriter(reg)
+    w.write_counter_absolute("hl_abs", 100.0, {"k": "v"})
+    w.write_counter_absolute("hl_abs", 250.0, {"k": "v"})
+    text = _expose(reg)
+    # Gauge-backed: exposes verbatim (NO _total suffix), and value is SET to 250 (NOT 350).
+    assert 'hl_abs{k="v"} 250' in text
+    assert "350" not in text
+
+
+def test_counter_absolute_no_labels_sets_value() -> None:
+    """write_counter_absolute with empty labels uses the no-label .set() path."""
+    reg = CollectorRegistry()
+    w = PrometheusRegistryWriter(reg)
+    w.write_counter_absolute("hl_abs_nolabel", 42.0, {})
+    text = _expose(reg)
+    assert "hl_abs_nolabel 42" in text
+
+
+def test_counter_absolute_labelname_mismatch_returns_early() -> None:
+    """A second emit with different label KEYS is dropped (metric is None branch)."""
+    reg = CollectorRegistry()
+    w = PrometheusRegistryWriter(reg)
+    w.write_counter_absolute("hl_abs_mismatch", 1.0, {"a": "x"})
+    # Different labelname set -> _get_or_create logs+returns None -> early return.
+    w.write_counter_absolute("hl_abs_mismatch", 2.0, {"b": "y"})
+    text = _expose(reg)
+    # First registration stands; the mismatched second emit is a no-op.
+    assert 'hl_abs_mismatch{a="x"} 1' in text

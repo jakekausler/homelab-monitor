@@ -18,6 +18,7 @@ from homelab_monitor.kernel.plugins.io import (
     InMemoryLogsWriter,
     InMemoryMetricsWriter,
     LogsWriter,
+    MemoryRetainingMetricsWriter,
     MetricsWriter,
     SshClientFactory,
     SshConnection,
@@ -79,6 +80,29 @@ def test_metrics_writer_satisfies_protocol() -> None:
     """InMemoryMetricsWriter is structurally a MetricsWriter."""
     w: MetricsWriter = InMemoryMetricsWriter()
     assert isinstance(w, MetricsWriter)
+
+
+def test_inmemory_write_counter_absolute_records_gauge_entry() -> None:
+    """write_counter_absolute records a single kind='gauge' entry with the value."""
+
+    w = InMemoryMetricsWriter()
+    w.write_counter_absolute("hl_abs", 123.0, {"d": "x"})
+    entries = [e for e in w.recorded if e.name == "hl_abs"]
+    assert len(entries) == 1
+    assert entries[0].kind == "gauge"
+    assert entries[0].value == 123.0  # noqa: PLR2004
+    assert entries[0].labels == {"d": "x"}
+
+
+def test_memory_retaining_write_counter_absolute_sets_latest() -> None:
+    """write_counter_absolute updates the latest-value snapshot as gauge-kind, SET semantics."""
+    w = MemoryRetainingMetricsWriter()
+    w.write_counter_absolute("hl_abs", 100.0, {"d": "x"})
+    w.write_counter_absolute("hl_abs", 250.0, {"d": "x"})
+    latest = [e for e in w.snapshot() if e.name == "hl_abs"]
+    assert len(latest) == 1
+    assert latest[0].kind == "gauge"
+    assert latest[0].value == 250.0  # SET, not accumulated  # noqa: PLR2004
 
 
 # --- InMemoryLogsWriter ---------------------------------------------------------------------

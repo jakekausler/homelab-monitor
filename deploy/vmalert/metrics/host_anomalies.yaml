@@ -1,0 +1,199 @@
+# vmalert METRICS rules for host anomalies (STAGE-005A-001).
+# Severity vocabulary locked: info / warning / error / critical (spec §8.2).
+#
+# All rules use source_tool: vmalert-metrics + target_kind: host.
+# CPU% is 0-100 scale. Memory ratio is 0-1 scale.
+#
+# `for: 10m` / `for: 15m` thresholds intentionally won't fire in the fast
+# `make test-fast` rig (-retentionPeriod=1d) — that's by design. The slow
+# integration test (apps/monitor/tests/integration/test_vmalert_pipeline.py)
+# drops `for:` to 0s via a runtime override or otherwise stages a synthetic
+# firing path.
+#
+# Rules 9 (HostMemoryAnomalous), 10 (HostDiskIOAnomalous), 11 (HostNetThroughputAnomalous)
+# use MetricsQL subqueries: avg_over_time(<expr>[6h:5m]). VictoriaMetrics supports
+# this. If Rule 9's inline division subquery is rejected on the rig, swap to the
+# documented abs-bytes fallback (see STAGE-005A-001 spec).
+# Rule 9 (plain-ratio subquery) IS promtool-validatable; rules 10 + 11 wrap rate(...)
+# in the subquery and show got:[] under promtool by design — validated via live
+# MetricsQL replay instead (see __tests__/host_anomalies.tests.yaml header).
+#
+# Rules 10 + 11 floors (50 MB/s) are conservative starting points tuned in
+# Refinement 3b against real disk/net traffic on this host.
+
+groups:
+  - name: host_anomalies
+    interval: 30s
+    rules:
+
+      # --- Tier: critical CPU (above the existing HostHighCPU warning at 90%) ---
+      - alert: HostCriticalCPU
+        expr: avg_over_time(homelab_host_cpu_percent{cpu="all"}[5m]) > 95
+        for: 10m
+        labels:
+          severity: critical
+          source_tool: vmalert-metrics
+          target_kind: host
+        annotations:
+          summary: "Host CPU above 95% for 10m"
+          description: 'Host {{ $labels.host }} CPU at {{ $value }}% (avg over 5m, sustained 10m)'
+
+      # --- Tier: critical memory (above the existing HostHighMemory warning at 90%) ---
+      - alert: HostCriticalMemory
+        expr: homelab_host_memory_bytes{type="used"} / ignoring(type) homelab_host_memory_bytes{type="total"} > 0.95
+        for: 10m
+        labels:
+          severity: critical
+          source_tool: vmalert-metrics
+          target_kind: host
+        annotations:
+          summary: "Host memory above 95% for 10m"
+          description: 'Host {{ $labels.host }} memory utilization {{ $value | humanizePercentage }}'
+
+      # --- Load average vs. core count ---
+      # count(homelab_host_cpu_percent{cpu!="all"}) = number of logical cores (16 on this host).
+      # scalar(...) converts the no-label count() vector to a true scalar so the comparison is
+      # unambiguous in BOTH MetricsQL (prod) and PromQL/promtool. Without scalar(), PromQL's
+      # vector-matching would return empty (the load vector and the no-label count vector don't
+      # share a label set); MetricsQL auto-converts but promtool does not.
+      - alert: HostHighLoad
+        expr: homelab_host_load_average{period="15m"} > scalar(2 * count(homelab_host_cpu_percent{cpu!="all"}))
+        for: 10m
+        labels:
+          severity: warning
+          source_tool: vmalert-metrics
+          target_kind: host
+        annotations:
+          summary: "Host load average above 2x core count for 10m"
+          description: 'Host {{ $labels.host }} 15m load {{ $value }} exceeds 2x core count'
+
+      - alert: HostCriticalLoad
+        expr: homelab_host_load_average{period="15m"} > scalar(4 * count(homelab_host_cpu_percent{cpu!="all"}))
+        for: 10m
+        labels:
+          severity: critical
+          source_tool: vmalert-metrics
+          target_kind: host
+        annotations:
+          summary: "Host load average above 4x core count for 10m"
+          description: 'Host {{ $labels.host }} 15m load {{ $value }} exceeds 4x core count'
+
+      # --- Memory pressure: swap AND RAM both elevated ---
+      # Silent at this box's 93%-swap/20%-mem baseline (swap>0.5 but mem<0.85 -> no fire).
+      # Fires only when BOTH swap >50% AND mem >85% simultaneously.
+      - alert: HostMemoryPressure
+        expr: |
+          (homelab_host_swap_bytes{type="used"} / ignoring(type) homelab_host_swap_bytes{type="total"} > 0.5)
+            and
+          (homelab_host_memory_bytes{type="used"} / ignoring(type) homelab_host_memory_bytes{type="total"} > 0.85)
+        for: 10m
+        labels:
+          severity: warning
+          source_tool: vmalert-metrics
+          target_kind: host
+        annotations:
+          summary: "Host memory pressure: swap and RAM both elevated for 10m"
+          description: 'Host {{ $labels.host }} swap >50% AND RAM >85% simultaneously for 10m'
+
+      # --- Zombie processes ---
+      - alert: HostZombieProcesses
+        expr: homelab_host_processes_total{state="zombie"} > 20
+        for: 10m
+        labels:
+          severity: warning
+          source_tool: vmalert-metrics
+          target_kind: host
+        annotations:
+          summary: "Host zombie process count above 20 for 10m"
+          description: 'Host {{ $labels.host }} has {{ $value }} zombie processes'
+
+      # --- Recent reboot ---
+      # for: 0m — fires immediately on first evaluation where uptime < 600s.
+      # Matches the CollectorQuarantined commented example (for: 0m) in host.yaml.
+      - alert: HostRecentlyRebooted
+        expr: homelab_host_uptime_seconds < 600
+        for: 0m
+        labels:
+          severity: info
+          source_tool: vmalert-metrics
+          target_kind: host
+        annotations:
+          summary: "Host recently rebooted (uptime < 10m)"
+          description: 'Host {{ $labels.host }} uptime is {{ $value }}s (rebooted within the last 10 minutes)'
+
+      # --- Anomaly: CPU spike (3x 6h baseline, floor 40%) ---
+      # clamp_min floor of 40 means the rule only fires when CPU is BOTH 3x its
+      # baseline AND at least 40% absolute — prevents false-fires on idle boxes
+      # where 3x of 5% = 15% would otherwise trip it.
+      - alert: HostCPUAnomalous
+        expr: |
+          homelab_host_cpu_percent{cpu="all"}
+            > clamp_min(3 * avg_over_time(homelab_host_cpu_percent{cpu="all"}[6h]), 40)
+        for: 15m
+        labels:
+          severity: info
+          source_tool: vmalert-metrics
+          target_kind: host
+        annotations:
+          summary: "Host CPU anomalously high (3x 6h baseline, floor 40%)"
+          description: 'Host {{ $labels.host }} CPU {{ $value }}% exceeds 3x its 6-hour baseline (floor 40%)'
+
+      # --- Anomaly: memory ratio spike (2x 6h baseline, floor 0.6) ---
+      # PRIMARY: inline ratio subquery. FALLBACK (if parse error on rig): see spec.
+      # floor 0.6 means "must be >60% AND 2x baseline simultaneously".
+      - alert: HostMemoryAnomalous
+        expr: |
+          homelab_host_memory_bytes{type="used"} / ignoring(type) homelab_host_memory_bytes{type="total"}
+            > clamp_min(
+                2 * avg_over_time(
+                  (homelab_host_memory_bytes{type="used"} / ignoring(type) homelab_host_memory_bytes{type="total"})[6h:5m]
+                ),
+                0.6
+              )
+        for: 15m
+        labels:
+          severity: info
+          source_tool: vmalert-metrics
+          target_kind: host
+        annotations:
+          summary: "Host memory anomalously high (2x 6h baseline, floor 60%)"
+          description: 'Host {{ $labels.host }} memory ratio {{ $value | humanizePercentage }} exceeds 2x its 6-hour baseline (floor 60%)'
+
+      # --- Anomaly: disk I/O rate spike (3x 6h baseline, floor 50 MB/s) ---
+      # Per-disk, per-direction. Counter metric: homelab_host_disk_io_bytes_total{direction,disk}.
+      # Floor 50 MB/s is conservative; tune in Refinement 3b against real idle baseline.
+      - alert: HostDiskIOAnomalous
+        expr: |
+          rate(homelab_host_disk_io_bytes_total[5m])
+            > clamp_min(
+                3 * avg_over_time(rate(homelab_host_disk_io_bytes_total[5m])[6h:5m]),
+                52428800
+              )
+        for: 15m
+        labels:
+          severity: info
+          source_tool: vmalert-metrics
+          target_kind: host
+        annotations:
+          summary: "Host disk I/O anomalously high on {{ $labels.disk }} ({{ $labels.direction }})"
+          description: 'Host {{ $labels.host }} disk {{ $labels.disk }} {{ $labels.direction }} at {{ $value | humanize }}B/s exceeds 3x 6h baseline (floor 50 MB/s)'
+
+      # --- Anomaly: network throughput spike (3x 6h baseline, floor 50 MB/s) ---
+      # Per-iface, per-direction. Excludes loopback (iface!="lo").
+      # Counter metric: homelab_host_net_bytes_total{direction,iface}.
+      # Floor 50 MB/s is conservative; tune in Refinement 3b.
+      - alert: HostNetThroughputAnomalous
+        expr: |
+          rate(homelab_host_net_bytes_total{iface!="lo"}[5m])
+            > clamp_min(
+                3 * avg_over_time(rate(homelab_host_net_bytes_total{iface!="lo"}[5m])[6h:5m]),
+                52428800
+              )
+        for: 15m
+        labels:
+          severity: info
+          source_tool: vmalert-metrics
+          target_kind: host
+        annotations:
+          summary: "Host net throughput anomalously high on {{ $labels.iface }} ({{ $labels.direction }})"
+          description: 'Host {{ $labels.host }} iface {{ $labels.iface }} {{ $labels.direction }} at {{ $value | humanize }}B/s exceeds 3x 6h baseline (floor 50 MB/s)'

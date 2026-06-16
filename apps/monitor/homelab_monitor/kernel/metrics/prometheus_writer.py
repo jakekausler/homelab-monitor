@@ -113,6 +113,21 @@ class PrometheusRegistryWriter:
         else:
             counter.inc(value)
 
+    def write_counter_absolute(self, name: str, value: float, labels: dict[str, str]) -> None:
+        """Set an absolute cumulative counter value via a Gauge (registers on first emit).
+
+        The metric is backed by a Gauge so ``.set()`` is available; VictoriaMetrics
+        still derives correct ``rate()`` / ``increase()`` from the monotonic series.
+        """
+        metric = self._get_or_create("gauge", name, labels)
+        if metric is None:
+            return
+        gauge = cast(Gauge, metric)
+        if labels:
+            gauge.labels(**labels).set(value)
+        else:
+            gauge.set(value)
+
     def write_summary(self, name: str, value: float, labels: dict[str, str]) -> None:
         """Observe a summary sample."""
         metric = self._get_or_create("summary", name, labels)

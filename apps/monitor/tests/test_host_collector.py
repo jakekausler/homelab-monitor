@@ -262,6 +262,11 @@ async def test_run_emits_disk_io_counters_per_disk(monkeypatch: pytest.MonkeyPat
     io = [e for e in writer.snapshot() if e.name == "homelab_host_disk_io_bytes_total"]
     pairs = {(e.labels["disk"], e.labels["direction"]) for e in io}
     assert pairs == {("sda", "read"), ("sda", "write")}
+    # Set-semantics: snapshot value equals the raw psutil counter, not a multiple.
+    by_dir = {e.labels["direction"]: e.value for e in io}
+    assert by_dir["read"] == 100.0  # noqa: PLR2004
+    assert by_dir["write"] == 200.0  # noqa: PLR2004
+    assert all(e.kind == "gauge" for e in io)
 
 
 @pytest.mark.asyncio
@@ -273,6 +278,10 @@ async def test_run_emits_net_io_counters_per_iface(monkeypatch: pytest.MonkeyPat
     net = [e for e in writer.snapshot() if e.name == "homelab_host_net_bytes_total"]
     pairs = {(e.labels["iface"], e.labels["direction"]) for e in net}
     assert pairs == {("eth0", "rx"), ("eth0", "tx")}
+    by_dir = {e.labels["direction"]: e.value for e in net}
+    assert by_dir["rx"] == 1000.0  # noqa: PLR2004
+    assert by_dir["tx"] == 500.0  # noqa: PLR2004
+    assert all(e.kind == "gauge" for e in net)
 
 
 @pytest.mark.asyncio

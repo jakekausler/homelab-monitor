@@ -37,6 +37,18 @@ def test_multiplex_fans_out_counter() -> None:
     assert a.recorded[0].value == _EXPECTED_COUNTER_VALUE
 
 
+def test_multiplex_fans_out_counter_absolute() -> None:
+    """Every absolute-counter write goes to every inner writer (as gauge-kind)."""
+    a = InMemoryMetricsWriter()
+    b = InMemoryMetricsWriter()
+    mux = MultiplexMetricsWriter([a, b])
+    mux.write_counter_absolute("c_abs", 99.0, {})
+    assert a.recorded[0].kind == "gauge"
+    assert b.recorded[0].kind == "gauge"
+    assert a.recorded[0].value == 99.0  # noqa: PLR2004
+    assert b.recorded[0].value == 99.0  # noqa: PLR2004
+
+
 def test_multiplex_fans_out_summary() -> None:
     """Every summary write goes to every inner writer."""
     a = InMemoryMetricsWriter()
@@ -60,6 +72,10 @@ def test_multiplex_preserves_registration_order() -> None:
             seen.append(self._tag)
 
         def write_counter(self, name: str, value: float, labels: dict[str, str]) -> None:
+            del name, value, labels
+            seen.append(self._tag)
+
+        def write_counter_absolute(self, name: str, value: float, labels: dict[str, str]) -> None:
             del name, value, labels
             seen.append(self._tag)
 

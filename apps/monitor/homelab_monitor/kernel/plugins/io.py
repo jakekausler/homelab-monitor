@@ -84,6 +84,15 @@ class MetricsWriter(Protocol):
         """Record a counter increment."""
         ...
 
+    def write_counter_absolute(self, name: str, value: float, labels: dict[str, str]) -> None:
+        """Record an absolute cumulative counter value (SET, not increment).
+
+        Backed by a Gauge so VictoriaMetrics still computes ``rate()`` /
+        ``increase()`` correctly; the caller passes the kernel's absolute
+        cumulative total each tick (e.g. psutil ``read_bytes``).
+        """
+        ...
+
     def write_summary(self, name: str, value: float, labels: dict[str, str]) -> None:
         """Record a summary observation."""
         ...
@@ -182,6 +191,10 @@ class InMemoryMetricsWriter:
             if collector_name is not None:
                 self._collector_ts[collector_name] = now_iso
 
+    def write_counter_absolute(self, name: str, value: float, labels: dict[str, str]) -> None:
+        """Record an absolute cumulative counter value (stored as gauge-kind)."""
+        self._entries.append(MetricEntry(kind="gauge", name=name, value=value, labels=dict(labels)))
+
     def write_summary(self, name: str, value: float, labels: dict[str, str]) -> None:
         """Record a summary observation."""
         self._entries.append(
@@ -259,6 +272,11 @@ class MemoryRetainingMetricsWriter(InMemoryMetricsWriter):
         """Record a counter increment; also update the latest-value map."""
         super().write_counter(name, value, labels)
         self._set_latest("counter", name, value, labels)
+
+    def write_counter_absolute(self, name: str, value: float, labels: dict[str, str]) -> None:
+        """Record an absolute counter value; also update the latest-value map."""
+        super().write_counter_absolute(name, value, labels)
+        self._set_latest("gauge", name, value, labels)
 
     def write_summary(self, name: str, value: float, labels: dict[str, str]) -> None:
         """Record a summary observation; also update the latest-value map."""

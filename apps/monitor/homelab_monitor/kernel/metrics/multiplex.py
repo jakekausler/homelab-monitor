@@ -54,6 +54,10 @@ class MultiplexMetricsWriter:
         """Fan-out a counter increment to every inner writer."""
         self._fanout(lambda w: w.write_counter(name, value, labels))
 
+    def write_counter_absolute(self, name: str, value: float, labels: dict[str, str]) -> None:
+        """Fan-out an absolute counter value to every inner writer."""
+        self._fanout(lambda w: w.write_counter_absolute(name, value, labels))
+
     def write_summary(self, name: str, value: float, labels: dict[str, str]) -> None:
         """Fan-out a summary observation to every inner writer."""
         self._fanout(lambda w: w.write_summary(name, value, labels))
