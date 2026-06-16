@@ -12,6 +12,8 @@ services:
       context: ../../
       dockerfile: apps/monitor/Dockerfile
     container_name: homelab-monitor
+    labels:
+      homelab-monitor.http.health: "http://container:9090/api/healthz"
     restart: unless-stopped
     user: "${HM_CRON_HOST_UID:-1000}:${HM_CRON_HOST_GID:-1000}"
     networks:
@@ -189,6 +191,8 @@ services:
   victoriametrics:
     image: victoriametrics/victoria-metrics:v1.107.0
     container_name: homelab-vm
+    labels:
+      homelab-monitor.http.health: "http://container:8428/health"
     restart: unless-stopped
     networks:
       - homelab-monitor-net
@@ -334,6 +338,8 @@ services:
   alertmanager:
     image: prom/alertmanager:v0.27.0
     container_name: homelab-alertmanager
+    labels:
+      homelab-monitor.http.health: "http://container:9093/-/healthy"
     restart: unless-stopped
     networks:
       - homelab-monitor-net
@@ -471,6 +477,8 @@ services:
       context: ../grafana
       dockerfile: Dockerfile
     container_name: homelab-grafana
+    labels:
+      homelab-monitor.http.health: "http://container:3000/api/health"
     restart: unless-stopped
     networks:
       - homelab-monitor-net

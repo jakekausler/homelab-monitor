@@ -1,0 +1,96 @@
+# vmalert rules for container lifecycle + resource-share alerting (STAGE-005A-004).
+# Sources:
+#   - homelab_container_restart_count{name}        gauge, cumulative restart count
+#   - homelab_image_update_check_skipped{reason,registry}  gauge==1 on skip (absent at baseline)
+#   - container_cpu_usage_seconds_total{name}      cadvisor counter (cumulative)
+#   - container_memory_working_set_bytes{name}     cadvisor gauge
+#   - homelab_host_memory_bytes{type="total"}      single-series host RAM denominator
+#   - homelab_host_cpu_percent{cpu!="all"}         per-core series; count() = host core count
+#   - homelab_probe_duration_seconds{container,kind,name}  gauge, absent until probes configured
+#
+# Severity vocabulary locked: info / warning / critical (spec §8.2). NEVER error.
+#
+# CPU/memory-share rules (ContainerHighCpuShare, ContainerHighMemoryShare,
+# ContainerCriticalMemoryShare) use broadcast/group_left joins against a
+# single-series host denominator; these are validated by LIVE-REPLAY in
+# Refinement 3a, not by promtool (promtool may render got:[] for the
+# scalar/broadcast division — see the test-mirror header).
+#
+# Like other rules in this directory, these won't fire under the fast
+# `make test-fast` rig; the slow integration pipeline drops `for:` via override.
+
+groups:
+  - name: container_lifecycle
+    interval: 30s
+    rules:
+      - alert: ContainerRestartLoop
+        expr: increase(homelab_container_restart_count[1h]) > 3
+        for: 0m
+        labels:
+          severity: warning
+          source_tool: vmalert-metrics
+          target_kind: docker_container
+          integration: docker
+        annotations:
+          summary: "Container {{ $labels.name }} is restart-looping ({{ $value }} restarts in 1h)"
+          description: 'Docker container {{ $labels.name }} restarted {{ $value }} times in the last hour (homelab_container_restart_count increased by more than 3). The container is likely crash-looping.'
+
+      - alert: DockerImageUpdateCheckSkipped
+        expr: homelab_image_update_check_skipped == 1
+        for: 0m
+        labels:
+          severity: info
+          source_tool: vmalert-metrics
+          target_kind: docker_container
+          integration: docker
+        annotations:
+          summary: "Image-update check skipped for registry {{ $labels.registry }} ({{ $labels.reason }})"
+          description: 'The Docker image-update check was skipped for registry {{ $labels.registry }}. Reason: {{ $labels.reason }} (e.g. registry rate-limit or cooldown). Update availability for affected containers may be stale.'
+
+      - alert: ContainerHighCpuShare
+        expr: rate(container_cpu_usage_seconds_total{name!=""}[5m]) / count(homelab_host_cpu_percent{cpu!="all"}) > 0.5
+        for: 15m
+        labels:
+          severity: warning
+          source_tool: vmalert-metrics
+          target_kind: docker_container
+          integration: docker
+        annotations:
+          summary: "Container {{ $labels.name }} is using {{ $value }} of host CPU cores"
+          description: 'Docker container {{ $labels.name }} has used more than 50% of total host CPU cores ({{ $value }} share, where 1.0 = all host cores) for over 15 minutes.'
+
+      - alert: ContainerHighMemoryShare
+        expr: container_memory_working_set_bytes{name!=""} / on() group_left() homelab_host_memory_bytes{type="total"} > 0.5
+        for: 15m
+        labels:
+          severity: warning
+          source_tool: vmalert-metrics
+          target_kind: docker_container
+          integration: docker
+        annotations:
+          summary: "Container {{ $labels.name }} is using {{ $value }} of host RAM"
+          description: 'Docker container {{ $labels.name }} working-set memory exceeds 50% of total host RAM ({{ $value }} share, where 1.0 = all host RAM) for over 15 minutes.'
+
+      - alert: ContainerCriticalMemoryShare
+        expr: container_memory_working_set_bytes{name!=""} / on() group_left() homelab_host_memory_bytes{type="total"} > 0.85
+        for: 10m
+        labels:
+          severity: critical
+          source_tool: vmalert-metrics
+          target_kind: docker_container
+          integration: docker
+        annotations:
+          summary: "Container {{ $labels.name }} is using {{ $value }} of host RAM (critical)"
+          description: 'Docker container {{ $labels.name }} working-set memory exceeds 85% of total host RAM ({{ $value }} share, where 1.0 = all host RAM) for over 10 minutes. Host is at risk of OOM.'
+
+      - alert: DockerProbeSlow
+        expr: homelab_probe_duration_seconds > 2
+        for: 5m
+        labels:
+          severity: warning
+          source_tool: vmalert-metrics
+          target_kind: docker_container
+          integration: docker
+        annotations:
+          summary: "Probe {{ $labels.kind }}.{{ $labels.name }} on {{ $labels.container }} is slow ({{ $value }}s)"
+          description: 'Docker container {{ $labels.container }} probe {{ $labels.kind }}.{{ $labels.name }} took {{ $value }}s (>2s) for at least 5 minutes. Complements DockerProbeFailing (which fires on homelab_probe_up==0).'

@@ -1,0 +1,236 @@
+# Rule unit-test fixtures for deploy/vmalert/metrics/container_lifecycle.yaml.
+# Schema: Prometheus / vmalert rule unit-test format.
+# (No make target wires this yet — forward-compatible static fixture, NOT CI-run.)
+#
+# promtool-validatable rules (deterministic FIRE/NO-FIRE):
+#   - ContainerRestartLoop        (increase() over gauge)
+#   - DockerImageUpdateCheckSkipped (== 1)
+#   - DockerProbeSlow             (> 2)
+# LIVE-REPLAY-ONLY rules (scalar/broadcast or group_left join — promtool may
+# render got:[] by design; validate against the real rig in Refinement 3a):
+#   - ContainerHighCpuShare       (rate() / count() scalar broadcast)
+#   - ContainerHighMemoryShare    (on() group_left() join, single-series denom)
+#   - ContainerCriticalMemoryShare (on() group_left() join, single-series denom)
+# Best-effort FIRE cases for the three live-replay rules are still written
+# below; do NOT change the production exprs to make promtool pass.
+
+rule_files:
+  - ../container_lifecycle.yaml
+
+evaluation_interval: 30s
+
+tests:
+  # --- R1 ContainerRestartLoop: 1h increase of 5 (>3) → fires (for: 0m). ---
+  # Series (1m interval): '0+0x60 0 1 2 3 4 5 5+0x60'
+  #   indices 0..60  = 0 (the '0+0x60' run is 61 samples)
+  #   index   61     = 0
+  #   index   62     = 1
+  #   index   63     = 2
+  #   index   64     = 3
+  #   index   65     = 4
+  #   index   66     = 5
+  #   indices 67..127 = 5 (the '5+0x60' run)
+  # increase(homelab_container_restart_count[1h]) at eval_time 120m (index 120):
+  #   value at index 120 = 5; value at index 60 (120m - 60m) = 0; increase = 5 - 0 = 5.
+  # 5 > 3 → fires, and {{ $value }} renders 5 (matches summary/description below).
+  - interval: 1m
+    input_series:
+      - series: 'homelab_container_restart_count{name="loopc"}'
+        values: '0+0x60 0 1 2 3 4 5 5+0x60'
+    alert_rule_test:
+      - eval_time: 120m
+        alertname: ContainerRestartLoop
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              source_tool: vmalert-metrics
+              target_kind: docker_container
+              integration: docker
+              name: loopc
+            exp_annotations:
+              summary: "Container loopc is restart-looping (5 restarts in 1h)"
+              description: "Docker container loopc restarted 5 times in the last hour (homelab_container_restart_count increased by more than 3). The container is likely crash-looping."
+
+  # --- R1 NO-FIRE: 1h increase of only 2 (<=3) → silent. ---
+  - interval: 1m
+    input_series:
+      - series: 'homelab_container_restart_count{name="stablec"}'
+        values: '0+0x30 1 2+0x90'
+    alert_rule_test:
+      - eval_time: 120m
+        alertname: ContainerRestartLoop
+        exp_alerts: []
+
+  # --- R2 DockerImageUpdateCheckSkipped: gauge==1 → fires (for: 0m). ---
+  - interval: 30s
+    input_series:
+      - series: 'homelab_image_update_check_skipped{registry="docker.io",reason="rate_limit"}'
+        values: '1 1 1 1'
+    alert_rule_test:
+      - eval_time: 60s
+        alertname: DockerImageUpdateCheckSkipped
+        exp_alerts:
+          - exp_labels:
+              severity: info
+              source_tool: vmalert-metrics
+              target_kind: docker_container
+              integration: docker
+              registry: docker.io
+              reason: rate_limit
+            exp_annotations:
+              summary: "Image-update check skipped for registry docker.io (rate_limit)"
+              description: "The Docker image-update check was skipped for registry docker.io. Reason: rate_limit (e.g. registry rate-limit or cooldown). Update availability for affected containers may be stale."
+
+  # --- R2 NO-FIRE: gauge==0 → silent. ---
+  - interval: 30s
+    input_series:
+      - series: 'homelab_image_update_check_skipped{registry="ghcr.io",reason="cooldown"}'
+        values: '0 0 0 0'
+    alert_rule_test:
+      - eval_time: 60s
+        alertname: DockerImageUpdateCheckSkipped
+        exp_alerts: []
+
+  # --- R6 DockerProbeSlow: duration flat at 3s (>2) held >=5m → fires. ---
+  - interval: 30s
+    input_series:
+      - series: 'homelab_probe_duration_seconds{container="grafana",kind="http",name="health"}'
+        values: '3+0x20'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: DockerProbeSlow
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              source_tool: vmalert-metrics
+              target_kind: docker_container
+              integration: docker
+              container: grafana
+              kind: http
+              name: health
+            exp_annotations:
+              summary: "Probe http.health on grafana is slow (3s)"
+              description: "Docker container grafana probe http.health took 3s (>2s) for at least 5 minutes. Complements DockerProbeFailing (which fires on homelab_probe_up==0)."
+
+  # --- R6 NO-FIRE: duration flat at 1s (<=2) → silent. ---
+  - interval: 30s
+    input_series:
+      - series: 'homelab_probe_duration_seconds{container="monitor",kind="http",name="health"}'
+        values: '1+0x20'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: DockerProbeSlow
+        exp_alerts: []
+
+  # R3 ContainerHighCpuShare is LIVE-REPLAY-ONLY: its count()-scalar-broadcast
+  # denominator returns got:[] under promtool, so it is NOT a promtool test case.
+  # Validate R3 via live-MetricsQL replay in Refinement 3a. Planted-series recipe
+  # (kept commented for that replay):
+  # --- R3 ContainerHighCpuShare (LIVE-REPLAY-ONLY best-effort). ---
+  # 16-core host (count of homelab_host_cpu_percent{cpu!="all"} = 16). A container
+  # accruing ~10 cpu-seconds per 5m window = rate ~0.0333/s; /16 cores is tiny, so
+  # to clear >0.5 the container must use >8 cores' worth. We plant a steep counter
+  # so rate ~9/s; 9/16 = 0.5625 > 0.5. NOTE: promtool may render got:[] for the
+  # count()-scalar division — this assertion is validated by live-replay in 3a.
+  #
+  # In-bounds check (1m interval): all series run to index 30 ('xN'=30 → indices
+  # 0..30, 31 samples). eval_time 20m = index 20 is comfortably inside the range
+  # (10 samples of margin after it). rate(...[5m]) at index 20 uses indices 15..20
+  # (all present): (10800-8100)/300s = 2700/300 = 9/s; 9/16 = 0.5625 > 0.5.
+  # - interval: 1m
+  #   input_series:
+  #     - series: 'container_cpu_usage_seconds_total{name="cpuhog"}'
+  #       values: '0+540x30'   # +540 cpu-sec per 1m = 9 cpu-sec/s
+  #     - series: 'homelab_host_cpu_percent{cpu="0"}'
+  #       values: '5+0x30'
+  #     - series: 'homelab_host_cpu_percent{cpu="1"}'
+  #       values: '5+0x30'
+  #     - series: 'homelab_host_cpu_percent{cpu="2"}'
+  #       values: '5+0x30'
+  #     - series: 'homelab_host_cpu_percent{cpu="3"}'
+  #       values: '5+0x30'
+  #     - series: 'homelab_host_cpu_percent{cpu="4"}'
+  #       values: '5+0x30'
+  #     - series: 'homelab_host_cpu_percent{cpu="5"}'
+  #       values: '5+0x30'
+  #     - series: 'homelab_host_cpu_percent{cpu="6"}'
+  #       values: '5+0x30'
+  #     - series: 'homelab_host_cpu_percent{cpu="7"}'
+  #       values: '5+0x30'
+  #     - series: 'homelab_host_cpu_percent{cpu="8"}'
+  #       values: '5+0x30'
+  #     - series: 'homelab_host_cpu_percent{cpu="9"}'
+  #       values: '5+0x30'
+  #     - series: 'homelab_host_cpu_percent{cpu="10"}'
+  #       values: '5+0x30'
+  #     - series: 'homelab_host_cpu_percent{cpu="11"}'
+  #       values: '5+0x30'
+  #     - series: 'homelab_host_cpu_percent{cpu="12"}'
+  #       values: '5+0x30'
+  #     - series: 'homelab_host_cpu_percent{cpu="13"}'
+  #       values: '5+0x30'
+  #     - series: 'homelab_host_cpu_percent{cpu="14"}'
+  #       values: '5+0x30'
+  #     - series: 'homelab_host_cpu_percent{cpu="15"}'
+  #       values: '5+0x30'
+  #   alert_rule_test:
+  #     - eval_time: 20m
+  #       alertname: ContainerHighCpuShare
+  #       exp_alerts:
+  #         - exp_labels:
+  #             severity: warning
+  #             source_tool: vmalert-metrics
+  #             target_kind: docker_container
+  #             integration: docker
+  #             name: cpuhog
+  #           exp_annotations:
+  #             summary: "Container cpuhog is using 0.5625 of host CPU cores"
+  #             description: 'Docker container cpuhog has used more than 50% of total host CPU cores (0.5625 share, where 1.0 = all host cores) for over 15 minutes.'
+
+  # --- R4 ContainerHighMemoryShare (LIVE-REPLAY-ONLY best-effort). ---
+  # host total = 100 bytes; container working set = 60 bytes; 60/100 = 0.6 > 0.5.
+  # NOTE: promtool may render got:[] for the on() group_left() join — validated
+  # by live-replay in 3a.
+  - interval: 1m
+    input_series:
+      - series: 'container_memory_working_set_bytes{name="memhog"}'
+        values: '60+0x20'
+      - series: 'homelab_host_memory_bytes{type="total"}'
+        values: '100+0x20'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: ContainerHighMemoryShare
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              source_tool: vmalert-metrics
+              target_kind: docker_container
+              integration: docker
+              name: memhog
+            exp_annotations:
+              summary: "Container memhog is using 0.6 of host RAM"
+              description: 'Docker container memhog working-set memory exceeds 50% of total host RAM (0.6 share, where 1.0 = all host RAM) for over 15 minutes.'
+
+  # --- R5 ContainerCriticalMemoryShare (LIVE-REPLAY-ONLY best-effort). ---
+  # host total = 100 bytes; container working set = 90 bytes; 90/100 = 0.9 > 0.85.
+  # NOTE: promtool may render got:[] for the on() group_left() join — validated
+  # by live-replay in 3a.
+  - interval: 1m
+    input_series:
+      - series: 'container_memory_working_set_bytes{name="oomhog"}'
+        values: '90+0x20'
+      - series: 'homelab_host_memory_bytes{type="total"}'
+        values: '100+0x20'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: ContainerCriticalMemoryShare
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              source_tool: vmalert-metrics
+              target_kind: docker_container
+              integration: docker
+              name: oomhog
+            exp_annotations:
+              summary: "Container oomhog is using 0.9 of host RAM (critical)"
+              description: 'Docker container oomhog working-set memory exceeds 85% of total host RAM (0.9 share, where 1.0 = all host RAM) for over 10 minutes. Host is at risk of OOM.'

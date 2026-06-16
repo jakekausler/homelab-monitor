@@ -268,3 +268,4 @@ If `make dev` fails for unknown reasons, fall back to the manual pattern in `CLA
 - `epics/EPIC-001-foundation/STAGE-001-020.md` — Grafana sub-path lessons-learned
 - `epics/EPIC-001-foundation/STAGE-001-021.md` — this stage's tracking doc
 - `deploy/compose/.env.example` — prod-compose env template
+- `docs/admin/docker-probes.md` — enabling Docker container probes (labels / override files)
