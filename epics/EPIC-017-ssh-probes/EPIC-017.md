@@ -2,7 +2,7 @@
 
 ## Status: Not Started
 
-## Current Stage: STAGE-017-002 (next — ssh_targets config model + per-target key secret)
+## Current Stage: STAGE-017-003 (next — SshProbe base collector + framework health metrics)
 
 ## Build order + framework-first mandate (LOCKED — 2026-06-17 brainstorm)
 
@@ -159,10 +159,10 @@ Re-decomposed from scratch (the pre-brainstorm sketch is fully superseded). Fram
 the exemplar. Alert rules come AFTER the exemplar so they validate against real `homelab_ssh_*` data (the
 "rules validate against real data" discipline from EPIC-006/007).
 
-| # | Stage | Theme |
-|---|---|---|
-| STAGE-017-001 | asyncssh transport: add the dep; implement `SshClientFactory.open(target_id)` + fill the `SshConnection` Protocol (connect-and-run-pinned-command → typed output); per-target pinned host-key verification; open-per-run; per-target concurrency group |
-| STAGE-017-002 | `ssh_targets:` config model (pydantic; per-target fields; empty public default) + per-target key secret model (`ssh_probe_key_<target>`, read via `ctx.secrets.get`, written via `AsyncSecretsRepository`) |
+| # | Stage | Theme | Status |
+|---|---|---|---|
+| STAGE-017-001 | asyncssh transport: add the dep; implement `SshClientFactory.open(target_id)` + fill the `SshConnection` Protocol (connect-and-run-pinned-command → typed output); per-target pinned host-key verification; open-per-run; per-target concurrency group | Complete |
+| STAGE-017-002 | `ssh_targets:` config model (pydantic; per-target fields; empty public default) + per-target key secret model (`ssh_probe_key_<target>`, read via `ctx.secrets.get`, written via `AsyncSecretsRepository`) | Complete |
 | STAGE-017-003 | `SshProbe` base collector (open→run→parse→emit→close; `ok=True`-when-target-down) + framework health metrics (`homelab_ssh_up`/`_probe_duration_seconds`/`_last_success_age_seconds`/`_host_key_mismatch`) |
 | STAGE-017-004 | `hm ssh-probe keygen` (ed25519 → secrets, print pubkey) + `capture-hostkey` (pin host key) |
 | STAGE-017-005 | `hm ssh-probe install-instructions` (account-mode-aware: appliance authorized_keys-line + persistence-warning; dedicated-user create-user + script + sudoers-line + authorized_keys-line) + `test` (connect + run forced command + verify the restriction holds) |
