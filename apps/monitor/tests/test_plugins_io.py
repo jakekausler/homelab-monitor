@@ -23,6 +23,7 @@ from homelab_monitor.kernel.plugins.io import (
     SshClientFactory,
     SshConnection,
 )
+from homelab_monitor.kernel.ssh.result import SshCommandResult
 
 # Test constants
 GAUGE_VALUE = 0.5
@@ -145,7 +146,12 @@ def test_logs_writer_satisfies_protocol() -> None:
 
 
 class _FakeConn:
-    """Mock SshConnection — empty stub Protocol means any class satisfies it."""
+    """Mock SshConnection with a dummy run method."""
+
+    async def run(self, command: str = "") -> SshCommandResult:
+        """Return a dummy result."""
+        del command
+        return SshCommandResult(stdout="", stderr="", exit_status=0)
 
 
 class _FakeFactory:
@@ -160,8 +166,8 @@ class _FakeFactory:
         yield cast(SshConnection, _FakeConn())
 
 
-def test_ssh_connection_protocol_accepts_empty_class() -> None:
-    """Empty Protocol body means any object structurally satisfies it."""
+def test_ssh_connection_protocol_accepts_run_method() -> None:
+    """A class with async run(command) method satisfies SshConnection."""
     conn: SshConnection = _FakeConn()
     assert isinstance(conn, SshConnection)
 

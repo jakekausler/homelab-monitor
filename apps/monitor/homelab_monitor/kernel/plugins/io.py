@@ -25,6 +25,7 @@ from homelab_monitor.kernel.ha.client import (
     HaState,
 )
 from homelab_monitor.kernel.ha.errors import HaError
+from homelab_monitor.kernel.ssh.result import SshCommandResult
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,12 +110,17 @@ class LogsWriter(Protocol):
 
 @runtime_checkable
 class SshConnection(Protocol):
-    """SCAFFOLDING: methods land in EPIC-017 (SSH collectors).
+    """A live SSH connection that runs a single command (STAGE-017-001).
 
-    NOTE: while empty, ``isinstance(x, SshConnection)`` is a tautology
-    (always True for any object). Do NOT rely on it for narrowing in
-    production code until methods are added.
+    The concrete implementation is
+    :class:`homelab_monitor.kernel.ssh.client._AsyncSshConnection`. A non-zero
+    ``exit_status`` is NOT an error; transport failures raise the
+    ``kernel.ssh.errors`` hierarchy instead.
     """
+
+    async def run(self, command: str = "") -> SshCommandResult:
+        """Run ``command`` on the remote and return its captured output."""
+        ...
 
 
 @runtime_checkable

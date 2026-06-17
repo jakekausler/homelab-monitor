@@ -6,9 +6,9 @@ import asyncio
 import contextlib
 import os
 from collections.abc import AsyncGenerator
-from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, NoReturn, cast
+from typing import NoReturn, cast
 
 import httpx
 import structlog
@@ -61,6 +61,7 @@ from homelab_monitor.kernel.scheduler.scheduler import Scheduler, SchedulerConfi
 from homelab_monitor.kernel.secrets.master_key import MasterKeyError, load_master_key
 from homelab_monitor.kernel.secrets.repository import AsyncSecretsRepository
 from homelab_monitor.kernel.secrets.ttl_resolver import TtlCachingSecretsResolver
+from homelab_monitor.kernel.ssh.client import AsyncSshClientFactory
 from homelab_monitor.plugins.collectors.builtin.log_error_rate import (
     LogErrorRateCollector,
 )
@@ -70,15 +71,6 @@ from homelab_monitor.plugins.collectors.builtin.log_stream_budget import (
 )
 from homelab_monitor.plugins.collectors.builtin.tail_metrics import TailMetricsCollector
 from homelab_monitor.plugins.collectors.builtin.vl_health import VlHealthCollector
-
-
-class _StubSshFactory:
-    """Placeholder SSH factory that raises NotImplementedError until EPIC-017."""
-
-    def open(self, target_id: str) -> AbstractAsyncContextManager[Any]:
-        del target_id  # pragma: no cover -- stub for EPIC-017; not testable in current scope
-        # Stub for EPIC-017; not testable in current scope
-        raise NotImplementedError("SSH support not yet implemented")  # pragma: no cover
 
 
 def _critical_abort(log: BoundLogger, event: str, **fields: object) -> NoReturn:
@@ -687,7 +679,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
     flusher_task = asyncio.create_task(vl_writer.run_flusher())
     logs_writer = MultiplexLogsWriter([in_memory_logs_writer, vl_writer])
     log_stream_state: LogStreamState = {}
-    ssh_factory = _StubSshFactory()
+    ssh_factory = AsyncSshClientFactory(
+        # TODO(STAGE-017-002): replace with the config-backed resolver.
+        resolve=lambda tid: None,
+        secrets_for=lambda name: ttl_resolver.current().get(name),
+    )
     broker = SseBroker(log)
     tail_registry = TailRegistry(max_connections=load_tail_config().max_connections)
     alert_repo = AlertRepository(repo)
