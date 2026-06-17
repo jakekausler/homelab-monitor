@@ -8,10 +8,12 @@
 the build sequence is swapped (decided 2026-06-16 brainstorm). Rationale: Unifi is the authoritative
 source of client identity (MAC↔IP↔device); Pi-hole can only reliably supply IP (see the client-join
 contract below), so Unifi must own **client-object creation** and Pi-hole **consumes** those identities
-to attach DNS behavior. This makes EPIC-006 the epic that **owns the unified Network → Clients merged
-view** (it is built second and has both datasets available). The final UI seam between 006 and 007 is
-confirmable/adjustable during the Unifi brainstorm (which runs after this design and may amend Pi-hole
-decisions).
+to attach DNS behavior. The Unifi brainstorm (2026-06-17) has now RUN and **finalized the seam**:
+**EPIC-007 OWNS and BUILDS the client view** (the persistent `unifi_clients` registry, the Network → Clients
+tab, and the per-client Client page, plus a documented DNS-enrichment extension point). **EPIC-006 does NOT
+build a separate merged view — it ENHANCES EPIC-007's Client page in place** with Pi-hole DNS behavior via
+that extension point (see the rewritten STAGE-006-027). The build order was also amended to whole-epic
+sequential **EPIC-017 → EPIC-007 → EPIC-006 → EPIC-008**.
 
 ## Overview
 
@@ -73,19 +75,22 @@ vmalert metrics+logs surfaces. Net: smaller than EPIC-005 was, but finer-grained
   via `/api/info/messages` — real live test data for the per-adlist + messages signals.
 - **DHCP:** Pi-hole is NOT the DHCP server (UDM is). No DHCP-leases collector/panel here — DHCP is EPIC-007.
 
-## DNS topology (why Pi-hole-down = critical)
+## DNS topology (why Pi-hole-down matters) — AMENDED 2026-06-17 (Unifi brainstorm)
 
-The user's Unifi firewall **forces** client DNS onto Pi-hole and **blocks** the UDM's own resolver:
-- "Pi-Hole Redirect to DNS" (LAN In, accept TCP/UDP to Pi-Hole DNS port 53) — forces clients to Pi-hole.
-- "Drop DNS to UDM" (LAN Local, drop TCP/UDP to 192.168.2.1:53) — blocks the UDM resolver.
-- One specific device is allowed to bypass Pi-hole.
-- The LAN DNS-server list (192.168.2.148 → 1.1.1.1 → 8.8.8.8) is a THIN client-side fallback that only
-  helps a client that can't reach Pi-hole at all — and 1.1.1.1/8.8.8.8 do NOT block ads/trackers.
+**The DNS steering mechanism is the per-network DHCP DNS handout, NOT a firewall redirect.** During the
+Unifi brainstorm the user **deleted** the three legacy DNS-force firewall rules ("Pi-Hole Redirect to DNS",
+"Drop DNS to UDM", and the one bypass rule) — they were already disabled and intentionally so. What actually
+steers clients to Pi-hole today is the UDM's per-network DHCP setting `dhcpd_dns_1 = 192.168.2.148` (Pi-hole
+handed out as the DNS server), with the LAN DNS-server list `192.168.2.148 → 1.1.1.1 → 8.8.8.8` as a
+client-side fallback.
 
-Net: a Pi-hole outage is a **real protection loss / partial DNS outage** for most clients (only the one
-bypassed device + whatever can reach public DNS directly survives, unprotected). This is the rationale for
-the critical-severity "down" alerts. (The firewall-rule details themselves are EPIC-007/Unifi's domain —
-captured here only to justify severity; investigate the force/fallback rules in the Unifi brainstorm.)
+Net: a Pi-hole outage is a **silent protection loss**, NOT a hard partial-DNS-outage. Clients fail over to
+the DHCP list's `1.1.1.1`/`8.8.8.8` and keep resolving — **but unfiltered** (no ad/tracker blocking), and
+any client configured to ignore the handed-out DNS bypasses Pi-hole entirely. DNS keeps working; protection
+silently stops. This is the rationale for the "down" alerts (loss of filtering for the whole LAN), and the
+reason the **DNS-steering check that matters is the DHCP handout** — monitored by EPIC-007's
+`UnifiDnsSteeringDrift` (`dhcp_dns_primary != 192.168.2.148`), not a firewall-rule check (the rules no longer
+exist). EPIC-007 owns this DHCP-DNS-handout monitoring.
 
 ## Client-join contract (load-bearing — shared with EPIC-007)
 
@@ -185,7 +190,12 @@ absolute-threshold rules carry the load immediately. The user-authored-rule mach
 | PiholeDbMaintenanceAnomaly | DB-vacuum errors / unusual deletions | info |
 
 The critical set = LAN-DNS-protection-loss (down / probe / container / split-divergence / block-collapse /
-all-upstreams-down). The "down" alert should ideally route via a path independent of Pi-hole's own DNS
+all-upstreams-down). NOTE (2026-06-17): "protection loss" is the accurate framing — with the firewall
+DNS-force rules deleted, a Pi-hole outage is a *silent loss of ad/tracker filtering* (clients fail over to
+the DHCP fallback `1.1.1.1`/`8.8.8.8` and keep resolving, unfiltered), NOT a hard DNS outage. The criticals
+still warrant paging (the whole LAN loses filtering), but the rationale is protection-loss, not
+connectivity-loss. The DHCP-DNS-handout drift detector lives in EPIC-007 (`UnifiDnsSteeringDrift`), not here.
+The "down" alert should ideally route via a path independent of Pi-hole's own DNS
 (HA push / EPIC-014 watchdog backstop); pinning the monitor's own resolver to a direct upstream so alerts
 escape a DNS outage is NOTED as a requirement but its hardening lives in EPIC-014, not here.
 
@@ -311,7 +321,7 @@ Each stage lands a single small slice and ships independently usable, mirroring 
 ### Deferred (cross-epic — finalized in the Unifi brainstorm, NOT counted in the 26)
 | # | Stage | Theme |
 |---|---|---|
-| STAGE-006-027 (tentative) | **Unified Network → Clients merged view** — joins Pi-hole DNS behavior onto Unifi client identities (time-windowed by IP; loopback→host). EPIC-006 OWNS it but it is built AFTER EPIC-007 lands (hard dependency on Unifi's client model). Exact stage number/seam confirmed in the Unifi brainstorm; may move into EPIC-007 if that brainstorm decides differently. |
+| STAGE-006-027 | **Enhance EPIC-007's Client page + Clients-tab with Pi-hole DNS behavior** (finalized 2026-06-17). EPIC-007 OWNS and BUILDS the client view (registry + Network→Clients tab + per-client Client page + a documented DNS-enrichment extension point). This stage does NOT build a separate merged view — it ENHANCES EPIC-007's existing Client page in place, plugging DNS behavior (query volume / block rate / top domains / recent blocks / DNSSEC) into EPIC-007's extension point, joined time-windowed by IP→MAC; loopback→host. Built AFTER EPIC-007 lands (hard dependency). See the rewritten STAGE-006-027.md. |
 
 ## Cross-stage acceptance criteria
 
@@ -344,8 +354,12 @@ Same as EPIC-001 plus:
 
 ## Notes
 
-- Build sequence swapped to Unifi-first (2026-06-16 brainstorm); numbers unchanged. The Unifi brainstorm
-  runs next and may amend decisions here (especially the unified-view seam, STAGE-006-027).
+- Build sequence is whole-epic sequential EPIC-017 → EPIC-007 → EPIC-006 → EPIC-008 (2026-06-16/17
+  brainstorms); numbers unchanged. The Unifi brainstorm has RUN and amended two decisions here: (1) the
+  client-view seam — EPIC-007 builds the client view, EPIC-006 ENHANCES it (STAGE-006-027 rewritten); (2)
+  the Pi-hole-down severity rationale — the firewall DNS-force rules were deleted, so DNS steering is the
+  DHCP handout and a Pi-hole outage is a *silent protection loss*, not a hard DNS outage (DNS-topology +
+  alert-catalog sections amended).
 - Unbound `extended-statistics` was enabled on the live host during this brainstorm (persistent drop-in +
   compose bind-mount + recreate). The user's compose now has one extra `:ro` volume line on `pihole-unbound`.
 - Candidate Claude auto-fix runbooks for EPIC-009 to author later: `pihole-restart` (risky — DNS blip),

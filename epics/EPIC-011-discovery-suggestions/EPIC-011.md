@@ -85,11 +85,18 @@ Same as EPIC-001 plus:
 - EPIC-002 (cron discoverer).
 - EPIC-003 (Docker discoverer).
 - EPIC-006 (Pi-hole DHCP table).
-- EPIC-007 (Unifi DHCP / client list).
+- EPIC-007 (Unifi) — the authoritative persistent `unifi_clients` registry (MAC-keyed client identities) is
+  the source the network discoverer + the new-device upgrade read.
 
 ## Notes
 
-- New-device alerts (e.g., "an unknown MAC just connected to wifi") were partially covered in EPIC-007 STAGE-007-005. This epic federates that into the unified suggestion inbox.
+- **New-device alerts → upgrade to discovery/suggestion (mandate from the 2026-06-17 Unifi brainstorm).**
+  EPIC-007 emits a `UnifiNewClient` **info alert** when a never-before-seen MAC associates (detection lives
+  in EPIC-007's identity collector, STAGE-007-007, off the persistent `unifi_clients` registry). EPIC-007
+  deliberately stops at an info alert because the discovery/suggestion engine (this epic) is built later.
+  **EPIC-011 MUST upgrade `UnifiNewClient` into a first-class discovery/suggestion** in the unified inbox
+  (Accept = track the device / Customize / Ignore), reading EPIC-007's registry as the source of new
+  devices — federating new-device detection into the inbox instead of leaving it a bare alert.
 - The cert-file discoverer is partially redundant with the cert-expiry collector (which lives in EPIC-014's SSL/cert plumbing). The two are coordinated: the discoverer finds new certs to monitor; the collector tracks expiry per known cert.
 - Spec Q27 deliberately skipped the "onboarding wizard" (G). This epic preserves that — there is no wizard; auto-discovery + suggestions does the bootstrapping.
 - **EPIC-002 cron derived-state redesign (2026-05-11):** Cron discovery **deliberately bypasses** the suggestion queue. Per `docs/superpowers/specs/2026-05-11-cron-derived-state-redesign.md`, crons are derived state — they appear in the registry as soon as discovery finds them on disk (or as soon as a heartbeat wrapper POSTs `/register`). The user's only "ignore" affordance for crons is the `hidden_at` column on the cron row, not the suggestion queue. EPIC-011's unified inbox covers other resource types (hosts, services, mounts, ports, certs, network devices) but NOT crons. If a downstream stage of EPIC-011 wants to add a "discovered-but-not-yet-acted-on" tab for crons later, that's a separate decision; the default is "no cron suggestions, period."

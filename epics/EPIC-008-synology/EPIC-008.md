@@ -2,6 +2,24 @@
 
 ## Status: Not Started
 
+## Build order + SSH-scoping note (added 2026-06-17 Unifi brainstorm)
+
+**Build sequence: EPIC-017 → EPIC-007 → EPIC-006 → EPIC-008** (whole epics, sequential; numbers unchanged).
+EPIC-008 is built LAST of the four. Consequences:
+
+- **EPIC-017 (SSH probe framework) is built FIRST**, so this epic's SSH-based DSM probes (`smartctl`,
+  `btrfs scrub`, `df`, etc.) are built ON the scoped per-target forced-command framework from day one — NOT
+  as unscoped access hardened later.
+- **Synology-specific SSH probes live HERE, not in EPIC-017.** EPIC-017 is the generic framework + an
+  exemplar `uptime` probe (against the UDM AND the Synology). The `synology_smartctl` / `synology_btrfs_scrub`
+  / `synology_df` probes (previously sketched inside EPIC-017) are THIS epic's, built on the 017 framework.
+- **Any SSH work that starts unscoped MUST be scoped via EPIC-017.** DSM SSH typically starts as an admin
+  user; this epic's probes MUST run as the dedicated low-privilege key-restricted forced-command
+  `homelab-monitor-probe` user the 017 framework provisions — never `root`, never `admin`. This is the same
+  "replace unscoped SSH" mandate recorded in the EPIC-017 banner.
+- EPIC-007 (Unifi) lands the unified client identity before this epic; the Synology appears as a wired
+  client in Unifi's registry (see Notes).
+
 ## Overview
 
 Land Synology DS3622xs+ as a plugin bundle. Three integration paths per spec Q12 (all in scope):

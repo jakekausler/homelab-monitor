@@ -111,6 +111,19 @@ Plus EPIC-002-specific criteria:
 - **The `homelab-monitor-overrides` repo wiring is NOT required for EPIC-002 completion.** EPIC-002 ships the public-safe defaults; the overrides repo is wired into a later epic (likely EPIC-008 or EPIC-014).
 - **Heartbeat receiver is reusable beyond crons.** The receiver accepts any `<id>` registered in the `crons` table. EPIC-014 (self-monitor + local-watchdog) will register `local-watchdog` itself as a "cron" with cadence `1m` and use the same receiver to detect monitor death.
 
+## Cross-epic UI relocation ← EPIC-007 (added 2026-06-17)
+
+The Crons UI shipped by this epic lives under a top-level **Inventory** page (the "Crons" tab — see
+STAGE-002-002 / STAGE-002-006). **EPIC-007 (Unifi) removes that Inventory page** and relocates the Crons
+view under **Integrations ▸** (beside Docker and Home Assistant), as part of a sidebar restructure
+(EPIC-007 STAGE-007-018). This is a deviation from spec §9.1, done in EPIC-007 because we do not reopen
+closed epics to make the nav change.
+
+- The relocation is a **move, not a rewrite** — all Crons routes/behavior/run-history/detail-page
+  functionality from STAGE-002-002 … 015 keep working, just under the Integrations group.
+- No EPIC-002 stage is re-opened; this note is provenance/traceability only. If a future change to the Crons
+  view is needed, it happens in whatever epic is active, not by re-opening EPIC-002.
+
 ## Cross-epic carry-forward → EPIC-004
 
 The cron run history & run-log work (STAGE-002-011 … 015, design spec `docs/superpowers/specs/2026-05-19-cron-run-logs-design.md`) defers three capabilities to EPIC-004. When EPIC-004 (Logs Pipeline) is designed, the following MUST be added as explicit EPIC-004 acceptance criteria:

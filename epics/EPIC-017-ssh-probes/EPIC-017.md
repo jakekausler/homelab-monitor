@@ -2,6 +2,37 @@
 
 ## Status: Not Started
 
+## Build order + framework-first mandate (LOCKED — 2026-06-17 Unifi brainstorm)
+
+**EPIC-017 is built FIRST in the sequence EPIC-017 → EPIC-007 → EPIC-006 → EPIC-008** (whole epics,
+sequential; numbers unchanged). Rationale: the per-target scoped-user + forced-command SSH framework must
+exist BEFORE any consumer epic ships an SSH collector, so no epic accumulates "unscoped now, harden later"
+SSH debt. EPIC-007's opt-in DHCP-lease collector (STAGE-007-012) and EPIC-008's DSM probes are built ON this
+framework.
+
+**Re-decompose this epic's stages FROM SCRATCH.** The "Stages (to decompose...)" table below and the
+"Cross-epic absorbed scope" stages are a PRE-brainstorm sketch — take them with a grain of salt. A dedicated
+EPIC-017 brainstorm (same format as the Pi-hole/Unifi ones) re-defines the stages before any are built.
+
+**Replace currently-unscoped SSH access (NON-NEGOTIABLE mandate).** Some live SSH access used by consumer
+epics today is UNSCOPED (full-privilege). This epic's framework MUST provide a dedicated, low-privilege,
+key-restricted **forced-command** user per target, and the consumer collectors MUST migrate onto it:
+- **Unifi (EPIC-007):** the opt-in DHCP-lease read must run through a scoped forced-command user whose only
+  capability is emitting the lease file — NOT a general shell. (No committed doc may reveal the current
+  unscoped path; the framework replaces it.)
+- **Synology (EPIC-008):** DSM SSH probes start unscoped and MUST be migrated onto a scoped
+  forced-command `homelab-monitor-probe` user as part of this framework.
+
+**Exemplar verification stage (REQUIRED).** Include one stage that builds a trivial `uptime` SSH probe and
+runs it against BOTH the live UDM and the live Synology, to prove the per-target scoped-user +
+forced-command framework end-to-end (mirroring how EPIC-001 proved the collector bones with a noop
+collector). This exemplar lands within EPIC-017 itself so the framework is independently verifiable before
+the real consumer probes (Unifi lease, Synology DSM) are built.
+
+**Synology-specific probes are NOT this epic's.** Keep EPIC-017 a GENERIC framework; defer all
+Synology-specific probe logic to EPIC-008 (built on this framework). The `synology_*` probes listed in the
+sketch table below move to EPIC-008's decomposition.
+
 ## Overview
 
 Build the SSH probe framework per spec §2 Q29. Use per-target dedicated low-priv users with key-restricted forced commands (`command="..."` in `authorized_keys`). Each probe declares its exact remote command. Setup instructions are documented per remote target.
