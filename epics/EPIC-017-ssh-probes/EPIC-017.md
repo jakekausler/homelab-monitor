@@ -2,7 +2,7 @@
 
 ## Status: Not Started
 
-## Build order + framework-first mandate (LOCKED — 2026-06-17 Unifi brainstorm)
+## Build order + framework-first mandate (LOCKED — 2026-06-17 brainstorm)
 
 **EPIC-017 is built FIRST in the sequence EPIC-017 → EPIC-007 → EPIC-006 → EPIC-008** (whole epics,
 sequential; numbers unchanged). Rationale: the per-target scoped-user + forced-command SSH framework must
@@ -10,90 +10,195 @@ exist BEFORE any consumer epic ships an SSH collector, so no epic accumulates "u
 SSH debt. EPIC-007's opt-in DHCP-lease collector (STAGE-007-012) and EPIC-008's DSM probes are built ON this
 framework.
 
-**Re-decompose this epic's stages FROM SCRATCH.** The "Stages (to decompose...)" table below and the
-"Cross-epic absorbed scope" stages are a PRE-brainstorm sketch — take them with a grain of salt. A dedicated
-EPIC-017 brainstorm (same format as the Pi-hole/Unifi ones) re-defines the stages before any are built.
+**Replace currently-unscoped SSH access (NON-NEGOTIABLE mandate).** Today the monitor host has UNSCOPED SSH
+to both real targets (passwordless root to the UDM; a passwordless **admin** user to the Synology on port
+53197). This epic's framework MUST provide a dedicated, key-restricted **forced-command** access path per
+target, and the consumer collectors MUST use it — never the existing unscoped human-ops keys:
+- **Unifi (EPIC-007):** the opt-in DHCP-lease read runs through this framework's forced-command path (the
+  key can ONLY emit the lease data), NOT a general root shell. No committed doc reveals the current unscoped
+  path; the framework replaces it.
+- **Synology (EPIC-008):** DSM probes run as a NEW dedicated low-priv user (NOT the existing admin), via this
+  framework's forced-command + scoped-sudoers path.
 
-**Replace currently-unscoped SSH access (NON-NEGOTIABLE mandate).** Some live SSH access used by consumer
-epics today is UNSCOPED (full-privilege). This epic's framework MUST provide a dedicated, low-privilege,
-key-restricted **forced-command** user per target, and the consumer collectors MUST migrate onto it:
-- **Unifi (EPIC-007):** the opt-in DHCP-lease read must run through a scoped forced-command user whose only
-  capability is emitting the lease file — NOT a general shell. (No committed doc may reveal the current
-  unscoped path; the framework replaces it.)
-- **Synology (EPIC-008):** DSM SSH probes start unscoped and MUST be migrated onto a scoped
-  forced-command `homelab-monitor-probe` user as part of this framework.
-
-**Exemplar verification stage (REQUIRED).** Include one stage that builds a trivial `uptime` SSH probe and
-runs it against BOTH the live UDM and the live Synology, to prove the per-target scoped-user +
-forced-command framework end-to-end (mirroring how EPIC-001 proved the collector bones with a noop
-collector). This exemplar lands within EPIC-017 itself so the framework is independently verifiable before
-the real consumer probes (Unifi lease, Synology DSM) are built.
-
-**Synology-specific probes are NOT this epic's.** Keep EPIC-017 a GENERIC framework; defer all
-Synology-specific probe logic to EPIC-008 (built on this framework). The `synology_*` probes listed in the
-sketch table below move to EPIC-008's decomposition.
+**Synology-specific probes are NOT this epic's.** EPIC-017 is the GENERIC framework + a trivial `uptime`
+exemplar (against the UDM AND the Synology). The `synology_smartctl` / `synology_btrfs_scrub` / `synology_df`
+probes + their specific sudoers entries are EPIC-008's deliverables (built on this framework).
 
 ## Overview
 
-Build the SSH probe framework per spec §2 Q29. Use per-target dedicated low-priv users with key-restricted forced commands (`command="..."` in `authorized_keys`). Each probe declares its exact remote command. Setup instructions are documented per remote target.
+Build the read-only SSH probe framework (spec §2 Q29: per-target dedicated low-priv users with key-restricted
+forced commands; §3.1: `SshClientFactory` in `CollectorContext`). The kernel already SCAFFOLDS this — the
+context field `ssh: SshClientFactory` and the `SshClientFactory.open(target_id)` + (empty) `SshConnection`
+Protocol exist in `apps/monitor/homelab_monitor/kernel/plugins/{context,io}.py` with explicit "real impl:
+EPIC-017" markers. This epic fills those stubs with a real **asyncssh**-based implementation (asyncssh is NOT
+yet a dependency — added here), the `SshProbe` collector base, the setup tooling (`hm ssh-probe`), framework
+health metrics + alerts, and a trivial `uptime` exemplar proving BOTH account-modes end-to-end against the
+two real targets.
 
-This unlocks deep checks against remote machines (notably the Synology) that DSM API + SNMP can't surface — `smartctl --xall`, `btrfs scrub status`, `df -h /volumeN`, etc.
+This framework is **read-only and observe-only**. It does NOT write to targets' auth config (the user installs
+keys manually from generated instructions) and ships NO write-capable SSH paths. The previously-absorbed cron
+SSH-pull/push scope is DEFERRED (see "Deferred scope").
 
-## Source documents
+## Verified deployment reality (recon 2026-06-17 — read-only; re-verify live in each stage's Design)
 
-- Spec §2 Q29 (decided: per-target dedicated low-priv users, command-restricted), §3.1 (`SshClientFactory` in `CollectorContext`), §3.4 (Synology in scope; "anything else" deferred).
+- **Kernel plumbing is scaffolded, not built.** `CollectorContext.ssh: SshClientFactory` is a required field
+  (`kernel/plugins/context.py`). `SshClientFactory.open(target_id) -> AbstractAsyncContextManager[SshConnection]`
+  is declared in `kernel/plugins/io.py`; `SshConnection` is an EMPTY Protocol ("methods land in EPIC-017").
+  `asyncssh`/`paramiko` are NOT dependencies. Secrets: read via `ctx.secrets.get(name)` (sync resolver),
+  write via `AsyncSecretsRepository.set(name, value, who=)`. Collector base = `BaseCollector` (ClassVars +
+  `async run(ctx) -> CollectorResult`); the `ok=True`-even-when-target-down convention is load-bearing (the
+  HA `ha_up.py` collector is the exemplar). Snapshot secrets are pickled across the PROCESS-run IPC boundary
+  (a PEM key string survives to subprocess collectors).
+- **UDM Pro (`192.168.2.1`, appliance):** passwordless **root** SSH works today (single existing ed25519 key
+  in `/root/.ssh/authorized_keys`). UniFi OS = stock OpenSSH (forced commands supported), but **root-only — no
+  non-root user can be created**. `/root/.ssh/authorized_keys` lives on **overlayfs** (upperdir
+  `/mnt/.rwfs/data`), NOT the `/persistent` partition → **a forced-command key likely will NOT survive a
+  UniFi OS firmware update** (re-paste required). Target data (the DHCP lease file
+  `/data/udapi-config/dnsmasq.lease`) is world-readable; plain `cat` as root works.
+- **Synology DS3622xs+ (`192.168.2.4`, port `53197`, full DSM 7.3.2 OS):** passwordless SSH works today but
+  lands as a **privileged admin** user (uid 1026, in `administrators` + `root` groups) — NOT a low-priv user.
+  Stock OpenSSH (forced commands supported), real persistent ext4 home, bash. `df`/`uptime` readable
+  unprivileged; **`smartctl -a` and `btrfs` queries require root** and there is **no passwordless sudo** for
+  this user → a dedicated low-priv user + a **narrow NOPASSWD sudoers** wrapper is required for privileged
+  data (EPIC-008's specifics).
+- **Crons on both targets are NOT worth SSH cron-discovery:** the UDM's are 100% UniFi/Debian housekeeping;
+  the Synology's watch-worthy jobs (monthly SMART, ActiveBackup retention — currently disabled) are surfaced
+  by EPIC-008's DSM-API collectors, not cron. → cron SSH work DEFERRED (see "Deferred scope").
 
-## Stages (to decompose during epic Design phase)
+## Account model (the spine — two modes, driven by the appliance-vs-full-OS tension)
 
-| Likely stage | Theme |
-|---|---|
-| STAGE-017-001 | `SshClientFactory` implementation: opens connections lazily by `target_id`; uses `paramiko` or `asyncssh`; closes on context-manager exit; pools connections per host with idle timeout |
-| STAGE-017-002 | Probe contract: `SshProbe` is a `Collector` subtype; declares remote_user, remote_host, remote_command, parser; the parser maps stdout → metrics |
-| STAGE-017-003 | Setup instruction generator: `hm ssh-probe install <probe-name>` prints instructions for the target host (create user, install key with `command="..."` restriction in `authorized_keys`); never auto-runs against a remote |
-| STAGE-017-004 | Synology probes (the first real users):
-  - `synology_smartctl` — `smartctl --json --xall /dev/sda` etc., parsed for predictive failure flags; emits `homelab_synology_smart_*`
-  - `synology_btrfs_scrub` — `btrfs scrub status -R /volume1`; emits scrub progress + last completion
-  - `synology_df` — `df --output=source,fstype,size,used,avail,pcent,target` for Btrfs subvolumes that DSM API doesn't surface |
-| STAGE-017-005 | Generic probe library: a few example probes (e.g., `ping`, `df`, `uptime`) for any remote Linux host; serves as templates for users |
-| STAGE-017-006 | UI: per-target "SSH probes" tab; lists configured probes with last-result + setup-instructions link; "Test connection" button |
+The two real targets sit at opposite ends of the constraint space, so the framework models a per-target
+**`account_mode`**:
+
+- **`appliance` mode (UDM):** the framework does NOT create a user. It accepts landing as the existing
+  privileged user (root) and treats the **`command="..."` forced command in `authorized_keys` as the SOLE
+  least-privilege boundary**, pinned to a **fixed inlined compound read-only command** (e.g. `cat` the lease
+  file + `uptime`). **No on-target script** (it wouldn't survive the overlay wipe, and there's no low-priv
+  user to own it). Setup instructions include a **firmware-update persistence warning**.
+- **`dedicated-user` mode (Synology, full OS):** the framework's setup instructions create a **NEW dedicated
+  low-priv user** (NOT the existing admin), with its own keypair; the forced command pins to an **installed
+  read-only collector script** owned by that user. Privileged data (SMART/btrfs) is reached via a **narrow
+  NOPASSWD sudoers** entry scoped to exactly those binaries, called from inside the script. The script + the
+  specific sudoers commands are the **consumer epic's (EPIC-008)** content; the framework owns the
+  install/sudoers-generation **mechanism** + the trivial exemplar script body.
+
+In BOTH modes the forced command is the security boundary; the dedicated user + sudoers on Synology is
+defense-in-depth. The framework = **mechanism + trivial exemplar**; consumer epics = **real script bodies +
+specific sudoers commands**.
+
+## Transport & key model (LOCKED)
+
+- **Library: `asyncssh`** (added as a dependency; async-native; SSH probes run `run_kind=ASYNC`).
+- **Open-per-run, no connection pool** (probes run at 60s–5m cadence; per-target `concurrency_group`
+  serializes; pooling is an unneeded complexity for v1).
+- **Per-target pinned host-key verification** — capture each target's host key at setup, verify against it on
+  every connection. NEVER blanket `known_hosts=None` (that would be MITM-open on the LAN gateway — ironic for
+  a security-probe framework). A host-key mismatch is a first-class **critical** signal (potential MITM).
+- **Per-target ed25519 key** in the secrets store (`ssh_probe_key_<target>`), generated by the framework and
+  distinct from the existing human-ops keys (those stay for human ops, untouched).
+- **Manual key install (Option A)** — the framework GENERATES the exact `authorized_keys` line (with
+  `command="..."` + `no-port-forwarding,no-pty,no-X11-forwarding,no-agent-forwarding` hardening) and the
+  account-mode-aware setup steps, and VERIFIES the restriction holds. It NEVER writes to a target's auth
+  config itself (trust-minimization is the whole point of this epic).
+- **Non-standard ports supported** (Synology = `53197`).
+
+## Probe contract & observability (LOCKED)
+
+- **`SshProbe` base** (subclasses `BaseCollector`): open via `ctx.ssh.open(target_id)` → run the pinned
+  forced command → capture stdout/exit → parse → emit → close. Follows the `ok=True`-even-when-target-down
+  convention: target sad → `homelab_ssh_up{target}=0`, still `ok=True`; `ok=False` ONLY when the probe itself
+  errors (connection refused / host-key mismatch / timeout). The empty `SshConnection` Protocol gets a narrow
+  connect-and-run-pinned-command → typed-output surface.
+- **Framework health metrics** (every probe, spec §5.7): `homelab_ssh_up{target}`,
+  `homelab_ssh_probe_duration_seconds{target,probe}`, `homelab_ssh_last_success_age_seconds{target,probe}`,
+  kernel `homelab_collector_run_*`, and **`homelab_ssh_host_key_mismatch{target}`** (first-class, distinct
+  from "target down").
+- **Framework-health alerts** (`deploy/vmalert/metrics/ssh.yaml`): `SshTargetUnreachable` (warning),
+  **`SshHostKeyMismatch` (critical — MITM on a trusted target)**, `SshProbeStale` (warning). Target-specific
+  alerts (e.g. "Synology SMART failing") belong to consumer epics.
+
+## CLI & config (LOCKED)
+
+- **CLI `hm ssh-probe`:** `keygen <target>` (ed25519 → secrets, print public key), `capture-hostkey <target>`
+  (pin the host key), `install-instructions <target>` (account-mode-aware: appliance → authorized_keys line +
+  persistence warning; dedicated-user → create-user + install-script + sudoers-line + authorized_keys line),
+  `test <target>` (connect + run the forced command + **verify the restriction** — an arbitrary command is
+  refused/overridden).
+- **Config:** `ssh_targets:` in plugin config (pydantic-validated; per-target `host`/`port`/`account_mode`/
+  `user`/key-secret-ref/pinned-host-key/forced-command-or-script-id/`concurrency_group`). Public default is
+  **empty** (no targets); the user's overrides repo declares the UDM + Synology.
+
+## UI (headless — Option B)
+
+EPIC-017 ships **NO dedicated UI**. SSH-probe state surfaces via: (1) **alerting** (`ssh.yaml`),
+(2) **Grafana** (consumer dashboards include `homelab_ssh_*` panels), and (3) **consumer integration pages** —
+the Unifi/Network pages and the Synology page each render THEIR OWN probe states (last success, host-key
+status, duration). The framework provides the metrics; consumers render. (EPIC-007 + EPIC-008 carry the
+rendering scope notes; no EPIC-017 UI stage.)
+
+## Deferred scope (explicitly NOT built here)
+
+- **Remote-cron SSH-pull discovery + SSH-push wrapper install** (the scope EPIC-002's cron derived-state
+  redesign had assigned here). DEFERRED entirely: the recon found neither real target has user-relevant cron
+  jobs that aren't better-sourced elsewhere (UDM = housekeeping noise; Synology backup/SMART scheduling =
+  EPIC-008 DSM-API). **Architecture recorded for if/when a remote host with real custom crons appears:** a
+  separately-installed, scoped script consuming THIS epic's `SshClientFactory` transport (a `dedicated-user`
+  forced-command path), in its own cron-remote-management home (NOT folded into this read-only-probe
+  framework — it is a write path). When built it depends on 017's transport. EPIC-002's CronDetail UI
+  references to EPIC-017 are updated to "remote-cron SSH deferred" (STAGE-017-008).
+- **Consumer probes** — the Unifi DHCP-lease probe (EPIC-007-012) and the Synology SMART/btrfs/df probes +
+  their sudoers (EPIC-008) are NOT here; this epic ships only the trivial `uptime` exemplar.
+- **Automated key install** to targets' auth config (we generate instructions; the user installs).
+- **Connection pooling** (open-per-run is sufficient at these cadences).
+
+## Stage decomposition (8 stages, sequential)
+
+Re-decomposed from scratch (the pre-brainstorm sketch is fully superseded). Framework-only; the only probe is
+the exemplar. Alert rules come AFTER the exemplar so they validate against real `homelab_ssh_*` data (the
+"rules validate against real data" discipline from EPIC-006/007).
+
+| # | Stage | Theme |
+|---|---|---|
+| STAGE-017-001 | asyncssh transport: add the dep; implement `SshClientFactory.open(target_id)` + fill the `SshConnection` Protocol (connect-and-run-pinned-command → typed output); per-target pinned host-key verification; open-per-run; per-target concurrency group |
+| STAGE-017-002 | `ssh_targets:` config model (pydantic; per-target fields; empty public default) + per-target key secret model (`ssh_probe_key_<target>`, read via `ctx.secrets.get`, written via `AsyncSecretsRepository`) |
+| STAGE-017-003 | `SshProbe` base collector (open→run→parse→emit→close; `ok=True`-when-target-down) + framework health metrics (`homelab_ssh_up`/`_probe_duration_seconds`/`_last_success_age_seconds`/`_host_key_mismatch`) |
+| STAGE-017-004 | `hm ssh-probe keygen` (ed25519 → secrets, print pubkey) + `capture-hostkey` (pin host key) |
+| STAGE-017-005 | `hm ssh-probe install-instructions` (account-mode-aware: appliance authorized_keys-line + persistence-warning; dedicated-user create-user + script + sudoers-line + authorized_keys-line) + `test` (connect + run forced command + verify the restriction holds) |
+| STAGE-017-006 | `uptime` exemplar probe — BOTH account-modes against BOTH real targets (UDM `appliance` inlined-command; Synology `dedicated-user` installed-script); emits `homelab_ssh_up` + `homelab_ssh_uptime_seconds`; end-to-end keygen→install→pin→probe→verify-restriction |
+| STAGE-017-007 | `deploy/vmalert/metrics/ssh.yaml` framework-health rules (`SshTargetUnreachable` warning, `SshHostKeyMismatch` critical, `SshProbeStale` warning) — AFTER the exemplar so they validate against real metrics |
+| STAGE-017-008 | Cross-epic reconciliation: update EPIC-002 CronDetail UI EPIC-017 references → "remote-cron SSH deferred"; record the deferred cron-SSH (Option-B architecture) + EPIC-007/008 consumer-rendering notes + the EPIC-008 sudoers-hop contract |
 
 ## Cross-stage acceptance criteria
 
 Same as EPIC-001 plus:
-
-- **Setup instructions never include the private key.** They include the public key the user adds to `authorized_keys`. The private key stays on our side, in the secrets store.
-- **Forced-commands enforced.** A test probe verifies that connecting and trying to run an arbitrary command fails (because `command="..."` restricts to one).
-- **Per-target user.** The Synology user is `homelab-monitor-probe`; never `root`, never `admin`. Document.
-- **STAGE-002-006 cross-epic criterion (added 2026-05-12):** When SSH-pull cron discovery or SSH-push wrapper install ships in this epic, two STAGE-002-006 UI elements need updating:
-  1. The `source_path IS NULL` remote-cron banner in `apps/ui/src/routes/inventory/CronDetail.tsx` MUST be removed (or trigger condition updated) for remote crons whose source files become readable via SSH-pull discovery.
-  2. The disabled "Install heartbeat wrapper" button in the Actions panel of CronDetail.tsx (introduced disabled in STAGE-002-006, enabled for local hosts in STAGE-002-009) needs to be enabled for remote hosts when SSH-push wrapper install ships. The tooltip currently reads: "Local install ships in STAGE-002-009. Remote install requires cross-host work in EPIC-015 / EPIC-017." Replace the disabled state with a functional button OR remove the EPIC-017 reference from the tooltip when this epic delivers the remote-install path.
+- **Setup instructions never include the private key** — only the public key + the account-mode-aware steps.
+  The private key stays in the secrets store.
+- **Forced command is the enforced boundary** — a test (017-005 `test` + 017-006 exemplar) verifies that
+  connecting and trying to run an arbitrary command fails (the forced command runs instead).
+- **Per-target user / least privilege** — `dedicated-user` targets use a dedicated low-priv user (never
+  root/admin); `appliance` targets lean on the forced command as the boundary. Document both.
+- **Host-key pinning enforced** — no connection without a verified pinned host key; a mismatch is a critical
+  `homelab_ssh_host_key_mismatch` signal, distinct from "target down."
+- **Read-only / observe-only** — no write paths to targets' auth config or anything else; the framework only
+  runs the pinned read commands.
+- **Self-observing** — every probe emits the `homelab_ssh_*` health surface + `homelab_collector_run_*`.
 
 ## Dependencies
 
-- EPIC-001 (kernel + secrets).
-- EPIC-008 (Synology integration) — SSH probes are most useful when paired with the existing Synology integration.
+- EPIC-001 (kernel: `CollectorContext`/`SshClientFactory` stubs, secrets store, collector base, scheduler).
+- **Consumers built AFTER this epic:** EPIC-007 (Unifi DHCP-lease probe, STAGE-007-012) and EPIC-008
+  (Synology DSM probes + sudoers). They use this framework's transport + forced-command + (Synology) script/
+  sudoers mechanism.
 
 ## Notes
 
-- Key generation: `hm ssh-probe keygen` produces a fresh ed25519 key per target host; private key stored in secrets store, public key printed for user to add.
-- `paramiko` vs `asyncssh`: `asyncssh` is the better fit for our async architecture; lock at Design.
-- Future targets beyond Synology and a sidecar host: not specified during the brainstorm. The framework supports any Linux host.
-
-## Cross-epic absorbed scope (from EPIC-002 cron derived-state redesign, 2026-05-11)
-
-Per `docs/superpowers/specs/2026-05-11-cron-derived-state-redesign.md`, this epic absorbs the **SSH-based cross-host work** for the cron monitoring subsystem:
-
-1. **SSH-pull cron discovery** — for hosts where the monitor has SSH credentials configured, a probe runs the same crontab-scanning logic that EPIC-002's local `cron-discoverer` plugin runs (read `/etc/crontab`, `/etc/cron.d/*`, per-user crontabs), parses each line, computes the fingerprint, and writes fingerprint-keyed rows into the registry with audit verb `crons.discover`. Equivalent to the local discoverer but the file reads happen over SSH instead of from a bind-mount.
-
-2. **"Install heartbeat" SSH-push variant** — STAGE-002-009 ships a local-host-only "Install heartbeat" UI button. This epic extends the button to work for any host where the user has configured SSH credentials. The push variant:
-   - Computes the wrapper script + fingerprint locally.
-   - SSHes into the target host as the configured probe user.
-   - `scp`s the wrapper script to `/usr/local/bin/cron-with-heartbeat.sh` (chmod 0755).
-   - Writes the token file (chmod 0600).
-   - Rewrites the target's crontab via `crontab -u <user> -` (or by editing `/etc/cron.d/...` via sudo if a system-level crontab).
-   - POSTs `/register` against itself (the monitor) with `wrapper: true` to finalize.
-   - Same dry-run-preview + explicit-confirm flow as STAGE-002-009.
-
-3. **EPIC-002 UI integration** — STAGE-002-006's CronDetail page Panel 4 already has a disabled "Install heartbeat" button with tooltip pointing at this epic. When this epic's SSH-push stage ships, the button becomes ENABLED for any cron with `host` matching an SSH-configured target.
-
-Suggested decomposition: add two new stages (e.g., STAGE-017-007: SSH-pull cron discovery; STAGE-017-008: SSH-push wrapper install) after the Synology probe stages.
+- `asyncssh` is the locked library (async-native; fits the FastAPI loop; `run_kind=ASYNC`). paramiko was
+  rejected (would force `run_kind=THREAD`).
+- Key generation: `hm ssh-probe keygen` produces a fresh ed25519 key per target; private key in secrets,
+  public key printed for manual install.
+- **UDM persistence caveat:** the forced-command key on the UDM lives on overlayfs and is likely wiped on
+  UniFi OS firmware updates — the `install-instructions` output for `appliance` targets MUST warn the user to
+  re-apply after upgrades.
+- **Synology privileged-data caveat:** SMART/btrfs need root; the `dedicated-user` script reaches them via a
+  narrow NOPASSWD sudoers entry. The framework provides the sudoers-line-generation mechanism; the SPECIFIC
+  commands (`smartctl -a /dev/sd*`, `btrfs scrub status *`, etc.) are EPIC-008's deliverable.

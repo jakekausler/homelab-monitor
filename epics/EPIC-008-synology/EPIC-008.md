@@ -20,6 +20,19 @@ EPIC-008 is built LAST of the four. Consequences:
 - EPIC-007 (Unifi) lands the unified client identity before this epic; the Synology appears as a wired
   client in Unifi's registry (see Notes).
 
+**SSH-probe specifics this epic owns (on the EPIC-017 framework) — recon-confirmed 2026-06-17:**
+- The Synology SSH lands today as a privileged ADMIN user on port **53197**; this epic MUST instead use a
+  **NEW dedicated low-priv user** (`dedicated-user` account-mode) the EPIC-017 framework provisions — never
+  the existing admin.
+- **SMART/btrfs data needs root** and the Synology has **no passwordless sudo**. So the EPIC-017 forced-command
+  **installed script** for Synology reaches SMART/btrfs via a **narrow NOPASSWD sudoers entry scoped to exactly
+  those binaries** (e.g. `homelab-monitor-probe ALL=(root) NOPASSWD: /usr/bin/smartctl -a /dev/sd*,
+  /usr/sbin/btrfs scrub status *`). EPIC-017 ships the sudoers-line-generation MECHANISM; **the specific
+  commands + script body are THIS epic's deliverable.** `df`/`uptime` need no sudo.
+- **SSH-probe STATE rendering is THIS epic's** (EPIC-017 is headless/Option-B): the Synology panel +
+  `synology.json` Grafana render this epic's SSH-probe state (last success, host-key status, duration) from
+  the framework's `homelab_ssh_*` metrics. EPIC-017 provides the metrics; this epic renders them.
+
 ## Overview
 
 Land Synology DS3622xs+ as a plugin bundle. Three integration paths per spec Q12 (all in scope):
