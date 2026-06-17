@@ -14,6 +14,7 @@ from homelab_monitor.cli import cron as cron_cli
 from homelab_monitor.cli import dev as dev_cli
 from homelab_monitor.cli import migrate as migrate_cli
 from homelab_monitor.cli import secrets as secrets_cli
+from homelab_monitor.cli import ssh_probe as ssh_probe_cli
 from homelab_monitor.cli import user as user_cli
 
 
@@ -28,6 +29,7 @@ def _build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command")
     migrate_cli.add_subparser(subparsers)
     secrets_cli.add_subparser(subparsers)
+    ssh_probe_cli.add_subparser(subparsers)
     user_cli.add_subparser(subparsers)
     api_token_cli.add_subparser(subparsers)
     backup_cli.add_subparser(subparsers)

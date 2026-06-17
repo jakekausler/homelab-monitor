@@ -7,8 +7,7 @@ import asyncio
 import os
 import sys
 
-from homelab_monitor.kernel.db.engine import get_engine
-from homelab_monitor.kernel.db.repository import SqliteRepository
+from homelab_monitor.cli._support import build_secrets_repo
 from homelab_monitor.kernel.secrets.errors import (
     MasterKeyError,
     SecretIntegrityError,
@@ -16,7 +15,6 @@ from homelab_monitor.kernel.secrets.errors import (
 )
 from homelab_monitor.kernel.secrets.master_key import (
     decode_master_key_b64,
-    load_master_key,
     master_key_fingerprint,
 )
 from homelab_monitor.kernel.secrets.repository import AsyncSecretsRepository
@@ -91,10 +89,12 @@ def _handle(  # noqa: PLR0911
 
 
 async def _build_repo() -> AsyncSecretsRepository:
-    """Construct an :class:`AsyncSecretsRepository` from env config."""
-    master = load_master_key()
-    engine = get_engine()
-    return AsyncSecretsRepository(SqliteRepository(engine), master)
+    """Construct an :class:`AsyncSecretsRepository` from env config.
+
+    Delegates to :func:`homelab_monitor.cli._support.build_secrets_repo` (shared
+    with ``cli/ssh_probe.py``).
+    """
+    return await build_secrets_repo()
 
 
 async def _cmd_set(name: str) -> int:
