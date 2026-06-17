@@ -51,6 +51,14 @@ class BaseCollector(ABC):
     concurrency_group: ClassVar[str] = "default"
     run_kind: ClassVar[RunKind] = RunKind.ASYNC
     trust_level: ClassVar[TrustLevel] = TrustLevel.BUILTIN
+    # Intermediate-base marker: a subclass that sets ``abstract = True`` in its OWN
+    # body is exempt from required-ClassVar enforcement (it's a framework layer, not
+    # an instantiable collector). Concrete subclasses do NOT set it (default False),
+    # so they remain enforced. Needed for bases like ``SshProbe`` that override
+    # ``run()`` and thus defeat the ``cls.run is BaseCollector.run`` heuristic below.
+    # Intentionally NOT part of the `Collector` Protocol — this is an ABC-enforcement
+    # detail (skips required-ClassVar checks for abstract intermediates like SshProbe).
+    abstract: ClassVar[bool] = False
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         """Enforce required ClassVars on concrete subclasses.
@@ -61,6 +69,12 @@ class BaseCollector(ABC):
         populated when ``__init_subclass__`` fires.
         """
         super().__init_subclass__(**kwargs)
+        # Skip enforcement for explicit intermediate bases (those that set
+        # ``abstract = True`` in their OWN body). ``cls.__dict__.get`` (NOT
+        # ``getattr``) is deliberate: it reads only THIS class's attribute so the
+        # marker never inherits to concrete subclasses, which stay enforced.
+        if cls.__dict__.get("abstract") is True:
+            return
         # Skip enforcement for abstract subclasses (those that didn't override run).
         if cls.run is BaseCollector.run:
             return
