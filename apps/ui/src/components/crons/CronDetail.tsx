@@ -138,15 +138,13 @@ export function CronDetail({ fingerprint }: CronDetailProps) {
   )
 }
 
-function WrapperRow({ at }: { at: string | null }) {
+function WrapperRow({ installed }: { installed: boolean }) {
   return (
     <Row label="Wrapper">
-      {at !== null ? (
-        <span title={formatAbsolute(at)}>Wrapper last seen {formatRelative(at)}</span>
+      {installed ? (
+        <span>Installed</span>
       ) : (
-        <span className="text-muted-foreground">
-          No wrapper installed (heartbeats from ad-hoc curl)
-        </span>
+        <span className="text-muted-foreground">Not installed</span>
       )}
     </Row>
   )
@@ -180,12 +178,12 @@ function HeartbeatStatePanel({
             {state.last_exit_code !== null && (
               <Row label="Last exit code">{state.last_exit_code}</Row>
             )}
-            <WrapperRow at={cron.wrapper_last_seen_at} />
+            <WrapperRow installed={cron.wrapper_installed} />
           </>
         ) : (
           <>
             <p className="text-muted-foreground">No pings received yet.</p>
-            <WrapperRow at={cron.wrapper_last_seen_at} />
+            <WrapperRow installed={cron.wrapper_installed} />
           </>
         )}
       </CardContent>

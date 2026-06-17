@@ -102,9 +102,11 @@ export function CronsTable({ items, isLoading, emptyHint }: CronsTableProps) {
                   </Badge>
                 )}
               </td>
-              <td className="px-3 py-2 text-xs text-muted-foreground">—</td>
+              <td className="px-3 py-2 text-xs text-muted-foreground">
+                {formatRelative(c.last_ok_at)}
+              </td>
               <td className="px-3 py-2 text-xs" data-testid="wrapper-cell">
-                {c.wrapper_last_seen_at !== null ? (
+                {c.wrapper_installed ? (
                   <Badge variant="secondary" aria-label="Wrapper installed">
                     ✓
                   </Badge>

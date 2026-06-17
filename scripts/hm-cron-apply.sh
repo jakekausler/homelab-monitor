@@ -263,6 +263,17 @@ process_request() {
 RC_CODE=""; RC_MSG=""
 _fail() { RC_CODE="$1"; RC_MSG="$2"; return 1; }
 
+# _parent_writable <path> → 0 if we can create a sibling in the parent dir.
+# Returns 0 (true) if the parent dir is writable; 1 (false) otherwise.
+# Used to decide whether to use atomic sibling-tempfile+rename (parent-writable,
+# e.g. /etc/cron.d, /var/spool/cron/crontabs) vs. in-place rewrite
+# (non-parent-writable, e.g. /etc/crontab under systemd sandbox with single-file grant).
+_parent_writable() {
+    local d
+    d="$(dirname "$1")"
+    [[ -w "$d" ]]
+}
+
 # verify_wrap <old_line> <command> <new_line> → 0 if new_line is old_line with
 # exactly the NEW format `<WRAPPER_BASE> <token> -- ` inserted before <command>;
 # or if old_line is LEGACY-wrapped and new_line is the format-migrated version;
@@ -395,9 +406,14 @@ apply_unwrap_crontab() {
 # Writes the operation's `content` to the FIXED dest. Refuses if the request
 # tries to supply a path/target field (defense-in-depth — the dest is never
 # caller-controlled).
+# Hybrid approach (Option Z, defensive):
+#   - If parent dir is writable: use atomic sibling-tempfile + rename.
+#   - If parent dir is NOT writable: in-place rewrite via RESULTS_DIR tempfile.
+#     (Currently not on the failing path, but applied for consistency and
+#     future-proofing if a future target becomes single-file-only granted.)
 apply_write_file() {
     local op="$1" dest="$2" mode="$3"
-    local content snap parent
+    local content snap parent tmp
     # Defense-in-depth: a file-write op must NOT carry a path/target.
     if jq -e 'has("path") or has("target") or has("target_crontab")' >/dev/null 2>&1 <<<"$op"; then
         _fail "bad_request" "file-write op must not carry a destination path"; return 1
@@ -419,20 +435,35 @@ apply_write_file() {
         ROLLBACK_LOG+=("delete $dest")
     fi
 
-    local tmp
-    tmp="$(mktemp "${dest}.hmtmp.XXXXXX")" || { _fail "write_failed" "mktemp failed"; return 1; }
-    printf '%s' "$content" > "$tmp" || { rm -f "$tmp"; _fail "write_failed" "write failed"; return 1; }
-    chmod "$mode" "$tmp"            || { rm -f "$tmp"; _fail "write_failed" "chmod failed"; return 1; }
-    mv -f "$tmp" "$dest"            || { rm -f "$tmp"; _fail "write_failed" "mv failed"; return 1; }
+    if _parent_writable "$dest"; then
+        # Parent-writable case: atomic sibling-tempfile + rename (existing path).
+        tmp="$(mktemp "${dest}.hmtmp.XXXXXX")" || { _fail "write_failed" "mktemp failed"; return 1; }
+        printf '%s' "$content" > "$tmp" || { rm -f "$tmp"; _fail "write_failed" "write failed"; return 1; }
+        chmod "$mode" "$tmp"            || { rm -f "$tmp"; _fail "write_failed" "chmod failed"; return 1; }
+        mv -f "$tmp" "$dest"            || { rm -f "$tmp"; _fail "write_failed" "mv failed"; return 1; }
+    else
+        # Non-parent-writable case: in-place rewrite via RESULTS_DIR tempfile.
+        tmp="$(mktemp "${RESULTS_DIR}/.hmtmp.XXXXXX")" || { _fail "write_failed" "mktemp failed"; return 1; }
+        printf '%s' "$content" > "$tmp" || { rm -f "$tmp"; _fail "write_failed" "write failed"; return 1; }
+        chmod "$mode" "$tmp"            || { rm -f "$tmp"; _fail "write_failed" "chmod failed"; return 1; }
+        # In-place rewrite: truncate + write the existing file (preserves inode/owner).
+        cat "$tmp" > "$dest"            || { rm -f "$tmp"; _fail "write_failed" "write failed"; return 1; }
+        chmod "$mode" "$dest"           || { rm -f "$tmp"; _fail "write_failed" "chmod failed"; return 1; }
+        rm -f "$tmp"
+    fi
     return 0
 }
 
 # apply_line_replace <file> <old_line> <new_line>
 # Replace exactly the one matching line; preserve mode + ownership.
+# Hybrid approach (Option Z):
+#   - If parent dir is writable: use atomic sibling-tempfile + rename.
+#   - If parent dir is NOT writable (e.g. /etc/crontab under systemd sandbox):
+#     create tempfile in RESULTS_DIR, build content there, then in-place rewrite
+#     to the existing inode (preserves ownership, requires only file-level grant).
 apply_line_replace() {
     local file="$1" old_line="$2" new_line="$3"
     local tmp owner_uid owner_gid mode
-    tmp="$(mktemp "${file}.hmtmp.XXXXXX")" || return 1
     # Read original metadata.
     owner_uid="$(stat -c %u "$file")"
     owner_gid="$(stat -c %g "$file")"
@@ -448,17 +479,35 @@ apply_line_replace() {
     # form on the next scan regardless.
     # Rewrite: replace only the first verbatim full-line match.
     # awk with exact string compare; replace at most once.
-    awk -v old="$old_line" -v new="$new_line" '
-        BEGIN { done=0 }
-        { if (!done && $0 == old) { print new; done=1 } else { print } }
-    ' "$file" > "$tmp" || { rm -f "$tmp"; return 1; }
-    # Re-apply the crontab file's original owner uid/gid to the temp file so
-    # the rename preserves ownership. Under the test harness (APPLY_ROOT set)
-    # owner is the test user, so this is effectively a no-op; in production it
-    # restores e.g. the crontab's per-user ownership.
-    chown "$owner_uid:$owner_gid" "$tmp" || { rm -f "$tmp"; return 1; }
-    chmod "$mode" "$tmp" || { rm -f "$tmp"; return 1; }
-    mv -f "$tmp" "$file" || { rm -f "$tmp"; return 1; }
+    if _parent_writable "$file"; then
+        # Parent-writable case: atomic sibling-tempfile + rename (existing path).
+        tmp="$(mktemp "${file}.hmtmp.XXXXXX")" || return 1
+        HM_OLD_LINE="$old_line" HM_NEW_LINE="$new_line" awk '
+            BEGIN { done=0; old=ENVIRON["HM_OLD_LINE"]; new=ENVIRON["HM_NEW_LINE"] }
+            { if (!done && $0 == old) { print new; done=1 } else { print } }
+        ' "$file" > "$tmp" || { rm -f "$tmp"; return 1; }
+        # Re-apply the crontab file's original owner uid/gid to the temp file so
+        # the rename preserves ownership. Under the test harness (APPLY_ROOT set)
+        # owner is the test user, so this is effectively a no-op; in production it
+        # restores e.g. the crontab's per-user ownership.
+        chown "$owner_uid:$owner_gid" "$tmp" || { rm -f "$tmp"; return 1; }
+        chmod "$mode" "$tmp" || { rm -f "$tmp"; return 1; }
+        mv -f "$tmp" "$file" || { rm -f "$tmp"; return 1; }
+    else
+        # Non-parent-writable case: in-place rewrite via RESULTS_DIR tempfile.
+        # Create tempfile in writable RESULTS_DIR, build content there, then
+        # rewrite the existing inode in place (goes through file-level grant, not parent-dir write).
+        tmp="$(mktemp "${RESULTS_DIR}/.hmtmp.XXXXXX")" || return 1
+        HM_OLD_LINE="$old_line" HM_NEW_LINE="$new_line" awk '
+            BEGIN { done=0; old=ENVIRON["HM_OLD_LINE"]; new=ENVIRON["HM_NEW_LINE"] }
+            { if (!done && $0 == old) { print new; done=1 } else { print } }
+        ' "$file" > "$tmp" || { rm -f "$tmp"; return 1; }
+        # In-place rewrite: truncate + write the existing file (preserves inode/owner).
+        cat "$tmp" > "$file" || { rm -f "$tmp"; return 1; }
+        # Re-apply the mode (ownership is unchanged since the inode is preserved).
+        chmod "$mode" "$file" || { rm -f "$tmp"; return 1; }
+        rm -f "$tmp"
+    fi
     return 0
 }
 

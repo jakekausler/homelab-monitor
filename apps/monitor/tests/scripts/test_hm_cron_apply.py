@@ -1445,3 +1445,401 @@ def test_cron_apply_service_grants_snapshot_dir_write() -> None:
     assert "/var/lib/homelab-monitor/crontab-snapshot" in rwp_lines[0], (
         "cron-apply.service ReadWritePaths must include the crontab snapshot dir"
     )
+
+
+# ---------------------------------------------------------------------------
+# Regression tests: awk -v escape-sequence handling (STAGE-002-009B fix)
+# ---------------------------------------------------------------------------
+# BUG: Prior code used `awk -v old="$old_line"` which processes C-style escapes
+# in the variable, collapsing `\!` to `!`. This caused wrapping to fail silently
+# for Debian certbot and other commands containing backslash escapes.
+# FIX: Use ENVIRON array instead — awk does NOT escape-process environment values.
+
+
+@pytest.mark.slow
+def test_wrap_crontab_with_backslash_exclamation(tmp_path: Path) -> None:
+    r"""Wrap a crontab line containing \! (Debian certbot case).
+
+    The Debian certbot renewal line is:
+    test -x /usr/bin/certbot -a \! -d /run/systemd/system
+        && perl -e 'sleep int(rand(43200))' && certbot -q renew
+
+    Prior bug: awk -v would collapse \! to !, causing the comparison to fail
+    and the line to remain unwrapped. This test verifies the fix using ENVIRON.
+    """
+    ipc, req, res = _make_ipc(tmp_path)
+    root = _make_root(tmp_path)
+
+    cron_d = root / "etc" / "cron.d"
+    cron_d.mkdir(parents=True, exist_ok=True)
+    cron_file = cron_d / "certbot"
+    # Real Debian certbot line (simplified for test)
+    old_line = (
+        r"0 0 * * * root test -x /usr/bin/certbot -a \! -d /run/systemd/system"
+        r" && certbot -q renew"
+    )
+    cron_file.write_text(old_line + "\n", encoding="utf-8")
+
+    new_line_cmd = r"test -x /usr/bin/certbot -a \! -d /run/systemd/system && certbot -q renew"
+    new_line = "0 0 * * * root " + _wrap_prefix() + new_line_cmd
+
+    req_id = _write_request(
+        req,
+        [
+            {
+                "operation": "wrap-crontab",
+                "target_crontab": "/etc/cron.d/certbot",
+                "old_line": old_line,
+                "command": new_line_cmd,
+                "new_line": new_line,
+            }
+        ],
+    )
+
+    _run_script(ipc, root)
+
+    result = _read_result(res, req_id)
+    assert result["status"] == "ok", result
+    new_content = cron_file.read_text(encoding="utf-8")
+    # Verify the wrapper was actually inserted (not silently skipped)
+    assert _wrap_prefix() in new_content
+    assert new_line in new_content
+    # Verify the backslash escape survived the round-trip
+    assert r"\!" in new_content
+
+
+@pytest.mark.slow
+def test_wrap_crontab_with_double_backslash(tmp_path: Path) -> None:
+    r"""Wrap a crontab line containing \\ (escaped backslash)."""
+    ipc, req, res = _make_ipc(tmp_path)
+    root = _make_root(tmp_path)
+
+    etc_ct = root / "etc" / "crontab"
+    # Command with a literal backslash in a path or pattern
+    old_line = r"0 1 * * * root /usr/bin/find /var \-name '*.tmp' -delete"
+    etc_ct.write_text(old_line + "\n", encoding="utf-8")
+
+    cmd = r"/usr/bin/find /var \-name '*.tmp' -delete"
+    new_line = "0 1 * * * root " + _wrap_prefix() + cmd
+
+    req_id = _write_request(
+        req,
+        [
+            {
+                "operation": "wrap-crontab",
+                "target_crontab": "/etc/crontab",
+                "old_line": old_line,
+                "command": cmd,
+                "new_line": new_line,
+            }
+        ],
+    )
+
+    _run_script(ipc, root)
+
+    result = _read_result(res, req_id)
+    assert result["status"] == "ok", result
+    new_content = etc_ct.read_text(encoding="utf-8")
+    assert _wrap_prefix() in new_content
+    assert new_line in new_content
+    assert r"\-" in new_content  # Escaped dash preserved
+
+
+@pytest.mark.slow
+def test_wrap_crontab_with_single_quotes(tmp_path: Path) -> None:
+    """Wrap a crontab line containing single quotes (perl/shell patterns)."""
+    ipc, req, res = _make_ipc(tmp_path)
+    root = _make_root(tmp_path)
+
+    etc_ct = root / "etc" / "crontab"
+    # Line with perl one-liner using single quotes (from certbot)
+    old_line = r"0 2 * * * root perl -e 'sleep int(rand(43200))' && /usr/bin/task.sh"
+    etc_ct.write_text(old_line + "\n", encoding="utf-8")
+
+    cmd = r"perl -e 'sleep int(rand(43200))' && /usr/bin/task.sh"
+    new_line = "0 2 * * * root " + _wrap_prefix() + cmd
+
+    req_id = _write_request(
+        req,
+        [
+            {
+                "operation": "wrap-crontab",
+                "target_crontab": "/etc/crontab",
+                "old_line": old_line,
+                "command": cmd,
+                "new_line": new_line,
+            }
+        ],
+    )
+
+    _run_script(ipc, root)
+
+    result = _read_result(res, req_id)
+    assert result["status"] == "ok", result
+    new_content = etc_ct.read_text(encoding="utf-8")
+    assert _wrap_prefix() in new_content
+    assert new_line in new_content
+    assert "'sleep int(rand(43200))'" in new_content
+
+
+@pytest.mark.slow
+def test_wrap_crontab_with_double_quotes(tmp_path: Path) -> None:
+    """Wrap a crontab line containing double quotes."""
+    ipc, req, res = _make_ipc(tmp_path)
+    root = _make_root(tmp_path)
+
+    etc_ct = root / "etc" / "crontab"
+    old_line = r'0 3 * * * root /usr/bin/echo "Hello World" > /tmp/log.txt'
+    etc_ct.write_text(old_line + "\n", encoding="utf-8")
+
+    cmd = r'/usr/bin/echo "Hello World" > /tmp/log.txt'
+    new_line = "0 3 * * * root " + _wrap_prefix() + cmd
+
+    req_id = _write_request(
+        req,
+        [
+            {
+                "operation": "wrap-crontab",
+                "target_crontab": "/etc/crontab",
+                "old_line": old_line,
+                "command": cmd,
+                "new_line": new_line,
+            }
+        ],
+    )
+
+    _run_script(ipc, root)
+
+    result = _read_result(res, req_id)
+    assert result["status"] == "ok", result
+    new_content = etc_ct.read_text(encoding="utf-8")
+    assert _wrap_prefix() in new_content
+    assert new_line in new_content
+    assert '"Hello World"' in new_content
+
+
+@pytest.mark.slow
+def test_wrap_crontab_with_ampersand(tmp_path: Path) -> None:
+    """Wrap a crontab line containing & (ampersand, special in awk replacements)."""
+    ipc, req, res = _make_ipc(tmp_path)
+    root = _make_root(tmp_path)
+
+    etc_ct = root / "etc" / "crontab"
+    old_line = "0 4 * * * root /usr/bin/cmd1 && /usr/bin/cmd2 & sleep 1"
+    etc_ct.write_text(old_line + "\n", encoding="utf-8")
+
+    cmd = "/usr/bin/cmd1 && /usr/bin/cmd2 & sleep 1"
+    new_line = "0 4 * * * root " + _wrap_prefix() + cmd
+
+    req_id = _write_request(
+        req,
+        [
+            {
+                "operation": "wrap-crontab",
+                "target_crontab": "/etc/crontab",
+                "old_line": old_line,
+                "command": cmd,
+                "new_line": new_line,
+            }
+        ],
+    )
+
+    _run_script(ipc, root)
+
+    result = _read_result(res, req_id)
+    assert result["status"] == "ok", result
+    new_content = etc_ct.read_text(encoding="utf-8")
+    assert _wrap_prefix() in new_content
+    assert new_line in new_content
+    assert "&&" in new_content
+
+
+@pytest.mark.slow
+def test_unwrap_crontab_with_backslash_exclamation(tmp_path: Path) -> None:
+    r"""Unwrap a crontab line containing \! and verify byte-exact restoration.
+
+    This is the inverse of wrap_crontab_with_backslash_exclamation.
+    """
+    ipc, req, res = _make_ipc(tmp_path)
+    root = _make_root(tmp_path)
+
+    cron_d = root / "etc" / "cron.d"
+    cron_d.mkdir(parents=True, exist_ok=True)
+    cron_file = cron_d / "certbot"
+
+    cmd = r"test -x /usr/bin/certbot -a \! -d /run/systemd/system && certbot -q renew"
+    old_line = "0 0 * * * root " + _wrap_prefix() + cmd
+    expected_new_line = "0 0 * * * root " + cmd
+
+    cron_file.write_text(old_line + "\n", encoding="utf-8")
+
+    req_id = _write_request(
+        req,
+        [
+            {
+                "operation": "unwrap-crontab",
+                "target_crontab": "/etc/cron.d/certbot",
+                "old_line": old_line,
+                "new_line": expected_new_line,
+            }
+        ],
+    )
+
+    _run_script(ipc, root)
+
+    result = _read_result(res, req_id)
+    assert result["status"] == "ok", result
+    new_content = cron_file.read_text(encoding="utf-8")
+    # Wrapper must be gone
+    assert _WRAPPER_BASE not in new_content
+    # Original command with escape preserved
+    assert r"\!" in new_content
+    # Byte-exact match
+    assert expected_new_line in new_content
+
+
+@pytest.mark.slow
+def test_wrap_and_unwrap_roundtrip_preserves_escapes(tmp_path: Path) -> None:
+    r"""Full roundtrip: wrap then unwrap a \! line yields byte-exact original."""
+    ipc, req, res = _make_ipc(tmp_path)
+    root = _make_root(tmp_path)
+
+    spool = root / "var" / "spool" / "cron" / "crontabs"
+    ct = spool / "alice"
+
+    schedule = "0 0 * * *"
+    cmd = r"test -x /usr/bin/certbot -a \! -d /run/systemd/system && certbot renew"
+    original_line = f"{schedule} {cmd}"
+    ct.write_text(original_line + "\n", encoding="utf-8")
+    ct.chmod(0o600)
+
+    # Phase 1: wrap
+    wrapped_line = f"{schedule} {_wrap_prefix()}{cmd}"
+    req_id1 = _write_request(
+        req,
+        [
+            {
+                "operation": "wrap-crontab",
+                "target_crontab": "crontab:alice",
+                "old_line": original_line,
+                "command": cmd,
+                "new_line": wrapped_line,
+            }
+        ],
+    )
+    _run_script(ipc, root)
+    result1 = _read_result(res, req_id1)
+    assert result1["status"] == "ok", result1
+    wrapped_content = ct.read_text(encoding="utf-8").strip()
+    assert wrapped_content == wrapped_line
+
+    # Phase 2: unwrap
+    req_id2 = _write_request(
+        req,
+        [
+            {
+                "operation": "unwrap-crontab",
+                "target_crontab": "crontab:alice",
+                "old_line": wrapped_line,
+                "new_line": original_line,
+            }
+        ],
+    )
+    _run_script(ipc, root)
+    result2 = _read_result(res, req_id2)
+    assert result2["status"] == "ok", result2
+    final_content = ct.read_text(encoding="utf-8").strip()
+    # Byte-exact restoration
+    assert final_content == original_line
+
+
+# ---------------------------------------------------------------------------
+# In-place rewrite branch (non-parent-writable): STAGE-002-009 code path M2
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.slow
+def test_wrap_crontab_in_place_when_parent_not_writable(tmp_path: Path) -> None:
+    """wrap-crontab on a target whose parent dir is read-only → in-place rewrite.
+
+    This test exercises the apply_line_replace non-parent-writable branch
+    (lines 496-510): when _parent_writable returns false, the script creates
+    a tempfile in the RESULTS_DIR (always writable), builds the content there,
+    then rewrites the target in-place via `cat tmp > file`. This preserves
+    the inode, ownership, and mode while updating the file content.
+
+    Reproduces the scenario: /etc/crontab under systemd sandbox with single-file
+    grant (parent dir is not writable). The in-place branch is the ONLY way to
+    update such a file; atomic sibling-tempfile+rename would fail.
+
+    The test uses chmod 0500 on the parent directory to make it non-writable,
+    triggering the in-place branch. It verifies:
+    1. The target file is updated with the wrapped line (same inode)
+    2. Mode is preserved (0644 for /etc/crontab-like files)
+    3. The original command with backslash escapes (e.g. \\!) survives round-trip
+    4. Parent directory is restored to writable afterward (cleanup)
+    """
+    ipc, req, res = _make_ipc(tmp_path)
+    root = _make_root(tmp_path)
+
+    # Create a "system" crontab file in /etc (parent: /etc)
+    etc_dir = root / "etc"
+    etc_ct = etc_dir / "crontab"
+    old_line = r"*/5 * * * * root test -x /usr/bin/task.sh -a \! -d /tmp && /usr/bin/task.sh"
+    etc_ct.write_text(old_line + "\n", encoding="utf-8")
+    etc_ct.chmod(0o644)
+
+    # Record the original inode before making parent non-writable
+    original_inode = etc_ct.stat().st_ino
+
+    # Make parent dir read-only so _parent_writable($etc_ct) returns false.
+    # chmod 0500 = r-x------ (no write for owner).
+    etc_dir.chmod(0o500)
+
+    try:
+        # Now attempt the wrap operation
+        new_line = (
+            "*/5 * * * * root "
+            + _wrap_prefix()
+            + r"test -x /usr/bin/task.sh -a \! -d /tmp && /usr/bin/task.sh"
+        )
+        req_id = _write_request(
+            req,
+            [
+                {
+                    "operation": "wrap-crontab",
+                    "target_crontab": "/etc/crontab",
+                    "old_line": old_line,
+                    "command": r"test -x /usr/bin/task.sh -a \! -d /tmp && /usr/bin/task.sh",
+                    "new_line": new_line,
+                }
+            ],
+        )
+
+        _run_script(ipc, root)
+
+        # Verify the wrap succeeded
+        result = _read_result(res, req_id)
+        assert result["status"] == "ok", result
+
+        # Verify the wrapped line is in the file
+        new_content = etc_ct.read_text(encoding="utf-8")
+        assert _wrap_prefix() in new_content, "wrapper prefix not inserted"
+        assert new_line in new_content, "wrapped line not found in file"
+
+        # Verify the backslash escape survived the awk round-trip
+        assert r"\!" in new_content, "backslash escape was corrupted"
+
+        # Verify inode is unchanged (in-place rewrite, not rename)
+        final_inode = etc_ct.stat().st_ino
+        assert final_inode == original_inode, (
+            f"inode changed: was {original_inode}, now {final_inode} "
+            "(expected in-place, got atomic rename?)"
+        )
+
+        # Verify mode is preserved
+        assert oct(etc_ct.stat().st_mode & 0o777) == oct(0o644), "file mode was not preserved"
+
+    finally:
+        # Restore parent directory permissions for cleanup
+        etc_dir.chmod(0o755)

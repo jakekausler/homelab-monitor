@@ -819,6 +819,40 @@ async def test_get_cron_is_local_false_for_remote_host(
 
 
 # ---------------------------------------------------------------------------
+# BUG 2 — last_ok_at in list response (via heartbeats_state LEFT JOIN)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_list_crons_last_ok_at_from_heartbeats_state(
+    authenticated_client: AsyncClient, repo: SqliteRepository
+) -> None:
+    """GET /api/crons list includes last_ok_at from LEFT JOIN heartbeats_state."""
+    fp = await _seed_cron(repo, name="with-heartbeat")
+    await _seed_state(repo, fingerprint=fp)
+    resp = await authenticated_client.get("/api/crons")
+    assert resp.status_code == 200  # noqa: PLR2004
+    body = resp.json()
+    items = {it["fingerprint"]: it for it in body["items"]}
+    # Heartbeat state is seeded with last_ok_at = now
+    assert items[fp]["last_ok_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_list_crons_last_ok_at_null_when_no_heartbeats_state(
+    authenticated_client: AsyncClient, repo: SqliteRepository
+) -> None:
+    """GET /api/crons list has last_ok_at=null for crons with no heartbeats_state row."""
+    fp = await _seed_cron(repo, name="no-heartbeat")
+    resp = await authenticated_client.get("/api/crons")
+    assert resp.status_code == 200  # noqa: PLR2004
+    body = resp.json()
+    items = {it["fingerprint"]: it for it in body["items"]}
+    # No heartbeat state row → last_ok_at is null
+    assert items[fp]["last_ok_at"] is None
+
+
+# ---------------------------------------------------------------------------
 # T5 — wrapper_health API field (STAGE-002-010)
 # ---------------------------------------------------------------------------
 

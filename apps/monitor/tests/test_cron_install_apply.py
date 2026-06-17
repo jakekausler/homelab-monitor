@@ -645,10 +645,48 @@ async def test_executor_write_failed_translates(tmp_path: Path) -> None:
             "homelab_monitor.kernel.cron.install.submit_and_wait",
             AsyncMock(side_effect=CronApplyRejectedError("disk error", error_code="write_failed")),
         ),
-        pytest.raises(CronLineNotFoundError),
+        pytest.raises(CrontabWriteError),
     ):
-        # write_failed is a CronApplyRejectedError which routes to CronLineNotFoundError
-        # (only "already_wrapped" is special-cased; all other codes → CronLineNotFoundError)
+        # write_failed is a CronApplyRejectedError which routes to CrontabWriteError
+        # (filesystem/sandbox failure → 500)
+        await install_wrapper_local(
+            _FINGERPRINT,
+            cron_repo=cron_repo,
+            auth_repo=auth_repo,
+            secrets_repo=secrets_repo,
+            host_root=tmp_path,
+            public_url=_PUBLIC_URL,
+            local_hostname=_HOST,
+            who="test",
+            ip=None,
+            log=_null_log(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_executor_crontab_missing_translates(tmp_path: Path) -> None:
+    """error_code=crontab_missing → CrontabWriteError."""
+    _make_crontab(tmp_path)
+    cron = _make_cron_record()
+    cron_repo, auth_repo, secrets_repo = _make_fake_repos(cron)
+
+    with (
+        patch(
+            "homelab_monitor.kernel.cron.install.ensure_heartbeat_wrapper_token",
+            new=AsyncMock(return_value="tok"),
+        ),
+        patch(
+            "homelab_monitor.kernel.cron.install.submit_and_wait",
+            AsyncMock(
+                side_effect=CronApplyRejectedError(
+                    "/etc/crontab not found", error_code="crontab_missing"
+                )
+            ),
+        ),
+        pytest.raises(CrontabWriteError),
+    ):
+        # crontab_missing is a CronApplyRejectedError which routes to CrontabWriteError
+        # (missing system file is a server-side state problem → 500)
         await install_wrapper_local(
             _FINGERPRINT,
             cron_repo=cron_repo,
@@ -1074,6 +1112,36 @@ async def test_uninstall_executor_rejected_other_code_raises_cron_line_not_found
             ),
         ),
         pytest.raises(CronLineNotFoundError),
+    ):
+        await uninstall_wrapper_local(
+            _FINGERPRINT,
+            cron_repo=cron_repo,
+            host_root=tmp_path,
+            local_hostname=_HOST,
+            who="test",
+            ip=None,
+            log=_null_log(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_uninstall_executor_write_failed_raises_crontab_write_error(
+    tmp_path: Path,
+) -> None:
+    """CronApplyRejectedError with error_code='write_failed' → CrontabWriteError.
+
+    Covers install.py lines 579-581 (filesystem/sandbox write failure → 500).
+    """
+    _make_wrapped_crontab(tmp_path)
+    cron = _make_cron_record()
+    cron_repo = _make_uninstall_cron_repo(cron)
+
+    with (
+        patch(
+            "homelab_monitor.kernel.cron.install.submit_and_wait",
+            AsyncMock(side_effect=CronApplyRejectedError("disk error", error_code="write_failed")),
+        ),
+        pytest.raises(CrontabWriteError),
     ):
         await uninstall_wrapper_local(
             _FINGERPRINT,

@@ -556,6 +556,48 @@ async def test_install_wrapper_confirm_crontab_write_error(
 
 
 @pytest.mark.asyncio
+async def test_install_wrapper_confirm_executor_write_failed_returns_500(
+    authenticated_client: AsyncClient,
+    repo: SqliteRepository,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Confirm path: executor rejects with write_failed → 500."""
+    from unittest.mock import AsyncMock  # noqa: PLC0415
+
+    from homelab_monitor.kernel.cron.install import CronApplyRejectedError  # noqa: PLC0415
+
+    monkeypatch.setenv("HOMELAB_MONITOR_PUBLIC_URL", _PUBLIC_URL)
+    monkeypatch.setenv("HM_CRON_HOST_ROOT", str(tmp_path))
+    monkeypatch.setenv("HM_HOST_HOSTNAME", _HOST)
+    _make_fake_crontab(tmp_path)
+    fp = await _seed_cron(repo, host=_HOST)
+
+    fake_wrapper = tmp_path / "cron-with-heartbeat.sh"
+    fake_token_dir = tmp_path / "etc" / "homelab-monitor"
+    fake_token_dir.mkdir(parents=True, exist_ok=True)
+    fake_token = fake_token_dir / "heartbeat.token"
+
+    with (
+        patch("homelab_monitor.kernel.cron.install.WRAPPER_PATH", str(fake_wrapper)),
+        patch("homelab_monitor.kernel.cron.install.TOKEN_FILE_PATH", str(fake_token)),
+        patch(
+            "homelab_monitor.kernel.cron.install.submit_and_wait",
+            new=AsyncMock(
+                side_effect=CronApplyRejectedError("disk error", error_code="write_failed")
+            ),
+        ),
+    ):
+        resp = await authenticated_client.post(
+            f"/api/crons/{fp}/install-wrapper",
+            json={"confirm": True},
+            headers=_csrf(authenticated_client),
+        )
+    assert resp.status_code == 500  # noqa: PLR2004
+    assert "rollback" in resp.text.lower()
+
+
+@pytest.mark.asyncio
 async def test_install_wrapper_confirm_no_auth_repo_via_delattr(
     authenticated_client: AsyncClient,
     repo: SqliteRepository,
@@ -1277,6 +1319,37 @@ async def test_uninstall_wrapper_confirm_write_error_returns_500(
     with patch(
         "homelab_monitor.kernel.cron.install.uninstall_wrapper_local",
         new=AsyncMock(side_effect=CrontabWriteError("disk full")),
+    ):
+        resp = await authenticated_client.post(
+            f"/api/crons/{fp}/uninstall-wrapper",
+            json={"confirm": True},
+            headers=_csrf(authenticated_client),
+        )
+
+    assert resp.status_code == 500  # noqa: PLR2004
+    assert "uninstall failed" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_uninstall_wrapper_confirm_executor_write_failed_returns_500(
+    authenticated_client: AsyncClient,
+    repo: SqliteRepository,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """confirm=true: executor rejects with write_failed → 500."""
+    from unittest.mock import AsyncMock  # noqa: PLC0415
+
+    from homelab_monitor.kernel.cron.install import CronApplyRejectedError  # noqa: PLC0415
+
+    monkeypatch.setenv("HM_CRON_HOST_ROOT", str(tmp_path))
+    monkeypatch.setenv("HM_HOST_HOSTNAME", _HOST)
+    _make_fake_wrapped_crontab(tmp_path)
+    fp = await _seed_cron(repo, host=_HOST)
+
+    with patch(
+        "homelab_monitor.kernel.cron.install.submit_and_wait",
+        new=AsyncMock(side_effect=CronApplyRejectedError("disk error", error_code="write_failed")),
     ):
         resp = await authenticated_client.post(
             f"/api/crons/{fp}/uninstall-wrapper",
