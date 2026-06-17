@@ -19,3 +19,13 @@
 - [ ] Duplicate `id` across entries is REJECTED.
 - [ ] Unknown/extra field on an entry is REJECTED (`extra="forbid"`).
 - [ ] The lifespan-wired `AsyncSshClientFactory` resolver returns the correct `SshTargetParams` for a configured id and `None` for an unknown id.
+
+## STAGE-017-003 — SshProbe base collector + health metrics
+
+- [ ] A concrete `SshProbe` subclass against the loopback server (happy path) emits `homelab_ssh_up{target}=1`, `homelab_ssh_probe_duration_seconds`, `homelab_ssh_host_key_mismatch{target}=0`, `homelab_ssh_last_success_age_seconds=0.0` (first success), and its payload metric; `CollectorResult.ok=True`.
+- [ ] Connected + `parse` returns `up=False` → `ok=True`, `homelab_ssh_up=0`, payload still emitted (probe completed; target sad).
+- [ ] A `HostKeyMismatch` (wrong pinned host key) → `ok=False`, `homelab_ssh_up=0`, `homelab_ssh_host_key_mismatch{target}=1`; no key material in the error message.
+- [ ] A connection failure (no listener / refused) → `ok=False`, `homelab_ssh_up=0`, `homelab_ssh_host_key_mismatch=0`.
+- [ ] `homelab_ssh_last_success_age_seconds` is OMITTED before the first successful (up=1) run; emits 0.0 on every up=1 run; emits elapsed (>0) on an up=0 run after a prior success.
+- [ ] Defining a concrete `BaseCollector`/`SshProbe` subclass WITHOUT `name`/`interval`/`timeout` raises (enforcement still fires); `SshProbe` itself (`abstract=True`) does NOT raise despite lacking them.
+- [ ] `homelab_collector_run_*` self-observation metrics are emitted by the scheduler (NOT the probe) — the probe does not emit them.
