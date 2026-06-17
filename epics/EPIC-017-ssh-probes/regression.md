@@ -29,3 +29,13 @@
 - [ ] `homelab_ssh_last_success_age_seconds` is OMITTED before the first successful (up=1) run; emits 0.0 on every up=1 run; emits elapsed (>0) on an up=0 run after a prior success.
 - [ ] Defining a concrete `BaseCollector`/`SshProbe` subclass WITHOUT `name`/`interval`/`timeout` raises (enforcement still fires); `SshProbe` itself (`abstract=True`) does NOT raise despite lacking them.
 - [ ] `homelab_collector_run_*` self-observation metrics are emitted by the scheduler (NOT the probe) — the probe does not emit them.
+
+## STAGE-017-004 — hm ssh-probe keygen + capture-hostkey
+
+- [ ] `hm ssh-probe keygen <t>` writes secret `ssh_probe_key_<t>` (PEM) + prints the bare PUBLIC key; stdout/stderr contain NO `PRIVATE KEY`.
+- [ ] `hm ssh-probe keygen <t>` on an existing secret refuses (exit 1) without `--rotate`; `--rotate` replaces it; `--rotate` on an absent secret errors (exit 1).
+- [ ] `hm ssh-probe keygen "bad id!"` (invalid charset) and a missing master key both exit 1 with clean errors (no traceback).
+- [ ] `hm ssh-probe capture-hostkey <t> --host H --port P` against a reachable SSH host prints a bare host-key line + `SHA256:` fingerprint + TOFU warning + paste instruction, exit 0, and WRITES NOTHING (no secret, no config).
+- [ ] **REGRESSION:** capture-hostkey succeeds even when the target's host key is ALREADY in `~/.ssh/known_hosts` (the `known_hosts=asyncssh.import_known_hosts("")` fix — any falsy value reintroduces the bug). Covered by `test_capture_hostkey_succeeds_when_key_already_in_known_hosts`.
+- [ ] capture-hostkey on an unreachable host/port (e.g. `--port 1`) exits 1 with a clean connection error; a target not in `ssh_targets` config (no `--host`) exits 1 with a "not found in ssh_targets" error.
+- [ ] capture-hostkey works against a non-standard port (e.g. Synology :53197) via `--port`, and accepts whatever host-key TYPE the server negotiates (ssh-rsa / ssh-ed25519 / ecdsa) — the validator is key-type-agnostic.
