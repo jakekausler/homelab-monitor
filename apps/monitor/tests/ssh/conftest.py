@@ -59,3 +59,38 @@ async def ssh_test_server() -> AsyncIterator[SshTestServer]:
     finally:
         acceptor.close()
         await acceptor.wait_closed()
+
+
+@pytest_asyncio.fixture
+async def ssh_test_server_forced_command() -> AsyncIterator[SshTestServer]:
+    """Yield a loopback SSH server that FORCES ``echo HM_FORCED_OK`` for the client key.
+
+    Identical to :func:`ssh_test_server` except the authorized_keys entry carries a
+    ``command="echo HM_FORCED_OK"`` option. asyncssh applies the forced command
+    server-side: ``process.command`` becomes ``echo HM_FORCED_OK`` regardless of the
+    client's requested command, so the existing echoing ``_handle_process`` emits
+    ``ran: echo HM_FORCED_OK`` and the client's arbitrary command never runs.
+    Used by ``hm ssh-probe test`` PASS-path tests (marker absent → restriction holds).
+    """
+    server_host_key = asyncssh.generate_private_key("ssh-ed25519")  # pyright: ignore[reportUnknownMemberType]
+    client_key = asyncssh.generate_private_key("ssh-ed25519")  # pyright: ignore[reportUnknownMemberType]
+    client_pub_line = client_key.export_public_key().decode()
+
+    acceptor = await asyncssh.listen(
+        "127.0.0.1",
+        0,
+        server_host_keys=[server_host_key],
+        authorized_client_keys=asyncssh.import_authorized_keys(
+            'command="echo HM_FORCED_OK" ' + client_pub_line
+        ),
+        process_factory=_handle_process,
+    )
+    try:
+        yield SshTestServer(
+            port=acceptor.get_port(),
+            host_pubkey_line=server_host_key.export_public_key().decode(),
+            client_key_pem=client_key.export_private_key().decode(),
+        )
+    finally:
+        acceptor.close()
+        await acceptor.wait_closed()

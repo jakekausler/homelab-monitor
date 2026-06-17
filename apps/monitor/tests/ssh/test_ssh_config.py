@@ -6,7 +6,12 @@ from pathlib import Path
 
 import pytest
 
-from homelab_monitor.kernel.ssh import SshTargetParams, load_ssh_targets
+from homelab_monitor.kernel.ssh import (
+    SshTargetParams,
+    load_ssh_target_configs,
+    load_ssh_targets,
+)
+from homelab_monitor.kernel.ssh.config import SshTargetConfig
 
 _DEFAULT_SSH_PORT = 22
 _SYNOLOGY_SSH_PORT = 53197
@@ -404,3 +409,156 @@ class TestLoadSshTargets:
         result = load_ssh_targets()
         assert len(result) == 1
         assert result["t"].host == "h"
+
+
+class TestLoadSshTargetConfigs:
+    """Test the un-projected SSH targets config loader."""
+
+    def test_returns_unprojected_config_fields(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """load_ssh_target_configs returns SshTargetConfig with preserved fields."""
+        body = """ssh_targets:
+  - id: "t"
+    host: "h"
+    user: "u"
+    account_mode: "appliance"
+    forced_command: "run-x"
+    concurrency_group: "appliances"
+"""
+        config_file = _write_config(tmp_path, body)
+        monkeypatch.setenv("HOMELAB_MONITOR_CONFIG", str(config_file))
+        result = load_ssh_target_configs()
+        assert len(result) == 1
+        cfg = result["t"]
+        assert isinstance(cfg, SshTargetConfig)
+        assert cfg.forced_command == "run-x"
+        assert cfg.account_mode == "appliance"
+        assert cfg.concurrency_group == "appliances"
+        assert cfg.script_id is None
+
+    def test_script_id_preserved(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        """load_ssh_target_configs preserves script_id."""
+        body = """ssh_targets:
+  - id: "t"
+    host: "h"
+    user: "u"
+    account_mode: "dedicated-user"
+    script_id: "s1"
+"""
+        config_file = _write_config(tmp_path, body)
+        monkeypatch.setenv("HOMELAB_MONITOR_CONFIG", str(config_file))
+        result = load_ssh_target_configs()
+        cfg = result["t"]
+        assert cfg.script_id == "s1"
+        assert cfg.account_mode == "dedicated-user"
+
+    def test_absent_file_returns_empty(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Missing config file → {}."""
+        config_path = tmp_path / "nonexistent.yaml"
+        monkeypatch.setenv("HOMELAB_MONITOR_CONFIG", str(config_path))
+        result = load_ssh_target_configs()
+        assert result == {}
+
+    def test_section_null_returns_empty(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """ssh_targets: (null) → {}."""
+        config_file = _write_config(tmp_path, "ssh_targets:\n")
+        monkeypatch.setenv("HOMELAB_MONITOR_CONFIG", str(config_file))
+        result = load_ssh_target_configs()
+        assert result == {}
+
+    def test_section_empty_list_returns_empty(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """ssh_targets: [] → {}."""
+        config_file = _write_config(tmp_path, "ssh_targets: []\n")
+        monkeypatch.setenv("HOMELAB_MONITOR_CONFIG", str(config_file))
+        result = load_ssh_target_configs()
+        assert result == {}
+
+    def test_section_absent_returns_empty(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Config body without ssh_targets key → {}."""
+        config_file = _write_config(tmp_path, "other_key: 1\n")
+        monkeypatch.setenv("HOMELAB_MONITOR_CONFIG", str(config_file))
+        result = load_ssh_target_configs()
+        assert result == {}
+
+    def test_duplicate_id_rejected(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        """Duplicate id values rejected."""
+        body = """ssh_targets:
+  - id: "dup"
+    host: "h1"
+    user: "u"
+    account_mode: "appliance"
+  - id: "dup"
+    host: "h2"
+    user: "u"
+    account_mode: "appliance"
+"""
+        config_file = _write_config(tmp_path, body)
+        monkeypatch.setenv("HOMELAB_MONITOR_CONFIG", str(config_file))
+        with pytest.raises(ValueError, match="duplicate id"):
+            load_ssh_target_configs()
+
+    def test_bad_entry_rejected(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        """Entry missing required host field rejected."""
+        body = """ssh_targets:
+  - id: "t"
+    user: "u"
+    account_mode: "appliance"
+"""
+        config_file = _write_config(tmp_path, body)
+        monkeypatch.setenv("HOMELAB_MONITOR_CONFIG", str(config_file))
+        with pytest.raises(ValueError, match="is invalid"):
+            load_ssh_target_configs()
+
+    def test_root_not_mapping_rejected(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Config root as list rejected."""
+        body = "- just\n- a\n- list\n"
+        config_file = _write_config(tmp_path, body)
+        monkeypatch.setenv("HOMELAB_MONITOR_CONFIG", str(config_file))
+        with pytest.raises(ValueError, match="config root must be a mapping"):
+            load_ssh_target_configs()
+
+    def test_section_not_list_rejected(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """ssh_targets as mapping rejected."""
+        body = "ssh_targets:\n  a: 1\n"
+        config_file = _write_config(tmp_path, body)
+        monkeypatch.setenv("HOMELAB_MONITOR_CONFIG", str(config_file))
+        with pytest.raises(ValueError, match="ssh_targets must be a list"):
+            load_ssh_target_configs()
+
+    def test_entry_not_mapping_rejected(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """List entry as string rejected."""
+        body = "ssh_targets:\n  - just-a-string\n"
+        config_file = _write_config(tmp_path, body)
+        monkeypatch.setenv("HOMELAB_MONITOR_CONFIG", str(config_file))
+        with pytest.raises(ValueError, match=r"ssh_targets\[0\] must be a mapping"):
+            load_ssh_target_configs()
+
+    def test_key_secret_ref_default_preserved(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """key_secret_ref default applies when omitted."""
+        body = """ssh_targets:
+  - id: "udm"
+    host: "h"
+    user: "u"
+    account_mode: "appliance"
+"""
+        config_file = _write_config(tmp_path, body)
+        monkeypatch.setenv("HOMELAB_MONITOR_CONFIG", str(config_file))
+        result = load_ssh_target_configs()
+        assert result["udm"].key_secret_ref == "ssh_probe_key_udm"

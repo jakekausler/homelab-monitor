@@ -7,7 +7,11 @@ host-key verification, per-target client keys, and typed transport errors.
 from __future__ import annotations
 
 from homelab_monitor.kernel.ssh.client import AsyncSshClientFactory
-from homelab_monitor.kernel.ssh.config import SshTargetConfig, load_ssh_targets
+from homelab_monitor.kernel.ssh.config import (
+    SshTargetConfig,
+    load_ssh_target_configs,
+    load_ssh_targets,
+)
 from homelab_monitor.kernel.ssh.errors import (
     HostKeyMismatch,
     HostKeyNotPinned,
@@ -30,5 +34,6 @@ __all__ = [
     "SshTargetParams",
     "SshTimeout",
     "SshTransportError",
+    "load_ssh_target_configs",
     "load_ssh_targets",
 ]

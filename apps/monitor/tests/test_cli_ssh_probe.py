@@ -12,14 +12,17 @@ import pytest
 from homelab_monitor.cli._support import build_secrets_repo
 from homelab_monitor.cli.main import main
 from homelab_monitor.cli.ssh_probe import (
+    _RESTRICTION_EXIT_CODE,  # pyright: ignore[reportPrivateUsage]
     _cmd_capture_hostkey,  # pyright: ignore[reportPrivateUsage]
+    _cmd_test,  # pyright: ignore[reportPrivateUsage]
 )
 from homelab_monitor.kernel.secrets.master_key import ENV_VAR
 
-# Re-export the loopback SSH server fixture so capture-hostkey tests can request it.
+# Re-export the loopback SSH server fixtures.
 from tests.ssh.conftest import (  # noqa: F401  -- pytest fixture re-export
     SshTestServer,
     ssh_test_server,  # pyright: ignore[reportUnusedImport]
+    ssh_test_server_forced_command,  # pyright: ignore[reportUnusedImport]
 )
 
 KEY = bytes(range(32))
@@ -41,6 +44,19 @@ def _get_secret(name: str) -> str | None:
         return await repo.get(name)
 
     return asyncio.run(_run())
+
+
+async def _astore_secret(name: str, value: str) -> None:
+    """Store a secret via the real AsyncSecretsRepository (awaitable; for async test bodies)."""
+    repo = await build_secrets_repo()
+    await repo.set(name, value, who="test")
+
+
+def _write_install_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, body: str) -> None:
+    """Write a temporary config file and point HOMELAB_MONITOR_CONFIG to it."""
+    config_file = tmp_path / "homelab-monitor.yaml"
+    config_file.write_text(body, encoding="utf-8")
+    monkeypatch.setenv("HOMELAB_MONITOR_CONFIG", str(config_file))
 
 
 # --------------------------- keygen ---------------------------
@@ -399,6 +415,536 @@ async def test_capture_hostkey_connect_succeeds_no_key_captured(
         port_override=9,
     )
     assert rc == 1
+
+
+# ----------------------- install-instructions ----------------------
+
+
+def test_install_instructions_appliance(
+    cli_env: str,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """install-instructions appliance: renders the forced-command line + persistence warning."""
+    _write_install_config(
+        tmp_path,
+        monkeypatch,
+        "ssh_targets:\n"
+        "  - id: udm\n"
+        "    host: 192.168.2.1\n"
+        "    user: root\n"
+        "    account_mode: appliance\n"
+        "    forced_command: /usr/bin/show-stuff\n",
+    )
+    main(["migrate"])
+    capsys.readouterr()
+
+    # keygen first
+    assert main(["ssh-probe", "keygen", "udm"]) == 0
+    capsys.readouterr()
+
+    # install-instructions
+    rc = main(["ssh-probe", "install-instructions", "udm"])
+    _captured = capsys.readouterr()
+    out, err = _captured.out, _captured.err
+    assert rc == 0
+    assert (
+        'command="/usr/bin/show-stuff",no-port-forwarding,no-pty,no-X11-forwarding,no-agent-forwarding'
+        in out
+    )
+    assert "hm-probe-udm" in out
+    assert "ssh-ed25519 " in out
+    assert "WARNING (UniFi OS firmware persistence)" in out
+    assert "PRIVATE KEY" not in out
+    assert "PRIVATE KEY" not in err
+
+
+def test_install_instructions_appliance_no_forced_command(
+    cli_env: str,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """install-instructions with no forced_command renders a placeholder + NOTE."""
+    _write_install_config(
+        tmp_path,
+        monkeypatch,
+        "ssh_targets:\n"
+        "  - id: udm\n"
+        "    host: 192.168.2.1\n"
+        "    user: root\n"
+        "    account_mode: appliance\n",
+    )
+    main(["migrate"])
+    capsys.readouterr()
+
+    assert main(["ssh-probe", "keygen", "udm"]) == 0
+    capsys.readouterr()
+
+    rc = main(["ssh-probe", "install-instructions", "udm"])
+    _captured = capsys.readouterr()
+    out, err = _captured.out, _captured.err
+    assert rc == 0
+    assert 'command="<CONFIGURE forced_command IN ssh-targets.yaml>"' in out
+    assert "NOTE:" in err
+    assert "no forced_command" in err
+
+
+def test_install_instructions_appliance_script_id_rejected(
+    cli_env: str,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """install-instructions for appliance + script_id exits 1."""
+    _write_install_config(
+        tmp_path,
+        monkeypatch,
+        "ssh_targets:\n"
+        "  - id: udm\n"
+        "    host: 192.168.2.1\n"
+        "    user: root\n"
+        "    account_mode: appliance\n"
+        "    script_id: s1\n",
+    )
+    main(["migrate"])
+    capsys.readouterr()
+
+    assert main(["ssh-probe", "keygen", "udm"]) == 0
+    capsys.readouterr()
+
+    rc = main(["ssh-probe", "install-instructions", "udm"])
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert "appliance mode forces a command, not a script" in err
+
+
+def test_install_instructions_dedicated_user(
+    cli_env: str,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """install-instructions dedicated-user: renders the 5-step recipe (no persistence warning)."""
+    _write_install_config(
+        tmp_path,
+        monkeypatch,
+        "ssh_targets:\n"
+        "  - id: synology\n"
+        "    host: 192.168.2.4\n"
+        "    port: 53197\n"
+        "    user: monitor\n"
+        "    account_mode: dedicated-user\n",
+    )
+    main(["migrate"])
+    capsys.readouterr()
+
+    assert main(["ssh-probe", "keygen", "synology"]) == 0
+    capsys.readouterr()
+
+    rc = main(["ssh-probe", "install-instructions", "synology"])
+    _captured = capsys.readouterr()
+    out, err = _captured.out, _captured.err
+    assert rc == 0
+    assert "sudo useradd -m -s /bin/sh monitor" in out
+    assert "uptime" in out
+    assert "monitor ALL=(root) NOPASSWD: <ABSOLUTE_PATHS_OF_READ_ONLY_COMMANDS>" in out
+    assert (
+        'command="/home/monitor/hm-probe.sh",no-port-forwarding,no-pty,no-X11-forwarding,no-agent-forwarding'
+        in out
+    )
+    assert "hm-probe-synology" in out
+    assert "ssh-ed25519 " in out
+    assert "WARNING (UniFi OS firmware persistence)" not in out
+    assert "PRIVATE KEY" not in out
+    assert "PRIVATE KEY" not in err
+
+
+def test_install_instructions_target_not_in_config(
+    cli_env: str,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """install-instructions for a target not in config exits 1."""
+    _write_install_config(
+        tmp_path,
+        monkeypatch,
+        "ssh_targets:\n  - id: other\n    host: 1.1.1.1\n"
+        "    user: x\n    account_mode: appliance\n",
+    )
+    main(["migrate"])
+    capsys.readouterr()
+
+    rc = main(["ssh-probe", "install-instructions", "ghost"])
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert "not in config" in err
+
+
+def test_install_instructions_no_key_secret(
+    cli_env: str,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """install-instructions without keygen exits 1."""
+    _write_install_config(
+        tmp_path,
+        monkeypatch,
+        "ssh_targets:\n"
+        "  - id: udm\n"
+        "    host: 192.168.2.1\n"
+        "    user: root\n"
+        "    account_mode: appliance\n",
+    )
+    main(["migrate"])
+    capsys.readouterr()
+
+    rc = main(["ssh-probe", "install-instructions", "udm"])
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert "no probe key" in err
+    assert "keygen" in err
+
+
+def test_install_instructions_invalid_target_charset(
+    cli_env: str,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """install-instructions with invalid charset exits 1."""
+    main(["migrate"])
+    capsys.readouterr()
+
+    rc = main(["ssh-probe", "install-instructions", "bad id*"])
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert "invalid target" in err
+
+
+def test_install_instructions_malformed_config(
+    cli_env: str,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """install-instructions with malformed config (root as list) exits 1."""
+    _write_install_config(tmp_path, monkeypatch, "- a\n- b\n")
+    main(["migrate"])
+    capsys.readouterr()
+
+    rc = main(["ssh-probe", "install-instructions", "x"])
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert "config root must be a mapping" in err
+
+
+def test_install_instructions_master_key_error(
+    db_url_env: str,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """install-instructions without master key exits 1."""
+    _write_install_config(
+        tmp_path,
+        monkeypatch,
+        "ssh_targets:\n"
+        "  - id: udm\n"
+        "    host: 192.168.2.1\n"
+        "    user: root\n"
+        "    account_mode: appliance\n",
+    )
+    monkeypatch.delenv(ENV_VAR, raising=False)
+    monkeypatch.setattr(
+        "homelab_monitor.kernel.secrets.master_key.DEFAULT_KEY_FILE",
+        "/nonexistent/path/master-key",
+    )
+    main(["migrate"])
+    capsys.readouterr()
+
+    rc = main(["ssh-probe", "install-instructions", "udm"])
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert "no master key" in err
+
+
+# -------------------------------- test ---------------------------------
+
+
+@pytest.mark.asyncio
+async def test_test_pass_restriction_enforced(
+    cli_env: str,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    ssh_test_server_forced_command: SshTestServer,  # noqa: F811
+) -> None:
+    """test command PASS path: forced server, marker absent → restriction holds."""
+    _write_install_config(
+        tmp_path,
+        monkeypatch,
+        "ssh_targets:\n"
+        "  - id: loopback\n"
+        f"    host: 127.0.0.1\n"
+        f"    port: {ssh_test_server_forced_command.port}\n"
+        "    user: root\n"
+        "    account_mode: appliance\n"
+        "    forced_command: echo HM_FORCED_OK\n"
+        f"    host_key: {ssh_test_server_forced_command.host_pubkey_line.strip()}\n",
+    )
+    main(["migrate"])
+    capsys.readouterr()
+
+    await _astore_secret("ssh_probe_key_loopback", ssh_test_server_forced_command.client_key_pem)
+
+    rc = await _cmd_test("loopback")
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "PASS: forced-command restriction enforced" in out
+    assert "forced-command output:" in out
+    assert "HM_FORCED_OK" in out
+    assert "HM_PROBE_RESTRICTION_CHECK_loopback" not in out
+
+
+@pytest.mark.asyncio
+async def test_test_fail_restriction_not_enforced(
+    cli_env: str,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    ssh_test_server: SshTestServer,  # noqa: F811
+) -> None:
+    """test command NEGATIVE path: plain server (no forced), marker echoed → restriction broken."""
+    _write_install_config(
+        tmp_path,
+        monkeypatch,
+        "ssh_targets:\n"
+        "  - id: loopback\n"
+        f"    host: 127.0.0.1\n"
+        f"    port: {ssh_test_server.port}\n"
+        "    user: root\n"
+        "    account_mode: appliance\n"
+        "    forced_command: echo HM_FORCED_OK\n"
+        f"    host_key: {ssh_test_server.host_pubkey_line.strip()}\n",
+    )
+    main(["migrate"])
+    capsys.readouterr()
+
+    await _astore_secret("ssh_probe_key_loopback", ssh_test_server.client_key_pem)
+
+    rc = await _cmd_test("loopback")
+    err = capsys.readouterr().err
+    assert rc == _RESTRICTION_EXIT_CODE
+    assert "FAIL: restriction NOT enforced" in err
+    assert 'command="' in err
+
+
+@pytest.mark.asyncio
+async def test_test_no_host_key(
+    cli_env: str,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """test exits 1 when no host_key in config."""
+    _write_install_config(
+        tmp_path,
+        monkeypatch,
+        "ssh_targets:\n"
+        "  - id: loopback\n"
+        "    host: 127.0.0.1\n"
+        "    port: 22\n"
+        "    user: root\n"
+        "    account_mode: appliance\n",
+    )
+    main(["migrate"])
+    capsys.readouterr()
+
+    rc = await _cmd_test("loopback")
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert "no pinned host key" in err
+    assert "capture-hostkey" in err
+
+
+@pytest.mark.asyncio
+async def test_test_no_key_secret(
+    cli_env: str,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """test exits 1 when no probe key secret."""
+    _write_install_config(
+        tmp_path,
+        monkeypatch,
+        "ssh_targets:\n"
+        "  - id: loopback\n"
+        "    host: 127.0.0.1\n"
+        "    port: 22\n"
+        "    user: root\n"
+        "    account_mode: appliance\n"
+        "    host_key: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIabc123 x\n",
+    )
+    main(["migrate"])
+    capsys.readouterr()
+
+    rc = await _cmd_test("loopback")
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert "no probe key" in err
+    assert "keygen" in err
+
+
+def test_test_target_not_in_config(
+    cli_env: str,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """test exits 1 when target not in config."""
+    monkeypatch.setenv("HOMELAB_MONITOR_CONFIG", str(tmp_path / "missing.yaml"))
+    main(["migrate"])
+    capsys.readouterr()
+
+    rc = main(["ssh-probe", "test", "ghost"])
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert "not in config" in err
+
+
+def test_test_invalid_target_charset(
+    cli_env: str,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """test exits 1 with invalid charset."""
+    main(["migrate"])
+    capsys.readouterr()
+
+    rc = main(["ssh-probe", "test", "bad id*"])
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert "invalid target" in err
+
+
+@pytest.mark.asyncio
+async def test_test_host_key_mismatch(
+    cli_env: str,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    ssh_test_server: SshTestServer,  # noqa: F811
+) -> None:
+    """test exits 1 + prints CRITICAL/MITM when host key mismatches."""
+    # Use a freshly-generated key (different from the server's).
+    wrong_host_key = (  # pyright: ignore[reportUnknownMemberType]
+        asyncssh.generate_private_key("ssh-ed25519").export_public_key().decode().strip()  # pyright: ignore[reportUnknownMemberType]
+    )
+
+    _write_install_config(
+        tmp_path,
+        monkeypatch,
+        "ssh_targets:\n"
+        "  - id: loopback\n"
+        f"    host: 127.0.0.1\n"
+        f"    port: {ssh_test_server.port}\n"
+        "    user: root\n"
+        "    account_mode: appliance\n"
+        f"    host_key: {wrong_host_key}\n",
+    )
+    main(["migrate"])
+    capsys.readouterr()
+
+    await _astore_secret("ssh_probe_key_loopback", ssh_test_server.client_key_pem)
+
+    rc = await _cmd_test("loopback")
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert "CRITICAL" in err
+    assert "MITM" in err
+    assert "HostKeyMismatch" in err
+
+
+def test_test_connection_refused(
+    cli_env: str,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """test exits 1 when connection refused (port unbound)."""
+    _write_install_config(
+        tmp_path,
+        monkeypatch,
+        "ssh_targets:\n"
+        "  - id: loopback\n"
+        "    host: 127.0.0.1\n"
+        "    port: 1\n"
+        "    user: root\n"
+        "    account_mode: appliance\n"
+        "    host_key: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIabc123 x\n",
+    )
+    main(["migrate"])
+    capsys.readouterr()
+
+    assert main(["ssh-probe", "keygen", "loopback"]) == 0
+    capsys.readouterr()
+
+    rc = main(["ssh-probe", "test", "loopback"])
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert "error:" in err
+
+
+@pytest.mark.asyncio
+async def test_test_malformed_config(
+    cli_env: str,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """test exits 1 when config root is malformed (not a mapping)."""
+    _write_install_config(tmp_path, monkeypatch, "- a\n- b\n")
+    main(["migrate"])
+    capsys.readouterr()
+
+    rc = await _cmd_test("x")
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert "config root must be a mapping" in err
+
+
+def test_test_master_key_error(
+    db_url_env: str,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """test exits 1 when master key unavailable."""
+    _write_install_config(
+        tmp_path,
+        monkeypatch,
+        "ssh_targets:\n"
+        "  - id: loopback\n"
+        "    host: 127.0.0.1\n"
+        "    port: 22\n"
+        "    user: root\n"
+        "    account_mode: appliance\n"
+        "    host_key: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIabc123 x\n",
+    )
+    monkeypatch.delenv(ENV_VAR, raising=False)
+    monkeypatch.setattr(
+        "homelab_monitor.kernel.secrets.master_key.DEFAULT_KEY_FILE",
+        "/nonexistent/path/master-key",
+    )
+    main(["migrate"])
+    capsys.readouterr()
+
+    rc = main(["ssh-probe", "test", "loopback"])
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert "no master key" in err
 
 
 # --------------------------- dispatch ---------------------------

@@ -24,13 +24,24 @@ import asyncssh
 
 from homelab_monitor.cli._support import build_secrets_repo
 from homelab_monitor.kernel.secrets.errors import MasterKeyError, SecretNotFoundError
-from homelab_monitor.kernel.ssh.config import load_ssh_targets
+from homelab_monitor.kernel.ssh.client import AsyncSshClientFactory
+from homelab_monitor.kernel.ssh.config import load_ssh_target_configs, load_ssh_targets
+from homelab_monitor.kernel.ssh.errors import (
+    HostKeyMismatch,
+    HostKeyNotPinned,
+    SshAuthError,
+    SshConnectionRefused,
+    SshTimeout,
+    SshTransportError,
+)
+from homelab_monitor.kernel.ssh.params import SshTargetParams
 
 _TARGET_RE = re.compile(r"[A-Za-z0-9._-]+")
 _MIN_PORT = 1
 _MAX_PORT = 65535
 _CAPTURE_CONNECT_TIMEOUT = 5
 _CAPTURE_LOGIN_TIMEOUT = 5
+_RESTRICTION_EXIT_CODE = 3
 
 
 # argparse exposes no public type for sub-parsers; using the private alias is the
@@ -67,6 +78,18 @@ def add_subparser(
         "--port", type=int, default=None, help="Override port (1-65535; default 22)"
     )
 
+    p_install = sub.add_parser(
+        "install-instructions",
+        help="Print the account-mode-aware manual setup recipe (no network; no private key)",
+    )
+    p_install.add_argument("target", help="Target id (charset [A-Za-z0-9._-]+)")
+
+    p_test = sub.add_parser(
+        "test",
+        help="Connect + run the forced command + verify an arbitrary command is refused",
+    )
+    p_test.add_argument("target", help="Target id (charset [A-Za-z0-9._-]+)")
+
     ssh_probe.set_defaults(func=_handle)
 
 
@@ -79,7 +102,14 @@ def _handle(args: argparse.Namespace) -> int:
         return asyncio.run(
             _cmd_capture_hostkey(args.target, host_override=args.host, port_override=args.port)
         )
-    print("usage: hm ssh-probe {keygen,capture-hostkey}", file=sys.stderr)
+    if sub == "install-instructions":
+        return asyncio.run(_cmd_install_instructions(args.target))
+    if sub == "test":
+        return asyncio.run(_cmd_test(args.target))
+    print(
+        "usage: hm ssh-probe {keygen,capture-hostkey,install-instructions,test}",
+        file=sys.stderr,
+    )
     return 2
 
 
@@ -243,3 +273,240 @@ async def _capture(host: str, port: int) -> asyncssh.SSHKey | None:
         return None
 
     return captured.get("key")
+
+
+def _render_appliance_instructions(target: str, forced: str, pub: str, key_secret_ref: str) -> str:
+    """Render the appliance-mode setup recipe (firmware-persistence warning included)."""
+    authkeys_line = (
+        f'command="{forced}",no-port-forwarding,no-pty,no-X11-forwarding,'
+        f"no-agent-forwarding {pub} hm-probe-{target}"
+    )
+    return f"""SSH probe setup — target '{target}' (appliance mode)
+
+This framework NEVER writes to the target's auth config. Perform these steps by hand
+on the target as the privileged user.
+
+1. Append this EXACT single line to the target's authorized_keys (e.g. /root/.ssh/authorized_keys):
+
+{authkeys_line}
+
+2. Verify the restriction holds:
+
+   hm ssh-probe test {target}
+
+WARNING (UniFi OS firmware persistence): On UniFi OS appliances, /root/.ssh/authorized_keys
+lives on an overlayfs layer that is wiped by firmware upgrades. After every UniFi OS update,
+re-apply the authorized_keys line above or the probe will fail to connect.
+
+The private key is NEVER printed and stays in the secrets store (secret: {key_secret_ref})."""
+
+
+def _render_dedicated_user_instructions(
+    target: str, user: str, pub: str, key_secret_ref: str
+) -> str:
+    """Render the dedicated-user-mode 5-step setup recipe (no persistence warning)."""
+    authkeys_line = (
+        f'command="/home/{user}/hm-probe.sh",no-port-forwarding,no-pty,'
+        f"no-X11-forwarding,no-agent-forwarding {pub} hm-probe-{target}"
+    )
+    return f"""SSH probe setup — target '{target}' (dedicated-user mode)
+
+This framework NEVER writes to the target's auth config. Perform these steps by hand
+on the target as an administrator.
+
+1. Create the dedicated low-privilege user '{user}' (no interactive login beyond the forced
+   command; do NOT add it to admin/root groups). On a generic Linux target:
+
+   sudo useradd -m -s /bin/sh {user}
+
+2. Install the read-only probe script at /home/{user}/hm-probe.sh (owned by {user}, mode 0755):
+
+   #!/bin/sh
+   # hm-probe exemplar — replace body with the real collector (EPIC-008).
+   uptime
+
+3. (Only if your script needs privileged read commands) add a narrow NOPASSWD sudoers line.
+   The exemplar 'uptime' needs NO sudo — skip this step for the exemplar. When a real probe
+   (e.g. EPIC-008) needs privileged reads, add to /etc/sudoers.d/hm-probe-{user} (validate with
+   'visudo -cf'):
+
+   {user} ALL=(root) NOPASSWD: <ABSOLUTE_PATHS_OF_READ_ONLY_COMMANDS>
+
+4. Append this EXACT single line to /home/{user}/.ssh/authorized_keys (owned by {user}, mode 0600):
+
+{authkeys_line}
+
+5. Verify the restriction holds:
+
+   hm ssh-probe test {target}
+
+The private key is NEVER printed and stays in the secrets store (secret: {key_secret_ref})."""
+
+
+async def _cmd_install_instructions(target: str) -> int:  # noqa: PLR0911
+    """``hm ssh-probe install-instructions TARGET`` — pure render, no network."""
+    if not _valid_target(target):
+        print(
+            f"error: invalid target id {target!r}; allowed charset is [A-Za-z0-9._-]",
+            file=sys.stderr,
+        )
+        return 1
+
+    try:
+        configs = load_ssh_target_configs()
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    cfg = configs.get(target)
+    if cfg is None:
+        print(f"error: ssh target {target!r} not in config", file=sys.stderr)
+        return 1
+
+    # key_secret_ref is guaranteed non-None after the model_validator.
+    key_secret_ref = cfg.key_secret_ref
+    assert key_secret_ref is not None
+
+    try:
+        repo = await build_secrets_repo()
+    except MasterKeyError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    pem = await repo.get(key_secret_ref)
+    if pem is None:
+        print(
+            f"error: no probe key for {target!r} — run 'hm ssh-probe keygen {target}' first",
+            file=sys.stderr,
+        )
+        return 1
+
+    pub = asyncssh.import_private_key(pem).export_public_key().decode().strip()  # pyright: ignore[reportUnknownMemberType]
+
+    if cfg.account_mode == "appliance":
+        if cfg.script_id is not None:
+            print(
+                "error: appliance mode forces a command, not a script "
+                f"(target {target!r} has script_id set)",
+                file=sys.stderr,
+            )
+            return 1
+        if cfg.forced_command is not None:
+            forced = cfg.forced_command
+        else:
+            forced = "<CONFIGURE forced_command IN ssh-targets.yaml>"
+            print(
+                f"NOTE: target {target!r} has no forced_command set; the rendered "
+                "authorized_keys line uses a placeholder. Set forced_command in "
+                "ssh-targets.yaml before installing.",
+                file=sys.stderr,
+            )
+        print(_render_appliance_instructions(target, forced, pub, key_secret_ref))
+    else:  # account_mode == "dedicated-user"
+        print(_render_dedicated_user_instructions(target, cfg.user, pub, key_secret_ref))
+
+    return 0
+
+
+def _build_target_factory(
+    target: str, params: SshTargetParams, key_secret_ref: str, pem: str
+) -> AsyncSshClientFactory:
+    """Build a one-off factory bound to a SINGLE resolved target.
+
+    ``resolve`` returns the projected params only for this target id; ``secrets_for``
+    is a sync lambda closed over the ALREADY-FETCHED PEM (the factory reads the
+    secret synchronously, so we must resolve it async up-front).
+    """
+    return AsyncSshClientFactory(
+        resolve=lambda tid: params if tid == target else None,
+        secrets_for=lambda name: pem if name == key_secret_ref else None,
+    )
+
+
+async def _cmd_test(target: str) -> int:  # noqa: PLR0911
+    """``hm ssh-probe test TARGET`` — connect, run an arbitrary command, verify the restriction.
+
+    Exit codes: 0 = restriction holds; 1 = could not test (config/key/connection/
+    auth/host-key); 3 = connected but restriction BROKEN.
+    """
+    if not _valid_target(target):
+        print(
+            f"error: invalid target id {target!r}; allowed charset is [A-Za-z0-9._-]",
+            file=sys.stderr,
+        )
+        return 1
+
+    try:
+        configs = load_ssh_target_configs()
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    cfg = configs.get(target)
+    if cfg is None:
+        print(f"error: ssh target {target!r} not in config", file=sys.stderr)
+        return 1
+
+    if not cfg.host_key:
+        print(
+            f"error: no pinned host key for {target!r} — run "
+            f"'hm ssh-probe capture-hostkey {target}' and add host_key to the config first",
+            file=sys.stderr,
+        )
+        return 1
+
+    key_secret_ref = cfg.key_secret_ref
+    assert key_secret_ref is not None
+
+    try:
+        repo = await build_secrets_repo()
+    except MasterKeyError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    pem = await repo.get(key_secret_ref)
+    if pem is None:
+        print(
+            f"error: no probe key for {target!r} — run 'hm ssh-probe keygen {target}' first",
+            file=sys.stderr,
+        )
+        return 1
+
+    # Projected params for host/port/user/pinned_host_key/account_mode.
+    params = load_ssh_targets()[target]
+    factory = _build_target_factory(target, params, key_secret_ref, pem)
+
+    marker = f"HM_PROBE_RESTRICTION_CHECK_{target}"
+    arbitrary = f"echo {marker}"
+
+    try:
+        async with factory.open(target) as conn:
+            result = await conn.run(arbitrary)
+    except HostKeyMismatch as exc:
+        print(
+            f"CRITICAL: host key mismatch for {target!r} — possible MITM",
+            file=sys.stderr,
+        )
+        print(f"error: {exc} (HostKeyMismatch)", file=sys.stderr)
+        return 1
+    except (
+        HostKeyNotPinned,
+        SshAuthError,
+        SshTimeout,
+        SshConnectionRefused,
+        SshTransportError,
+    ) as exc:
+        print(f"error: {exc} ({type(exc).__name__})", file=sys.stderr)
+        return 1
+
+    if marker not in result.stdout:
+        print(f"forced-command output:\n{result.stdout.rstrip()}")
+        print(f"PASS: forced-command restriction enforced for {target!r}")
+        return 0
+
+    print(
+        f"FAIL: restriction NOT enforced for {target!r} — the arbitrary command "
+        'executed. Re-check the authorized_keys line includes the command="..." option.',
+        file=sys.stderr,
+    )
+    return _RESTRICTION_EXIT_CODE

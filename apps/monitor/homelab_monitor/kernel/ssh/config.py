@@ -127,10 +127,12 @@ class SshTargetConfig(BaseModel):
         )
 
 
-def load_ssh_targets() -> dict[str, SshTargetParams]:
-    """Load + validate ``ssh_targets`` from the active config file.
+def _load_ssh_target_configs_internal() -> dict[str, SshTargetConfig]:
+    """Read + validate ``ssh_targets`` from the active config file into raw configs.
 
-    Reads ``HOMELAB_MONITOR_CONFIG`` (default ``/config/homelab-monitor.yaml``).
+    Shared parsing core for :func:`load_ssh_targets` (projected params) and
+    :func:`load_ssh_target_configs` (un-projected configs). Reads
+    ``HOMELAB_MONITOR_CONFIG`` (default ``/config/homelab-monitor.yaml``).
 
     Fallback cascade (mirrors ``load_redact_patterns``):
       * config file missing            -> ``{}``
@@ -140,8 +142,8 @@ def load_ssh_targets() -> dict[str, SshTargetParams]:
 
     Raises:
         ValueError: malformed structure (root not a mapping, ``ssh_targets`` not
-            a list, list entry not a mapping, duplicate ``id``).
-        pydantic.ValidationError: an entry fails field/model validation.
+            a list, list entry not a mapping, duplicate ``id``, or an entry that
+            fails field/model validation).
         yaml.YAMLError: malformed YAML (propagated).
     """
     config_path = Path(os.environ.get("HOMELAB_MONITOR_CONFIG", _DEFAULT_CONFIG_PATH))
@@ -165,7 +167,7 @@ def load_ssh_targets() -> dict[str, SshTargetParams]:
         raise ValueError(msg)
 
     targets_list = cast(list[object], targets_obj)
-    result: dict[str, SshTargetParams] = {}
+    result: dict[str, SshTargetConfig] = {}
     for idx, entry_obj in enumerate(targets_list):
         if not isinstance(entry_obj, dict):
             msg = f"{_SSH_TARGETS_KEY}[{idx}] must be a mapping, got {type(entry_obj).__name__}"
@@ -174,12 +176,31 @@ def load_ssh_targets() -> dict[str, SshTargetParams]:
         try:
             cfg = SshTargetConfig.model_validate(entry)
         except ValidationError as exc:
-            # Re-raise with the entry index for operator clarity, preserving the
-            # pydantic detail as the cause.
             msg = f"{_SSH_TARGETS_KEY}[{idx}] is invalid: {exc}"
             raise ValueError(msg) from exc
         if cfg.id in result:
             msg = f"{_SSH_TARGETS_KEY} has duplicate id {cfg.id!r}"
             raise ValueError(msg)
-        result[cfg.id] = cfg.to_params()
+        result[cfg.id] = cfg
     return result
+
+
+def load_ssh_targets() -> dict[str, SshTargetParams]:
+    """Load + validate ``ssh_targets`` and project each entry to ``SshTargetParams``.
+
+    See :func:`_load_ssh_target_configs_internal` for the file-read + fallback
+    cascade + validation contract. This loader returns the narrower transport
+    projection consumed by :class:`AsyncSshClientFactory`.
+    """
+    return {tid: cfg.to_params() for tid, cfg in _load_ssh_target_configs_internal().items()}
+
+
+def load_ssh_target_configs() -> dict[str, SshTargetConfig]:
+    """Load + validate ``ssh_targets`` returning the UN-projected ``SshTargetConfig`` objects.
+
+    Same file-read + fallback cascade + validation as :func:`load_ssh_targets`,
+    but preserves the config-only fields (``forced_command`` / ``script_id`` /
+    ``account_mode`` / ``concurrency_group``) that ``to_params()`` drops.
+    Consumed by ``hm ssh-probe install-instructions`` + ``test`` (STAGE-017-005).
+    """
+    return _load_ssh_target_configs_internal()
