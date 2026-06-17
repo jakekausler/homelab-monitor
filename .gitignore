@@ -61,6 +61,9 @@ data/
 # Code Review Graph
 .code-review-graph/
 
+# Claude Code local session/config state
+.claude/
+
 # Rendered Alertmanager config in test-rig seed dir contains the rig's
 # bootstrap bearer token. Generated at boot, never committed.
 deploy/compose/test-fixtures/am-config-seed/alertmanager.yml
