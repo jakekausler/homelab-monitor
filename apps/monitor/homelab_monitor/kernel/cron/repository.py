@@ -108,6 +108,7 @@ class CronRecord:
     log_match_key: str | None
     wrapper_installed: bool
     wrapper_format_version: str | None
+    last_ok_at: str | None = None
 
 
 @dataclass(slots=True, frozen=True)
@@ -182,6 +183,11 @@ def _row_to_cron(row: Row[Any]) -> CronRecord:
         wrapper_installed=bool(row.wrapper_installed),
         wrapper_format_version=(
             None if row.wrapper_format_version is None else str(row.wrapper_format_version)
+        ),
+        last_ok_at=(
+            None
+            if not hasattr(row, "last_ok_at") or row.last_ok_at is None
+            else str(row.last_ok_at)
         ),
     )
 
@@ -328,8 +334,17 @@ class CronRepo:
         # PAGE
         offset = (page - 1) * page_size
         list_params = {**params, "limit": page_size, "offset": offset}
+        # Qualify all columns with table names to avoid ambiguity with heartbeats_state.updated_at
         list_sql = text(
-            f"SELECT {_CRON_COLS} FROM crons{where_sql} "
+            "SELECT crons.fingerprint, crons.name, crons.host, crons.command, "
+            "crons.schedule, crons.schedule_canonical, crons.cadence_seconds, "
+            "crons.expected_grace_seconds, crons.enabled, crons.last_seen_state, "
+            "crons.created_at, crons.updated_at, crons.hidden_at, crons.source_path, "
+            "crons.wrapper_last_seen_at, crons.last_discovered_at, crons.soft_deleted_at, "
+            "crons.log_match_key, crons.wrapper_installed, crons.wrapper_format_version, "
+            "heartbeats_state.last_ok_at FROM crons "
+            "LEFT JOIN heartbeats_state ON crons.fingerprint = heartbeats_state.cron_fingerprint "
+            f"{where_sql} "
             "ORDER BY name ASC, fingerprint ASC LIMIT :limit OFFSET :offset"
         )
         rows = await self._db.fetch_all(list_sql, list_params)

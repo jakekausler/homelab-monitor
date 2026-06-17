@@ -1784,6 +1784,17 @@
             ],
             "title": "Last Discovered At"
           },
+          "last_ok_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Ok At"
+          },
           "last_seen_state": {
             "enum": [
               "unknown",

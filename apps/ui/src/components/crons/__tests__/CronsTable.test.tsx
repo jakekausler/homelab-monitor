@@ -55,6 +55,7 @@ const sampleCron: CronOut = {
   wrapper_last_seen_at: null,
   last_discovered_at: null,
   wrapper_installed: false,
+  last_ok_at: null,
 }
 
 describe('CronsTable', () => {
@@ -104,18 +105,28 @@ describe('CronsTable', () => {
     expect(screen.queryByText('Remote')).toBeNull()
   })
 
-  it('shows wrapper checkmark when wrapper_last_seen_at is set', async () => {
-    const withWrapper: CronOut = { ...sampleCron, wrapper_last_seen_at: '2026-05-10T00:00:00Z' }
+  it('shows wrapper checkmark when wrapper_installed is true', async () => {
+    const withWrapper: CronOut = { ...sampleCron, wrapper_installed: true }
     renderInRouter(<CronsTable items={[withWrapper]} isLoading={false} />)
     expect(await screen.findByLabelText('Wrapper installed')).toBeInTheDocument()
   })
 
-  it('does not show wrapper checkmark when wrapper_last_seen_at is null', async () => {
+  it('does not show wrapper checkmark when wrapper_installed is false', async () => {
     renderInRouter(
-      <CronsTable items={[{ ...sampleCron, wrapper_last_seen_at: null }]} isLoading={false} />,
+      <CronsTable items={[{ ...sampleCron, wrapper_installed: false }]} isLoading={false} />,
     )
     expect(await screen.findByText('daily-backup')).toBeInTheDocument()
     expect(screen.queryByLabelText('Wrapper installed')).toBeNull()
+  })
+
+  it('shows wrapper checkmark when wrapper_installed is true even if wrapper_last_seen_at is null', async () => {
+    const installedButNeverSeen: CronOut = {
+      ...sampleCron,
+      wrapper_installed: true,
+      wrapper_last_seen_at: null,
+    }
+    renderInRouter(<CronsTable items={[installedButNeverSeen]} isLoading={false} />)
+    expect(await screen.findByLabelText('Wrapper installed')).toBeInTheDocument()
   })
 
   it('shows Hidden badge when hidden_at is set', async () => {
@@ -152,5 +163,29 @@ describe('CronsTable', () => {
         'No crons yet. Crons will appear here once they are discovered or have registered a heartbeat.',
       ),
     ).toBeInTheDocument()
+  })
+
+  it('renders formatted last_ok_at when present in Last OK column', async () => {
+    const withLastOk: CronOut = { ...sampleCron, last_ok_at: '2026-05-10T00:00:00Z' }
+    renderInRouter(<CronsTable items={[withLastOk]} isLoading={false} />)
+    await screen.findByText('daily-backup')
+    // The table renders formatRelative(c.last_ok_at)
+    // Check that some relative time text is rendered (formatRelative produces "Xd ago", "Xh ago", etc)
+    expect(screen.getByText(/ago$/)).toBeInTheDocument()
+  })
+
+  it('renders em dash in Last OK column when last_ok_at is null', async () => {
+    renderInRouter(<CronsTable items={[sampleCron]} isLoading={false} />)
+    await screen.findByText('daily-backup')
+    // When last_ok_at is null, formatRelative returns "—"
+    // Verify by checking the structure: should have 7 cells, and Last OK (5th cell) should be em dash
+    const rows = screen.getAllByRole('row')
+    const dataRow = rows[1] // Second row (first is header)
+    if (dataRow === undefined) throw new Error('expected a data row')
+    const cells = dataRow.querySelectorAll('td')
+    // Cell order: Name, Host, Schedule, State, Last OK, Wrapper, Hidden
+    const lastOkCell = cells[4] // 5th cell (0-indexed)
+    if (lastOkCell === undefined) throw new Error('expected a Last OK cell')
+    expect(lastOkCell).toHaveTextContent('—')
   })
 })

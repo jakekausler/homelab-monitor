@@ -100,6 +100,7 @@ const baseCron = {
   wrapper_last_seen_at: null as string | null,
   last_discovered_at: null as string | null,
   wrapper_installed: false as boolean,
+  last_ok_at: null as string | null,
 }
 
 const baseState = null
@@ -601,5 +602,33 @@ describe('CronDetail', () => {
     await screen.findByText('daily-backup')
     expect(screen.getByText('Overdue after')).toBeInTheDocument()
     expect(screen.queryByText('Next due')).toBeNull()
+  })
+
+  // ---------------------------------------------------------------------------
+  // BUG 1: Wrapper indicator reflects INSTALLED state, not liveness
+  // ---------------------------------------------------------------------------
+
+  // 34. Wrapper row shows "Installed" when wrapper_installed is true
+  it('shows Installed in Wrapper row when wrapper_installed is true', async () => {
+    vi.mocked(useGetCron).mockReturnValue(
+      makeGetCronResult({ wrapper_installed: true }) as unknown as ReturnType<typeof useGetCron>,
+    )
+    renderInRouter(<CronDetail fingerprint={FP} />)
+    await screen.findByText('daily-backup')
+    expect(screen.getByText('Installed')).toBeInTheDocument()
+  })
+
+  // 35. Wrapper row shows "Not installed" when wrapper_installed is false
+  it('shows Not installed in Wrapper row when wrapper_installed is false', async () => {
+    renderInRouter(<CronDetail fingerprint={FP} />)
+    await screen.findByText('daily-backup')
+    expect(screen.getByText('Not installed')).toBeInTheDocument()
+  })
+
+  // 36. Old copy "No wrapper installed (heartbeats from ad-hoc curl)" is not present
+  it('does not render old wrapper copy about heartbeats from ad-hoc curl', async () => {
+    renderInRouter(<CronDetail fingerprint={FP} />)
+    await screen.findByText('daily-backup')
+    expect(screen.queryByText(/No wrapper installed \(heartbeats from ad-hoc curl\)/)).toBeNull()
   })
 })

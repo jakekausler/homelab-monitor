@@ -474,10 +474,14 @@ async def install_wrapper_local(  # noqa: PLR0913 -- explicit DI (repos/log)
         # Executor not installed / timed out
         raise CronApplyUnavailableError(str(exc)) from exc
     except CronApplyRejectedError as exc:
-        # Executor rejected the request — translate error_code
+        # Executor rejected the request — translate error_code.
         if exc.error_code == "already_wrapped":
             raise AlreadyWrappedError(str(exc)) from exc
-        # bad_path, line_not_found, crontab_missing, not_wrapped, bad_request
+        # write_failed / crontab_missing are SERVER-side failures (filesystem /
+        # sandbox), not client mistakes — surface as 500 via CrontabWriteError.
+        if exc.error_code in ("write_failed", "crontab_missing"):
+            raise CrontabWriteError(str(exc)) from exc
+        # bad_path, line_not_found, bad_request → 409 (client/request problem).
         raise CronLineNotFoundError(str(exc)) from exc
     except Exception as exc:
         # Malformed result / other IPC error
@@ -573,7 +577,9 @@ async def uninstall_wrapper_local(  # noqa: PLR0913 -- explicit DI (repos/log)
         # Executor rejected — translate error_code.
         if exc.error_code == "not_wrapped":
             raise NotWrappedError(str(exc)) from exc
-        # bad_path, line_not_found, crontab_missing, bad_request
+        if exc.error_code in ("write_failed", "crontab_missing"):
+            raise CrontabWriteError(str(exc)) from exc
+        # bad_path, line_not_found, bad_request → 409.
         raise CronLineNotFoundError(str(exc)) from exc
     except Exception as exc:
         raise CrontabWriteError(f"cron-apply IPC error: {exc}") from exc

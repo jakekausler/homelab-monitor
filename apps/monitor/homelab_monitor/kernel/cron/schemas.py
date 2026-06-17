@@ -180,6 +180,7 @@ class CronOut(BaseModel):
     soft_deleted_at: str | None
     is_local: bool
     wrapper_installed: bool
+    last_ok_at: str | None = None
 
 
 class CronListResponse(BaseModel):
@@ -420,6 +421,7 @@ def cron_record_to_out(rec: CronRecord, *, local_hostname: str | None = None) ->
         soft_deleted_at=rec.soft_deleted_at,
         is_local=(local_hostname is not None and rec.host == local_hostname),
         wrapper_installed=rec.wrapper_installed,
+        last_ok_at=rec.last_ok_at,
     )
 
 

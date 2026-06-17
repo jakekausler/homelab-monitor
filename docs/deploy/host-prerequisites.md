@@ -88,6 +88,11 @@ wrapper-install feature requires systemd.)
 > ```bash
 > sudo bash scripts/host-setup.sh
 > ```
+>
+> **Bugfix (2026-06-17):** `/etc/crontab` wrapping now works under `systemd ProtectSystem=strict`
+> (previously failed silently). Commands with backslash escapes (e.g., Debian certbot's `\!`) now wrap
+> correctly (awk escape-processing bug fixed). Re-run `host-setup.sh` after June 2026 updates to deploy
+> the fixed executor.
 
 ### 2. Update your env
 
