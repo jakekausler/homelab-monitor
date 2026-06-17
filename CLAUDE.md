@@ -28,11 +28,18 @@ Each stage goes through 4 phases, each typically in a separate session:
 
 1. **DESIGN** — Present approach options, user picks, confirm seed data and acceptance test
 2. **BUILD** — Implement to make verify pass; add seed data and placeholders
-3. **REFINEMENT** — Dual sign-off (Desktop AND Mobile, plus any cross-cutting concerns). For backend stages with host-integration concerns (bind-mounts, host file paths, container-vs-host UIDs, host setup scripts, real cron files, network probes, etc.), Refinement is TWO sub-phases:
-   - **3a. Dev rig refinement** — Validate against `make dev` / manual-fallback host backend with synthetic / fake / empty data. Fast iteration. UI manual test (if applicable) happens here.
-   - **3b. Prod rig refinement** — Validate against full `docker compose up -d` production stack with REAL host data (real /etc/crontab, real /var/spool/cron/crontabs/*, real network probes). Includes any host setup scripts (e.g., `scripts/host-setup.sh`). Confirms the deployment surface actually works against this host's reality.
-   - Backend-only stages without host-integration concerns can skip 3b (no real-data delta to validate). Backend stages WITH host-integration concerns MUST do both 3a and 3b before Refinement is complete.
-   - Frontend-only stages typically only need 3a (no host-integration delta in 3b).
+3. **REFINEMENT** — Validate against PRODUCTION reality. Nearly everything in this project needs real-host
+   validation, so Refinement is a single production-focused pass (no separate dev-rig sub-phase):
+   - Validate against the full `docker compose up -d` production stack with REAL host data (real
+     /etc/crontab, real /var/spool/cron/crontabs/*, real network probes, real services like the live UDM /
+     Synology / Pi-hole), including any host setup scripts (e.g., `scripts/host-setup.sh`). Confirms the
+     deployment surface actually works against this host's reality.
+   - For **frontend** stages, this includes dual sign-off (Desktop AND Mobile) against the production stack.
+     For **backend / CLI / host-integration** stages, validate the real integration end-to-end (real data,
+     real targets, real error paths) — not just a re-run of Build's unit tests.
+   - The prod rig stays up between stages/epics (it's the user's real monitor — do NOT tear it down). If a
+     genuinely fast synthetic/dev-rig spot-check helps mid-iteration, it's optional and informal; the
+     Refinement GATE is the production validation above.
 4. **FINALIZE** — Tests, code review, docs, commit (all via subagents)
 
 ## Commands
