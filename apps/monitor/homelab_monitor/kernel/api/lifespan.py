@@ -62,6 +62,7 @@ from homelab_monitor.kernel.secrets.master_key import MasterKeyError, load_maste
 from homelab_monitor.kernel.secrets.repository import AsyncSecretsRepository
 from homelab_monitor.kernel.secrets.ttl_resolver import TtlCachingSecretsResolver
 from homelab_monitor.kernel.ssh.client import AsyncSshClientFactory
+from homelab_monitor.kernel.ssh.config import load_ssh_targets
 from homelab_monitor.plugins.collectors.builtin.log_error_rate import (
     LogErrorRateCollector,
 )
@@ -679,9 +680,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
     flusher_task = asyncio.create_task(vl_writer.run_flusher())
     logs_writer = MultiplexLogsWriter([in_memory_logs_writer, vl_writer])
     log_stream_state: LogStreamState = {}
+    ssh_targets = load_ssh_targets()
     ssh_factory = AsyncSshClientFactory(
-        # TODO(STAGE-017-002): replace with the config-backed resolver.
-        resolve=lambda tid: None,
+        resolve=ssh_targets.get,
         secrets_for=lambda name: ttl_resolver.current().get(name),
     )
     broker = SseBroker(log)
