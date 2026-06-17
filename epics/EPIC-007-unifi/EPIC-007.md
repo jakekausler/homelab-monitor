@@ -2,6 +2,39 @@
 
 ## Status: Not Started
 
+## Build order + client-identity ownership (IMPORTANT — added 2026-06-16)
+
+**EPIC-007 (Unifi) is built BEFORE EPIC-006 (Pi-hole)** (epic numbers unchanged; only the build sequence
+is swapped — decided during the 2026-06-16 Pi-hole brainstorm). Rationale: **Unifi is the authoritative
+source of client identity** (reliable MAC ↔ current-IP ↔ stable device for every associated client).
+Pi-hole can only reliably supply IP (its network table has MAC for ~19% of active clients — host-mode ARP
+visibility is sparse), so Pi-hole must NOT own client-object creation.
+
+**Therefore EPIC-007 OWNS client-object creation** (the canonical client/device model: MAC↔IP↔identity,
+hostname, AP/switch-port, signal, bandwidth, online/offline, DHCP lease — the UDM is the DHCP server here),
+and **EPIC-006 (Pi-hole, built second) OWNS the unified "Network → Clients" merged view** that joins
+Pi-hole DNS behavior onto Unifi's client identities. EPIC-007 builds every Unifi-centric view it can on its
+own; the cross-source merge lives in EPIC-006 (its STAGE-006-027, tentative — the exact seam may move here
+and is finalized in the **Unifi brainstorm**, which has NOT run yet).
+
+**Client-join contract (load-bearing — shared with EPIC-006):**
+- Join is **time-windowed by IP-at-time-of-observation**, NEVER a static IP→device map (DHCP IPs rotate).
+  Unifi is the stable identity anchor; Pi-hole's IP is the lookup key into Unifi's station table. Pi-hole-
+  supplied MAC (the ~19%) is a corroborating secondary key only.
+- **The host `192.168.2.148` is a FIRST-CLASS, top-tier device** in the unified view (it runs the monitor,
+  Pi-hole, HA, Plex, Foundry, many host-mode containers — a major network actor). Pi-hole attributes its
+  own loopback DNS (`127.0.0.1`/`::`/`pi.hole`) to this host; the unified view must treat it as a real
+  device, never hide/exclude it.
+- **Investigate (in the Unifi brainstorm) the DNS force/fallback rules** that make Pi-hole-down critical:
+  the user's firewall has "Pi-Hole Redirect to DNS" (forces clients to Pi-hole :53), "Drop DNS to UDM"
+  (blocks the UDM's own resolver at 192.168.2.1:53), one device bypassing Pi-hole, and a thin client-side
+  DNS fallback list (Pi-hole → 1.1.1.1 → 8.8.8.8). The two port lists named "Pi-Hole DNS" and "DNS Port"
+  (Port type, value 53) are part of this. EPIC-006 records these only to justify alert severity; EPIC-007
+  owns understanding/monitoring them.
+
+The **Unifi brainstorm is the next planning session** (same format as the Pi-hole one) and may amend any of
+the above + the EPIC-006 decisions. Stage files for BOTH epics are created together after that brainstorm.
+
 ## Overview
 
 Land Unifi as a plugin bundle. Three integration paths per spec Q11:
@@ -43,8 +76,21 @@ Same as EPIC-001 plus:
 
 - EPIC-001.
 - EPIC-004 (logs pipeline) — UDM syslog parsing benefits from Drain signatures.
+- **EPIC-006 (Pi-hole) is built AFTER this epic and CONSUMES its client identities** (see the Build-order
+  banner). EPIC-006 owns the unified Network → Clients merged view (joins Pi-hole DNS behavior onto the
+  client identities this epic creates). DHCP-leases monitoring is THIS epic's (the UDM is the DHCP server,
+  not Pi-hole).
 
 ## Notes
 
 - The user's UDM is the controller; some Unifi installations have a separate Network Application elsewhere. The collector config supports both topologies via a configurable controller URL.
 - WAN-down detection from Unifi's perspective is the *primary* detector for ISP outages; EPIC-016 (ISP/WAN) adds independent corroboration via WAN reachability probes.
+- **DHCP leases + per-device DNS-force/fallback rules + the unified client model land here** (added
+  2026-06-16). A future stage (decided in the Unifi brainstorm) builds: client-object creation (the
+  canonical MAC↔IP↔device model EPIC-006 joins onto), DHCP-lease monitoring, and investigation of the
+  firewall DNS-force rules. The unified Network → Clients merged VIEW is EPIC-006's (STAGE-006-027,
+  tentative) — but its seam with this epic is finalized in the Unifi brainstorm and may move here.
+- **This epic's stage list above is the PRE-brainstorm sketch.** The Unifi brainstorm (next planning
+  session) will re-decompose it EPIC-005-style (fine, session-sized stages) the same way the Pi-hole
+  brainstorm re-decomposed EPIC-006 from its 6-stage sketch into 27 stages. Do NOT take the 9-stage sketch
+  above at face value when that brainstorm runs.

@@ -125,3 +125,17 @@ The "Pull & Restart" action (STAGE-003-010) introduces the FIRST kernel-driven D
 - The `compose_actions` audit table introduced in STAGE-003-010 SHOULD be either subsumed into `runbook_runs` OR kept separate and cross-referenced — to be decided in EPIC-009 Design.
 - The confirm-on-destructive UX from STAGE-003-010 SHOULD be the same component used for runbook real-runs.
 - The docker socket RW widening from STAGE-003-010 is a prerequisite for any EPIC-009 runbook that needs to invoke `docker` commands.
+
+## Cross-epic back-fill ← EPIC-006 (added 2026-06-16)
+
+A **generic container lifecycle action** — `POST /api/docker/containers/{id}/{restart|start|stop}`,
+confirm-gated + audited, usable from ANY container's inventory/detail view — was identified as missing from
+this (now-complete) epic during the 2026-06-16 Pi-hole brainstorm. EPIC-003 shipped the compose-aware
+"Pull & Restart" write action (STAGE-003-010) but NOT a plain operator restart/start/stop control. The
+generic action is **back-filled in EPIC-006 STAGE-006-019** (it surfaced there because the Pi-hole panel
+needs a "restart Pi-hole" button). It is authored Pi-hole-agnostic in the shared Docker/inventory surface
+(not in Pi-hole code) and **REUSES this epic's existing STAGE-003-010 machinery**: the confirm-on-destructive
+component, the `compose_actions` audit pattern, and the RW docker socket access (criterion #18). Scope:
+restart + start + stop only (no kill/remove/recreate). EPIC-003 is NOT reopened for this; the action lives
+where the need surfaced (EPIC-006) with this note for traceability. If a future cleanup wants it relocated
+into EPIC-003 proper, this is the breadcrumb.
