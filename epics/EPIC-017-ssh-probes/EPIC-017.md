@@ -2,6 +2,8 @@
 
 ## Status: Not Started
 
+## Current Stage: STAGE-017-002 (next — ssh_targets config model + per-target key secret)
+
 ## Build order + framework-first mandate (LOCKED — 2026-06-17 brainstorm)
 
 **EPIC-017 is built FIRST in the sequence EPIC-017 → EPIC-007 → EPIC-006 → EPIC-008** (whole epics,
