@@ -39,3 +39,14 @@
 - [ ] **REGRESSION:** capture-hostkey succeeds even when the target's host key is ALREADY in `~/.ssh/known_hosts` (the `known_hosts=asyncssh.import_known_hosts("")` fix — any falsy value reintroduces the bug). Covered by `test_capture_hostkey_succeeds_when_key_already_in_known_hosts`.
 - [ ] capture-hostkey on an unreachable host/port (e.g. `--port 1`) exits 1 with a clean connection error; a target not in `ssh_targets` config (no `--host`) exits 1 with a "not found in ssh_targets" error.
 - [ ] capture-hostkey works against a non-standard port (e.g. Synology :53197) via `--port`, and accepts whatever host-key TYPE the server negotiates (ssh-rsa / ssh-ed25519 / ecdsa) — the validator is key-type-agnostic.
+
+## STAGE-017-005 — hm ssh-probe install-instructions + test
+
+- [ ] `hm ssh-probe install-instructions <appliance-target>` renders the `command="<forced>",no-port-forwarding,no-pty,no-X11-forwarding,no-agent-forwarding <pub> hm-probe-<target>` authorized_keys line + the firmware-persistence WARNING; NO `PRIVATE KEY` in output; exit 0.
+- [ ] `hm ssh-probe install-instructions <dedicated-user-target>` renders the 5-step recipe (create user, exemplar `/home/<user>/hm-probe.sh` body `uptime`, sudoers MECHANISM placeholder `<user> ALL=(root) NOPASSWD: <ABSOLUTE_PATHS...>`, authorized_keys forcing the SCRIPT path) with NO persistence warning; NO `PRIVATE KEY`; exit 0.
+- [ ] install-instructions: appliance with NO forced_command → placeholder line + stderr NOTE (exit 0); appliance with `script_id` set → exit 1; target not in config → exit 1; target with no key secret → exit 1 ("run keygen first").
+- [ ] `hm ssh-probe test <target>` with no pinned `host_key` in config → exit 1 ("run capture-hostkey first"); target not in config → exit 1.
+- [ ] `hm ssh-probe test <target>` against a server WITHOUT the forced command installed → exit 3 (restriction NOT enforced) — covered at unit level by the plain-echo loopback fixture (`test_test_fail_restriction_not_enforced`).
+- [ ] `hm ssh-probe test <target>` against a server WITH the forced command → exit 0 (PASS, marker absent) — covered at unit level by the forced-command loopback fixture (`test_test_pass_restriction_enforced`); the live end-to-end proof is STAGE-017-006.
+- [ ] `hm ssh-probe test <target>` maps real transport errors cleanly to exit 1 (auth failure / connection refused / host-key mismatch → CRITICAL MITM line); no crash, no key leak.
+- [ ] `load_ssh_target_configs()` returns the un-projected `SshTargetConfig` objects (with `forced_command`/`script_id`/`account_mode`/`concurrency_group`), unlike `load_ssh_targets()` which projects to `SshTargetParams`.
