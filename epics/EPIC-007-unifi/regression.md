@@ -18,3 +18,11 @@
 - [ ] Confirm NO `homelab_unifi_outlet_power/current/voltage` metric is emitted (PDU wattage is intentionally omitted; HA owns it).
 - [ ] Confirm the collector does not raise on malformed/absent fields (graceful degrade): a device with empty `sys_stats`/missing `system-stats`/non-list tables emits no spurious metrics and does not fail the run.
 - [ ] Confirm the `unifi_placeholder` collector is GONE from `GET /api/collectors` and `unifi_device` is present (healthy).
+
+## STAGE-007-006 — WAN/ISP + speedtest + failover collector
+
+- [ ] Run the `unifi_wan` collector against the live UDM (or replay a captured `stat/health` payload) and confirm `ok=True` and these families present: `homelab_unifi_wan_up`, `_wan_latency_seconds` (value in SECONDS, not ms), `_wan_drops`, `_wan_xput_down/up_bytes_per_sec`, `_wan_failover_capable`, `_wan_failover_active`, `homelab_unifi_speedtest_lastrun`, `homelab_unifi_api_took_seconds{endpoint="stat/health"}`.
+- [ ] Confirm the never-run-speedtest graceful degrade: when `speedtest_lastrun==0`, the `homelab_unifi_speedtest_download_mbps`/`_upload_mbps`/`_ping_seconds` metrics are NOT emitted (zeros are not reported as real speedtest results), while `_speedtest_lastrun` IS emitted (=0).
+- [ ] Confirm failover semantics: `_wan_failover_capable=1.0` when a secondary WAN is configured (even if down); `_wan_failover_active=1.0` only when a secondary WAN is actively carrying traffic (single-active-WAN -> 0.0).
+- [ ] Confirm the collector does not raise on malformed/absent subsystem entries (graceful degrade): missing `www` or `wan` subsystem entry, non-dict `data` entry, non-string `status`, non-dict `uptime_stats` -> ok=True, no spurious metrics.
+- [ ] Confirm both `unifi_device` and `unifi_wan` collectors appear healthy in `GET /api/collectors`.
