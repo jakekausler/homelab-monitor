@@ -1,6 +1,6 @@
 # EPIC-007: Unifi integration
 
-## Status: Not Started
+## Status: In Progress (STAGE-007-001 Complete; current: STAGE-007-002)
 
 ## Build order + client-identity ownership (LOCKED — 2026-06-16/17 brainstorm)
 
@@ -109,6 +109,8 @@ vector→VL pipeline (EPIC-004), Grafana-dashboards-as-code, and the vmalert met
     `xput_down/up`, `latency`, `drops`), `rest/networkconf` (DHCP ranges, `dhcpd_dns_*`, reservations),
     `rest/alarm?archived=false` (IDS/IPS/threats), `stat/dpi` (per-app), `stat/sysinfo` (version).
     `stat/event` is POST-only → we use syslog for the raw event stream instead (stay GET-only).
+
+  **Two site identifiers (verified live, STAGE-007-001):** the classic API path `/proxy/network/api/s/{site}/` requires the SHORT site NAME (`"default"`), while the v1 Integrations site-scoped paths `/sites/{id}/` require the site UUID (resolved from `v1/sites` as `data[0].id`). These are DIFFERENT identifiers — the classic API returns 401 if given the v1 UUID. The `UnifiClient` exposes both `site_name` (classic) and `v1_site_id` (v1 UUID); Wave B/C collectors must use the correct one per surface.
 - **NO local Network account needed.** The key covers identity, device/port/PoE/outlet/radio stats, DHCP
   config, alarms, health, speedtest, DPI. (`unpoller` would have needed a username/password account — another
   reason we dropped it.)
