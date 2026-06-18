@@ -61,6 +61,8 @@ EXPECTED_TABLES = {
     "container_healthcheck_enrichments",
     "cron_run_failure_enrichments",
     "log_user_rules",
+    "unifi_clients",
+    "unifi_client_observations",
 }
 
 
@@ -1166,5 +1168,53 @@ async def test_migration_0041_round_trip(db_url: str) -> None:
         async with engine.connect() as conn:
             tables_at_0040 = await conn.run_sync(_list_tables)
         assert "log_user_rules" not in tables_at_0040
+    finally:
+        await engine.dispose()
+
+
+async def test_migration_0044_round_trip(db_url: str) -> None:
+    """Migration 0044 creates unifi_clients + unifi_client_observations + their
+    indexes; downgrade to 0043 drops both tables."""
+    engine = get_engine(url=db_url)
+    try:
+        await run_migrations(engine)
+
+        def _list_tables(sync_conn: object) -> set[str]:
+            inspector = inspect(sync_conn)
+            return set(inspector.get_table_names()) if inspector is not None else set()
+
+        async with engine.connect() as conn:
+            tables_at_head = await conn.run_sync(_list_tables)
+        assert "unifi_clients" in tables_at_head
+        assert "unifi_client_observations" in tables_at_head
+
+        # Both unifi_clients indexes present.
+        async with engine.connect() as conn:
+            clients_idx = (
+                await conn.execute(text("PRAGMA index_list('unifi_clients')"))
+            ).fetchall()
+        clients_idx_names = {r[1] for r in clients_idx}
+        assert "ix_unifi_clients_last_seen" in clients_idx_names
+        assert "ix_unifi_clients_ip" in clients_idx_names
+
+        # Both observation indexes present.
+        async with engine.connect() as conn:
+            obs_idx = (
+                await conn.execute(text("PRAGMA index_list('unifi_client_observations')"))
+            ).fetchall()
+        obs_idx_names = {r[1] for r in obs_idx}
+        assert "ix_unifi_client_observations_ip_first_seen" in obs_idx_names
+        assert "ix_unifi_client_observations_mac_last_seen" in obs_idx_names
+
+        # Downgrade to 0043 + verify both tables dropped.
+        cfg = Config()
+        cfg.set_main_option("script_location", str(ALEMBIC_DIR))
+        cfg.set_main_option("sqlalchemy.url", db_url)
+        command.downgrade(cfg, "0043")
+
+        async with engine.connect() as conn:
+            tables_at_0043 = await conn.run_sync(_list_tables)
+        assert "unifi_clients" not in tables_at_0043
+        assert "unifi_client_observations" not in tables_at_0043
     finally:
         await engine.dispose()

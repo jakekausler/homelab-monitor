@@ -511,3 +511,23 @@ def test_load_unifi_config_ssh_lease_enabled_falsey_value(
     monkeypatch.setenv("HOMELAB_MONITOR_UNIFI_SSH_LEASE_ENABLED", "nope")
     cfg = load_unifi_config()
     assert cfg.ssh_lease_enabled is False
+
+
+_DEFAULT_OBSERVATION_RETENTION_DAYS = 90
+_OVERRIDE_OBSERVATION_RETENTION_DAYS = 30
+
+
+def test_load_unifi_config_observation_retention_days_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("HOMELAB_MONITOR_UNIFI_OBSERVATION_RETENTION_DAYS", raising=False)
+    cfg = load_unifi_config()
+    assert cfg.observation_retention_days == _DEFAULT_OBSERVATION_RETENTION_DAYS
+
+
+def test_load_unifi_config_observation_retention_days_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HOMELAB_MONITOR_UNIFI_OBSERVATION_RETENTION_DAYS", "30")
+    cfg = load_unifi_config()
+    assert cfg.observation_retention_days == _OVERRIDE_OBSERVATION_RETENTION_DAYS

@@ -29,6 +29,7 @@ from homelab_monitor.kernel.cron.repository import CronRepo
 from homelab_monitor.kernel.cron.run_repository import CronRunRepository
 from homelab_monitor.kernel.db.engine import dispose_engine, get_engine
 from homelab_monitor.kernel.db.migrations import MigrationsPendingError, run_migrations
+from homelab_monitor.kernel.db.repositories.unifi_clients_repository import UnifiClientRepo
 from homelab_monitor.kernel.db.repository import SqliteRepository
 from homelab_monitor.kernel.db.time import utc_now_iso
 from homelab_monitor.kernel.dispatch.channels.ha_event import HAEventChannel
@@ -701,6 +702,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
             message=unifi_site_err.message,
         )
     app.state.unifi_client = unifi_client
+
+    # STAGE-007-003: guarantee a first-class host row in the unifi_clients
+    # registry. Sentinel-keyed (host:<ip>) until the active-client collector
+    # discovers the host's real MAC (STAGE-007-004/007). Idempotent + safe; runs
+    # after migrations (step 3) and after unifi_config is loaded. A failure here
+    # must NOT crash startup (the registry seed is best-effort), so wrap + log.
+    try:
+        await UnifiClientRepo(repo).ensure_host_row(unifi_config.host_lan_ip)
+    except Exception as exc:  # pragma: no cover -- defensive; ensure_host_row is safe
+        log.warning("lifespan.unifi_host_row_seed_failed", error=str(exc))
 
     in_memory_metrics_writer = MemoryRetainingMetricsWriter()
     prom_registry = CollectorRegistry()

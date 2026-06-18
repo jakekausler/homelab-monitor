@@ -543,12 +543,18 @@ class UnifiConfig:
     ``ssh_lease_enabled`` (STAGE-007-002) is the opt-in gate (default ``False``) the
     SSH DHCP-lease collector (STAGE-007-012) reads. Defined here now; its consumer
     lands in 012.
+
+    ``observation_retention_days`` (STAGE-007-003) is the time-window for the
+    unifi_client_observations span prune (default 90 days). The caller computes a
+    cutoff = now - observation_retention_days and passes it to
+    UnifiClientRepo.append_observation_conn, which deletes spans older than the cutoff.
     """
 
     base_url: str = "https://192.168.2.1"
     site_id: str = "default"
     host_lan_ip: str = "192.168.2.148"
     ssh_lease_enabled: bool = False
+    observation_retention_days: int = 90
 
 
 def load_unifi_config() -> UnifiConfig:
@@ -561,6 +567,9 @@ def load_unifi_config() -> UnifiConfig:
     ``"192.168.2.148"``; raw value, no strip — an IP carries no trailing slash).
     ``HOMELAB_MONITOR_UNIFI_SSH_LEASE_ENABLED`` -> ``ssh_lease_enabled`` (default
     ``False``; truthy when the env value lowercases to one of 1/true/yes).
+    ``HOMELAB_MONITOR_UNIFI_OBSERVATION_RETENTION_DAYS`` -> ``observation_retention_days``
+    (default ``90``; parsed as int — an unparseable value raises ValueError, mirroring
+    load_vl_retention_days / load_cron_run_reconciler_config).
     """
     raw = os.environ.get("HOMELAB_MONITOR_UNIFI_URL")
     base_url = UnifiConfig().base_url if raw is None else raw.rstrip("/")
@@ -572,11 +581,16 @@ def load_unifi_config() -> UnifiConfig:
         if raw_ssh_lease is None
         else raw_ssh_lease.strip().lower() in ("1", "true", "yes")
     )
+    raw_retention = os.environ.get("HOMELAB_MONITOR_UNIFI_OBSERVATION_RETENTION_DAYS")
+    observation_retention_days = (
+        UnifiConfig().observation_retention_days if raw_retention is None else int(raw_retention)
+    )
     return UnifiConfig(
         base_url=base_url,
         site_id=site_id,
         host_lan_ip=host_lan_ip,
         ssh_lease_enabled=ssh_lease_enabled,
+        observation_retention_days=observation_retention_days,
     )
 
 
