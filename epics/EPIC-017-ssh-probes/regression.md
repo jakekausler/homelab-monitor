@@ -69,3 +69,10 @@
 - [ ] Firing end-to-end: a synthetic `homelab_ssh_host_key_mismatch{target=...}=1` makes `SshHostKeyMismatch` fire immediately and reach Alertmanager with the `{{ $labels.target }}`-rendered summary; a synthetic `homelab_ssh_up{target=...}=0` makes `SshTargetUnreachable` go pending.
 - [ ] `SshProbeStale` does NOT spuriously fire when the age series is absent (post-monitor-restart / never-succeeded) — absent age is silent by design.
 - [ ] Annotation `description`s carry the card-required remediation (authorized_keys re-install incl. appliance firmware-wipe note; out-of-band host-key verify + capture-hostkey for mismatch; in-memory-state-resets-on-restart note for stale).
+
+## STAGE-017-008 — Cross-epic reconciliation (cron-SSH deferral notes + CronDetail text)
+
+- [ ] `CronDetail` (`apps/ui/src/components/crons/CronDetail.tsx`): for a REMOTE cron (`is_local: false`), the disabled "Install/Remove heartbeat wrapper" button's tooltip reads "Remote-host install/removal over SSH is deferred — not yet available." (NO "ships in EPIC-017" / no epic-jargon in user-facing UI). For a LOCAL cron the button is enabled (unchanged). Covered by a vitest assertion in CronDetail.test.tsx (`/over SSH is deferred.*not yet available/i`).
+- [ ] EPIC-002.md has the `## Deferred scope — remote-host cron SSH install (Option-B)` section recording the deferred remote-host cron SSH install + the write-path Option-B architecture + the user-facing consequence + conditional/no-tracking-stage status.
+- [ ] EPIC-017.md retains the deferred cron-SSH Option-B note, the EPIC-007/008 consumer-rendering notes, and the EPIC-008 sudoers-hop contract.
+- [ ] The deferred cron-SSH is recorded as a CONDITIONAL/uncommitted capability (no tracking stage); if ever committed it lands as a write-path stage in a FUTURE epic (not EPIC-017 — complete + read-only — nor EPIC-002).

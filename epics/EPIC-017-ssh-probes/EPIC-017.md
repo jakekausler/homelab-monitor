@@ -1,8 +1,8 @@
 # EPIC-017: SSH probe framework (per-target users, forced commands)
 
-## Status: Not Started
+## Status: Complete — all 8 stages finished
 
-## Current Stage: STAGE-017-008 (next: cross-epic reconciliation)
+## Current Stage: (complete)
 
 ## Build order + framework-first mandate (LOCKED — 2026-06-17 brainstorm)
 
@@ -168,7 +168,7 @@ the exemplar. Alert rules come AFTER the exemplar so they validate against real 
 | STAGE-017-005 | `hm ssh-probe install-instructions` (account-mode-aware: appliance authorized_keys-line + persistence-warning; dedicated-user create-user + script + sudoers-line + authorized_keys-line) + `test` (connect + run forced command + verify the restriction holds) | Complete |
 | STAGE-017-006 | `uptime` exemplar probe — BOTH account-modes against BOTH real targets (UDM `appliance` inlined-command; Synology `dedicated-user` installed-script); emits `homelab_ssh_up` + `homelab_ssh_uptime_seconds`; end-to-end keygen→install→pin→probe→verify-restriction | Complete |
 | STAGE-017-007 | `deploy/vmalert/metrics/ssh.yaml` framework-health rules (`SshTargetUnreachable` warning, `SshHostKeyMismatch` critical, `SshProbeStale` warning) — AFTER the exemplar so they validate against real metrics | Complete |
-| STAGE-017-008 | Cross-epic reconciliation: update EPIC-002 CronDetail UI EPIC-017 references → "remote-cron SSH deferred"; record the deferred cron-SSH (Option-B architecture) + EPIC-007/008 consumer-rendering notes + the EPIC-008 sudoers-hop contract |
+| STAGE-017-008 | Cross-epic reconciliation: update EPIC-002 CronDetail UI EPIC-017 references → "remote-cron SSH deferred"; record the deferred cron-SSH (Option-B architecture) + EPIC-007/008 consumer-rendering notes + the EPIC-008 sudoers-hop contract | Complete |
 
 ## Cross-stage acceptance criteria
 
