@@ -16,18 +16,15 @@ import structlog
 
 from homelab_monitor.kernel.plugins.base import BaseCollector
 from homelab_monitor.kernel.plugins.loader import PluginLoader, config_from_classvars
-from homelab_monitor.plugins.collectors.integrations.unifi.placeholder import (
-    UnifiPlaceholderCollector,
+from homelab_monitor.plugins.collectors.integrations.unifi.device import (
+    UnifiDeviceCollector,
 )
 
 _log = structlog.get_logger()
 
 # Wave-B stages append their collector class here.
 _UNIFI_COLLECTORS: list[type[BaseCollector]] = [
-    # SCAFFOLDING (STAGE-007-002): throwaway no-op proving the bundle loads.
-    # REMOVED by STAGE-007-005 (first Wave-B device collector) — delete this
-    # entry AND placeholder.py.
-    UnifiPlaceholderCollector,
+    UnifiDeviceCollector,
 ]
 
 

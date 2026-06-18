@@ -1,4 +1,4 @@
-"""Tests for the unifi integration bundle register_all (STAGE-007-002)."""
+"""Tests for the unifi integration bundle register_all (STAGE-007-005)."""
 
 from __future__ import annotations
 
@@ -7,24 +7,24 @@ import pytest
 from homelab_monitor.kernel.plugins.base import BaseCollector
 from homelab_monitor.kernel.plugins.loader import LoadedCollector, PluginLoader
 from homelab_monitor.plugins.collectors.integrations.unifi import register_all
-from homelab_monitor.plugins.collectors.integrations.unifi.placeholder import (
-    UnifiPlaceholderCollector,
+from homelab_monitor.plugins.collectors.integrations.unifi.device import (
+    UnifiDeviceCollector,
 )
 
 _EXPECTED_INTERVAL = 60
-_EXPECTED_TIMEOUT = 5
+_EXPECTED_TIMEOUT = 15
 
 
-def test_register_all_registers_placeholder() -> None:
-    """register_all registers UnifiPlaceholderCollector with the derived config."""
+def test_register_all_registers_device_collector() -> None:
+    """register_all registers UnifiDeviceCollector with the derived config."""
     loader = PluginLoader()
     register_all(loader)
     loaded = loader.load_all()
-    records = [r for r in loaded if isinstance(r.collector, UnifiPlaceholderCollector)]
+    records = [r for r in loaded if isinstance(r.collector, UnifiDeviceCollector)]
     assert len(records) == 1
     record = records[0]
     assert isinstance(record, LoadedCollector)
-    assert record.config.name == "unifi_placeholder"
+    assert record.config.name == "unifi_device"
     assert record.config.interval_seconds == _EXPECTED_INTERVAL
     assert record.config.timeout_seconds == _EXPECTED_TIMEOUT
 
