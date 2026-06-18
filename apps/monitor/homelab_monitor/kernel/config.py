@@ -536,10 +536,19 @@ class UnifiConfig:
     ``unifi_api_key`` and is resolved at request time. ``site_id`` is the controller
     site id (default ``"default"``); the client re-caches it from ``v1/sites`` at
     startup, so this is just the pre-resolution default.
+
+    ``host_lan_ip`` (STAGE-007-002) is the LAN IP of the monitor host on the Unifi
+    network, used for host attribution by Wave-B/C collectors.
+
+    ``ssh_lease_enabled`` (STAGE-007-002) is the opt-in gate (default ``False``) the
+    SSH DHCP-lease collector (STAGE-007-012) reads. Defined here now; its consumer
+    lands in 012.
     """
 
     base_url: str = "https://192.168.2.1"
     site_id: str = "default"
+    host_lan_ip: str = "192.168.2.148"
+    ssh_lease_enabled: bool = False
 
 
 def load_unifi_config() -> UnifiConfig:
@@ -548,11 +557,27 @@ def load_unifi_config() -> UnifiConfig:
     ``HOMELAB_MONITOR_UNIFI_URL`` -> ``base_url`` (trailing slash stripped so client
     path concatenation is unambiguous; default base URL when unset).
     ``HOMELAB_MONITOR_UNIFI_SITE_ID`` -> ``site_id`` (default ``"default"``).
+    ``HOMELAB_MONITOR_UNIFI_HOST_LAN_IP`` -> ``host_lan_ip`` (default
+    ``"192.168.2.148"``; raw value, no strip — an IP carries no trailing slash).
+    ``HOMELAB_MONITOR_UNIFI_SSH_LEASE_ENABLED`` -> ``ssh_lease_enabled`` (default
+    ``False``; truthy when the env value lowercases to one of 1/true/yes).
     """
     raw = os.environ.get("HOMELAB_MONITOR_UNIFI_URL")
     base_url = UnifiConfig().base_url if raw is None else raw.rstrip("/")
     site_id = os.environ.get("HOMELAB_MONITOR_UNIFI_SITE_ID", "default")
-    return UnifiConfig(base_url=base_url, site_id=site_id)
+    host_lan_ip = os.environ.get("HOMELAB_MONITOR_UNIFI_HOST_LAN_IP", UnifiConfig().host_lan_ip)
+    raw_ssh_lease = os.environ.get("HOMELAB_MONITOR_UNIFI_SSH_LEASE_ENABLED")
+    ssh_lease_enabled = (
+        UnifiConfig().ssh_lease_enabled
+        if raw_ssh_lease is None
+        else raw_ssh_lease.strip().lower() in ("1", "true", "yes")
+    )
+    return UnifiConfig(
+        base_url=base_url,
+        site_id=site_id,
+        host_lan_ip=host_lan_ip,
+        ssh_lease_enabled=ssh_lease_enabled,
+    )
 
 
 # Built-in per-family cardinality caps (STAGE-005-006).

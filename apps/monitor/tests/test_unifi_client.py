@@ -469,3 +469,45 @@ def test_load_unifi_config_site_id_override(monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setenv("HOMELAB_MONITOR_UNIFI_SITE_ID", "custom-site")
     cfg = load_unifi_config()
     assert cfg.site_id == "custom-site"
+
+
+def test_load_unifi_config_host_lan_ip_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("HOMELAB_MONITOR_UNIFI_HOST_LAN_IP", raising=False)
+    cfg = load_unifi_config()
+    assert cfg.host_lan_ip == "192.168.2.148"
+
+
+def test_load_unifi_config_host_lan_ip_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HOMELAB_MONITOR_UNIFI_HOST_LAN_IP", "10.0.0.5")
+    cfg = load_unifi_config()
+    assert cfg.host_lan_ip == "10.0.0.5"
+
+
+def test_load_unifi_config_ssh_lease_enabled_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("HOMELAB_MONITOR_UNIFI_SSH_LEASE_ENABLED", raising=False)
+    cfg = load_unifi_config()
+    assert cfg.ssh_lease_enabled is False
+
+
+def test_load_unifi_config_ssh_lease_enabled_true(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HOMELAB_MONITOR_UNIFI_SSH_LEASE_ENABLED", "true")
+    cfg = load_unifi_config()
+    assert cfg.ssh_lease_enabled is True
+
+
+def test_load_unifi_config_ssh_lease_enabled_truthy_variants(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for value in ("1", "TRUE", "Yes"):
+        monkeypatch.setenv("HOMELAB_MONITOR_UNIFI_SSH_LEASE_ENABLED", value)
+        cfg = load_unifi_config()
+        assert cfg.ssh_lease_enabled is True, value
+
+
+def test_load_unifi_config_ssh_lease_enabled_falsey_value(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A non-truthy env value (set but not in the truthy set) parses to False.
+    monkeypatch.setenv("HOMELAB_MONITOR_UNIFI_SSH_LEASE_ENABLED", "nope")
+    cfg = load_unifi_config()
+    assert cfg.ssh_lease_enabled is False
