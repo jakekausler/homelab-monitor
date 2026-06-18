@@ -15,7 +15,6 @@ from homelab_monitor.kernel.unifi.client import UnifiResponse
 from homelab_monitor.kernel.unifi.errors import UnifiError
 from homelab_monitor.plugins.collectors.integrations.unifi.device import (
     UnifiDeviceCollector,
-    _as_float,  # pyright: ignore[reportPrivateUsage]
     _emit_device_level,  # pyright: ignore[reportPrivateUsage]
     _kind_for,  # pyright: ignore[reportPrivateUsage]
 )
@@ -605,42 +604,6 @@ async def test_metrics_emitted_count() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Tests: _as_float helper branch coverage
-# ---------------------------------------------------------------------------
-
-
-def test_as_float_bool_excluded() -> None:
-    """bool inputs return None (bool must be excluded before int check)."""
-    assert _as_float(True) is None
-    assert _as_float(False) is None
-
-
-def test_as_float_numeric_types() -> None:
-    """int and float inputs convert correctly."""
-    assert _as_float(42) == 42.0  # noqa: PLR2004
-    assert _as_float(3.14) == 3.14  # noqa: PLR2004
-
-
-def test_as_float_string_numeric() -> None:
-    """String numeric inputs parse correctly."""
-    assert _as_float("21.9") == 21.9  # noqa: PLR2004
-    assert _as_float("  0.5 ") == 0.5  # noqa: PLR2004
-
-
-def test_as_float_unparseable_string() -> None:
-    """Non-numeric string returns None."""
-    assert _as_float("not-a-number") is None
-    assert _as_float("") is None
-
-
-def test_as_float_non_numeric_type() -> None:
-    """None and other non-numeric types return None."""
-    assert _as_float(None) is None
-    assert _as_float([1, 2]) is None
-    assert _as_float({"a": 1}) is None
-
-
-# ---------------------------------------------------------------------------
 # Tests: edge cases for payload structure and data narrowing
 # ---------------------------------------------------------------------------
 
@@ -817,7 +780,7 @@ async def test_port_radio_outlet_entries_malformed() -> None:
                         {"up": True},  # no port_idx
                         {
                             "port_idx": 5,
-                            "up": "yes",  # non-bool up (should be False via _as_bool)
+                            "up": "yes",  # non-bool up (should be False via as_bool)
                             # no speed, no poe_good
                         },
                     ],
@@ -838,7 +801,7 @@ async def test_port_radio_outlet_entries_malformed() -> None:
 
     port5 = {"device": "device-malformed", "port": "5"}
     port_up = _gauge_value(writer, "homelab_unifi_port_up", port5)
-    assert port_up == 0.0  # non-bool up -> _as_bool returns False
+    assert port_up == 0.0  # non-bool up -> as_bool returns False
 
     port_speed = _gauge_value(writer, "homelab_unifi_port_speed_bps", port5)
     assert port_speed is None

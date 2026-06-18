@@ -19,12 +19,16 @@ from homelab_monitor.kernel.plugins.loader import PluginLoader, config_from_clas
 from homelab_monitor.plugins.collectors.integrations.unifi.device import (
     UnifiDeviceCollector,
 )
+from homelab_monitor.plugins.collectors.integrations.unifi.wan import (
+    UnifiWanCollector,
+)
 
 _log = structlog.get_logger()
 
 # Wave-B stages append their collector class here.
 _UNIFI_COLLECTORS: list[type[BaseCollector]] = [
     UnifiDeviceCollector,
+    UnifiWanCollector,
 ]
 
 

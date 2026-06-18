@@ -21,8 +21,8 @@ Graceful-degrade guarantees:
   is fetched via ``.get()`` and only iterated if ``isinstance(..., list)``.
 - Each entry in those lists is only processed if ``isinstance(entry, dict)``.
 - STRING numeric fields (poe_power, poe_current, poe_voltage, cpu, mem, loadavg_*)
-  are parsed via ``_as_float()`` which returns None on failure -- skipping the gauge.
-- ``bool`` is excluded BEFORE ``int``/``float`` isinstance checks in ``_as_float``.
+  are parsed via ``as_float()`` which returns None on failure -- skipping the gauge.
+- ``bool`` is excluded BEFORE ``int``/``float`` isinstance checks in ``as_float``.
 - ``sys_stats`` may be ``{}`` (empty dict) on EdgeSwitch -- graceful skip.
 """
 
@@ -36,30 +36,11 @@ from homelab_monitor.kernel.plugins.base import BaseCollector
 from homelab_monitor.kernel.plugins.context import CollectorContext
 from homelab_monitor.kernel.plugins.types import CollectorResult
 from homelab_monitor.kernel.unifi.errors import UnifiError
-
-
-def _as_float(v: object) -> float | None:
-    """Parse int, float, or numeric string to float. Returns None for bool, non-numeric, None.
-
-    bool must be excluded FIRST because ``isinstance(True, int)`` is True in Python.
-    """
-    if isinstance(v, bool):
-        return None
-    if isinstance(v, (int, float)):
-        return float(v)
-    if isinstance(v, str):
-        try:
-            return float(v.strip())
-        except ValueError:
-            return None
-    return None
-
-
-def _as_bool(v: object) -> bool:
-    """Return bool value if v is a bool, otherwise False."""
-    if isinstance(v, bool):
-        return v
-    return False
+from homelab_monitor.plugins.collectors.integrations.unifi._parsing import (
+    as_bool,
+    as_float,
+    emit_numeric,
+)
 
 
 def _kind_for(rec: dict[str, object]) -> str:
@@ -87,20 +68,6 @@ def _kind_for(rec: dict[str, object]) -> str:
     return "switch"
 
 
-def _emit_numeric(
-    ctx: CollectorContext,
-    name: str,
-    value_obj: object,
-    labels: dict[str, str],
-    emitted: list[int],
-) -> None:
-    """Parse value_obj via _as_float and write_gauge if not None; increment emitted[0]."""
-    val = _as_float(value_obj)
-    if val is not None:
-        ctx.vm.write_gauge(name, val, labels)
-        emitted[0] += 1
-
-
 def _emit_device_level(
     ctx: CollectorContext,
     rec: dict[str, object],
@@ -119,7 +86,7 @@ def _emit_device_level(
 
     # device_up
     state_val = rec.get("state")
-    state_f = _as_float(state_val)
+    state_f = as_float(state_val)
     if state_f is not None:
         up = 1.0 if state_f == 1.0 else 0.0
         ctx.vm.write_gauge("homelab_unifi_device_up", up, device_model_kind)
@@ -150,7 +117,7 @@ def _emit_device_level(
         emitted[0] += 1
 
     # uptime (numeric, seconds elapsed)
-    _emit_numeric(
+    emit_numeric(
         ctx, "homelab_unifi_device_uptime_seconds", rec.get("uptime"), device_label, emitted
     )
 
@@ -158,10 +125,10 @@ def _emit_device_level(
     sys_stats_raw = rec.get("system-stats")
     if isinstance(sys_stats_raw, dict):
         sys_stats: dict[str, object] = cast("dict[str, object]", sys_stats_raw)
-        _emit_numeric(
+        emit_numeric(
             ctx, "homelab_unifi_device_cpu_percent", sys_stats.get("cpu"), device_label, emitted
         )
-        _emit_numeric(
+        emit_numeric(
             ctx, "homelab_unifi_device_mem_percent", sys_stats.get("mem"), device_label, emitted
         )
 
@@ -169,7 +136,7 @@ def _emit_device_level(
     sys_stats2_raw = rec.get("sys_stats")
     if isinstance(sys_stats2_raw, dict):
         sys_stats2: dict[str, object] = cast("dict[str, object]", sys_stats2_raw)
-        _emit_numeric(
+        emit_numeric(
             ctx,
             "homelab_unifi_device_load1",
             sys_stats2.get("loadavg_1"),
@@ -189,7 +156,7 @@ def _emit_device_level(
             temp_value = entry.get("value")
             if not isinstance(temp_name, str) or not isinstance(temp_type, str):
                 continue
-            val = _as_float(temp_value)
+            val = as_float(temp_value)
             if val is not None:
                 ctx.vm.write_gauge(
                     "homelab_unifi_device_temperature_celsius",
@@ -213,7 +180,7 @@ def _emit_port_metrics(
         if not isinstance(entry_obj, dict):
             continue
         entry = cast("dict[str, object]", entry_obj)
-        port_idx_f = _as_float(entry.get("port_idx"))
+        port_idx_f = as_float(entry.get("port_idx"))
         if port_idx_f is None:
             continue
         port_str = str(int(port_idx_f))
@@ -221,24 +188,24 @@ def _emit_port_metrics(
 
         # port_up
         up_val = entry.get("up")
-        ctx.vm.write_gauge("homelab_unifi_port_up", 1.0 if _as_bool(up_val) else 0.0, labels)
+        ctx.vm.write_gauge("homelab_unifi_port_up", 1.0 if as_bool(up_val) else 0.0, labels)
         emitted[0] += 1
 
         # port_speed_bps (speed is Mbps int)
         speed_val = entry.get("speed")
-        speed_f = _as_float(speed_val)
+        speed_f = as_float(speed_val)
         if speed_f is not None:
             ctx.vm.write_gauge("homelab_unifi_port_speed_bps", speed_f * 1_000_000, labels)
             emitted[0] += 1
 
         # PoE fields (STRING-encoded on real UDM)
-        _emit_numeric(
+        emit_numeric(
             ctx, "homelab_unifi_port_poe_power_watts", entry.get("poe_power"), labels, emitted
         )
-        _emit_numeric(
+        emit_numeric(
             ctx, "homelab_unifi_port_poe_current_ma", entry.get("poe_current"), labels, emitted
         )
-        _emit_numeric(
+        emit_numeric(
             ctx, "homelab_unifi_port_poe_voltage", entry.get("poe_voltage"), labels, emitted
         )
 
@@ -260,7 +227,7 @@ def _emit_port_metrics(
             ("link_down_count", "homelab_unifi_port_link_down_count"),
             ("satisfaction", "homelab_unifi_port_satisfaction"),
         ):
-            _emit_numeric(ctx, metric, entry.get(field), labels, emitted)
+            emit_numeric(ctx, metric, entry.get(field), labels, emitted)
 
 
 def _emit_radio_metrics(
@@ -292,7 +259,7 @@ def _emit_radio_metrics(
             ("channel", "homelab_unifi_radio_channel"),
             ("bw", "homelab_unifi_radio_bandwidth_mhz"),
         ):
-            _emit_numeric(ctx, metric, entry.get(field), labels, emitted)
+            emit_numeric(ctx, metric, entry.get(field), labels, emitted)
 
 
 def _emit_outlet_metrics(
@@ -319,7 +286,7 @@ def _emit_outlet_metrics(
         labels = {"device": device_name, "outlet": outlet_str, "name": outlet_name}
         ctx.vm.write_gauge(
             "homelab_unifi_outlet_relay_state",
-            1.0 if _as_bool(relay_val) else 0.0,
+            1.0 if as_bool(relay_val) else 0.0,
             labels,
         )
         emitted[0] += 1
