@@ -131,3 +131,26 @@ The cron run history & run-log work (STAGE-002-011 … 015, design spec `docs/su
 - **STAGE-004-002 (Drain clustering + error-keyword work)** must apply to **cron run logs**, not only generic service logs — anomaly detection v2/v3 (error-keyword scan, Drain content clustering) is backfilled onto the `cron_runs` history produced by EPIC-002.
 - **STAGE-004-005 (logs explorer)** must explicitly include **live-tail of in-flight cron runs** as in-scope.
 - The generic `/api/logs` LogsQL proxy (EPIC-004) must be built on top of the `VictoriaLogsClient` module introduced in STAGE-002-013.
+
+## Deferred scope — remote-host cron SSH install (Option-B)
+
+Remote-host cron **discovery** and **SSH-push wrapper install/removal** are **deferred**.
+The EPIC-002 cron-derived-state redesign originally assigned this cross-host scope to
+EPIC-017 (SSH probe framework). EPIC-017 explicitly deferred it as out-of-scope: EPIC-017
+ships a **read-only** probe transport, and remote-cron wrapper install is a **write** path
+that does not belong in that framework.
+
+**Recorded architecture (Option-B) — build if/when a remote host with real custom crons appears:**
+A separately-installed, scoped script that consumes EPIC-017's `SshClientFactory` transport over
+the **dedicated-user forced-command** path, living in its own cron-remote-management home. It is a
+**write** path NOT folded into the read-only-probe framework. When built it depends on EPIC-017's
+transport (now complete). See EPIC-017.md for the transport contract and the matching deferral note.
+
+**User-facing consequence (live today):** In `CronDetail`, for remote-only crons (`source_path IS
+NULL`) the "Install / Remove heartbeat wrapper" button stays **disabled**; its tooltip reads
+"Remote-host install/removal over SSH is deferred — not yet available." Remote crons surface health
+via wrapper-based heartbeats only (the remote-cron banner explains this).
+
+**Status:** Conditional / not a committed deliverable — there is no committed trigger, so no tracking
+stage exists or is required yet. If it is ever committed, it lands as a new write-path stage in a
+future epic (not in EPIC-002 — heartbeat/cron-state — nor EPIC-017 — complete + read-only).

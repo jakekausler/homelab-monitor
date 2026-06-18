@@ -362,8 +362,8 @@ function ActionsPanel({
                 </span>
               </TooltipTrigger>
               <TooltipContent>
-                Remote-host {wrapperInstalled ? 'removal' : 'install'} ships in EPIC-017 (SSH probe
-                framework).
+                Remote-host {wrapperInstalled ? 'removal' : 'install'} over SSH is deferred — not
+                yet available.
               </TooltipContent>
             </Tooltip>
           )}

@@ -12,6 +12,16 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { CronDetail } from '@/components/crons/CronDetail'
+
+// Make TooltipContent always render its children so tooltip assertions work in jsdom.
+vi.mock('@/components/ui/tooltip', async (importOriginal) => {
+  const mod = await importOriginal<typeof import('@/components/ui/tooltip')>()
+  return {
+    ...mod,
+    TooltipContent: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  }
+})
+
 import { TooltipProvider } from '@/components/ui/tooltip'
 
 afterEach(cleanup)
@@ -414,6 +424,28 @@ describe('CronDetail', () => {
     await screen.findByText('daily-backup')
     // baseCron has is_local: false — button rendered inside a span with tooltip
     expect(screen.getByRole('button', { name: 'Install heartbeat wrapper' })).toBeDisabled()
+  })
+
+  // 21a. Tooltip text for disabled Install button on remote cron
+  it('shows deferred-SSH tooltip on the disabled Install button for a remote cron', async () => {
+    renderInRouter(<CronDetail fingerprint={FP} />)
+    await screen.findByText('daily-backup')
+    // TooltipContent is mocked to render eagerly; assert the tooltip text is present.
+    expect(screen.getByText(/over SSH is deferred.*not yet available/i)).toBeInTheDocument()
+  })
+
+  // 21b. Tooltip text for disabled Remove button on remote cron with wrapper installed
+  it("shows deferred-SSH 'removal' tooltip on the disabled Remove button for a remote cron with wrapper installed", async () => {
+    vi.mocked(useGetCron).mockReturnValue(
+      makeGetCronResult({
+        is_local: false,
+        wrapper_installed: true,
+      }) as unknown as ReturnType<typeof useGetCron>,
+    )
+    renderInRouter(<CronDetail fingerprint={FP} />)
+    await screen.findByText('daily-backup')
+    // TooltipContent is mocked to render eagerly; assert the removal-variant tooltip text is present.
+    expect(screen.getByText(/removal over SSH is deferred.*not yet available/i)).toBeInTheDocument()
   })
 
   // 22. Clicking install button opens the modal (for local cron)
