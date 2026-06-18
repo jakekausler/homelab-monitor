@@ -1,6 +1,6 @@
 # EPIC-007: Unifi integration
 
-## Status: In Progress (STAGE-007-001..004 Complete; current: STAGE-007-005)
+## Status: In Progress (STAGE-007-001..005 Complete; current: STAGE-007-006)
 
 ## Build order + client-identity ownership (LOCKED — 2026-06-16/17 brainstorm)
 
@@ -150,7 +150,7 @@ vector→VL pipeline (EPIC-004), Grafana-dashboards-as-code, and the vmalert met
 
 | Collector | Source | Cadence | Emits (abridged) |
 |---|---|---|---|
-| Combined device | `stat/device` (one fetch) | 60s | `device_up{device,model,kind}`, state, `firmware_version`, `update_available`, uptime, cpu%/mem%/load, temp; **ports**: link/`port_speed_bps`, `poe_power/current/voltage`, `poe_good`, errors/drops, `mac_table_count`; **AP radios**: `cu_total/self_rx/self_tx` (airtime), `num_sta`, `tx_power`, `tx_retries_pct`, `satisfaction`, channel/bw; **PDU**: `outlet_relay_state{outlet}`, outlet name (NO power — HA owns USP PDU Pro wattage) |
+| Combined device | `stat/device` (one fetch) | 60s | `device_up{device,model,kind}`, state, `firmware_info`, `update_available`, uptime, cpu%/mem%/load, temp; **ports**: link/`port_speed_bps`, `poe_power/current/voltage`, `poe_good`, errors/drops, `mac_table_count`; **AP radios**: `cu_total/self_rx/self_tx` (airtime), `num_sta`, `tx_power`, `tx_retries_pct`, `satisfaction`, channel/bw; **PDU**: `outlet_relay_state{outlet}`, outlet name (NO power — HA owns USP PDU Pro wattage) |
 | WAN / ISP + speedtest | `stat/health` (`www`) | 30s | `wan_up`, `wan_latency_seconds`, `wan_drops`, `wan_xput_down/up`, `speedtest_download/upload/ping`, `speedtest_lastrun`, `wan_failover_active` |
 | Active-client identity | `stat/sta` (+ `stat/alluser` for known) | 60s | upserts the persistent `unifi_clients` registry (MAC↔IP↔hostname↔ap_mac/sw_port↔fixed_ip; online/offline) |
 | Per-client stats + WiFi-experience | `stat/sta` | 60s | `client_signal_dbm`, `client_tx/rx_rate_bps`, `client_uptime`, bytes; experience rollups (counts of clients below signal/satisfaction thresholds, high retries) — capped |
@@ -303,7 +303,7 @@ including the opt-in SSH lease, land in Wave B before any rules).
 ### Wave B — Collectors (8)
 | # | Stage | Theme |
 |---|---|---|
-| STAGE-007-005 | Combined device collector (health/firmware/ports/PoE/radios/PDU-relay/temp from one `stat/device`) |
+| STAGE-007-005 | Combined device collector (health/firmware/ports/PoE/radios/PDU-relay/temp from one `stat/device`) | Complete |
 | STAGE-007-006 | WAN/ISP + speedtest + failover collector (`stat/health` www) |
 | STAGE-007-007 | Active-client identity collector → registry upsert |
 | STAGE-007-008 | Per-client stats + WiFi-experience rollups collector |
