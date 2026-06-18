@@ -26,3 +26,11 @@
 - [ ] Confirm failover semantics: `_wan_failover_capable=1.0` when a secondary WAN is configured (even if down); `_wan_failover_active=1.0` only when a secondary WAN is actively carrying traffic (single-active-WAN -> 0.0).
 - [ ] Confirm the collector does not raise on malformed/absent subsystem entries (graceful degrade): missing `www` or `wan` subsystem entry, non-dict `data` entry, non-string `status`, non-dict `uptime_stats` -> ok=True, no spurious metrics.
 - [ ] Confirm both `unifi_device` and `unifi_wan` collectors appear healthy in `GET /api/collectors`.
+
+## STAGE-007-007 — Active-client identity collector
+- [ ] Run the `unifi_active_client` collector against the live UDM (or replay captured stat/sta+stat/alluser payloads) into a migrated DB with the host sentinel seeded; confirm `ok=True`, the registry upserts the roster (online + offline rows), and `homelab_unifi_identity_hosts_reconciled`=1 (host `192.168.2.148` reconciled — requires the `host:<ip>` sentinel seeded by lifespan/ensure_host_row first).
+- [ ] Confirm new-client detection: on a registry that already contains the macs, a re-run emits `homelab_unifi_new_client_total`=0 (no false new-client signals); a genuinely new mac increments it. (Detection is a pre-upsert MAC-set snapshot diff, NOT `first_seen==now`.)
+- [ ] Confirm roster rollups present: `homelab_unifi_active_client_count`, `_known_client_count`, `_offline_client_count`, `ssid_client_count{ssid}`, `client_count_by_network/by_ap/by_band/by_link` (bands 2.4ghz/5ghz/6ghz; link wired/wireless).
+- [ ] Confirm D2 degrade: `stat_alluser` failure -> ok=True + `homelab_unifi_alluser_degraded`=1 + sta still upserted; `stat_sta` failure -> ok=False + no upsert.
+- [ ] Confirm both `api_took_seconds{endpoint=stat/sta}` and `{endpoint=stat/alluser}` emitted on success.
+- [ ] Confirm `unifi_device`, `unifi_wan`, `unifi_active_client` all appear healthy in `GET /api/collectors`.

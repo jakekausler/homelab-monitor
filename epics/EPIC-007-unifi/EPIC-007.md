@@ -1,6 +1,6 @@
 # EPIC-007: Unifi integration
 
-## Status: In Progress (STAGE-007-001..006 Complete; current: STAGE-007-007)
+## Status: In Progress (STAGE-007-001..007 Complete; current: STAGE-007-008)
 
 ## Build order + client-identity ownership (LOCKED — 2026-06-16/17 brainstorm)
 
@@ -305,7 +305,7 @@ including the opt-in SSH lease, land in Wave B before any rules).
 |---|---|---|
 | STAGE-007-005 | Combined device collector (health/firmware/ports/PoE/radios/PDU-relay/temp from one `stat/device`) | Complete |
 | STAGE-007-006 | WAN/ISP + speedtest + failover collector (`stat/health` www) | Complete |
-| STAGE-007-007 | Active-client identity collector → registry upsert |
+| STAGE-007-007 | Active-client identity collector → registry upsert | Complete |
 | STAGE-007-008 | Per-client stats + WiFi-experience rollups collector |
 | STAGE-007-009 | Per-client DPI collector (capped top-N×top-N + clamp) |
 | STAGE-007-010 | Alarms/threats collector (`rest/alarm`) |
