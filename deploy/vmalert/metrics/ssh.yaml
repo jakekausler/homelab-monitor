@@ -1,0 +1,104 @@
+# vmalert METRICS rules for SSH-probe framework health (STAGE-017-007).
+# Severities used in this file: warning / critical. (Project vocab also allows info / error.)
+#
+# All rules carry source_tool: vmalert-metrics and target_kind: ssh_target.
+#
+# Metric surface (label sets matter):
+#   homelab_ssh_up{target}                       — 1 ok / 0 transport-fail; ALWAYS
+#                                                   present once a probe has run.
+#   homelab_ssh_host_key_mismatch{target}        — 0/1 gauge; ALWAYS present.
+#   homelab_ssh_last_success_age_seconds{target,probe}
+#                                                — 0.0 on every up==1 run; on up==0
+#                                                  emits now-last_success ONLY if a
+#                                                  prior success exists; OMITTED before
+#                                                  first success AND after monitor
+#                                                  restart (last-success ts is in-memory).
+#
+# DESIGN NOTES / LANDMINES:
+# (a) SshProbeStale keys on the AGE metric (per-target, label intact) and is SILENT
+#     when age is absent (post-restart / never-succeeded). Absent age is NOT a
+#     staleness signal. The "currently down" case is owned by SshTargetUnreachable
+#     (keys on always-present *_up).
+# (b) Do NOT use absent() here. SSH is MULTI-target; absent() collapses to a single
+#     LABEL-LESS series and only evaluates true when EVERY target's series is gone —
+#     losing per-target identity and breaking annotation templating + group_by. (The
+#     vl_health.yaml `or absent(...)` pattern is valid only because VL is SINGLE-target.)
+#     A never-emitting SSH probe is a collector-registration failure, covered by the
+#     homelab_collector_run_* collector-health rules, not this file.
+# (c) routing_channel: monitoring-health on the two probe-health rules (unreachable,
+#     stale) routes them to the "your monitoring is broken" channel, matching the
+#     wrapper-health precedent. SshHostKeyMismatch is a SECURITY finding about the
+#     target/path (possible MITM), NOT monitoring degradation — it uses default routing.
+# (d) VALIDATION: no promtool in make verify; these are plain comparisons (no
+#     absent()/subquery), confirm live-replay in Refinement against real probe series.
+
+groups:
+  - name: ssh_health
+    interval: 30s
+    rules:
+
+      # --- SSH target unreachable: probe transport failing (warning) ---
+      - alert: SshTargetUnreachable
+        expr: homelab_ssh_up == 0
+        for: 5m
+        labels:
+          severity: warning
+          source_tool: vmalert-metrics
+          target_kind: ssh_target
+          routing_channel: monitoring-health
+        annotations:
+          summary: "SSH probe cannot reach {{ $labels.target }}"
+          description: >-
+            The SSH probe for {{ $labels.target }} has reported transport failure
+            (homelab_ssh_up=0) for over 5m. What to check:
+            (1) Confirm the probe's public key is still installed in the target's
+            authorized_keys — NOTE: an APPLIANCE FIRMWARE UPDATE WIPES
+            /root/.ssh/authorized_keys; if the target was recently updated, re-apply
+            the key via `hm ssh-probe install-instructions {{ $labels.target }}`.
+            (2) Verify the target is powered on and reachable on the network.
+            (3) Re-run the probe interactively: `hm ssh-probe test {{ $labels.target }}`.
+
+      # --- SSH host-key mismatch: possible MITM (critical, fire immediately) ---
+      - alert: SshHostKeyMismatch
+        expr: homelab_ssh_host_key_mismatch == 1
+        for: 0s
+        labels:
+          severity: critical
+          source_tool: vmalert-metrics
+          target_kind: ssh_target
+        annotations:
+          summary: "SSH host-key MISMATCH for {{ $labels.target }} — possible MITM"
+          description: >-
+            The SSH host key presented by {{ $labels.target }} does NOT match the
+            pinned host key (homelab_ssh_host_key_mismatch=1). This can indicate a
+            man-in-the-middle interception. DO NOT auto-trust the new key. What to do:
+            (1) Verify the target's host key fingerprint OUT-OF-BAND (console / known
+            channel), not over this connection.
+            (2) If the target was legitimately rebuilt/reflashed, capture and verify
+            the new key: `hm ssh-probe capture-hostkey {{ $labels.target }}`, confirm
+            the fingerprint out-of-band, then update the target's host_key config.
+            (3) Otherwise treat as a possible interception and investigate the network
+            path before reconnecting.
+
+      # --- SSH probe stale: connected once, last success now old (warning) ---
+      - alert: SshProbeStale
+        expr: homelab_ssh_last_success_age_seconds > 900
+        for: 5m
+        labels:
+          severity: warning
+          source_tool: vmalert-metrics
+          target_kind: ssh_target
+          routing_channel: monitoring-health
+        annotations:
+          summary: "SSH probe for {{ $labels.target }} is stale (last success aging)"
+          description: >-
+            The SSH probe for {{ $labels.target }} has not had a successful run in
+            {{ $value }}s (threshold: 900s). What to check:
+            (1) NOTE: this series resets on a monitor restart (last-success timestamp
+            is in-memory), so a fresh deploy will NOT trigger this — a firing alert
+            means a genuinely long gap since the last success.
+            (2) Confirm the probe is still scheduled/registered for this target.
+            (3) Check the same connectivity + key items as SshTargetUnreachable:
+            authorized_keys still installed (re-apply after appliance firmware updates
+            via `hm ssh-probe install-instructions {{ $labels.target }}`), target
+            reachable, and re-run `hm ssh-probe test {{ $labels.target }}`.
