@@ -16,6 +16,9 @@ import structlog
 
 from homelab_monitor.kernel.plugins.base import BaseCollector
 from homelab_monitor.kernel.plugins.loader import PluginLoader, config_from_classvars
+from homelab_monitor.plugins.collectors.integrations.unifi.active_client import (
+    UnifiActiveClientCollector,
+)
 from homelab_monitor.plugins.collectors.integrations.unifi.device import (
     UnifiDeviceCollector,
 )
@@ -29,6 +32,7 @@ _log = structlog.get_logger()
 _UNIFI_COLLECTORS: list[type[BaseCollector]] = [
     UnifiDeviceCollector,
     UnifiWanCollector,
+    UnifiActiveClientCollector,
 ]
 
 
