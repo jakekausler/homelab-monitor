@@ -1,6 +1,6 @@
 # EPIC-007: Unifi integration
 
-## Status: In Progress (STAGE-007-001..003 Complete; current: STAGE-007-004)
+## Status: In Progress (STAGE-007-001..004 Complete; current: STAGE-007-005)
 
 ## Build order + client-identity ownership (LOCKED — 2026-06-16/17 brainstorm)
 
