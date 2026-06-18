@@ -256,6 +256,33 @@ async def test_connect_gaierror_maps_to_connection_refused(
             pass
 
 
+async def test_connect_unexpected_value_error_maps_to_transport_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Regression (STAGE-017-006): asyncssh raises a bare ValueError when it can't
+    # resolve the local username (container runs as a UID with no passwd entry /
+    # no USER env). ValueError is NOT an asyncssh.Error/OSError, so without the
+    # defensive arm it would crash the scheduler tick and quarantine the
+    # collector. It must map to the base SshTransportError -> up=0.
+    valid_host_line = asyncssh.generate_private_key("ssh-ed25519").export_public_key().decode()  # pyright: ignore[reportUnknownMemberType]
+    valid_client_pem = asyncssh.generate_private_key("ssh-ed25519").export_private_key().decode()  # pyright: ignore[reportUnknownMemberType]
+    params = _params(port=22, pinned_host_key=valid_host_line)
+    factory = _factory(params, secret_value=valid_client_pem)
+
+    async def _boom(*args: object, **kwargs: object) -> object:
+        raise ValueError(
+            "Unknown local username: set one of LOGNAME, USER, LNAME, or "
+            "USERNAME in the environment"
+        )
+
+    monkeypatch.setattr(asyncssh, "connect", _boom)
+    with pytest.raises(SshTransportError) as excinfo:
+        async with factory.open("t1"):
+            pass
+    assert type(excinfo.value) is SshTransportError
+    assert str(excinfo.value) == "ssh connect failed"
+
+
 async def test_run_command_asyncssh_error_maps_to_transport_error(
     ssh_test_server: SshTestServer, monkeypatch: pytest.MonkeyPatch
 ) -> None:

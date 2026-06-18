@@ -383,7 +383,7 @@ async def test_get_run_log_available(
     """Shape 1 (available): closed enriched run, VL returns 2 lines."""
     monkeypatch.setenv("HOMELAB_MONITOR_VL_URL", "http://vl-test:9428")
     fp = await _seed_cron(repo, name="log-avail")
-    now_ts = "2026-05-19T00:00:00+00:00"
+    now_ts = (datetime.now(UTC) - timedelta(days=1)).isoformat()
     await _seed_run(
         repo,
         run_id="log-avail-run",
@@ -436,7 +436,7 @@ async def test_get_run_log_running_shape(
         run_id="log-running-run",
         cron_fingerprint=fp,
         state="running",
-        started_at="2026-05-19T00:00:00+00:00",
+        started_at=(datetime.now(UTC) - timedelta(days=1)).isoformat(),
     )
 
     before = datetime.now(UTC)
@@ -518,7 +518,7 @@ async def test_get_run_log_503_on_vl_error(
     """VictoriaLogsClientError from VL → 503 with code='vl_unavailable'."""
     monkeypatch.setenv("HOMELAB_MONITOR_VL_URL", "http://vl-test:9428")
     fp = await _seed_cron(repo, name="log-503")
-    now_ts = "2026-05-19T00:00:00+00:00"
+    now_ts = (datetime.now(UTC) - timedelta(days=1)).isoformat()
     await _seed_run(
         repo,
         run_id="log-503-run",
@@ -544,7 +544,7 @@ async def test_get_run_log_400_on_malformed_cursor(
 ) -> None:
     """A malformed cursor returns 400 with code 'invalid_cursor'."""
     fp = await _seed_cron(repo, name="log-badcur")
-    now_ts = "2026-05-19T00:00:00+00:00"
+    now_ts = (datetime.now(UTC) - timedelta(days=1)).isoformat()
     await _seed_run(
         repo,
         run_id="log-badcur-run",
@@ -626,7 +626,7 @@ async def test_get_run_log_amode_query_contains_run_id(
     """source='wrapper' (A-mode): VL request URL contains run_id:"<uuid>"."""
     monkeypatch.setenv("HOMELAB_MONITOR_VL_URL", "http://vl-test:9428")
     fp = await _seed_cron(repo, name="log-amode")
-    now_ts = "2026-05-19T00:00:00+00:00"
+    now_ts = (datetime.now(UTC) - timedelta(days=1)).isoformat()
     await _seed_run(
         repo,
         run_id="amode-run-id",
@@ -662,7 +662,7 @@ async def test_get_run_log_bmode_query_contains_canonical_key(
 
     command = "/usr/bin/bmode-test.sh"
     fp = await _seed_cron(repo, name="log-bmode", command=command)
-    now_ts = "2026-05-19T00:00:00+00:00"
+    now_ts = (datetime.now(UTC) - timedelta(days=1)).isoformat()
     await _seed_run(
         repo,
         run_id="bmode-run-id",
@@ -864,7 +864,7 @@ async def test_get_run_log_widens_vl_query_with_slack(
     monkeypatch.setenv("HOMELAB_MONITOR_CRON_RUN_ENRICH_WINDOW_SLACK_SECONDS", "60")
 
     fp = await _seed_cron(repo, name="log-slack-test")
-    base_ts = "2026-05-19T00:00:00+00:00"
+    base_ts = (datetime.now(UTC) - timedelta(days=1)).isoformat()
     await _seed_run(
         repo,
         run_id="slack-test-run",
@@ -923,7 +923,7 @@ async def test_get_run_log_no_slack_when_disabled(
     monkeypatch.setenv("HOMELAB_MONITOR_CRON_RUN_ENRICH_WINDOW_SLACK_SECONDS", "0")
 
     fp = await _seed_cron(repo, name="log-noslack-test")
-    base_ts = "2026-05-19T00:00:00+00:00"
+    base_ts = (datetime.now(UTC) - timedelta(days=1)).isoformat()
     await _seed_run(
         repo,
         run_id="noslack-test-run",

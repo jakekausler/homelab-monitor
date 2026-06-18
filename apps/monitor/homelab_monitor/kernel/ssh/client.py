@@ -22,6 +22,7 @@ logged.
 
 from __future__ import annotations
 
+import os
 import socket
 from collections.abc import AsyncGenerator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
@@ -38,6 +39,16 @@ from homelab_monitor.kernel.ssh.errors import (
 )
 from homelab_monitor.kernel.ssh.params import SshTargetParams
 from homelab_monitor.kernel.ssh.result import SshCommandResult
+
+# asyncssh's SSHClientConnectionOptions.prepare() calls getpass.getuser()
+# unconditionally to derive the CLIENT-side username — independent of the remote
+# `username` we pass per target. In the prod container (numeric UID, no
+# /etc/passwd entry, no USER/LOGNAME env) getpass.getuser() raises KeyError and
+# asyncssh raises ValueError("Unknown local username ..."). No connect() param
+# suppresses this lookup, so seed a static CLIENT-side label. This is NEVER the
+# remote login. setdefault() never overwrites a real env value.
+os.environ.setdefault("USER", "homelab-monitor")
+os.environ.setdefault("LOGNAME", "homelab-monitor")
 
 _DEFAULT_CONNECT_TIMEOUT: float = 10.0
 _DEFAULT_COMMAND_TIMEOUT: float = 30.0
@@ -169,6 +180,11 @@ class AsyncSshClientFactory:
             raise SshTransportError(target_id, "ssh connect failed") from exc
         except OSError as exc:  # non-asyncssh socket errors (no route, etc.)
             raise SshConnectionRefused(target_id, "ssh connection refused or unreachable") from exc
+        except Exception as exc:  # defensive: any unexpected connect-time failure
+            # (e.g. asyncssh's ValueError when the local username can't be resolved)
+            # must map to a clean up=0, never crash the scheduler tick / quarantine
+            # the collector. Message stays static (no secret leak).
+            raise SshTransportError(target_id, "ssh connect failed") from exc
 
         try:
             async with conn:

@@ -323,7 +323,7 @@ on the target as an administrator.
 
    #!/bin/sh
    # hm-probe exemplar — replace body with the real collector (EPIC-008).
-   uptime
+   cat /proc/uptime
 
 3. (Only if your script needs privileged read commands) add a narrow NOPASSWD sudoers line.
    The exemplar 'uptime' needs NO sudo — skip this step for the exemplar. When a real probe

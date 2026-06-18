@@ -548,7 +548,7 @@ def test_install_instructions_dedicated_user(
     out, err = _captured.out, _captured.err
     assert rc == 0
     assert "sudo useradd -m -s /bin/sh monitor" in out
-    assert "uptime" in out
+    assert "cat /proc/uptime" in out
     assert "monitor ALL=(root) NOPASSWD: <ABSOLUTE_PATHS_OF_READ_ONLY_COMMANDS>" in out
     assert (
         'command="/home/monitor/hm-probe.sh",no-port-forwarding,no-pty,no-X11-forwarding,no-agent-forwarding'

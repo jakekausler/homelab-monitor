@@ -586,6 +586,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
 
     register_ha_collectors(loader)
 
+    # ------------------------------------------------------------------
+    # STAGE-017-006: SSH probe bundle (plugins/collectors/ssh/ exemplar).
+    # The bundle owns per-probe failure isolation internally (one per ssh_target);
+    # if no ssh_targets are configured it's a no-op.
+    # ------------------------------------------------------------------
+    from homelab_monitor.plugins.collectors.ssh import (  # noqa: PLC0415
+        register_all as register_ssh_collectors,
+    )
+
+    register_ssh_collectors(loader)
+
     plugins_env = os.environ.get("HOMELAB_MONITOR_PLUGINS_DIR")
     if plugins_env is not None:
         plugins_dir: Path | None = Path(plugins_env)
