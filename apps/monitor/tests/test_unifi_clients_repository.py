@@ -61,6 +61,7 @@ async def test_upsert_client_inserts_new_row(repo: SqliteRepository) -> None:
             use_fixedip=False,
             fixed_ip=None,
             online=True,
+            first_seen=seen,
             last_seen=seen,
         )
 
@@ -106,6 +107,7 @@ async def test_upsert_client_updates_preserving_first_seen(repo: SqliteRepositor
             use_fixedip=False,
             fixed_ip=None,
             online=False,
+            first_seen=first_seen,
             last_seen=first_seen,
         )
 
@@ -131,6 +133,7 @@ async def test_upsert_client_updates_preserving_first_seen(repo: SqliteRepositor
             use_fixedip=True,
             fixed_ip="192.168.2.20",
             online=True,
+            first_seen=later,
             last_seen=later,
         )
 
@@ -327,6 +330,7 @@ async def test_get_client_maps_booleans_and_nullables(repo: SqliteRepository) ->
             use_fixedip=False,
             fixed_ip=None,
             online=False,
+            first_seen=seen,
             last_seen=seen,
         )
 
@@ -363,6 +367,7 @@ async def test_list_clients_orders_by_last_seen_desc(repo: SqliteRepository) -> 
             use_fixedip=False,
             fixed_ip=None,
             online=False,
+            first_seen=older,
             last_seen=older,
         )
         await client_repo.upsert_client_conn(
@@ -379,6 +384,7 @@ async def test_list_clients_orders_by_last_seen_desc(repo: SqliteRepository) -> 
             use_fixedip=False,
             fixed_ip=None,
             online=False,
+            first_seen=newer,
             last_seen=newer,
         )
 

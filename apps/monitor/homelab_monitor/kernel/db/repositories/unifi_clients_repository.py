@@ -102,14 +102,16 @@ class UnifiClientRepo:
         use_fixedip: bool,
         fixed_ip: str | None,
         online: bool,
+        first_seen: str,
         last_seen: str,
     ) -> None:
         """Insert or update a client by MAC.
 
-        On INSERT, first_seen = last_seen. On CONFLICT(mac), updates all mutable
-        identity/connection fields + last_seen, PRESERVES first_seen, and does NOT
-        touch is_host or lease_expiry (those are owned by ensure_host_row /
-        STAGE-007-012 respectively).
+        On INSERT, first_seen = the passed first_seen (the record's true epoch->ISO
+        first_seen; STAGE-007-004). On CONFLICT(mac), updates all mutable identity/
+        connection fields + last_seen, PRESERVES first_seen (it is NOT in DO UPDATE
+        SET), and does NOT touch is_host or lease_expiry (those are owned by
+        ensure_host_row / promote_to_host_conn / STAGE-007-012 respectively).
         """
         await conn.execute(
             text(
@@ -118,7 +120,7 @@ class UnifiClientRepo:
                 "   use_fixedip, fixed_ip, online, first_seen, last_seen) "
                 "VALUES "
                 "  (:mac, :ip, :hostname, :name, :oui, :network, :ap_mac, :sw_mac, "
-                "   :sw_port, :use_fixedip, :fixed_ip, :online, :last_seen, :last_seen) "
+                "   :sw_port, :use_fixedip, :fixed_ip, :online, :first_seen, :last_seen) "
                 "ON CONFLICT(mac) DO UPDATE SET "
                 "  ip = excluded.ip, "
                 "  hostname = excluded.hostname, "
@@ -146,6 +148,7 @@ class UnifiClientRepo:
                 "use_fixedip": 1 if use_fixedip else 0,
                 "fixed_ip": fixed_ip,
                 "online": 1 if online else 0,
+                "first_seen": first_seen,
                 "last_seen": last_seen,
             },
         )
@@ -178,6 +181,57 @@ class UnifiClientRepo:
             text("DELETE FROM unifi_client_observations WHERE last_seen < :cutoff"),
             {"cutoff": cutoff},
         )
+
+    @staticmethod
+    async def promote_to_host_conn(
+        conn: AsyncConnection,
+        *,
+        real_mac: str,
+        host_ip: str,
+    ) -> bool:
+        """Reconcile the sentinel host row into a real-MAC row (STAGE-007-004).
+
+        The host's first-class row is seeded by ensure_host_row as a sentinel keyed
+        mac = f"host:{host_ip}" (is_host=1). When the active-client collector observes
+        the host's REAL MAC online at host_ip, this merges the sentinel into the
+        real-MAC row: sets is_host=1 on the real-MAC row, carries the EARLIER first_seen
+        (lexicographic MIN of the two ISO timestamps), then DELETES the sentinel.
+
+        Returns True when a reconcile happened, False when there is nothing to do
+        (sentinel absent — already reconciled or never seeded). Idempotent: once the
+        sentinel is deleted, later calls return False.
+
+        The caller MUST have already upserted the real-MAC row (so it exists for the
+        UPDATE). Guards real_mac == sentinel_mac (an impossible real MAC literally equal
+        to "host:<ip>") and returns False, never deleting the row it would promote.
+        """
+        sentinel_mac = f"host:{host_ip}"
+        if real_mac == sentinel_mac:
+            return False
+        sentinel_row = await conn.execute(
+            text("SELECT first_seen FROM unifi_clients WHERE mac = :mac"),
+            {"mac": sentinel_mac},
+        )
+        sentinel: Row[Any] | None = sentinel_row.fetchone()
+        if sentinel is None:
+            return False
+        real_row = await conn.execute(
+            text("SELECT first_seen FROM unifi_clients WHERE mac = :mac"),
+            {"mac": real_mac},
+        )
+        real: Row[Any] | None = real_row.fetchone()
+        if real is None:
+            return False
+        merged_first_seen = min(str(sentinel.first_seen), str(real.first_seen))
+        await conn.execute(
+            text("UPDATE unifi_clients SET is_host = 1, first_seen = :fs WHERE mac = :mac"),
+            {"fs": merged_first_seen, "mac": real_mac},
+        )
+        await conn.execute(
+            text("DELETE FROM unifi_clients WHERE mac = :mac"),
+            {"mac": sentinel_mac},
+        )
+        return True
 
     # ---- Instance reads ----
 

@@ -603,6 +603,16 @@ _DEFAULT_CARDINALITY_FAMILIES: dict[str, int] = {
     "homelab_ha_entity_last_changed_seconds": 2500,
     # ~106 real update entities observed on this homelab + headroom.
     "homelab_ha_update_available": 150,
+    # STAGE-007-004 — Unifi per-client/DPI metric-family caps. CONFIG only here;
+    # the cap is APPLIED in STAGE-007-008 (per-client stats: cap_for("unifi_client_stats"))
+    # and STAGE-007-009 (DPI: cap_for("unifi_dpi")). The identity-upsert helper applies
+    # NO cap — the unifi_clients registry is the complete canonical inventory
+    # (a home /24 is ~85 clients, far below any cap). These bound only the per-client
+    # METRIC-series cardinality in Prometheus.
+    # ~85 home clients x a few stat series each → 200 headroom.
+    "unifi_client_stats": 200,
+    # DPI top-N clients x top-N apps → 100.
+    "unifi_dpi": 100,
 }
 
 

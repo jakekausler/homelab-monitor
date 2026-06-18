@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from homelab_monitor.kernel.config import CardinalityCapsConfig
 from homelab_monitor.kernel.metrics.cardinality import (
     M_FAMILY_DROPPED_SERIES,
     CappedEmitter,
@@ -202,3 +203,21 @@ def test_emit_returns_survivor_count() -> None:
     assert len(drop_gauges) == 1
     assert drop_gauges[0].value == float(_SMALL)
     assert len(events) == 1
+
+
+# CardinalityCapsConfig.cap_for tests (STAGE-007-004 family additions)
+
+
+def test_cap_for_unifi_client_stats() -> None:
+    """The unifi_client_stats family resolves to its configured cap (200)."""
+    assert CardinalityCapsConfig().cap_for("unifi_client_stats") == 200  # noqa: PLR2004
+
+
+def test_cap_for_unifi_dpi() -> None:
+    """The unifi_dpi family resolves to its configured cap (100)."""
+    assert CardinalityCapsConfig().cap_for("unifi_dpi") == 100  # noqa: PLR2004
+
+
+def test_cap_for_unknown_family_returns_default() -> None:
+    """An unconfigured family falls back to the default cap (500)."""
+    assert CardinalityCapsConfig().cap_for("no_such_family") == 500  # noqa: PLR2004
