@@ -19,6 +19,7 @@ from homelab_monitor.kernel.plugins.io import (
     LogsWriter,
     MetricsWriter,
     SshClientFactory,
+    UnifiClient,
 )
 from homelab_monitor.kernel.plugins.types import CollectorConfig
 from homelab_monitor.kernel.secrets.resolver import SyncSecretsResolver
@@ -48,3 +49,4 @@ class CollectorContext:
     log: BoundLogger
     ha: HomeAssistantClient | None = None
     ha_registry: HaEntityRegistryCache | None = None
+    unifi: UnifiClient | None = None

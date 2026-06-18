@@ -527,6 +527,34 @@ def load_ha_config() -> HaConfig:
     return HaConfig(base_url=base_url, notify_service=notify_service, event_type=event_type)
 
 
+@dataclass(frozen=True, slots=True)
+class UnifiConfig:
+    """Unifi controller connection config (STAGE-007-001). Env-only.
+
+    ``base_url`` is the UDM controller base URL (no trailing slash; the loader strips
+    it). The read-only API key is NOT here — it lives in the secret store under
+    ``unifi_api_key`` and is resolved at request time. ``site_id`` is the controller
+    site id (default ``"default"``); the client re-caches it from ``v1/sites`` at
+    startup, so this is just the pre-resolution default.
+    """
+
+    base_url: str = "https://192.168.2.1"
+    site_id: str = "default"
+
+
+def load_unifi_config() -> UnifiConfig:
+    """Load Unifi connection config from env.
+
+    ``HOMELAB_MONITOR_UNIFI_URL`` -> ``base_url`` (trailing slash stripped so client
+    path concatenation is unambiguous; default base URL when unset).
+    ``HOMELAB_MONITOR_UNIFI_SITE_ID`` -> ``site_id`` (default ``"default"``).
+    """
+    raw = os.environ.get("HOMELAB_MONITOR_UNIFI_URL")
+    base_url = UnifiConfig().base_url if raw is None else raw.rstrip("/")
+    site_id = os.environ.get("HOMELAB_MONITOR_UNIFI_SITE_ID", "default")
+    return UnifiConfig(base_url=base_url, site_id=site_id)
+
+
 # Built-in per-family cardinality caps (STAGE-005-006).
 # A typical large HA deployment emits ~1906 entity-family series; 2500 gives
 # comfortable headroom while still bounding runaway growth.

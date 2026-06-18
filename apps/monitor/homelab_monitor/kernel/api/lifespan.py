@@ -23,6 +23,7 @@ from homelab_monitor.kernel.config import (
     load_ha_config,
     load_ha_registry_config,
     load_tail_config,
+    load_unifi_config,
 )
 from homelab_monitor.kernel.cron.repository import CronRepo
 from homelab_monitor.kernel.cron.run_repository import CronRunRepository
@@ -63,6 +64,7 @@ from homelab_monitor.kernel.secrets.repository import AsyncSecretsRepository
 from homelab_monitor.kernel.secrets.ttl_resolver import TtlCachingSecretsResolver
 from homelab_monitor.kernel.ssh.client import AsyncSshClientFactory
 from homelab_monitor.kernel.ssh.config import load_ssh_targets
+from homelab_monitor.kernel.unifi.client import UnifiRestClient
 from homelab_monitor.plugins.collectors.builtin.log_error_rate import (
     LogErrorRateCollector,
 )
@@ -650,6 +652,44 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
     # (get_ha_client dep). Mirrors app.state.ha_ws_client below.
     app.state.ha_client = ha_client
 
+    # 7a-unifi. Unifi REST client (STAGE-007-001).
+    #
+    # D1 — a SECOND, DEDICATED httpx client with verify=False (the UDM uses a
+    # self-signed cert CN=unifi.local). Blast radius of verify=False is exactly the
+    # one UDM target; the vanilla http_client above keeps full verification for
+    # everything else. Lifespan owns this client's construction + teardown (closed in
+    # the finally block alongside http_client); UnifiRestClient borrows it.
+    #
+    # The unifi_api_key is read per-request via the TTL resolver (mirrors HA's
+    # token_provider) and is never stored on the client nor logged. The client is
+    # ALWAYS constructed (never None); a missing key surfaces as UnifiError(auth)
+    # inside the client without a network call.
+    unifi_http_client = httpx.AsyncClient(
+        verify=False,  # self-signed UDM cert; blast radius is one LAN target (D1, STAGE-007-001)
+        limits=httpx.Limits(max_connections=50, max_keepalive_connections=20),
+        timeout=httpx.Timeout(10.0, connect=5.0),
+    )
+    unifi_config = load_unifi_config()
+    unifi_client = UnifiRestClient(
+        base_url=unifi_config.base_url,
+        http=unifi_http_client,
+        key_provider=lambda: ttl_resolver.current().get("unifi_api_key"),
+        site_id=unifi_config.site_id,
+    )
+    # Eager, NON-FATAL site-id resolution from v1/sites (D3). A startup UDM/key
+    # failure must NOT crash the app — log the typed error and continue. resolve is
+    # single-shot here (NOT retried): on failure v1_site_id stays "default" until a
+    # Wave-B/C collector re-invokes resolve_site_id() or the process restarts. The
+    # classic site_name ("default") is unaffected and works regardless.
+    unifi_site_err = await unifi_client.resolve_site_id()
+    if unifi_site_err is not None:
+        log.warning(
+            "lifespan.unifi_site_id_unresolved",
+            reason=unifi_site_err.reason,
+            message=unifi_site_err.message,
+        )
+    app.state.unifi_client = unifi_client
+
     in_memory_metrics_writer = MemoryRetainingMetricsWriter()
     prom_registry = CollectorRegistry()
     prom_writer = PrometheusRegistryWriter(prom_registry)
@@ -741,6 +781,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
             log=bound_log,  # pyright: ignore[reportArgumentType]
             ha=ha_client,
             ha_registry=getattr(app.state, "ha_entity_registry", None),
+            unifi=unifi_client,
         )
 
     # 7f. BuildSourcesLoader — STAGE-003-009 generic config (scope expansion).
@@ -1439,6 +1480,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
         with contextlib.suppress(asyncio.CancelledError):
             await flusher_task
         await http_client.aclose()
+        await unifi_http_client.aclose()
         docker_client = getattr(app.state, "docker_socket_client", None)
         # Defensive guard: triggers only when DockerSocketCollector registration failed
         # during startup (degraded path) and lifespan still tries to close the client

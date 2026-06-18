@@ -908,3 +908,38 @@ async def test_lifespan_ha_disabled_skips_websocket_start(
         ha_ws_client = app.state.ha_ws_client
         # _task is None because start_task was not called (base_url was falsy)
         assert ha_ws_client._task is None  # pyright: ignore[reportPrivateUsage]
+
+
+@pytest.mark.asyncio
+async def test_lifespan_unifi_site_resolution_success_skips_warning(
+    db_url: str,
+    master_key: bytes,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """resolve_site_id() returning None → success path taken, warning skipped.
+
+    # Coverage: lifespan success-path when resolve_site_id() returns None
+    # (685->691), STAGE-007-001.
+    When unifi_site_err is None the ``if unifi_site_err is not None`` block at
+    line 685 is skipped and control flows directly to line 691
+    (app.state.unifi_client = unifi_client).  Without this test, the FALSE branch
+    of that condition was never hit, leaving a partial-branch gap that fails the
+    ``fail_under=100`` coverage gate.
+    """
+    import homelab_monitor.kernel.unifi.client as unifi_client_mod  # noqa: PLC0415
+
+    monkeypatch.setenv("HOMELAB_MONITOR_DB_URL", db_url)
+    monkeypatch.setenv("HOMELAB_MONITOR_MASTER_KEY", base64.b64encode(master_key).decode())
+
+    async def _resolve_ok(self: object) -> None:
+        return None
+
+    monkeypatch.setattr(unifi_client_mod.UnifiRestClient, "resolve_site_id", _resolve_ok)
+
+    app = create_app(lifespan_enabled=True)
+
+    async with app.router.lifespan_context(app):
+        assert app.state.scheduler is not None
+        assert app.state.scheduler.running
+        assert hasattr(app.state, "unifi_client")
+        assert app.state.unifi_client is not None

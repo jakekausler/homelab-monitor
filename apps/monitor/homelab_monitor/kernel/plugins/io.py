@@ -26,6 +26,8 @@ from homelab_monitor.kernel.ha.client import (
 )
 from homelab_monitor.kernel.ha.errors import HaError
 from homelab_monitor.kernel.ssh.result import SshCommandResult
+from homelab_monitor.kernel.unifi.client import UnifiResponse
+from homelab_monitor.kernel.unifi.errors import UnifiError
 
 
 @dataclass(frozen=True, slots=True)
@@ -161,6 +163,81 @@ class HomeAssistantClient(Protocol):
         self, domain: str, service: str, data: dict[str, object] | None = None
     ) -> HaServiceResult | HaError:
         """POST /api/services/<domain>/<service> — changed states, or a typed HaError."""
+        ...
+
+
+@runtime_checkable
+class UnifiClient(Protocol):
+    """Read-only REST surface for reaching the Unifi controller (STAGE-007-001).
+
+    Every method is return-not-raise: it returns a :class:`UnifiResponse` OR a
+    :class:`UnifiError`, so a UDM 5xx / timeout / auth failure never propagates as
+    our own 5xx. OBSERVE-ONLY — only GET helpers exist. The concrete implementation
+    is :class:`homelab_monitor.kernel.unifi.client.UnifiRestClient`.
+
+    SCAFFOLDING: collectors consuming these helpers land in Wave B/C
+    (STAGE-007-005..014).
+    """
+
+    # Classic API site NAME (default "default"); used in /api/s/{name}/ paths.
+    site_name: str
+    # v1 site UUID resolved from v1/sites; used in /sites/{uuid}/ paths.
+    v1_site_id: str
+
+    async def v1_sites(self) -> UnifiResponse | UnifiError:
+        """GET v1 /sites — controller sites, or a typed UnifiError."""
+        ...
+
+    async def v1_devices(self) -> UnifiResponse | UnifiError:
+        """GET v1 /sites/{site_id}/devices — device inventory, or a typed UnifiError."""
+        ...
+
+    async def v1_device(self, device_id: str) -> UnifiResponse | UnifiError:
+        """GET v1 /devices/{device_id} — one device, or a typed UnifiError."""
+        ...
+
+    async def v1_device_stats(self, device_id: str) -> UnifiResponse | UnifiError:
+        """GET v1 /devices/{device_id}/statistics/latest — latest stats, or a typed UnifiError."""
+        ...
+
+    async def v1_clients(self) -> UnifiResponse | UnifiError:
+        """GET v1 /sites/{site_id}/clients — coarse client list, or a typed UnifiError."""
+        ...
+
+    async def stat_device(self) -> UnifiResponse | UnifiError:
+        """GET classic stat/device — fat per-device records, or a typed UnifiError."""
+        ...
+
+    async def stat_sta(self) -> UnifiResponse | UnifiError:
+        """GET classic stat/sta — active-client identity + stats, or a typed UnifiError."""
+        ...
+
+    async def stat_alluser(self) -> UnifiResponse | UnifiError:
+        """GET classic stat/alluser — all known clients, or a typed UnifiError."""
+        ...
+
+    async def stat_health(self) -> UnifiResponse | UnifiError:
+        """GET classic stat/health — subsystem/WAN health, or a typed UnifiError."""
+        ...
+
+    async def stat_dpi(self) -> UnifiResponse | UnifiError:
+        """GET classic stat/dpi — per-app DPI counters, or a typed UnifiError."""
+        ...
+
+    async def rest_networkconf(self) -> UnifiResponse | UnifiError:
+        """GET classic rest/networkconf — DHCP/DNS config, or a typed UnifiError."""
+        ...
+
+    async def rest_alarm(self) -> UnifiResponse | UnifiError:
+        """GET classic rest/alarm?archived=false — active alarms, or a typed UnifiError."""
+        ...
+
+    async def stat_sysinfo(self) -> UnifiResponse | UnifiError:
+        """GET classic stat/sysinfo — controller version/system info, or a typed UnifiError."""
+        ...
+
+    async def resolve_site_id(self) -> UnifiError | None:
+        """Resolve + cache the site id from v1/sites; None on success, UnifiError on failure."""
         ...
 
 
