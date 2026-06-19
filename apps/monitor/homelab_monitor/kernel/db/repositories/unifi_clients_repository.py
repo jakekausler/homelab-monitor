@@ -233,6 +233,22 @@ class UnifiClientRepo:
         )
         return True
 
+    @staticmethod
+    async def set_lease_expiry_conn(
+        conn: AsyncConnection, *, mac: str, lease_expiry: str | None
+    ) -> None:
+        """Set lease_expiry on an existing client by MAC (case-insensitive).
+
+        Used by STAGE-007-012 (SSH lease collector). MACs are stored verbatim from
+        the UniFi API (no normalization), while the dnsmasq lease file lowercases
+        MACs, so the match is case-insensitive. No-op if no row matches (lease-only
+        rows are inserted separately by the collector before calling this).
+        """
+        await conn.execute(
+            text("UPDATE unifi_clients SET lease_expiry = :expiry WHERE LOWER(mac) = LOWER(:mac)"),
+            {"expiry": lease_expiry, "mac": mac},
+        )
+
     # ---- Instance reads ----
 
     async def find_mac_by_ip_at(self, ip: str, at: str) -> str | None:

@@ -448,3 +448,65 @@ async def test_ensure_host_row_noop_when_host_already_present(
     assert host_rows[0].mac == _MAC
     # Sentinel specifically absent.
     assert await client_repo.get_client(f"host:{_HOST_IP}") is None
+
+
+# ---- set_lease_expiry_conn ----
+
+
+async def _seed_client(repo: SqliteRepository, mac: str) -> None:
+    """Insert a minimal client row with the given mac (online, now timestamps)."""
+    seen = utc_now_iso()
+    async with repo.transaction() as conn:
+        await UnifiClientRepo.upsert_client_conn(
+            conn,
+            mac=mac,
+            ip=None,
+            hostname=None,
+            name=None,
+            oui=None,
+            network=None,
+            ap_mac=None,
+            sw_mac=None,
+            sw_port=None,
+            use_fixedip=False,
+            fixed_ip=None,
+            online=True,
+            first_seen=seen,
+            last_seen=seen,
+        )
+
+
+@pytest.mark.asyncio
+async def test_set_lease_expiry_conn_case_insensitive_match(repo: SqliteRepository) -> None:
+    """A lowercase MAC enriches a row stored with an UPPERCASE MAC."""
+    upper_mac = "AA:BB:CC:DD:EE:FF"
+    await _seed_client(repo, upper_mac)
+    client_repo = UnifiClientRepo(repo)
+
+    async with repo.transaction() as conn:
+        await UnifiClientRepo.set_lease_expiry_conn(
+            conn, mac="aa:bb:cc:dd:ee:ff", lease_expiry="2026-06-19T08:00:00+00:00"
+        )
+
+    row = await client_repo.get_client(upper_mac)
+    assert row is not None
+    assert row.lease_expiry == "2026-06-19T08:00:00+00:00"
+
+
+@pytest.mark.asyncio
+async def test_set_lease_expiry_conn_no_match_is_noop(repo: SqliteRepository) -> None:
+    """No matching MAC -> no error, no row created, nothing changed."""
+    await _seed_client(repo, _MAC)
+    client_repo = UnifiClientRepo(repo)
+
+    async with repo.transaction() as conn:
+        await UnifiClientRepo.set_lease_expiry_conn(
+            conn, mac="99:99:99:99:99:99", lease_expiry="2026-06-19T08:00:00+00:00"
+        )
+
+    # The seeded row is untouched; the unmatched MAC created nothing.
+    seeded = await client_repo.get_client(_MAC)
+    assert seeded is not None
+    assert seeded.lease_expiry is None
+    missing = await client_repo.get_client("99:99:99:99:99:99")
+    assert missing is None

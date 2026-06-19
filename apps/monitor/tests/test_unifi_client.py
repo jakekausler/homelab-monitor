@@ -514,6 +514,29 @@ def test_load_unifi_config_ssh_lease_enabled_falsey_value(
     assert cfg.ssh_lease_enabled is False
 
 
+def test_load_unifi_config_ssh_lease_target_id_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Unset env -> the default target id 'udm'."""
+    monkeypatch.delenv("HOMELAB_MONITOR_UNIFI_SSH_LEASE_TARGET_ID", raising=False)
+    cfg = load_unifi_config()
+    assert cfg.ssh_lease_target_id == "udm"
+
+
+def test_load_unifi_config_ssh_lease_target_id_blank_falls_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Whitespace-only env -> the default target id (empty branch)."""
+    monkeypatch.setenv("HOMELAB_MONITOR_UNIFI_SSH_LEASE_TARGET_ID", "   ")
+    cfg = load_unifi_config()
+    assert cfg.ssh_lease_target_id == "udm"
+
+
+def test_load_unifi_config_ssh_lease_target_id_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Set env -> stripped override value."""
+    monkeypatch.setenv("HOMELAB_MONITOR_UNIFI_SSH_LEASE_TARGET_ID", "  synology  ")
+    cfg = load_unifi_config()
+    assert cfg.ssh_lease_target_id == "synology"
+
+
 _DEFAULT_OBSERVATION_RETENTION_DAYS = 90
 _OVERRIDE_OBSERVATION_RETENTION_DAYS = 30
 
