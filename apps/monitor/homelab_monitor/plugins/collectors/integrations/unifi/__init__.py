@@ -31,6 +31,9 @@ from homelab_monitor.plugins.collectors.integrations.unifi.client_stats import (
 from homelab_monitor.plugins.collectors.integrations.unifi.device import (
     UnifiDeviceCollector,
 )
+from homelab_monitor.plugins.collectors.integrations.unifi.networkconf import (
+    UnifiNetworkconfCollector,
+)
 from homelab_monitor.plugins.collectors.integrations.unifi.wan import (
     UnifiWanCollector,
 )
@@ -45,6 +48,7 @@ _UNIFI_COLLECTORS: list[type[BaseCollector]] = [
     UnifiClientStatsCollector,
     UnifiClientDpiCollector,
     UnifiAlarmsCollector,
+    UnifiNetworkconfCollector,
 ]
 
 
