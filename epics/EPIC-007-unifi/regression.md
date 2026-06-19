@@ -52,3 +52,9 @@
 - [ ] Run the `unifi_alarms` collector against the live UDM and confirm `homelab_unifi_threat_count{}` is ALWAYS emitted (=0.0 on a quiet network) plus `homelab_unifi_api_took_seconds{endpoint="rest/alarm?archived=false"}`, with `result.ok=True` and no per-type series when no alarms (the always-emit-0 / graceful path).
 - [ ] When the live UDM has active alarms, re-validate: `homelab_unifi_threat_count{}` = distinct active `_id` count and `homelab_unifi_threat{type}` per-type counts appear, with the `{type}` label = alarm `key` (fallback `subsystem`/`"unknown"`). (This populated-live path was NOT exercisable at STAGE-007-010 Refinement — live had zero alarms.)
 - [ ] Confirm duplicate alarm `_id`s are counted ONCE (within-poll dedup) and records with no usable `_id` are skipped.
+
+## STAGE-007-011 — DHCP config + DNS-steering + pool-usage collector
+
+- [ ] Run `UnifiNetworkconfCollector` against the live UDM and confirm: `homelab_unifi_dhcp_enabled_network_count>=1`, `homelab_unifi_dhcp_pool_size{network="Default"}` ~249, and `homelab_unifi_dhcp_dns_primary{network="Default", dns="192.168.2.148"}=1.0` (the Pi-hole DNS-steering signal — if the `dns` label ever != 192.168.2.148, DNS steering has drifted). WAN networks must NOT produce DHCP series.
+- [ ] Confirm field-by-field graceful degrade: a DHCP network with a malformed pool start/stop drops only its pool gauges (size/start/end) while still emitting its dns_primary gauge and still counting toward `dhcp_enabled_network_count`; a network with no `dhcpd_dns_1` emits pool gauges but no dns_primary gauge.
+- [ ] Confirm `homelab_unifi_dhcp_enabled_network_count` is ALWAYS emitted (incl. 0.0 if no DHCP networks) so STAGE-007-015 alerts avoid the absent() trap.
