@@ -28,6 +28,9 @@ from homelab_monitor.plugins.collectors.integrations.unifi.client_dpi import (
 from homelab_monitor.plugins.collectors.integrations.unifi.client_stats import (
     UnifiClientStatsCollector,
 )
+from homelab_monitor.plugins.collectors.integrations.unifi.controller_up import (
+    UnifiControllerUpCollector,
+)
 from homelab_monitor.plugins.collectors.integrations.unifi.device import (
     UnifiDeviceCollector,
 )
@@ -51,6 +54,7 @@ _UNIFI_COLLECTORS: list[type[BaseCollector]] = [
     UnifiClientStatsCollector,
     UnifiClientDpiCollector,
     UnifiAlarmsCollector,
+    UnifiControllerUpCollector,  # STAGE-007-013
     UnifiNetworkconfCollector,
     UnifiSshLeaseCollector,
 ]
