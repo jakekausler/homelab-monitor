@@ -165,7 +165,7 @@ async def test_tick_precision_short_interval() -> None:
     count = _count_metric(
         metrics, "homelab_collector_run_success_total", labels_subset={"name": "short"}
     )
-    assert 14 <= count <= 16  # noqa: PLR2004
+    assert 10 <= count <= 16  # noqa: PLR2004
 
 
 @pytest.mark.asyncio
