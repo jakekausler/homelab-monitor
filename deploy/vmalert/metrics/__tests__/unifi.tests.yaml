@@ -1,0 +1,607 @@
+# Rule unit-test fixtures for deploy/vmalert/metrics/unifi.yaml (STAGE-007-015 / EPIC-007).
+# Schema: Prometheus / vmalert rule unit-test format.
+# Run manually (vmalert has NO unit-test mode — use promtool, which understands the same
+# Prometheus rule-test schema, for the threshold/comparison/join rules):
+#   docker run --rm --entrypoint promtool \
+#     -v $(pwd)/deploy/vmalert/metrics:/rules \
+#     prom/prometheus:v2.47.0 \
+#     test rules /rules/__tests__/unifi.tests.yaml
+#
+# NOTE: promtool (Prometheus engine) CANNOT evaluate the MetricsQL `[1d:30s]` subquery anomaly rules
+#   UnifiClientCountAnomaly (rule 24) and UnifiSsidClientCountAnomaly (rule 25). Those are validated by
+#   live-MetricsQL replay against the rig instead (Refinement) and have NO promtool cases here.
+#
+# ANNOTATION NOTE: under promtool v2.47.0, an OMITTED exp_annotations asserts Annotations:{} (empty),
+#   NOT "skip the check". So every firing stanza below includes exp_annotations with the EXACT rendered
+#   summary + description strings (rendered {{ $value }} included). Rules 24/25 (subqueries) have no
+#   promtool cases at all (live-replay-only).
+#
+# (No make target wires this yet — forward-compatible static fixture, NOT CI-run. Consistent with
+#  every other __tests__/*.tests.yaml in this directory.)
+
+rule_files:
+  - ../unifi.yaml
+
+evaluation_interval: 30s
+
+tests:
+  # ---- Rule 1: UnifiControllerDown (for: 0m, no {{ $value }}) ----
+  - interval: 30s
+    input_series:
+      - series: 'homelab_unifi_up'
+        values: '0 0 0'
+    alert_rule_test:
+      - eval_time: 60s
+        alertname: UnifiControllerDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              source_tool: vmalert-metrics
+              category: network
+              integration: unifi
+            exp_annotations:
+              summary: "Unifi controller is down or API-unreachable"
+              description: "The Unifi controller health probe returned down (homelab_unifi_up=0). The controller API is unreachable; all Unifi metrics are stale until it recovers."
+
+  # ---- Rule 1 NO-FIRE: controller up ----
+  - interval: 30s
+    input_series:
+      - series: 'homelab_unifi_up'
+        values: '1 1 1'
+    alert_rule_test:
+      - eval_time: 60s
+        alertname: UnifiControllerDown
+        exp_alerts: []
+
+  # ---- Rule 2: UnifiWanDown (for: 0m, no {{ $value }}) ----
+  - interval: 30s
+    input_series:
+      - series: 'homelab_unifi_wan_up'
+        values: '0 0 0'
+    alert_rule_test:
+      - eval_time: 60s
+        alertname: UnifiWanDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              source_tool: vmalert-metrics
+              category: network
+              integration: unifi
+            exp_annotations:
+              summary: "Unifi WAN link is down"
+              description: "The Unifi WAN uplink is down (homelab_unifi_wan_up=0). Internet connectivity through the gateway is likely lost."
+
+  # ---- Rule 3: UnifiGatewayDown (for: 0m, no {{ $value }}) ----
+  - interval: 30s
+    input_series:
+      - series: 'homelab_unifi_device_up{kind="gateway",device="udmpro",model="UDMPRO"}'
+        values: '0 0 0'
+    alert_rule_test:
+      - eval_time: 60s
+        alertname: UnifiGatewayDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              source_tool: vmalert-metrics
+              category: network
+              integration: unifi
+              kind: gateway
+              device: udmpro
+              model: UDMPRO
+            exp_annotations:
+              summary: "Unifi gateway is down"
+              description: "Unifi gateway udmpro (model UDMPRO) is down (homelab_unifi_device_up=0)."
+
+  # ---- Rule 3 + Rule 4 overlap check: gateway-down must NOT fire UnifiDeviceDown (excluded) ----
+  - interval: 30s
+    input_series:
+      - series: 'homelab_unifi_device_up{kind="gateway",device="udmpro",model="UDMPRO"}'
+        values: '0 0 0'
+    alert_rule_test:
+      - eval_time: 60s
+        alertname: UnifiDeviceDown
+        exp_alerts: []
+
+  # ---- Rule 4: UnifiDeviceDown (non-gateway, for: 0m, no {{ $value }}) ----
+  - interval: 30s
+    input_series:
+      - series: 'homelab_unifi_device_up{kind="switch",device="usw-24",model="USW24"}'
+        values: '0 0 0'
+    alert_rule_test:
+      - eval_time: 60s
+        alertname: UnifiDeviceDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              source_tool: vmalert-metrics
+              category: network
+              integration: unifi
+              kind: switch
+              device: usw-24
+              model: USW24
+            exp_annotations:
+              summary: "Unifi device is down"
+              description: "Unifi device usw-24 (model USW24, kind switch) is down (homelab_unifi_device_up=0)."
+
+  # ---- Rule 4 NO-FIRE: device up ----
+  - interval: 30s
+    input_series:
+      - series: 'homelab_unifi_device_up{kind="switch",device="usw-24",model="USW24"}'
+        values: '1 1 1'
+    alert_rule_test:
+      - eval_time: 60s
+        alertname: UnifiDeviceDown
+        exp_alerts: []
+
+  # ---- Rule 5: UnifiDnsSteeringDrift (for: 5m, no {{ $value }}) ----
+  - interval: 30s
+    input_series:
+      - series: 'homelab_unifi_dhcp_dns_primary{network="lan",dns="1.1.1.1"}'
+        values: '1+0x12'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: UnifiDnsSteeringDrift
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              source_tool: vmalert-metrics
+              category: network
+              integration: unifi
+              network: lan
+              dns: 1.1.1.1
+            exp_annotations:
+              summary: "Unifi DHCP DNS steering drifted from expected Pi-hole IP"
+              description: "Network lan is handing out primary DNS 1.1.1.1, which is not the expected Pi-hole IP 192.168.2.148. DNS steering has drifted."
+
+  # ---- Rule 5 NO-FIRE: DNS == expected Pi-hole IP (label-filtered out) ----
+  - interval: 30s
+    input_series:
+      - series: 'homelab_unifi_dhcp_dns_primary{network="lan",dns="192.168.2.148"}'
+        values: '1+0x12'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: UnifiDnsSteeringDrift
+        exp_alerts: []
+
+  # ---- Rule 6: UnifiDnsSteeringMetricMissing (absent(), for: 5m, no {{ $value }}) ----
+  # Declare an UNRELATED series so the group loads; do NOT declare homelab_unifi_dhcp_dns_primary.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_unifi_up'
+        values: '1+0x12'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: UnifiDnsSteeringMetricMissing
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              source_tool: vmalert-metrics
+              category: network
+              integration: unifi
+            exp_annotations:
+              summary: "Unifi DHCP DNS steering metric is missing"
+              description: "The homelab_unifi_dhcp_dns_primary metric is absent. DNS steering can no longer be verified — the collector may be failing to read DHCP/DNS config."
+
+  # ---- Rule 7: UnifiDeviceFlapping (changes(...[15m]) > 3, for: 0m, has {{ $value }} → labels only) ----
+  # Toggle 0/1 across 15m so changes() > 3. 31 samples over 15m at 30s; alternate each step.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_unifi_device_up{kind="ap",device="uap-1"}'
+        values: '0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: UnifiDeviceFlapping
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              source_tool: vmalert-metrics
+              category: network
+              integration: unifi
+              kind: ap
+              device: uap-1
+            exp_annotations:
+              summary: "Unifi device is flapping"
+              description: "Unifi device uap-1 (kind ap) changed up/down state 30 times in 15m — it is flapping."
+
+  # ---- Rule 8: UnifiSwitchPortErrors (rate sum > 1, for: 10m, has {{ $value }} → labels only) ----
+  # Counters rising 60/interval each (=2/s each over 30s) → summed rate ~4/s > 1. 25 samples for 10m+for.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_unifi_port_rx_errors{device="usw-24",port="5"}'
+        values: '0+60x33'
+      - series: 'homelab_unifi_port_tx_errors{device="usw-24",port="5"}'
+        values: '0+60x33'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: UnifiSwitchPortErrors
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              source_tool: vmalert-metrics
+              category: network
+              integration: unifi
+              device: usw-24
+              port: "5"
+            exp_annotations:
+              summary: "Unifi switch port error rate elevated"
+              description: "Unifi device usw-24 port 5 is logging 4 RX+TX errors/sec (>1/sec sustained 10m)."
+
+  # ---- Rule 8b: UnifiSwitchPortErrors missing-side (only rx_errors present) ----
+  # Proves the label_replace expr tolerates a port that emits only ONE error series:
+  # rx rate 2/s alone still > 1 and fires (value 2). No tx_errors series for this port.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_unifi_port_rx_errors{device="usw-48",port="9"}'
+        values: '0+60x33'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: UnifiSwitchPortErrors
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              source_tool: vmalert-metrics
+              category: network
+              integration: unifi
+              device: usw-48
+              port: "9"
+            exp_annotations:
+              summary: "Unifi switch port error rate elevated"
+              description: "Unifi device usw-48 port 9 is logging 2 RX+TX errors/sec (>1/sec sustained 10m)."
+
+  # ---- Rule 9: UnifiPoePortFault (for: 5m, no {{ $value }}) ----
+  - interval: 30s
+    input_series:
+      - series: 'homelab_unifi_port_poe_good{device="usw-24",port="7"}'
+        values: '0+0x12'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: UnifiPoePortFault
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              source_tool: vmalert-metrics
+              category: network
+              integration: unifi
+              device: usw-24
+              port: "7"
+            exp_annotations:
+              summary: "Unifi PoE port fault"
+              description: "Unifi device usw-24 port 7 reports a PoE fault (homelab_unifi_port_poe_good=0)."
+
+  # ---- Rule 10: UnifiApHighChannelUtil (>80, for: 15m, has {{ $value }} → labels only) ----
+  - interval: 30s
+    input_series:
+      - series: 'homelab_unifi_radio_cu_total{device="uap-1",radio="ng"}'
+        values: '90+0x32'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: UnifiApHighChannelUtil
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              source_tool: vmalert-metrics
+              category: network
+              integration: unifi
+              device: uap-1
+              radio: ng
+            exp_annotations:
+              summary: "Unifi AP radio channel utilization high"
+              description: "Unifi AP uap-1 radio ng channel utilization is 90% (>80% sustained 15m)."
+
+  # ---- Rule 11: UnifiApLowSatisfaction (<70 AND >0, for: 15m, has {{ $value }} → labels only) ----
+  - interval: 30s
+    input_series:
+      - series: 'homelab_unifi_radio_satisfaction{device="uap-1",radio="na"}'
+        values: '50+0x32'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: UnifiApLowSatisfaction
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              source_tool: vmalert-metrics
+              category: network
+              integration: unifi
+              device: uap-1
+              radio: na
+            exp_annotations:
+              summary: "Unifi AP radio satisfaction low"
+              description: "Unifi AP uap-1 radio na client satisfaction is 50 (<70, sustained 15m)."
+
+  # ---- Rule 11 NO-FIRE: idle radio at 0 (guarded out by `> 0`) ----
+  - interval: 30s
+    input_series:
+      - series: 'homelab_unifi_radio_satisfaction{device="uap-1",radio="na"}'
+        values: '0+0x32'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: UnifiApLowSatisfaction
+        exp_alerts: []
+
+  # ---- Rule 12: UnifiClientPoorExperience (>3, for: 10m, has {{ $value }} → labels only) ----
+  - interval: 30s
+    input_series:
+      - series: 'homelab_unifi_clients_poor_satisfaction{threshold="50"}'
+        values: '5+0x24'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: UnifiClientPoorExperience
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              source_tool: vmalert-metrics
+              category: network
+              integration: unifi
+              threshold: "50"
+            exp_annotations:
+              summary: "Multiple Unifi clients have poor experience"
+              description: "5 clients are below the satisfaction threshold 50 (>3 sustained 10m)."
+
+  # ---- Rule 13: UnifiWanLatencyHigh (>0.1, for: 10m, has {{ $value }} → labels only) ----
+  - interval: 30s
+    input_series:
+      - series: 'homelab_unifi_wan_latency_seconds'
+        values: '0.2+0x24'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: UnifiWanLatencyHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              source_tool: vmalert-metrics
+              category: network
+              integration: unifi
+            exp_annotations:
+              summary: "Unifi WAN latency high"
+              description: "Unifi WAN latency is 0.2s (>0.1s sustained 10m)."
+
+  # ---- Rule 14: UnifiWanPacketLoss (>0, for: 10m, has {{ $value }} → labels only) ----
+  - interval: 30s
+    input_series:
+      - series: 'homelab_unifi_wan_drops'
+        values: '3+0x24'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: UnifiWanPacketLoss
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              source_tool: vmalert-metrics
+              category: network
+              integration: unifi
+            exp_annotations:
+              summary: "Unifi WAN packet loss detected"
+              description: "Unifi WAN is dropping packets (3 drops, sustained 10m)."
+
+  # ---- Rule 15: UnifiThreatDetected (>0, for: 0m, has {{ $value }} → labels only) ----
+  - interval: 30s
+    input_series:
+      - series: 'homelab_unifi_threat{type="ids"}'
+        values: '2 2 2'
+    alert_rule_test:
+      - eval_time: 60s
+        alertname: UnifiThreatDetected
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              source_tool: vmalert-metrics
+              category: network
+              integration: unifi
+              type: ids
+            exp_annotations:
+              summary: "Unifi threat detected"
+              description: "Unifi IDS/IPS detected 2 threat(s) of type ids."
+
+  # ---- Rule 16: UnifiDeviceHighTemp (>80, for: 10m, has {{ $value }} → labels only) ----
+  - interval: 30s
+    input_series:
+      - series: 'homelab_unifi_device_temperature_celsius{device="usw-24",name="cpu",type="board"}'
+        values: '85+0x24'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: UnifiDeviceHighTemp
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              source_tool: vmalert-metrics
+              category: network
+              integration: unifi
+              device: usw-24
+              name: cpu
+              type: board
+            exp_annotations:
+              summary: "Unifi device temperature high"
+              description: "Unifi device usw-24 sensor cpu (board) is at 85°C (>80°C sustained 10m)."
+
+  # ---- Rule 17: UnifiDeviceHighCpuMem (cpu>90 or mem>90, for: 15m, has {{ $value }} → labels only) ----
+  # CPU side fires; mem side absent. `or` keeps the cpu series' {device} label.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_unifi_device_cpu_percent{device="udmpro"}'
+        values: '95+0x32'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: UnifiDeviceHighCpuMem
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              source_tool: vmalert-metrics
+              category: network
+              integration: unifi
+              device: udmpro
+            exp_annotations:
+              summary: "Unifi device CPU or memory high"
+              description: "Unifi device udmpro has CPU and/or memory utilization above 90% (one metric reads 95%, sustained 15m). Check both homelab_unifi_device_cpu_percent and _mem_percent for this device."
+
+  # ---- Rule 17b: UnifiDeviceHighCpuMem mem-only (mem>90, cpu absent) ----
+  # Proves the `or` covers the memory side independently: mem 95% alone fires, keeping {device}.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_unifi_device_mem_percent{device="usw-48"}'
+        values: '95+0x32'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: UnifiDeviceHighCpuMem
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              source_tool: vmalert-metrics
+              category: network
+              integration: unifi
+              device: usw-48
+            exp_annotations:
+              summary: "Unifi device CPU or memory high"
+              description: "Unifi device usw-48 has CPU and/or memory utilization above 90% (one metric reads 95%, sustained 15m). Check both homelab_unifi_device_cpu_percent and _mem_percent for this device."
+
+  # ---- Rule 18: UnifiTeleportDown (for: 0m, no {{ $value }}) ----
+  - interval: 30s
+    input_series:
+      - series: 'homelab_unifi_teleport_up'
+        values: '0 0 0'
+    alert_rule_test:
+      - eval_time: 60s
+        alertname: UnifiTeleportDown
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              source_tool: vmalert-metrics
+              category: network
+              integration: unifi
+            exp_annotations:
+              summary: "Unifi Teleport VPN is down"
+              description: "Unifi Teleport VPN is down (homelab_unifi_teleport_up=0). See homelab_unifi_teleport_reason for the reported cause."
+
+  # ---- Rule 19: UnifiDhcpPoolExhaustion (join ratio >0.9, for: 15m, has {{ $value }} → labels only) ----
+  # 95 clients / 100 pool = 0.95 > 0.9. Both series carry network="iot".
+  - interval: 30s
+    input_series:
+      - series: 'homelab_unifi_client_count_by_network{network="iot"}'
+        values: '95+0x32'
+      - series: 'homelab_unifi_dhcp_pool_size{network="iot"}'
+        values: '100+0x32'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: UnifiDhcpPoolExhaustion
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              source_tool: vmalert-metrics
+              category: network
+              integration: unifi
+              network: iot
+            exp_annotations:
+              summary: "Unifi DHCP pool near exhaustion"
+              description: "Network iot DHCP pool is 95% utilized (>90% sustained 15m)."
+
+  # ---- Rule 19 NO-FIRE: ratio below 0.9 (10/100 = 0.1) ----
+  - interval: 30s
+    input_series:
+      - series: 'homelab_unifi_client_count_by_network{network="lan"}'
+        values: '10+0x32'
+      - series: 'homelab_unifi_dhcp_pool_size{network="lan"}'
+        values: '100+0x32'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: UnifiDhcpPoolExhaustion
+        exp_alerts: []
+
+  # ---- Rule 20: UnifiSwitchUplinkSaturation (rate*8/speed > 0.9, for: 10m, has {{ $value }} → labels only) ----
+  # speed_bps = 1e9 (1 Gbps). Need rate(tx_bytes)*8 > 0.9e9 → tx bytes rate > ~1.125e8 B/s.
+  # Increment 60_000_000 bytes / 30s interval = 2e6 B/s ... too low. Use big increments:
+  # increment 4_000_000_000 bytes per 30s → rate = ~1.333e8 B/s → *8 = ~1.066e9 / 1e9 = 1.066 > 0.9.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_unifi_port_tx_bytes{device="usw-24",port="1"}'
+        values: '0+4000000000x33'
+      - series: 'homelab_unifi_port_speed_bps{device="usw-24",port="1"}'
+        values: '1000000000+0x33'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: UnifiSwitchUplinkSaturation
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              source_tool: vmalert-metrics
+              category: network
+              integration: unifi
+              device: usw-24
+              port: "1"
+            exp_annotations:
+              summary: "Unifi switch uplink saturated"
+              description: "Unifi device usw-24 port 1 uplink is at 106.7% of link speed (>90% sustained 10m)."
+
+  # ---- Rule 21: UnifiFirmwareUpdateAvailable (==1, for: 0m, no {{ $value }}) ----
+  - interval: 30s
+    input_series:
+      - series: 'homelab_unifi_device_update_available{device="uap-1"}'
+        values: '1 1 1'
+    alert_rule_test:
+      - eval_time: 60s
+        alertname: UnifiFirmwareUpdateAvailable
+        exp_alerts:
+          - exp_labels:
+              severity: info
+              source_tool: vmalert-metrics
+              category: network
+              integration: unifi
+              device: uap-1
+            exp_annotations:
+              summary: "Unifi device firmware update available"
+              description: "A firmware update is available for Unifi device uap-1."
+
+  # ---- Rule 22: UnifiNewClient (==1, for: 0m, no {{ $value }}) ----
+  - interval: 30s
+    input_series:
+      - series: 'homelab_unifi_new_client{mac="aa:bb:cc:dd:ee:ff",hostname="phone",network="iot"}'
+        values: '1 1 1'
+    alert_rule_test:
+      - eval_time: 60s
+        alertname: UnifiNewClient
+        exp_alerts:
+          - exp_labels:
+              severity: info
+              source_tool: vmalert-metrics
+              category: network
+              integration: unifi
+              mac: aa:bb:cc:dd:ee:ff
+              hostname: phone
+              network: iot
+            exp_annotations:
+              summary: "New Unifi client joined"
+              description: "New client phone (aa:bb:cc:dd:ee:ff) joined network iot."
+
+  # ---- Rule 23: UnifiSpeedtestDegraded (<100 AND lastrun>0, for: 0m, has {{ $value }} → labels only) ----
+  - interval: 30s
+    input_series:
+      - series: 'homelab_unifi_speedtest_download_mbps'
+        values: '50 50 50'
+      - series: 'homelab_unifi_speedtest_lastrun'
+        values: '1700000000 1700000000 1700000000'
+    alert_rule_test:
+      - eval_time: 60s
+        alertname: UnifiSpeedtestDegraded
+        exp_alerts:
+          - exp_labels:
+              severity: info
+              source_tool: vmalert-metrics
+              category: network
+              integration: unifi
+            exp_annotations:
+              summary: "Unifi speedtest download degraded"
+              description: "Unifi speedtest download is 50 Mbps (below the 100 Mbps floor)."
+
+  # ---- Rule 23 NO-FIRE: speedtest never ran (lastrun == 0) ----
+  - interval: 30s
+    input_series:
+      - series: 'homelab_unifi_speedtest_download_mbps'
+        values: '50 50 50'
+      - series: 'homelab_unifi_speedtest_lastrun'
+        values: '0 0 0'
+    alert_rule_test:
+      - eval_time: 60s
+        alertname: UnifiSpeedtestDegraded
+        exp_alerts: []
+
+  # Rules 24 (UnifiClientCountAnomaly) and 25 (UnifiSsidClientCountAnomaly) are SUBQUERY rules
+  # ([1d:30s]) — promtool cannot evaluate them. They have NO promtool cases here and are validated
+  # via live-MetricsQL replay against the rig (Refinement). See file header.
