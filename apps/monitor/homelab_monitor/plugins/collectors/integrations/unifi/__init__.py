@@ -40,6 +40,9 @@ from homelab_monitor.plugins.collectors.integrations.unifi.networkconf import (
 from homelab_monitor.plugins.collectors.integrations.unifi.ssh_lease import (
     UnifiSshLeaseCollector,
 )
+from homelab_monitor.plugins.collectors.integrations.unifi.vpn_teleport import (
+    UnifiVpnTeleportCollector,
+)
 from homelab_monitor.plugins.collectors.integrations.unifi.wan import (
     UnifiWanCollector,
 )
@@ -55,6 +58,7 @@ _UNIFI_COLLECTORS: list[type[BaseCollector]] = [
     UnifiClientDpiCollector,
     UnifiAlarmsCollector,
     UnifiControllerUpCollector,  # STAGE-007-013
+    UnifiVpnTeleportCollector,  # STAGE-007-014
     UnifiNetworkconfCollector,
     UnifiSshLeaseCollector,
 ]
