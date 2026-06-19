@@ -46,3 +46,9 @@
 - [ ] Run `UnifiClientDpiCollector` against the live UDM and confirm `homelab_unifi_dpi_enabled=1.0` + `homelab_unifi_api_took_seconds{endpoint="stat/stadpi"}` + `homelab_metric_family_dropped_series{family="homelab_unifi_client_dpi_bytes"}` are emitted, with `result.ok=True`, even when DPI data is empty (graceful-degrade path).
 - [ ] When the live UDM accumulates DPI data, re-validate: `homelab_unifi_client_dpi_bytes{client,app,cat}` series appear with combined rx+tx values, cardinality bounded to `cap_for("unifi_dpi")` (=100) by VOLUME (biggest consumers survive), and the drop gauge + ONE SuggestionEvent fire when over cap. (This populated-live path was NOT exercisable at STAGE-007-009 Refinement — live had no DPI data.)
 - [ ] Confirm the by-volume cap keeps the HIGHEST-byte series (not lexically-smallest) — the deliberate deviation from CappedEmitter's lexical slice.
+
+## STAGE-007-010 — Alarms/threats collector
+
+- [ ] Run the `unifi_alarms` collector against the live UDM and confirm `homelab_unifi_threat_count{}` is ALWAYS emitted (=0.0 on a quiet network) plus `homelab_unifi_api_took_seconds{endpoint="rest/alarm?archived=false"}`, with `result.ok=True` and no per-type series when no alarms (the always-emit-0 / graceful path).
+- [ ] When the live UDM has active alarms, re-validate: `homelab_unifi_threat_count{}` = distinct active `_id` count and `homelab_unifi_threat{type}` per-type counts appear, with the `{type}` label = alarm `key` (fallback `subsystem`/`"unknown"`). (This populated-live path was NOT exercisable at STAGE-007-010 Refinement — live had zero alarms.)
+- [ ] Confirm duplicate alarm `_id`s are counted ONCE (within-poll dedup) and records with no usable `_id` are skipped.
