@@ -34,3 +34,10 @@
 - [ ] Confirm D2 degrade: `stat_alluser` failure -> ok=True + `homelab_unifi_alluser_degraded`=1 + sta still upserted; `stat_sta` failure -> ok=False + no upsert.
 - [ ] Confirm both `api_took_seconds{endpoint=stat/sta}` and `{endpoint=stat/alluser}` emitted on success.
 - [ ] Confirm `unifi_device`, `unifi_wan`, `unifi_active_client` all appear healthy in `GET /api/collectors`.
+
+## STAGE-007-008 — Per-client stats + WiFi-experience rollups collector
+- [ ] Run the `unifi_client_stats` collector against the live UDM (or replay a captured `stat/sta` payload); confirm `ok=True` and the 6 capped per-client families emit `{mac}`-labeled series: `homelab_unifi_client_signal_dbm` (wireless, negative dBm), `_client_tx_rate_bps`/`_client_rx_rate_bps` (wireless, BPS magnitude — confirm kbps->bps x1000, NOT raw kbps), `_client_uptime`, `_client_tx_bytes`, `_client_rx_bytes` (all clients; wired bytes from wired-* keys).
+- [ ] Confirm the cardinality cap: each capped family writes a `homelab_metric_family_dropped_series{family}` gauge (0.0 under cap); when >`cap_for("unifi_client_stats")` (200) clients are fed, survivors==cap and exactly one warning SuggestionEvent per over-cap family. The survivor `{mac}` set is IDENTICAL across families (A2 invariant).
+- [ ] Confirm WiFi-experience rollups (bounded, not capped) with `{threshold}` labels: `clients_poor_signal{threshold="-70"}`, `clients_poor_satisfaction{threshold="50"}`, `clients_high_retries{threshold="10"}` (computed over the full pre-cap list; div-by-zero guarded when `wifi_tx_attempts==0`), and `ap_client_count{ap_mac}` (per-AP wireless client counts).
+- [ ] Confirm wired graceful degrade: a wired client contributes uptime + tx/rx_bytes but NO signal_dbm/tx_rate_bps/rx_rate_bps series.
+- [ ] Confirm all four unifi collectors (device, wan, active_client, client_stats) healthy in `GET /api/collectors`.
