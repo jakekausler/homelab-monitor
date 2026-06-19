@@ -19,6 +19,9 @@ from homelab_monitor.kernel.plugins.loader import PluginLoader, config_from_clas
 from homelab_monitor.plugins.collectors.integrations.unifi.active_client import (
     UnifiActiveClientCollector,
 )
+from homelab_monitor.plugins.collectors.integrations.unifi.alarms import (
+    UnifiAlarmsCollector,
+)
 from homelab_monitor.plugins.collectors.integrations.unifi.client_dpi import (
     UnifiClientDpiCollector,
 )
@@ -41,6 +44,7 @@ _UNIFI_COLLECTORS: list[type[BaseCollector]] = [
     UnifiActiveClientCollector,
     UnifiClientStatsCollector,
     UnifiClientDpiCollector,
+    UnifiAlarmsCollector,
 ]
 
 
