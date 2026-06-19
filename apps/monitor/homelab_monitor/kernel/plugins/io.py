@@ -224,6 +224,10 @@ class UnifiClient(Protocol):
         """GET classic stat/dpi — per-app DPI counters, or a typed UnifiError."""
         ...
 
+    async def stat_stadpi(self) -> UnifiResponse | UnifiError:
+        """GET classic stat/stadpi — per-client per-app DPI counters, or a typed UnifiError."""
+        ...
+
     async def rest_networkconf(self) -> UnifiResponse | UnifiError:
         """GET classic rest/networkconf — DHCP/DNS config, or a typed UnifiError."""
         ...

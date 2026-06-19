@@ -150,6 +150,10 @@ class UnifiRestClient:
         """GET classic stat/dpi — per-app DPI byte counters."""
         return await self._get_classic("stat/dpi")
 
+    async def stat_stadpi(self) -> UnifiResponse | UnifiError:
+        """GET classic stat/stadpi — per-client per-app DPI byte counters."""
+        return await self._get_classic("stat/stadpi")
+
     async def rest_networkconf(self) -> UnifiResponse | UnifiError:
         """GET classic rest/networkconf — DHCP ranges, dhcpd_dns_*, reservations."""
         return await self._get_classic("rest/networkconf")

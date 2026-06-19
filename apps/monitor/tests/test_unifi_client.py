@@ -158,6 +158,7 @@ async def test_remaining_classic_helpers_build_urls() -> None:
         (lambda c: c.stat_alluser(), "stat/alluser"),
         (lambda c: c.stat_health(), "stat/health"),
         (lambda c: c.stat_dpi(), "stat/dpi"),
+        (lambda c: c.stat_stadpi(), "stat/stadpi"),
         (lambda c: c.rest_networkconf(), "rest/networkconf"),
     ]
     for call, ep in cases:

@@ -243,6 +243,9 @@ class _FakeUnifiBase:
     async def stat_dpi(self) -> UnifiResponse | UnifiError:
         return UnifiError(reason="bad_response", message="stub")
 
+    async def stat_stadpi(self) -> UnifiResponse | UnifiError:
+        return UnifiError(reason="bad_response", message="stub")
+
     async def rest_networkconf(self) -> UnifiResponse | UnifiError:
         return UnifiError(reason="bad_response", message="stub")
 
