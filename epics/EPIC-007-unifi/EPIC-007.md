@@ -1,6 +1,6 @@
 # EPIC-007: Unifi integration
 
-## Status: In Progress (STAGE-007-001..014 Complete; current: STAGE-007-015)
+## Status: In Progress (STAGE-007-001..015 Complete; current: STAGE-007-016)
 
 ## Build order + client-identity ownership (LOCKED — 2026-06-16/17 brainstorm)
 
@@ -321,7 +321,7 @@ including the opt-in SSH lease, land in Wave B before any rules).
 ### Wave D — Metric alert rules (1)
 | # | Stage | Theme |
 |---|---|---|
-| STAGE-007-015 | vmalert-METRICS rules (the ~24 metric alerts) — needs only Wave B/C collectors |
+| STAGE-007-015 | vmalert-METRICS rules (the ~24 metric alerts) — needs only Wave B/C collectors | Complete |
 
 ### Wave E — Events pipeline (1)
 | # | Stage | Theme |
