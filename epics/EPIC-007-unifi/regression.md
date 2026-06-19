@@ -41,3 +41,8 @@
 - [ ] Confirm WiFi-experience rollups (bounded, not capped) with `{threshold}` labels: `clients_poor_signal{threshold="-70"}`, `clients_poor_satisfaction{threshold="50"}`, `clients_high_retries{threshold="10"}` (computed over the full pre-cap list; div-by-zero guarded when `wifi_tx_attempts==0`), and `ap_client_count{ap_mac}` (per-AP wireless client counts).
 - [ ] Confirm wired graceful degrade: a wired client contributes uptime + tx/rx_bytes but NO signal_dbm/tx_rate_bps/rx_rate_bps series.
 - [ ] Confirm all four unifi collectors (device, wan, active_client, client_stats) healthy in `GET /api/collectors`.
+
+## STAGE-007-009 — Per-client DPI collector (capped top-N×top-N + clamp)
+- [ ] Run `UnifiClientDpiCollector` against the live UDM and confirm `homelab_unifi_dpi_enabled=1.0` + `homelab_unifi_api_took_seconds{endpoint="stat/stadpi"}` + `homelab_metric_family_dropped_series{family="homelab_unifi_client_dpi_bytes"}` are emitted, with `result.ok=True`, even when DPI data is empty (graceful-degrade path).
+- [ ] When the live UDM accumulates DPI data, re-validate: `homelab_unifi_client_dpi_bytes{client,app,cat}` series appear with combined rx+tx values, cardinality bounded to `cap_for("unifi_dpi")` (=100) by VOLUME (biggest consumers survive), and the drop gauge + ONE SuggestionEvent fire when over cap. (This populated-live path was NOT exercisable at STAGE-007-009 Refinement — live had no DPI data.)
+- [ ] Confirm the by-volume cap keeps the HIGHEST-byte series (not lexically-smallest) — the deliberate deviation from CappedEmitter's lexical slice.

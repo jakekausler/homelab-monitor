@@ -1,6 +1,6 @@
 # EPIC-007: Unifi integration
 
-## Status: In Progress (STAGE-007-001..008 Complete; current: STAGE-007-009)
+## Status: In Progress (STAGE-007-001..009 Complete; current: STAGE-007-010)
 
 ## Build order + client-identity ownership (LOCKED — 2026-06-16/17 brainstorm)
 
@@ -307,7 +307,7 @@ including the opt-in SSH lease, land in Wave B before any rules).
 | STAGE-007-006 | WAN/ISP + speedtest + failover collector (`stat/health` www) | Complete |
 | STAGE-007-007 | Active-client identity collector → registry upsert | Complete |
 | STAGE-007-008 | Per-client stats + WiFi-experience rollups collector | Complete |
-| STAGE-007-009 | Per-client DPI collector (capped top-N×top-N + clamp) |
+| STAGE-007-009 | Per-client DPI collector (capped top-N×top-N + clamp) | Complete |
 | STAGE-007-010 | Alarms/threats collector (`rest/alarm`) |
 | STAGE-007-011 | DHCP config + DNS-steering + pool-usage collector (`rest/networkconf`) |
 | STAGE-007-012 | SSH DHCP-lease collector (opt-in, default-OFF, on EPIC-017 framework; enriches registry with `lease_expiry`; surfaces in Client page / Clients-tab column / Network DHCP widget / `network.json` — graceful-degrade when off; note: built after EPIC-017) |
