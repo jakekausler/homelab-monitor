@@ -1,6 +1,6 @@
 # EPIC-007: Unifi integration
 
-## Status: In Progress (STAGE-007-001..013 Complete; current: STAGE-007-014)
+## Status: In Progress (STAGE-007-001..014 Complete; current: STAGE-007-015)
 
 ## Build order + client-identity ownership (LOCKED — 2026-06-16/17 brainstorm)
 
@@ -316,7 +316,7 @@ including the opt-in SSH lease, land in Wave B before any rules).
 | # | Stage | Theme |
 |---|---|---|
 | STAGE-007-013 | Controller-up composite + API-latency collector | Complete |
-| STAGE-007-014 | VPN/Teleport health collector (confirm field shape live at Design) | Not Started |
+| STAGE-007-014 | VPN/Teleport health collector (confirm field shape live at Design) | Complete |
 
 ### Wave D — Metric alert rules (1)
 | # | Stage | Theme |
