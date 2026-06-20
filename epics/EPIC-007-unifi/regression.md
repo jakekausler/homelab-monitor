@@ -22,6 +22,15 @@
 
 - Radio `satisfaction` UX (owned by STAGE-007-020 Unifi panel): the `/devices/{device}` radio rows surface UniFi's raw `homelab_unifi_radio_satisfaction` value, which is `-1.0` when the controller hasn't computed satisfaction. STAGE-020's device drill-down UI should render `-1` as "n/a"/blank rather than a literal -1. (019 correctly passes the raw metric through; this is a display decision, not a backend bug.)
 
+## STAGE-007-020 — Integrations → Unifi panel
+
+- Unifi panel (Integrations → Unifi): the persistent status strip renders controller/WAN/Teleport state + device up/total + threat count from `/summary`.
+- Device table renders the live device roster from `/devices` with Kind title-cased (AP/PDU/UDM/Gateway/Switch), State as "Up"/"Down", and Uptime in two-unit magnitude format (e.g. "5d 3h").
+- Clicking a device row opens `/integrations/unifi/devices/<mac>` drill-down with a back-link; sections render data-driven (Ports for switches, Radios for APs, Outlets for the PDU, always-on System).
+- Device-page port Speed shows human bitrate (e.g. "1 Gbps"); port/radio Satisfaction shows em-dash "—" when not reported (switches/non-AP devices); System "Load avg" shows the raw 2-decimal Unix load average (no %).
+- Controller-health widget shows per-endpoint API **Latency** (not uptime); Threats/DPI render honest empty states ("No active threats" / "No DPI data") when those are empty on the live UDM.
+- Radio Satisfaction == -1 sentinel renders as "—"/blank, never literal -1.
+
 ## STAGE-007-005 — Combined Unifi device collector
 
 - [ ] Run the `unifi_device` collector against the live UDM (or replay a captured `stat/device` payload) and confirm: `ok=True`, all adopted devices emit `homelab_unifi_device_up`, and the families `homelab_unifi_port_*`, `homelab_unifi_radio_*`, `homelab_unifi_outlet_relay_state`, `homelab_unifi_device_temperature_celsius`, `homelab_unifi_api_took_seconds{endpoint="stat/device"}` are present.

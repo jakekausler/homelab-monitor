@@ -1,6 +1,6 @@
 # EPIC-007: Unifi integration
 
-## Status: In Progress (STAGE-007-001..019 + 016A Complete; current: STAGE-007-020)
+## Status: In Progress (STAGE-007-001..021 + 016A Complete; current: STAGE-007-021)
 
 ## Build order + client-identity ownership (LOCKED — 2026-06-16/17 brainstorm)
 
@@ -339,7 +339,7 @@ including the opt-in SSH lease, land in Wave B before any rules).
 |---|---|---|
 | STAGE-007-018 | **Nav restructure** (remove Inventory page; relocate Crons under Integrations; add Integrations entries) — FIRST UI stage so all subsequent UI registers into the final structure. Design verifies live what's on Inventory today. Cross-epic UI move (EPIC-002 crons provenance noted). | Complete |
 | STAGE-007-019 | Backend panel/page data endpoints (Unifi panel + Network page + Client page) | Complete |
-| STAGE-007-020 | Integrations → Unifi panel (device table + drill-down + threats/DPI/Teleport/controller + `<LogViewer>`) |
+| STAGE-007-020 | Integrations → Unifi panel (device table + drill-down + threats/DPI/Teleport/controller + `<LogViewer>`) | Complete |
 | STAGE-007-021 | Integrations → Network page shell + WAN/DHCP-pool/WiFi-experience/SSID widgets + DNS-posture indicator |
 | STAGE-007-022 | Clients tab (registry table + lease-expiry column) + Client page (per-client drill-down + DPI + lease field + **DNS-enrichment extension point** for EPIC-006) |
 | STAGE-007-023 | Embedded `<LogViewer>` wiring (UDM syslog, device/category filter) + threat-forensics view |
