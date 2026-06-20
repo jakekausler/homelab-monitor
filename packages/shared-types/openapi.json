@@ -2290,6 +2290,42 @@
         "title": "DismissResponse",
         "type": "object"
       },
+      "DnsEnrichment": {
+        "properties": {
+          "blocked_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Blocked Count"
+          },
+          "last_query_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Query At"
+          },
+          "top_domains": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Top Domains",
+            "type": "array"
+          }
+        },
+        "title": "DnsEnrichment",
+        "type": "object"
+      },
       "DockerSuggestionListResponse": {
         "properties": {
           "next_cursor": {
@@ -6133,6 +6169,1459 @@
         "title": "SuggestionIgnoreResponse",
         "type": "object"
       },
+      "UnifiApiTook": {
+        "properties": {
+          "endpoint": {
+            "title": "Endpoint",
+            "type": "string"
+          },
+          "seconds": {
+            "title": "Seconds",
+            "type": "number"
+          }
+        },
+        "required": [
+          "endpoint",
+          "seconds"
+        ],
+        "title": "UnifiApiTook",
+        "type": "object"
+      },
+      "UnifiClientDetail": {
+        "properties": {
+          "ap_mac": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ap Mac"
+          },
+          "dns": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DnsEnrichment"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "dpi": {
+            "items": {
+              "$ref": "#/components/schemas/UnifiClientDpiRow"
+            },
+            "title": "Dpi",
+            "type": "array"
+          },
+          "first_seen": {
+            "title": "First Seen",
+            "type": "string"
+          },
+          "fixed_ip": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fixed Ip"
+          },
+          "hostname": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hostname"
+          },
+          "ip": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ip"
+          },
+          "is_host": {
+            "title": "Is Host",
+            "type": "boolean"
+          },
+          "last_seen": {
+            "title": "Last Seen",
+            "type": "string"
+          },
+          "lease_expiry": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lease Expiry"
+          },
+          "mac": {
+            "title": "Mac",
+            "type": "string"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "network": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Network"
+          },
+          "online": {
+            "title": "Online",
+            "type": "boolean"
+          },
+          "oui": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Oui"
+          },
+          "series": {
+            "$ref": "#/components/schemas/UnifiClientSeries"
+          },
+          "sw_mac": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sw Mac"
+          },
+          "sw_port": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sw Port"
+          },
+          "use_fixedip": {
+            "title": "Use Fixedip",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "mac",
+          "ip",
+          "hostname",
+          "name",
+          "oui",
+          "network",
+          "ap_mac",
+          "sw_mac",
+          "sw_port",
+          "use_fixedip",
+          "fixed_ip",
+          "online",
+          "is_host",
+          "first_seen",
+          "last_seen",
+          "lease_expiry",
+          "series",
+          "dpi"
+        ],
+        "title": "UnifiClientDetail",
+        "type": "object"
+      },
+      "UnifiClientDpiRow": {
+        "properties": {
+          "app": {
+            "title": "App",
+            "type": "string"
+          },
+          "bytes": {
+            "title": "Bytes",
+            "type": "number"
+          },
+          "cat": {
+            "title": "Cat",
+            "type": "string"
+          }
+        },
+        "required": [
+          "app",
+          "cat",
+          "bytes"
+        ],
+        "title": "UnifiClientDpiRow",
+        "type": "object"
+      },
+      "UnifiClientRowModel": {
+        "properties": {
+          "ap_mac": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ap Mac"
+          },
+          "hostname": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hostname"
+          },
+          "ip": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ip"
+          },
+          "is_host": {
+            "title": "Is Host",
+            "type": "boolean"
+          },
+          "last_seen": {
+            "title": "Last Seen",
+            "type": "string"
+          },
+          "lease_expiry": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lease Expiry"
+          },
+          "mac": {
+            "title": "Mac",
+            "type": "string"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "network": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Network"
+          },
+          "online": {
+            "title": "Online",
+            "type": "boolean"
+          },
+          "use_fixedip": {
+            "title": "Use Fixedip",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "mac",
+          "ip",
+          "hostname",
+          "name",
+          "network",
+          "online",
+          "use_fixedip",
+          "ap_mac",
+          "last_seen",
+          "lease_expiry",
+          "is_host"
+        ],
+        "title": "UnifiClientRowModel",
+        "type": "object"
+      },
+      "UnifiClientSeries": {
+        "properties": {
+          "rx_rate_bps": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rx Rate Bps"
+          },
+          "signal_dbm": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Signal Dbm"
+          },
+          "tx_rate_bps": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tx Rate Bps"
+          }
+        },
+        "required": [
+          "signal_dbm",
+          "tx_rate_bps",
+          "rx_rate_bps"
+        ],
+        "title": "UnifiClientSeries",
+        "type": "object"
+      },
+      "UnifiClientsResponse": {
+        "properties": {
+          "clients": {
+            "items": {
+              "$ref": "#/components/schemas/UnifiClientRowModel"
+            },
+            "title": "Clients",
+            "type": "array"
+          },
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
+          },
+          "offset": {
+            "title": "Offset",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "clients",
+          "total",
+          "limit",
+          "offset"
+        ],
+        "title": "UnifiClientsResponse",
+        "type": "object"
+      },
+      "UnifiControllerHealth": {
+        "properties": {
+          "api_took_seconds": {
+            "items": {
+              "$ref": "#/components/schemas/UnifiApiTook"
+            },
+            "title": "Api Took Seconds",
+            "type": "array"
+          },
+          "controller_up": {
+            "title": "Controller Up",
+            "type": "boolean"
+          },
+          "up_reasons": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Up Reasons",
+            "type": "array"
+          }
+        },
+        "required": [
+          "controller_up",
+          "up_reasons",
+          "api_took_seconds"
+        ],
+        "title": "UnifiControllerHealth",
+        "type": "object"
+      },
+      "UnifiCountByKey": {
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "count"
+        ],
+        "title": "UnifiCountByKey",
+        "type": "object"
+      },
+      "UnifiDeviceDetail": {
+        "properties": {
+          "cpu_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cpu Pct"
+          },
+          "load": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Load"
+          },
+          "mac": {
+            "title": "Mac",
+            "type": "string"
+          },
+          "mem_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mem Pct"
+          },
+          "outlets": {
+            "items": {
+              "$ref": "#/components/schemas/UnifiOutletRow"
+            },
+            "title": "Outlets",
+            "type": "array"
+          },
+          "ports": {
+            "items": {
+              "$ref": "#/components/schemas/UnifiPortRow"
+            },
+            "title": "Ports",
+            "type": "array"
+          },
+          "radios": {
+            "items": {
+              "$ref": "#/components/schemas/UnifiRadioRow"
+            },
+            "title": "Radios",
+            "type": "array"
+          },
+          "temps": {
+            "items": {
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "type": "object"
+            },
+            "title": "Temps",
+            "type": "array"
+          }
+        },
+        "required": [
+          "mac",
+          "ports",
+          "radios",
+          "outlets",
+          "cpu_pct",
+          "mem_pct",
+          "temps",
+          "load"
+        ],
+        "title": "UnifiDeviceDetail",
+        "type": "object"
+      },
+      "UnifiDeviceRow": {
+        "properties": {
+          "cpu_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cpu Pct"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "mac": {
+            "title": "Mac",
+            "type": "string"
+          },
+          "mem_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mem Pct"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "temp": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Temp"
+          },
+          "up": {
+            "title": "Up",
+            "type": "boolean"
+          },
+          "update_available": {
+            "title": "Update Available",
+            "type": "boolean"
+          },
+          "uptime_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Uptime Seconds"
+          }
+        },
+        "required": [
+          "mac",
+          "name",
+          "model",
+          "kind",
+          "up",
+          "cpu_pct",
+          "mem_pct",
+          "temp",
+          "uptime_seconds",
+          "update_available"
+        ],
+        "title": "UnifiDeviceRow",
+        "type": "object"
+      },
+      "UnifiDevicesResponse": {
+        "properties": {
+          "devices": {
+            "items": {
+              "$ref": "#/components/schemas/UnifiDeviceRow"
+            },
+            "title": "Devices",
+            "type": "array"
+          }
+        },
+        "required": [
+          "devices"
+        ],
+        "title": "UnifiDevicesResponse",
+        "type": "object"
+      },
+      "UnifiDnsHandout": {
+        "properties": {
+          "dns": {
+            "title": "Dns",
+            "type": "string"
+          },
+          "network": {
+            "title": "Network",
+            "type": "string"
+          }
+        },
+        "required": [
+          "network",
+          "dns"
+        ],
+        "title": "UnifiDnsHandout",
+        "type": "object"
+      },
+      "UnifiDnsPostureResponse": {
+        "properties": {
+          "networks": {
+            "items": {
+              "$ref": "#/components/schemas/UnifiDnsHandout"
+            },
+            "title": "Networks",
+            "type": "array"
+          }
+        },
+        "required": [
+          "networks"
+        ],
+        "title": "UnifiDnsPostureResponse",
+        "type": "object"
+      },
+      "UnifiDpiResponse": {
+        "properties": {
+          "apps": {
+            "items": {
+              "$ref": "#/components/schemas/UnifiDpiRow"
+            },
+            "title": "Apps",
+            "type": "array"
+          }
+        },
+        "required": [
+          "apps"
+        ],
+        "title": "UnifiDpiResponse",
+        "type": "object"
+      },
+      "UnifiDpiRow": {
+        "properties": {
+          "app": {
+            "title": "App",
+            "type": "string"
+          },
+          "bytes": {
+            "title": "Bytes",
+            "type": "number"
+          },
+          "cat": {
+            "title": "Cat",
+            "type": "string"
+          },
+          "client": {
+            "title": "Client",
+            "type": "string"
+          }
+        },
+        "required": [
+          "client",
+          "app",
+          "cat",
+          "bytes"
+        ],
+        "title": "UnifiDpiRow",
+        "type": "object"
+      },
+      "UnifiNetworkDhcpResponse": {
+        "properties": {
+          "networks": {
+            "items": {
+              "$ref": "#/components/schemas/UnifiNetworkDhcpRow"
+            },
+            "title": "Networks",
+            "type": "array"
+          }
+        },
+        "required": [
+          "networks"
+        ],
+        "title": "UnifiNetworkDhcpResponse",
+        "type": "object"
+      },
+      "UnifiNetworkDhcpRow": {
+        "properties": {
+          "dhcp_enabled": {
+            "title": "Dhcp Enabled",
+            "type": "boolean"
+          },
+          "network": {
+            "title": "Network",
+            "type": "string"
+          },
+          "occupancy": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Occupancy"
+          },
+          "pool_end": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pool End"
+          },
+          "pool_size": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pool Size"
+          },
+          "pool_start": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pool Start"
+          },
+          "reservation_count": {
+            "title": "Reservation Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "network",
+          "pool_size",
+          "pool_start",
+          "pool_end",
+          "dhcp_enabled",
+          "occupancy",
+          "reservation_count"
+        ],
+        "title": "UnifiNetworkDhcpRow",
+        "type": "object"
+      },
+      "UnifiOutletRow": {
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "outlet": {
+            "title": "Outlet",
+            "type": "string"
+          },
+          "relay_state": {
+            "title": "Relay State",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "outlet",
+          "name",
+          "relay_state"
+        ],
+        "title": "UnifiOutletRow",
+        "type": "object"
+      },
+      "UnifiPortRow": {
+        "properties": {
+          "link_down_count": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Link Down Count"
+          },
+          "mac_table_count": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mac Table Count"
+          },
+          "poe_current_ma": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Poe Current Ma"
+          },
+          "poe_good": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Poe Good"
+          },
+          "poe_power_watts": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Poe Power Watts"
+          },
+          "poe_voltage": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Poe Voltage"
+          },
+          "port_idx": {
+            "title": "Port Idx",
+            "type": "string"
+          },
+          "rx_bytes": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rx Bytes"
+          },
+          "rx_dropped": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rx Dropped"
+          },
+          "rx_errors": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rx Errors"
+          },
+          "satisfaction": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Satisfaction"
+          },
+          "speed_bps": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Speed Bps"
+          },
+          "tx_bytes": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tx Bytes"
+          },
+          "tx_dropped": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tx Dropped"
+          },
+          "tx_errors": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tx Errors"
+          },
+          "up": {
+            "title": "Up",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "port_idx",
+          "up",
+          "speed_bps",
+          "poe_power_watts",
+          "poe_current_ma",
+          "poe_voltage",
+          "poe_good",
+          "rx_bytes",
+          "tx_bytes",
+          "rx_errors",
+          "tx_errors",
+          "rx_dropped",
+          "tx_dropped",
+          "mac_table_count",
+          "link_down_count",
+          "satisfaction"
+        ],
+        "title": "UnifiPortRow",
+        "type": "object"
+      },
+      "UnifiRadioRow": {
+        "properties": {
+          "bandwidth_mhz": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bandwidth Mhz"
+          },
+          "channel": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Channel"
+          },
+          "cu_self_rx": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cu Self Rx"
+          },
+          "cu_self_tx": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cu Self Tx"
+          },
+          "cu_total": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cu Total"
+          },
+          "num_sta": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Num Sta"
+          },
+          "radio": {
+            "title": "Radio",
+            "type": "string"
+          },
+          "satisfaction": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Satisfaction"
+          },
+          "tx_power": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tx Power"
+          },
+          "tx_retries_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tx Retries Pct"
+          }
+        },
+        "required": [
+          "radio",
+          "cu_total",
+          "cu_self_rx",
+          "cu_self_tx",
+          "num_sta",
+          "tx_power",
+          "tx_retries_pct",
+          "satisfaction",
+          "channel",
+          "bandwidth_mhz"
+        ],
+        "title": "UnifiRadioRow",
+        "type": "object"
+      },
+      "UnifiSsidCount": {
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "ssid": {
+            "title": "Ssid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ssid",
+          "count"
+        ],
+        "title": "UnifiSsidCount",
+        "type": "object"
+      },
+      "UnifiSummary": {
+        "properties": {
+          "controller_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Controller Reason"
+          },
+          "controller_up": {
+            "title": "Controller Up",
+            "type": "boolean"
+          },
+          "devices_total": {
+            "title": "Devices Total",
+            "type": "integer"
+          },
+          "devices_up": {
+            "title": "Devices Up",
+            "type": "integer"
+          },
+          "last_seen": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Seen"
+          },
+          "teleport_up": {
+            "title": "Teleport Up",
+            "type": "boolean"
+          },
+          "threat_count": {
+            "title": "Threat Count",
+            "type": "integer"
+          },
+          "wan_up": {
+            "title": "Wan Up",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "controller_up",
+          "controller_reason",
+          "devices_up",
+          "devices_total",
+          "threat_count",
+          "teleport_up",
+          "wan_up",
+          "last_seen"
+        ],
+        "title": "UnifiSummary",
+        "type": "object"
+      },
+      "UnifiTeleport": {
+        "properties": {
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "teleport_up": {
+            "title": "Teleport Up",
+            "type": "boolean"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "required": [
+          "teleport_up",
+          "reason",
+          "version"
+        ],
+        "title": "UnifiTeleport",
+        "type": "object"
+      },
+      "UnifiThreatRow": {
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "threat_type": {
+            "title": "Threat Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "threat_type",
+          "count"
+        ],
+        "title": "UnifiThreatRow",
+        "type": "object"
+      },
+      "UnifiThreatsResponse": {
+        "properties": {
+          "threats": {
+            "items": {
+              "$ref": "#/components/schemas/UnifiThreatRow"
+            },
+            "title": "Threats",
+            "type": "array"
+          }
+        },
+        "required": [
+          "threats"
+        ],
+        "title": "UnifiThreatsResponse",
+        "type": "object"
+      },
+      "UnifiWanCurrent": {
+        "properties": {
+          "download_mbps": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Download Mbps"
+          },
+          "failover_active": {
+            "title": "Failover Active",
+            "type": "boolean"
+          },
+          "failover_capable": {
+            "title": "Failover Capable",
+            "type": "boolean"
+          },
+          "latency_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latency Seconds"
+          },
+          "ping_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ping Seconds"
+          },
+          "speedtest_lastrun": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Speedtest Lastrun"
+          },
+          "upload_mbps": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Upload Mbps"
+          },
+          "wan_up": {
+            "title": "Wan Up",
+            "type": "boolean"
+          },
+          "wan_uptime_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wan Uptime Seconds"
+          },
+          "xput_down_mbps": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Xput Down Mbps"
+          },
+          "xput_up_mbps": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Xput Up Mbps"
+          }
+        },
+        "required": [
+          "wan_up",
+          "latency_seconds",
+          "download_mbps",
+          "upload_mbps",
+          "ping_seconds",
+          "speedtest_lastrun",
+          "failover_capable",
+          "failover_active",
+          "wan_uptime_seconds",
+          "xput_down_mbps",
+          "xput_up_mbps"
+        ],
+        "title": "UnifiWanCurrent",
+        "type": "object"
+      },
+      "UnifiWifiResponse": {
+        "properties": {
+          "by_band": {
+            "items": {
+              "$ref": "#/components/schemas/UnifiCountByKey"
+            },
+            "title": "By Band",
+            "type": "array"
+          },
+          "by_link": {
+            "items": {
+              "$ref": "#/components/schemas/UnifiCountByKey"
+            },
+            "title": "By Link",
+            "type": "array"
+          },
+          "high_retries": {
+            "title": "High Retries",
+            "type": "integer"
+          },
+          "poor_satisfaction": {
+            "title": "Poor Satisfaction",
+            "type": "integer"
+          },
+          "poor_signal": {
+            "title": "Poor Signal",
+            "type": "integer"
+          },
+          "ssids": {
+            "items": {
+              "$ref": "#/components/schemas/UnifiSsidCount"
+            },
+            "title": "Ssids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "poor_signal",
+          "poor_satisfaction",
+          "high_retries",
+          "ssids",
+          "by_band",
+          "by_link"
+        ],
+        "title": "UnifiWifiResponse",
+        "type": "object"
+      },
       "UninstallWrapperPreview": {
         "additionalProperties": false,
         "description": "Dry-run response (confirm=false). Uninstall is a pure crontab-line edit,\nso the preview carries ONLY the crontab diff (no wrapper_content / token).",
@@ -9462,6 +10951,369 @@
           }
         },
         "summary": "Get Ha Updates",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/api/integrations/unifi/clients": {
+      "get": {
+        "description": "Return paginated list of all known Unifi clients.\n\nAuth: cookie session required. CSRF NOT enforced on GET.\n\nSorted by last_seen DESC (most recent first).\n\nQuery params:\n  limit: max clients per page (1-500, default 100)\n  offset: pagination offset (default 0)\n\nEmpty registry -> clients=[], total=0.",
+        "operationId": "get_unifi_clients_api_integrations_unifi_clients_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnifiClientsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Unifi Clients",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/api/integrations/unifi/clients/{mac}": {
+      "get": {
+        "description": "Return detailed view of a single Unifi client with series + DPI.\n\nAuth: cookie session required. CSRF NOT enforced on GET.\n\nmac not found in registry -> 404 not_found.\n\nVM transport/query error -> 502 upstream_unavailable (after checking registry).\n\ndpi: RAW cumulative bytes; rate is frontend-computed.\ndns: always None (EPIC-006 slot).",
+        "operationId": "get_unifi_client_api_integrations_unifi_clients__mac__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "mac",
+            "required": true,
+            "schema": {
+              "title": "Mac",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnifiClientDetail"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Unifi Client",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/api/integrations/unifi/controller-health": {
+      "get": {
+        "description": "Return controller up status + API endpoint latencies.\n\nAuth: cookie session required. CSRF NOT enforced on GET.\n\nEmpty vector -> controller_up=false, up_reasons=[], api_took_seconds=[].",
+        "operationId": "get_unifi_controller_health_api_integrations_unifi_controller_health_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnifiControllerHealth"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Unifi Controller Health",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/api/integrations/unifi/devices": {
+      "get": {
+        "description": "Return roster of all Unifi devices with per-device metrics.\n\nAuth: cookie session required. CSRF NOT enforced on GET.\n\nEmpty vector -> devices=[].",
+        "operationId": "get_unifi_devices_api_integrations_unifi_devices_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnifiDevicesResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Unifi Devices",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/api/integrations/unifi/devices/{device}": {
+      "get": {
+        "description": "Return drill-down detail for a single device\n(ports/radios/outlets/temps).\n\nAuth: cookie session required. CSRF NOT enforced on GET.\n\ndevice not found -> 404 not_found.",
+        "operationId": "get_unifi_device_api_integrations_unifi_devices__device__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "device",
+            "required": true,
+            "schema": {
+              "title": "Device",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnifiDeviceDetail"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Unifi Device",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/api/integrations/unifi/dpi": {
+      "get": {
+        "description": "Return RAW cumulative DPI bytes by client/app/category.\n\nAuth: cookie session required. CSRF NOT enforced on GET.\n\nNOTE: Returns RAW cumulative byte counters; rate-per-second + clamp is\ncomputed by the FRONTEND/Grafana, NOT here.\n\nEmpty vector -> apps=[].",
+        "operationId": "get_unifi_dpi_api_integrations_unifi_dpi_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnifiDpiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Unifi Dpi",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/api/integrations/unifi/network/dhcp": {
+      "get": {
+        "description": "Return DHCP pool sizes, reservations, and occupancy per network.\n\nAuth: cookie session required. CSRF NOT enforced on GET.\n\nNetwork universe = union of network labels across pool-size, reservations,\nand clients-by-network metrics. Occupancy = clients_on_network / pool_size\n(None when pool_size is None or <= 0).\n\nEmpty vector -> networks=[].",
+        "operationId": "get_unifi_dhcp_api_integrations_unifi_network_dhcp_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnifiNetworkDhcpResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Unifi Dhcp",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/api/integrations/unifi/network/dns-posture": {
+      "get": {
+        "description": "Return DNS handout (primary DNS servers) per network.\n\nAuth: cookie session required. CSRF NOT enforced on GET.\n\nEmpty vector -> networks=[].",
+        "operationId": "get_unifi_dns_posture_api_integrations_unifi_network_dns_posture_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnifiDnsPostureResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Unifi Dns Posture",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/api/integrations/unifi/network/wan": {
+      "get": {
+        "description": "Return CURRENT WAN metrics (latency, speedtest, failover, uptime).\n\nAuth: cookie session required. CSRF NOT enforced on GET.\n\nNOTE: CURRENT WAN only. HISTORY (time-range) is served by the existing\n``/api/metrics/range`` proxy \u2014 this endpoint does NOT return history.\n\nEmpty vector -> each metric scalar defaults to None/False.",
+        "operationId": "get_unifi_wan_api_integrations_unifi_network_wan_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnifiWanCurrent"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Unifi Wan",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/api/integrations/unifi/network/wifi": {
+      "get": {
+        "description": "Return WiFi stats (poor signal, poor satisfaction, high retries, SSIDs, by-band, by-link).\n\nAuth: cookie session required. CSRF NOT enforced on GET.\n\nEmpty vector -> defaults (0 for counts, [] for lists).",
+        "operationId": "get_unifi_wifi_api_integrations_unifi_network_wifi_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnifiWifiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Unifi Wifi",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/api/integrations/unifi/summary": {
+      "get": {
+        "description": "Return Unifi panel summary counts from VictoriaMetrics instant queries.\n\nAuth: cookie session required. CSRF NOT enforced on GET.\n\nEach count defaults to 0 when its instant query returns an empty vector.\nAny VM transport/query failure surfaces as 502 ``upstream_unavailable``\n(via the shared ``vm_query`` helper) rather than a 200-with-zeros response.",
+        "operationId": "get_unifi_summary_api_integrations_unifi_summary_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnifiSummary"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Unifi Summary",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/api/integrations/unifi/teleport": {
+      "get": {
+        "description": "Return Teleport VPN status.\n\nAuth: cookie session required. CSRF NOT enforced on GET.\n\nEmpty vector -> teleport_up=false, reason/version=None.",
+        "operationId": "get_unifi_teleport_api_integrations_unifi_teleport_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnifiTeleport"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Unifi Teleport",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/api/integrations/unifi/threats": {
+      "get": {
+        "description": "Return threat counts by threat type.\n\nAuth: cookie session required. CSRF NOT enforced on GET.\n\nEmpty vector -> threats=[].",
+        "operationId": "get_unifi_threats_api_integrations_unifi_threats_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnifiThreatsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Unifi Threats",
         "tags": [
           "integrations"
         ]

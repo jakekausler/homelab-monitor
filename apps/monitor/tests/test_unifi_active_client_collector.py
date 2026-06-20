@@ -568,3 +568,222 @@ async def test_rollup_skip_branches_for_sparse_records(repo: SqliteRepository) -
     assert _gauges(writer, "homelab_unifi_ssid_client_count") == []
     assert _gauges(writer, "homelab_unifi_client_count_by_ap") == []
     assert _gauges(writer, "homelab_unifi_client_count_by_band") == []
+
+
+# ── DHCP reservation metric tests (new in STAGE-007-019) ──────────────────────
+
+
+@pytest.mark.asyncio
+async def test_dhcp_reservation_count_with_fixedip(repo: SqliteRepository) -> None:
+    """Network with ≥1 use_fixedip==true client -> reservation count emitted."""
+    sta_payload: dict[str, object] = {
+        "meta": {"rc": "ok"},
+        "data": [
+            {
+                "mac": "aa:00:00:00:00:01",
+                "ip": "192.168.2.50",
+                "hostname": "reserved1",
+                "network": "LAN",
+                "is_wired": False,
+                "essid": "Home",
+                "radio": "ng",
+                "ap_mac": "ap:01",
+                "use_fixedip": True,  # Fixed IP
+                "fixed_ip": "192.168.2.100",
+                "first_seen": _FS,
+                "last_seen": _LS,
+            },
+            {
+                "mac": "aa:00:00:00:00:02",
+                "ip": "192.168.2.51",
+                "hostname": "reserved2",
+                "network": "LAN",
+                "is_wired": False,
+                "essid": "Home",
+                "radio": "na",
+                "ap_mac": "ap:02",
+                "use_fixedip": True,  # Fixed IP
+                "fixed_ip": "192.168.2.101",
+                "first_seen": _FS,
+                "last_seen": _LS,
+            },
+            {
+                "mac": "aa:00:00:00:00:03",
+                "ip": "192.168.2.52",
+                "hostname": "dynamic",
+                "network": "LAN",
+                "is_wired": False,
+                "essid": "Home",
+                "radio": "ng",
+                "ap_mac": "ap:01",
+                "use_fixedip": False,  # No fixed IP
+                "first_seen": _FS,
+                "last_seen": _LS,
+            },
+        ],
+    }
+    alluser_payload: dict[str, object] = {"meta": {"rc": "ok"}, "data": []}
+
+    writer = InMemoryMetricsWriter()
+    fake = _FakeStaAllOk(sta_payload, alluser_payload)
+    result = await UnifiActiveClientCollector().run(_ctx(repo, writer, fake))
+    assert result.ok is True
+
+    # LAN network should have 2 reservations
+    lan_reservation = _gauge_value(
+        writer, "homelab_unifi_dhcp_reservation_count", {"network": "LAN"}
+    )
+    assert lan_reservation == 2.0  # noqa: PLR2004
+
+
+@pytest.mark.asyncio
+async def test_dhcp_reservation_count_zero_in_network(repo: SqliteRepository) -> None:
+    """Network with clients but 0 reservations -> series emitted with value 0.0."""
+    sta_payload: dict[str, object] = {
+        "meta": {"rc": "ok"},
+        "data": [
+            {
+                "mac": "aa:00:00:00:00:01",
+                "ip": "192.168.2.50",
+                "hostname": "client1",
+                "network": "Guest",
+                "is_wired": True,
+                "use_fixedip": False,
+                "first_seen": _FS,
+                "last_seen": _LS,
+            },
+            {
+                "mac": "aa:00:00:00:00:02",
+                "ip": "192.168.2.51",
+                "hostname": "client2",
+                "network": "Guest",
+                "is_wired": False,
+                "essid": "Guest",
+                "radio": "ng",
+                "ap_mac": "ap:01",
+                "use_fixedip": False,  # No reservations
+                "first_seen": _FS,
+                "last_seen": _LS,
+            },
+        ],
+    }
+    alluser_payload: dict[str, object] = {"meta": {"rc": "ok"}, "data": []}
+
+    writer = InMemoryMetricsWriter()
+    fake = _FakeStaAllOk(sta_payload, alluser_payload)
+    result = await UnifiActiveClientCollector().run(_ctx(repo, writer, fake))
+    assert result.ok is True
+
+    # Guest network has clients but 0 reservations -> value is 0.0
+    assert _gauge_value(writer, "homelab_unifi_dhcp_reservation_count", {"network": "Guest"}) == 0.0
+
+
+@pytest.mark.asyncio
+async def test_dhcp_reservation_count_missing_field(repo: SqliteRepository) -> None:
+    """Record missing use_fixedip key -> not counted, no crash."""
+    sta_payload: dict[str, object] = {
+        "meta": {"rc": "ok"},
+        "data": [
+            {
+                "mac": "aa:00:00:00:00:01",
+                "ip": "192.168.2.50",
+                "hostname": "client1",
+                "network": "LAN",
+                "is_wired": False,
+                "essid": "Home",
+                "radio": "ng",
+                "ap_mac": "ap:01",
+                # NO use_fixedip key -> as_bool defaults to False
+                "first_seen": _FS,
+                "last_seen": _LS,
+            },
+        ],
+    }
+    alluser_payload: dict[str, object] = {"meta": {"rc": "ok"}, "data": []}
+
+    writer = InMemoryMetricsWriter()
+    fake = _FakeStaAllOk(sta_payload, alluser_payload)
+    result = await UnifiActiveClientCollector().run(_ctx(repo, writer, fake))
+    assert result.ok is True
+
+    # Missing field treated as false -> 0 reservations
+    assert _gauge_value(writer, "homelab_unifi_dhcp_reservation_count", {"network": "LAN"}) == 0.0
+
+
+@pytest.mark.asyncio
+async def test_dhcp_reservation_count_fixedip_false(repo: SqliteRepository) -> None:
+    """Record with use_fixedip=False -> not counted."""
+    sta_payload: dict[str, object] = {
+        "meta": {"rc": "ok"},
+        "data": [
+            {
+                "mac": "aa:00:00:00:00:01",
+                "ip": "192.168.2.50",
+                "hostname": "client1",
+                "network": "LAN",
+                "is_wired": False,
+                "essid": "Home",
+                "radio": "ng",
+                "ap_mac": "ap:01",
+                "use_fixedip": False,  # Explicitly false
+                "first_seen": _FS,
+                "last_seen": _LS,
+            },
+        ],
+    }
+    alluser_payload: dict[str, object] = {"meta": {"rc": "ok"}, "data": []}
+
+    writer = InMemoryMetricsWriter()
+    fake = _FakeStaAllOk(sta_payload, alluser_payload)
+    result = await UnifiActiveClientCollector().run(_ctx(repo, writer, fake))
+    assert result.ok is True
+
+    # use_fixedip=False -> not counted
+    assert _gauge_value(writer, "homelab_unifi_dhcp_reservation_count", {"network": "LAN"}) == 0.0
+
+
+@pytest.mark.asyncio
+async def test_dhcp_reservation_count_network_none(repo: SqliteRepository) -> None:
+    """Record with network=None -> skipped, no series, no crash."""
+    sta_payload: dict[str, object] = {
+        "meta": {"rc": "ok"},
+        "data": [
+            {
+                "mac": "aa:00:00:00:00:01",
+                "ip": "192.168.2.50",
+                "hostname": "client1",
+                # NO network key -> network is None
+                "is_wired": False,
+                "essid": "Home",
+                "radio": "ng",
+                "ap_mac": "ap:01",
+                "use_fixedip": True,  # Would be a reservation, but no network
+                "first_seen": _FS,
+                "last_seen": _LS,
+            },
+        ],
+    }
+    alluser_payload: dict[str, object] = {"meta": {"rc": "ok"}, "data": []}
+
+    writer = InMemoryMetricsWriter()
+    fake = _FakeStaAllOk(sta_payload, alluser_payload)
+    result = await UnifiActiveClientCollector().run(_ctx(repo, writer, fake))
+    assert result.ok is True
+
+    # No network -> no reservation series emitted
+    assert _gauges(writer, "homelab_unifi_dhcp_reservation_count") == []
+
+
+@pytest.mark.asyncio
+async def test_dhcp_reservation_count_empty_sta(repo: SqliteRepository) -> None:
+    """Empty sta/alluser payload -> no reservation series emitted."""
+    sta_payload: dict[str, object] = {"meta": {"rc": "ok"}, "data": []}
+    alluser_payload: dict[str, object] = {"meta": {"rc": "ok"}, "data": []}
+
+    writer = InMemoryMetricsWriter()
+    fake = _FakeStaAllOk(sta_payload, alluser_payload)
+    result = await UnifiActiveClientCollector().run(_ctx(repo, writer, fake))
+    assert result.ok is True
+
+    # No clients -> no series
+    assert _gauges(writer, "homelab_unifi_dhcp_reservation_count") == []

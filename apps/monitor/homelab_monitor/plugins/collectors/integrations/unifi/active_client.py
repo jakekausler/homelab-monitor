@@ -115,6 +115,19 @@ def _emit_latency(ctx: CollectorContext, endpoint: str, took: float, emitted: li
     emitted[0] += 1
 
 
+def _emit_gauge_by_key(
+    ctx: CollectorContext,
+    metric_name: str,
+    label_key: str,
+    by_key: dict[str, int],
+    emitted: list[int],
+) -> None:
+    """Emit gauges for each key in the counter dict."""
+    for key, count in by_key.items():
+        ctx.vm.write_gauge(metric_name, float(count), {label_key: key})
+        emitted[0] += 1
+
+
 def _emit_self_metrics(ctx: CollectorContext, result: UpsertResult, emitted: list[int]) -> None:
     """Emit the four UpsertResult self-metric gauges."""
     ctx.vm.write_gauge(
@@ -185,6 +198,7 @@ def _emit_rollups(
     by_ap: Counter[str] = Counter()
     by_band: Counter[str] = Counter()
     by_link: Counter[str] = Counter()
+    by_reservation: Counter[str] = Counter()
 
     for rec in valid_sta:
         is_wired = as_bool(rec.get("is_wired"))
@@ -193,6 +207,9 @@ def _emit_rollups(
         network = _str_field(rec, "network")
         if network is not None:
             by_network[network] += 1
+            # DHCP reservations: count clients with a fixed IP, grouped by network.
+            if as_bool(rec.get("use_fixedip")):
+                by_reservation[network] += 1
 
         # Wireless-only dimensions: essid / ap_mac / radio (band). Wired records
         # lack these -- skip them FOR THOSE DIMENSIONS (not an error).
@@ -208,22 +225,19 @@ def _emit_rollups(
                 band = _BAND_BY_RADIO.get(radio, radio)
                 by_band[band] += 1
 
-    for ssid, count in by_ssid.items():
-        ctx.vm.write_gauge("homelab_unifi_ssid_client_count", float(count), {"ssid": ssid})
-        emitted[0] += 1
-    for network, count in by_network.items():
+    _emit_gauge_by_key(ctx, "homelab_unifi_ssid_client_count", "ssid", by_ssid, emitted)
+    _emit_gauge_by_key(ctx, "homelab_unifi_client_count_by_network", "network", by_network, emitted)
+    _emit_gauge_by_key(ctx, "homelab_unifi_client_count_by_ap", "ap_mac", by_ap, emitted)
+    _emit_gauge_by_key(ctx, "homelab_unifi_client_count_by_band", "band", by_band, emitted)
+    _emit_gauge_by_key(ctx, "homelab_unifi_client_count_by_link", "link", by_link, emitted)
+
+    # Emit DHCP reservations: one series per network in the by_network universe.
+    for network in by_network:
         ctx.vm.write_gauge(
-            "homelab_unifi_client_count_by_network", float(count), {"network": network}
+            "homelab_unifi_dhcp_reservation_count",
+            float(by_reservation.get(network, 0)),
+            {"network": network},
         )
-        emitted[0] += 1
-    for ap_mac, count in by_ap.items():
-        ctx.vm.write_gauge("homelab_unifi_client_count_by_ap", float(count), {"ap_mac": ap_mac})
-        emitted[0] += 1
-    for band, count in by_band.items():
-        ctx.vm.write_gauge("homelab_unifi_client_count_by_band", float(count), {"band": band})
-        emitted[0] += 1
-    for link, count in by_link.items():
-        ctx.vm.write_gauge("homelab_unifi_client_count_by_link", float(count), {"link": link})
         emitted[0] += 1
 
 
