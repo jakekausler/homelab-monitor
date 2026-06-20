@@ -38,13 +38,16 @@ class TestBuildRedactVrl:
         assert r":\/\/" not in result
 
     def test_all_defaults_present(self) -> None:
-        """All 5 defaults present in output."""
+        """All 8 defaults present in output."""
         result = build_redact_vrl(list(DEFAULT_REDACT_PATTERNS))
         assert ".rdt_bearer_token = 1" in result
         assert ".rdt_jwt = 1" in result
         assert ".rdt_password_in_url = 1" in result
         assert ".rdt_aws_access_key = 1" in result
         assert ".rdt_api_key_generic = 1" in result
+        assert ".rdt_udm_bearer = 1" in result
+        assert ".rdt_udm_session = 1" in result
+        assert ".rdt_udm_authkey = 1" in result
 
     def test_no_lookarounds_in_output(self) -> None:
         """Generated output contains no lookaround tokens."""
@@ -82,13 +85,16 @@ class TestBuildRedactStripMarkers:
         assert result == "# no redaction markers to strip\n"
 
     def test_all_defaults(self) -> None:
-        """All 5 defaults present."""
+        """All 8 defaults present."""
         result = build_redact_strip_markers(list(DEFAULT_REDACT_PATTERNS))
         assert "del(.rdt_bearer_token)" in result
         assert "del(.rdt_jwt)" in result
         assert "del(.rdt_password_in_url)" in result
         assert "del(.rdt_aws_access_key)" in result
         assert "del(.rdt_api_key_generic)" in result
+        assert "del(.rdt_udm_bearer)" in result
+        assert "del(.rdt_udm_session)" in result
+        assert "del(.rdt_udm_authkey)" in result
 
 
 class TestBuildRedactMetricEntries:
@@ -132,10 +138,10 @@ class TestBuildRedactMetricEntries:
                     assert value.startswith('"') and value.endswith('"')
 
     def test_all_defaults_present(self) -> None:
-        """All 5 defaults with correct metric names."""
+        """All 8 defaults with correct metric names."""
         result = build_redact_metric_entries(list(DEFAULT_REDACT_PATTERNS))
         metric_entries = result.split("[[transforms.redaction_metric.metrics]]")
-        # Should have 5 entries (split gives 6 parts: empty + 5 entries)
-        assert len(metric_entries) == 6  # noqa: PLR2004
+        # Should have 8 entries (split gives 9 parts: empty + 8 entries)
+        assert len(metric_entries) == 9  # noqa: PLR2004
         # Each should have the correct counter name
-        assert result.count('name = "vector_redactions_total"') == 5  # noqa: PLR2004
+        assert result.count('name = "vector_redactions_total"') == 8  # noqa: PLR2004

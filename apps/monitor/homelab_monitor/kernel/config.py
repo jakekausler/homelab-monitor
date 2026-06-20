@@ -1353,6 +1353,29 @@ DEFAULT_REDACT_PATTERNS: tuple[RedactPattern, ...] = (
         ),
         replacement="${1}=[REDACTED]",
     ),
+    # STAGE-007-016: UDM/Unifi token redaction. No lookarounds (Rust regex crate).
+    RedactPattern(
+        name="udm_bearer",
+        pattern=r"(?i)authorization:\s*bearer\s+[A-Za-z0-9._-]{20,}",
+        replacement="Authorization: Bearer [REDACTED]",
+    ),
+    RedactPattern(
+        name="udm_session",
+        pattern=(
+            r"(?i)(unifises|token|x-csrf-token)"
+            r"[\"']?\s*[:=]\s*[\"']?[A-Za-z0-9._-]{16,}"
+        ),
+        replacement="${1}=[REDACTED]",
+    ),
+    # STAGE-007-016: UDM mcad authkey (cleartext hex on the wire).
+    # Fixed replacement (no `${1}` group): cleaner than echoing the capture, and
+    # avoids relying on render.py's "$" -> "$$" env-escaping interacting with a
+    # literal `${1}` in the generated VRL replace().
+    RedactPattern(
+        name="udm_authkey",
+        pattern=r"(?i)authkey[\"']?\s*[:=]\s*[\"']?[A-Za-z0-9]{16,}",
+        replacement="authkey=[REDACTED]",
+    ),
 )
 
 _REDACT_KEY = "logs"

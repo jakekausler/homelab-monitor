@@ -428,3 +428,25 @@ groups:
           description: >-
             SSID {{ $labels.ssid }} client count is {{ $value }}, exceeding 2x its
             1-day baseline (floor 5).
+
+      # ---- Rule 26: UDM log parse failures (STAGE-007-016 REDESIGN) ----
+      # vector's udm_parse emits udm_lines_total{parse_failed="0"/"1"} per line.
+      # A sustained nonzero parse_failed="1" rate means the UDM emitted an
+      # on-the-wire shape the multi-format parser doesn't recognize (new format /
+      # firmware change) — those lines fall to service="udm-other" and lose
+      # structured fields. Alert so the parser/category vocabulary can be updated.
+      - alert: UnifiUdmLogParseFailed
+        expr: >-
+          sum(rate(udm_lines_total{parse_failed="1"}[5m])) > 0
+        for: 0m
+        labels:
+          severity: warning
+          source_tool: vmalert-metrics
+          category: network
+          integration: unifi
+        annotations:
+          summary: "UDM syslog lines failing to parse"
+          description: >-
+            vector is failing to parse {{ $value }} UDM syslog lines/sec
+            (rate >0/sec; fires immediately). Unrecognized lines fall to service=udm-other;
+            the udm_parse VRL or category vocabulary likely needs updating.

@@ -602,6 +602,29 @@ tests:
         alertname: UnifiSpeedtestDegraded
         exp_alerts: []
 
+  # ---- Rule 26: UnifiUdmLogParseFailed (rate > 0, for: 0m — fires immediately) ----
+  # parse_failed="1" counter rising 60/interval (=2/s over 30s) -> rate 2/s > 0.
+  # 34 samples cover 10m + for:10m; eval at 16m. A parse_failed="0" series is
+  # included to prove the rule matches ONLY the parse_failed="1" stream.
+  - interval: 30s
+    input_series:
+      - series: 'udm_lines_total{parse_failed="1",udm_format="unknown"}'
+        values: '0+60x33'
+      - series: 'udm_lines_total{parse_failed="0",udm_format="cef"}'
+        values: '0+60x33'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: UnifiUdmLogParseFailed
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              source_tool: vmalert-metrics
+              category: network
+              integration: unifi
+            exp_annotations:
+              summary: "UDM syslog lines failing to parse"
+              description: "vector is failing to parse 2 UDM syslog lines/sec (rate >0/sec; fires immediately). Unrecognized lines fall to service=udm-other; the udm_parse VRL or category vocabulary likely needs updating."
+
   # Rules 24 (UnifiClientCountAnomaly) and 25 (UnifiSsidClientCountAnomaly) are SUBQUERY rules
   # ([1d:30s]) — promtool cannot evaluate them. They have NO promtool cases here and are validated
   # via live-MetricsQL replay against the rig (Refinement). See file header.

@@ -285,7 +285,7 @@ key_field = "service"
 
 [sinks.vl]
 type = "http"
-inputs = ["throttle", "strip_markers_hmrun"]
+inputs = ["throttle", "strip_markers_hmrun", "strip_markers_udm"]
 uri = "http://victorialogs:9428/insert/jsonline?_msg_field=message"
 encoding.codec = "json"
 framing.method = "newline_delimited"
@@ -479,6 +479,216 @@ inputs = ["redact_hmrun"]
 source = '''
 ${VECTOR_REDACT_STRIP_MARKERS}'''
 
+# UDM SYSLOG PIPELINE (STAGE-007-016 REDESIGN — multi-format)
+# ============================================================
+# Parallel branch (mirrors the hmrun branch shape: source -> parse -> throttle ->
+# redact -> strip_markers -> vl). The UDM Pro emits MULTIPLE on-the-wire shapes
+# over UDP syslog (port 5514): CEF audit lines (single "UDM-Pro" hostname),
+# iptables/firewall lines and systemd/sshd/daemon lines (DOUBLED "UDM-Pro UDM-Pro"
+# hostname). We use a `socket` source (not `syslog`): the syslog source mangles
+# these shapes (consumes "CEF" as appname, splits on the doubled hostname). The
+# socket source delivers each raw UDP datagram verbatim in .message including the
+# leading <PRI>, and udm_parse does the envelope strip + three-way format branch
+# itself (binary-verified against timberio/vector:0.41.1-debian, 20/20).
+#
+# Branch buckets: CEF -> service="udm-audit" (udm_format="cef");
+# iptables (body starts "[A-Z..]") -> service="udm-firewall" (udm_format="iptables");
+# systemd/sshd/daemon -> service="udm-system" (udm_format="system");
+# unrecognized envelope -> service="udm-other" (udm_format="unknown", parse_failed=1).
+# source_type="udm" + service="udm-*" both become VictoriaLogs STREAM fields
+# (VL infers them; no sink change needed).
+#
+# No regex lookarounds (Rust regex crate constraint). The doubled `$$1` in the
+# CEF boundary-split replace() is REQUIRED: a single-dollar backref written
+# literally would collide with vector's env-var interpolation (which runs over the
+# WHOLE file, comments included) and break config load ("Missing environment
+# variable name=1"). Doubling it (vector un-escapes the doubled dollar to one
+# literal dollar) yields the VRL capture-group backref safely. Throttle runs BEFORE redaction so redaction CPU isn't spent on
+# dropped events. The UDM device is operator-enabled at Refinement; in Build
+# this source simply listens and parses whatever (if anything) arrives.
+
+[sources.udm_syslog]
+type = "socket"
+mode = "udp"
+address = "0.0.0.0:5514"
+
+[transforms.udm_parse]
+type = "remap"
+inputs = ["udm_syslog"]
+source = '''
+raw = strip_whitespace(to_string(.message) ?? "")
+
+# --- Envelope strip (handles BOTH UDM shapes + trailing newline/CR) ---
+# Real UDP syslog datagrams carry a trailing "\n" (or "\r\n"); strip_whitespace
+# removes it (and any leading ws) BEFORE both envelope attempts, else "$" + non-(?m)
+# Rust-regex rejects every real line. Two envelope shapes:
+#   * WITH <PRI>: standard lines (DOUBLED hostname) AND most CEF audit lines.
+#   * NO <PRI>: some CEF audit lines arrive as "Mon DD HH:MM:SS host CEF:..." with
+#     no leading <PRI>. Fall back to a PRI-less envelope; severity is unknowable
+#     so .syslog_severity = "". Both shapes converge on the same dedup + 3-way branch.
+.parse_failed = 0
+env, env_err = parse_regex(raw, r'^<(?P<pri>\d+)>(?P<ts>[A-Za-z]{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2})\s+(?P<host>\S+)\s+(?P<body>.*)$')
+matched = false
+pri_present = false
+if env_err == null {
+  matched = true
+  pri_present = true
+} else {
+  env, env_err = parse_regex(raw, r'^(?P<ts>[A-Za-z]{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2})\s+(?P<host>\S+)\s+(?P<body>.*)$')
+  if env_err == null {
+    matched = true
+    pri_present = false
+  }
+}
+if !matched {
+  # Not a recognizable syslog envelope (with OR without <PRI>) — keep raw,
+  # mark parse_failed, bucket as udm-other.
+  .parse_failed = 1
+  .message = raw
+  .source_type = "udm"
+  .service = "udm-other"
+  .udm_format = "unknown"
+} else {
+  if pri_present {
+    pri = to_int(env.pri) ?? 0
+    .syslog_severity = to_string(mod(pri, 8))
+  } else {
+    .syslog_severity = ""
+  }
+  host = to_string(env.host)
+  body = to_string(env.body)
+  # strip the duplicated leading hostname on standard lines
+  dup = host + " "
+  if starts_with(body, dup) {
+    body = slice!(body, start: strlen(dup))
+  }
+  .host = host
+  .source_type = "udm"
+
+  if starts_with(body, "CEF:") {
+    # ---- CEF / audit ----
+    .udm_format = "cef"
+    .service = "udm-audit"
+    parts = split(body, "|", limit: 8)
+    .cef_signature_id = to_string(parts[4])
+    .cef_name = to_string(parts[5])
+    .cef_severity_raw = to_string(parts[6])
+    ext = to_string(parts[7])
+    # boundary pre-split so SPACE-containing values survive ($$1 escapes vector env interpolation)
+    norm = replace(ext, r' (UNIFI[A-Za-z]+|src|dst|spt|dpt|msg|cs\d|cn\d)=', "\n$$1=")
+    kv = parse_key_value(norm, field_delimiter: "\n", key_value_delimiter: "=") ?? {}
+    .udm_category = downcase(to_string(kv.UNIFIcategory) ?? "")
+    .udm_subcategory = to_string(kv.UNIFIsubCategory) ?? ""
+    .udm_admin = to_string(kv.UNIFIadmin) ?? ""
+    .udm_access_method = to_string(kv.UNIFIaccessMethod) ?? ""
+    .udm_settings_section = to_string(kv.UNIFIsettingsSection) ?? ""
+    .udm_settings_entry = to_string(kv.UNIFIsettingsEntry) ?? ""
+    .src = to_string(kv.src) ?? ""
+    cefmsg = to_string(kv.msg) ?? ""
+    if cefmsg != "" {
+      .message = cefmsg
+    } else {
+      .message = body
+    }
+  } else if match(body, r'^\[[A-Z]') {
+    # ---- iptables / firewall ----
+    .udm_format = "iptables"
+    .service = "udm-firewall"
+    chain, _cerr = parse_regex(body, r'^\[(?P<chain>[^\]]*)\]')
+    if chain != null { .fw_chain = to_string(chain.chain) }
+    # extract quoted DESCR (may contain spaces + brackets), then strip it before kv-parse
+    descr, _derr = parse_regex(body, r'DESCR="(?P<descr>[^"]*)"')
+    rest = body
+    if descr != null {
+      .fw_descr = to_string(descr.descr)
+      rest = replace(body, r'DESCR="[^"]*"', "")
+    }
+    # Per-field regex (NOT parse_key_value): an empty-value iptables field such as
+    # "OUT= " makes parse_key_value swallow the following key (fw_out="SRC=..."),
+    # leaving .src empty. \b<KEY>=(?P<v>\S*) tolerates empty/missing values and bare
+    # flag tokens (DF/SYN have no "=" so they are ignored). Binary-verified against
+    # timberio/vector:0.41.1-debian for UDP/TCP/ICMP/IPv6/empty-OUT/named-rule.
+    .fw_in = ""
+    fw_in_m, fw_in_e = parse_regex(rest, r'\bIN=(?P<v>\S*)')
+    if fw_in_e == null { .fw_in = to_string(fw_in_m.v) }
+    .fw_out = ""
+    fw_out_m, fw_out_e = parse_regex(rest, r'\bOUT=(?P<v>\S*)')
+    if fw_out_e == null { .fw_out = to_string(fw_out_m.v) }
+    .src = ""
+    fw_src_m, fw_src_e = parse_regex(rest, r'\bSRC=(?P<v>\S*)')
+    if fw_src_e == null { .src = to_string(fw_src_m.v) }
+    .dst = ""
+    fw_dst_m, fw_dst_e = parse_regex(rest, r'\bDST=(?P<v>\S*)')
+    if fw_dst_e == null { .dst = to_string(fw_dst_m.v) }
+    .fw_proto = ""
+    fw_proto_m, fw_proto_e = parse_regex(rest, r'\bPROTO=(?P<v>\S*)')
+    if fw_proto_e == null { .fw_proto = to_string(fw_proto_m.v) }
+    .fw_spt = ""
+    fw_spt_m, fw_spt_e = parse_regex(rest, r'\bSPT=(?P<v>\S*)')
+    if fw_spt_e == null { .fw_spt = to_string(fw_spt_m.v) }
+    .fw_dpt = ""
+    fw_dpt_m, fw_dpt_e = parse_regex(rest, r'\bDPT=(?P<v>\S*)')
+    if fw_dpt_e == null { .fw_dpt = to_string(fw_dpt_m.v) }
+    .message = body
+  } else {
+    # ---- systemd / sshd / daemon ----
+    .udm_format = "system"
+    .service = "udm-system"
+    proc, _perr = parse_regex(body, r'^(?P<proc>[A-Za-z0-9._-]+)(\[(?P<pid>\d+)\])?:\s+(?P<pmsg>.*)$')
+    if proc != null {
+      .process = to_string(proc.proc)
+      .message = to_string(proc.pmsg)
+    } else {
+      .message = body
+    }
+  }
+}
+'''
+
+[transforms.udm_throttle]
+type = "throttle"
+inputs = ["udm_parse"]
+threshold = 50
+window_secs = 1
+key_field = "service"
+
+[transforms.redact_udm]
+type = "remap"
+inputs = ["udm_throttle"]
+source = '''
+${VECTOR_REDACT_TRANSFORMS}'''
+
+[transforms.strip_markers_udm]
+type = "remap"
+inputs = ["redact_udm"]
+source = '''
+${VECTOR_REDACT_STRIP_MARKERS}'''
+
+# UDM PARSE-FAILURE METRIC (STAGE-007-016 REDESIGN)
+# =================================================
+# Mirrors the redaction_metric log_to_metric mechanism. udm_parse sets
+# .parse_failed = 0 on every line and = 1 on an unrecognized envelope. The
+# field is ALWAYS present, so log_to_metric never hits its field-absent
+# error+drop path. We emit one counter per line tagged with the parse_failed
+# value (a low-cardinality label "0"/"1") and the udm_format bucket; vmalert
+# alerts on the {parse_failed="1"} stream. Taps udm_parse DIRECTLY (before
+# throttle) so dropped/throttled lines are still counted. The counter flows to
+# the existing prometheus_exporter sink on :9598 (udm_parse_failed_metric added
+# to sinks.redaction_metrics.inputs below).
+[transforms.udm_parse_failed_metric]
+type = "log_to_metric"
+inputs = ["udm_parse"]
+
+[[transforms.udm_parse_failed_metric.metrics]]
+type = "counter"
+field = "parse_failed"
+name = "udm_lines_total"
+increment_by_value = false
+
+[transforms.udm_parse_failed_metric.metrics.tags]
+parse_failed = "{{ parse_failed }}"
+udm_format = "{{ udm_format }}"
+
 # NON-SYSTEMD FALLBACK: cron_syslog source
 # ==========================================
 # MUTUALLY EXCLUSIVE with cron_journald_filter. Uncomment ONLY on non-systemd
@@ -506,10 +716,10 @@ ${VECTOR_REDACT_STRIP_MARKERS}'''
 # these markers never reach VictoriaLogs.
 [transforms.redaction_metric]
 type = "log_to_metric"
-inputs = ["redact_main", "redact_hmrun"]
+inputs = ["redact_main", "redact_hmrun", "redact_udm"]
 ${VECTOR_REDACT_METRICS}
 
 [sinks.redaction_metrics]
 type = "prometheus_exporter"
-inputs = ["redaction_metric", "internal_metrics"]
+inputs = ["redaction_metric", "internal_metrics", "udm_parse_failed_metric"]
 address = "0.0.0.0:9598"

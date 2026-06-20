@@ -90,13 +90,13 @@ def test_hmrun_shaped_transform_present(parsed_config: dict[str, Any]) -> None:
 
 
 def test_sinks_vl_inputs_rewired(parsed_config: dict[str, Any]) -> None:
-    """[sinks.vl].inputs must be ['throttle', 'strip_markers_hmrun'] (STAGE-004-006 rewired)."""
+    """[sinks.vl].inputs = throttle + hmrun + udm markers (STAGE-004-006 + STAGE-007-016)."""
     sinks = parsed_config.get("sinks", {})
     vl = sinks.get("vl", {})
     inputs = vl.get("inputs", [])
-    assert inputs == ["throttle", "strip_markers_hmrun"], (
-        f"sinks.vl.inputs should be ['throttle', 'strip_markers_hmrun'] "
-        f"after redaction rewire, got: {inputs}"
+    assert inputs == ["throttle", "strip_markers_hmrun", "strip_markers_udm"], (
+        f"sinks.vl.inputs should be "
+        f"['throttle', 'strip_markers_hmrun', 'strip_markers_udm'], got: {inputs}"
     )
 
 
@@ -1064,3 +1064,71 @@ def test_rendered_template_passes_vector_validate(tmp_path: Path) -> None:
         pytest.fail(
             "vector validate failed:\nstdout:\n" + result.stdout + "\nstderr:\n" + result.stderr
         )
+
+
+def test_udm_syslog_source_and_pipeline(parsed_config: dict[str, Any]) -> None:
+    """STAGE-007-016 REDESIGN: UDM multi-format socket source + parse/throttle/redact branch."""
+    sources = parsed_config.get("sources", {})
+    udm = sources.get("udm_syslog", {})
+    assert udm.get("type") == "socket", f"udm_syslog type, got: {udm.get('type')}"
+    assert udm.get("mode") == "udp", f"udm_syslog mode, got: {udm.get('mode')}"
+    address = udm.get("address", "")
+    assert address.endswith(":5514"), f"udm_syslog address, got: {address}"
+
+    transforms = parsed_config.get("transforms", {})
+    for name in (
+        "udm_parse",
+        "udm_throttle",
+        "redact_udm",
+        "strip_markers_udm",
+        "udm_parse_failed_metric",
+    ):
+        assert name in transforms, f"missing {name}; keys: {list(transforms.keys())}"
+
+    assert transforms["udm_parse"].get("inputs") == ["udm_syslog"], (
+        f"udm_parse inputs, got: {transforms['udm_parse'].get('inputs')}"
+    )
+    assert transforms["udm_throttle"].get("inputs") == ["udm_parse"], (
+        f"udm_throttle inputs, got: {transforms['udm_throttle'].get('inputs')}"
+    )
+    assert transforms["udm_throttle"].get("type") == "throttle", (
+        f"udm_throttle type, got: {transforms['udm_throttle'].get('type')}"
+    )
+    assert transforms["redact_udm"].get("inputs") == ["udm_throttle"], (
+        f"redact_udm inputs, got: {transforms['redact_udm'].get('inputs')}"
+    )
+    assert transforms["strip_markers_udm"].get("inputs") == ["redact_udm"], (
+        f"strip_markers_udm inputs, got: {transforms['strip_markers_udm'].get('inputs')}"
+    )
+
+    # Parse-failure metric taps udm_parse directly and emits a log_to_metric counter.
+    pfm = transforms["udm_parse_failed_metric"]
+    assert pfm.get("type") == "log_to_metric", (
+        f"udm_parse_failed_metric type, got: {pfm.get('type')}"
+    )
+    assert pfm.get("inputs") == ["udm_parse"], (
+        f"udm_parse_failed_metric inputs, got: {pfm.get('inputs')}"
+    )
+
+    udm_parse_source = transforms["udm_parse"].get("source", "")
+    assert '.source_type = "udm"' in udm_parse_source, "udm_parse must set source_type=udm"
+    assert '"udm-audit"' in udm_parse_source, "udm_parse must map the CEF/audit bucket"
+    assert '"udm-firewall"' in udm_parse_source, "udm_parse must map the iptables bucket"
+    assert '"udm-system"' in udm_parse_source, "udm_parse must map the system bucket"
+    assert '"udm-other"' in udm_parse_source, "udm_parse must have the udm-other fallback"
+    assert ".parse_failed = 1" in udm_parse_source, "udm_parse must mark parse failures"
+    # The $$1 boundary-split escape is load-bearing (bare $1 breaks env interpolation).
+    assert "$$1=" in udm_parse_source, "udm_parse CEF boundary-split must use $$1"
+
+    sinks = parsed_config.get("sinks", {})
+    vl_inputs = sinks.get("vl", {}).get("inputs", [])
+    assert "strip_markers_udm" in vl_inputs, f"vl inputs missing udm, got: {vl_inputs}"
+
+    metric_inputs = transforms.get("redaction_metric", {}).get("inputs", [])
+    assert "redact_udm" in metric_inputs, f"redaction_metric inputs, got: {metric_inputs}"
+
+    # The parse-failure counter must reach the prometheus_exporter sink on :9598.
+    exporter_inputs = sinks.get("redaction_metrics", {}).get("inputs", [])
+    assert "udm_parse_failed_metric" in exporter_inputs, (
+        f"redaction_metrics inputs missing parse-failed metric, got: {exporter_inputs}"
+    )

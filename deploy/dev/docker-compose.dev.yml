@@ -45,6 +45,7 @@ services:
   vector:
     ports:
       - "127.0.0.1:${HM_DEV_VECTOR_PORT:-18686}:8686"
+      - "127.0.0.1:${HM_DEV_UDM_SYSLOG_PORT:-15514}:5514/udp"
 
   alertmanager:
     ports:

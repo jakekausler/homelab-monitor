@@ -1,0 +1,81 @@
+# UDM Pro syslog fixture — REAL captured samples
+#
+# Source: live UniFi UDM Pro (UniFi Network 10.4.57), captured via
+#   `tcpdump -A` of UDP syslog to 192.168.x.x:5514 on 2026-06-19.
+# Purpose: seed parser tests with the actual on-the-wire envelope shapes.
+#
+# Anonymized: admin name → 'Admin User'; public IPs → documentation ranges
+#   (203.0.113.x / 198.51.100.x); MAC host-octets masked (OUI retained).
+#   LAN 192.168.x.x retained per repo convention. mcad authkey REDACTED;
+#   SSH key fingerprint masked. No bearer/session tokens or passwords are
+#   present in this capture (scanned and confirmed; sshd uses key auth only).
+#
+# ENVELOPE SHAPE — load-bearing parser design input:
+#   * Standard lines (iptables, systemd, sshd, daemons): HAVE a <PRI> prefix
+#     AND a DOUBLED hostname ("UDM-Pro UDM-Pro" = syslog HOSTNAME + APP-NAME).
+#   * CEF audit lines: have a <PRI> (<30>) BUT a SINGLE hostname ("UDM-Pro").
+#     The CEF payload itself carries no RFC5424 structured-data; a strict
+#     RFC-syslog parser will still accept the <PRI> but the body is CEF, not
+#     a normal MSG. Note the single (not doubled) hostname on these.
+#   * <PRI> values seen: <13> firewall(user.notice), <14> daemon(user.info),
+#     <30> systemd/dnsmasq/earlyoom/CEF(daemon.info), <38> sshd login(auth),
+#     <86> sshd PAM session(authpriv).
+#   * DESCR= named-rule values are TRUNCATED on the wire by the firewall
+#     logger (e.g. "[WAN_LOCAL]Block All Other Tra"). Preserve as-is.
+
+# === FORMAT: cef-audit-login ===
+# <PRI> present (<30>); SINGLE hostname (UDM-Pro, NOT doubled). CEF body.
+<30>Jun 19 18:17:32 UDM-Pro CEF:0|Ubiquiti|UniFi Network|10.4.57|544|Network Accessed|4|UNIFIcategory=Audit UNIFIhost=UDM Pro UNIFIaccessMethod=web UNIFIadmin=Admin User src=192.168.2.38 UNIFIutcTime=2026-06-19T22:17:32.276Z msg=Admin User accessed UniFi Network using the web. Source IP: 192.168.2.38
+
+# === FORMAT: cef-audit-config-change ===
+# <PRI> present (<30>); SINGLE hostname (UDM-Pro, NOT doubled). CEF body.
+<30>Jun 19 18:18:56 UDM-Pro CEF:0|Ubiquiti|UniFi Network|10.4.57|546|Config Modified|5|UNIFIcategory=Audit UNIFIhost=UDM Pro UNIFIsettingsChanges=name: Pi-Hole DNS_test UNIFIaccessMethod=web UNIFIsettingsSection=Firewall Group UNIFIsettingsEntry=Pi-Hole DNS_test UNIFIadmin=Admin User src=192.168.2.38 UNIFIutcTime=2026-06-19T22:18:56.537Z msg=Admin User made a change to  in Pi-Hole DNS_test Firewall Group settings. Source IP: 192.168.2.38
+
+# === FORMAT: iptables-udp ===
+# <PRI> present (<13>); DOUBLED hostname (UDM-Pro UDM-Pro).
+<13>Jun 19 18:17:05 UDM-Pro UDM-Pro [LAN_LOCAL-RET-2147483647] DESCR="no rule description" IN=br0 OUT= MAC=ff:ff:ff:xx:xx:xx:e8:68:e7:xx:xx:xx:08:00 SRC=192.168.2.24 DST=255.255.255.255 LEN=216 TOS=00 PREC=0x00 TTL=255 ID=47698 PROTO=UDP SPT=49154 DPT=6667 LEN=196 MARK=1a0000
+<13>Jun 19 18:17:06 UDM-Pro UDM-Pro [LAN_LOCAL-RET-2147483647] DESCR="no rule description" IN=br0 OUT= MAC=45:00:00:xx:xx:xx:40:00:01:xx:xx:xx:c0:a8 SRC=192.168.2.1 DST=224.0.0.251 LEN=61 TOS=00 PREC=0x00 TTL=1 ID=9643 DF PROTO=UDP SPT=5353 DPT=5353 LEN=41 MARK=1a0000
+
+# === FORMAT: iptables-tcp ===
+# <PRI> present (<13>); DOUBLED hostname. TCP flags: SEQ/ACK/WINDOW/SYN.
+<13>Jun 19 18:17:09 UDM-Pro UDM-Pro [LAN_LOCAL-RET-2147483647] DESCR="no rule description" IN=br0 OUT= MAC=6c:63:f8:xx:xx:xx:6c:63:f8:xx:xx:xx:08:00 SRC=192.168.2.111 DST=192.168.2.1 LEN=60 TOS=00 PREC=0x00 TTL=64 ID=34881 DF PROTO=TCP SPT=60856 DPT=8080 SEQ=726876871 ACK=0 WINDOW=64240 SYN URGP=0 MARK=1a0000
+
+# === FORMAT: iptables-named-rule ===
+# <PRI> present (<13>); DOUBLED hostname. DESCR= values TRUNCATED on the wire.
+<13>Jun 19 18:17:15 UDM-Pro UDM-Pro [WAN_LOCAL-D-2147483647] DESCR="[WAN_LOCAL]Block All Other Tra" IN=eth8 OUT= MAC=01:00:5e:xx:xx:xx:2c:c1:f4:xx:xx:xx:08:00 SRC=192.168.1.254 DST=224.0.0.1 LEN=36 TOS=00 PREC=0xC0 TTL=1 ID=1277 DF PROTO=2 MARK=1a0000
+<13>Jun 19 18:17:24 UDM-Pro UDM-Pro [WAN_IN-RET-30009] DESCR="[WAN_IN]Allow Port Forward {Nginx SS" IN=eth8 OUT=br0 MAC=6c:63:f8:xx:xx:xx:2c:c1:f4:xx:xx:xx:08:00 SRC=198.51.100.80 DST=192.168.2.148 LEN=52 TOS=00 PREC=0x00 TTL=52 ID=35859 PROTO=TCP SPT=44596 DPT=443 SEQ=1402745621 ACK=0 WINDOW=65535 SYN URGP=0 MARK=1a0000
+<13>Jun 19 18:18:05 UDM-Pro UDM-Pro [WAN_IN-RET-30007] DESCR="[WAN_IN]Allow Port Forward {Nginx}" IN=eth8 OUT=br0 MAC=6c:63:f8:xx:xx:xx:2c:c1:f4:xx:xx:xx:08:00 SRC=198.51.100.30 DST=192.168.2.148 LEN=52 TOS=00 PREC=0x00 TTL=104 ID=62426 DF PROTO=TCP SPT=25857 DPT=80 SEQ=316147080 ACK=0 WINDOW=65535 SYN URGP=0 MARK=1a0000
+<13>Jun 19 18:17:24 UDM-Pro UDM-Pro [PREROUTING-DNAT-11] DESCR="PortForward DNAT [Nginx SSL]" IN=eth8 OUT= MAC=6c:63:f8:xx:xx:xx:2c:c1:f4:xx:xx:xx:08:00 SRC=198.51.100.80 DST=203.0.113.10 LEN=52 TOS=00 PREC=0x00 TTL=53 ID=35859 PROTO=TCP SPT=44596 DPT=443 SEQ=1402745621 ACK=0 WINDOW=65535 SYN URGP=0 MARK=1a0000
+
+# === FORMAT: iptables-icmp ===
+# <PRI> present (<13>); DOUBLED hostname. PROTO=ICMP with TYPE/CODE.
+<13>Jun 19 18:17:25 UDM-Pro UDM-Pro [LAN_LOCAL-RET-2147483647] DESCR="no rule description" IN=br0 OUT= MAC=6c:63:f8:xx:xx:xx:88:29:bf:xx:xx:xx:08:00 SRC=192.168.2.139 DST=192.168.2.1 LEN=84 TOS=00 PREC=0x00 TTL=64 ID=19970 DF PROTO=ICMP TYPE=8 CODE=0 ID=56026 SEQ=61743 MARK=1a0000
+
+# === FORMAT: iptables-ipv6 ===
+# <PRI> present (<13>); DOUBLED hostname. IPv6 fields: TC/HOPLIMIT/FLOWLBL.
+<13>Jun 19 18:17:06 UDM-Pro UDM-Pro [LAN_LOCAL-RET-2147483646] DESCR="no rule description" IN=br0 OUT= MAC=33:33:00:xx:xx:xx:36:34:d0:xx:xx:xx:86:dd SRC=fe80::3434:d0ff:feda:5b54 DST=ff02::fb LEN=95 TC=0 HOPLIMIT=255 FLOWLBL=0 PROTO=UDP SPT=5353 DPT=5353 LEN=55 MARK=1a0000
+
+# === FORMAT: systemd ===
+# <PRI> present (<30>); DOUBLED hostname.
+<30>Jun 19 18:17:37 UDM-Pro UDM-Pro systemd[1]: Created slice User Slice of UID 0.
+<30>Jun 19 18:17:37 UDM-Pro UDM-Pro systemd[1]: Starting User Runtime Directory /run/user/0...
+
+# === FORMAT: sshd ===
+# <PRI> varies (<38> login auth, <86> PAM session authpriv); DOUBLED hostname.
+# Key fingerprint masked.
+<38>Jun 19 18:17:37 UDM-Pro UDM-Pro sshd[1365787]: Accepted publickey for root from 192.168.2.148 port 40738 ssh2: ED25519 SHA256:xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+<86>Jun 19 18:17:37 UDM-Pro UDM-Pro sshd[1365787]: pam_unix(sshd:session): session opened for user root(uid=0) by (uid=0)
+
+# === FORMAT: other-daemon ===
+# <PRI> varies (<30> earlyoom/dnsmasq, <14> ubios-udapi-server/mcad);
+# DOUBLED hostname. mcad authkey REDACTED.
+<30>Jun 19 18:17:51 UDM-Pro UDM-Pro earlyoom[1385]: mem avail:  2131 of  3946 MiB (54.02%), swap free: 1959 of 1973 MiB (99.29%)
+<30>Jun 19 18:17:59 UDM-Pro UDM-Pro dnsmasq[2956502]: inotify: /run/dnsmasq.dns.conf.d/hosts.d//leases new or modified
+<30>Jun 19 18:17:59 UDM-Pro UDM-Pro dnsmasq-dhcp[2956498]: DHCPREQUEST(br0) 192.168.2.107 60:6b:ff:xx:xx:xx
+<14>Jun 19 18:19:00 UDM-Pro UDM-Pro ubios-udapi-server[1730]: config-migrate-helper: Migrating config .versionDetail.services/sslInspection from 2 to 3
+<14>Jun 19 18:18:57 UDM-Pro UDM-Pro mcad[3112]: ace_reporter.reporter_save_config(): authkey: REDACTED
+
+# === FORMAT: wifi-ap ===
+# NOT PRESENT in this capture — no AP-specific (U7-Pro / AP-MAC) lines were
+# seen. Placeholder section retained so the parser test suite can note the
+# gap; add a real sample when an AP log is captured.

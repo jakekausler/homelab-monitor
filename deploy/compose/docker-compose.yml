@@ -310,6 +310,13 @@ services:
     # by vmagent over homelab-monitor-net (job_name: vector). Not host-published.
     expose:
       - "9598"
+    # STAGE-007-016: UDM CEF-over-syslog UDP listener. The DELIBERATE prod
+    # LAN-exposure exception — a real LAN syslog source (the UDM Pro) cannot
+    # reach a container-internal sidecar, so this is the ONE prod sidecar port
+    # published, on 0.0.0.0 (not 127.0.0.1) by necessity. Configurable via
+    # HM_UDM_SYSLOG_BIND_HOST / HM_UDM_SYSLOG_PORT in deploy/compose/.env.
+    ports:
+      - "${HM_UDM_SYSLOG_BIND_HOST:-0.0.0.0}:${HM_UDM_SYSLOG_PORT:-5514}:5514/udp"
     # The monitor renders vector.toml (with the cron-events ingest token
     # substituted) into data_vector_config at boot. Vector --configs the
     # rendered file. A named volume cannot overlay a single file path, so the
