@@ -1,6 +1,6 @@
 # EPIC-007: Unifi integration
 
-## Status: In Progress (STAGE-007-001..017 + 016A Complete; current: STAGE-007-018)
+## Status: In Progress (STAGE-007-001..018 + 016A Complete; current: STAGE-007-019)
 
 ## Build order + client-identity ownership (LOCKED — 2026-06-16/17 brainstorm)
 
@@ -337,7 +337,7 @@ including the opt-in SSH lease, land in Wave B before any rules).
 ### Wave G — UI (6)
 | # | Stage | Theme |
 |---|---|---|
-| STAGE-007-018 | **Nav restructure** (remove Inventory page; relocate Crons under Integrations; add Integrations entries) — FIRST UI stage so all subsequent UI registers into the final structure. Design verifies live what's on Inventory today. Cross-epic UI move (EPIC-002 crons provenance noted). |
+| STAGE-007-018 | **Nav restructure** (remove Inventory page; relocate Crons under Integrations; add Integrations entries) — FIRST UI stage so all subsequent UI registers into the final structure. Design verifies live what's on Inventory today. Cross-epic UI move (EPIC-002 crons provenance noted). | Complete |
 | STAGE-007-019 | Backend panel/page data endpoints (Unifi panel + Network page + Client page) |
 | STAGE-007-020 | Integrations → Unifi panel (device table + drill-down + threats/DPI/Teleport/controller + `<LogViewer>`) |
 | STAGE-007-021 | Integrations → Network page shell + WAN/DHCP-pool/WiFi-experience/SSID widgets + DNS-posture indicator |
