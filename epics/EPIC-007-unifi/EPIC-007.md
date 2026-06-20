@@ -1,6 +1,6 @@
 # EPIC-007: Unifi integration
 
-## Status: In Progress (STAGE-007-001..016 Complete; current: STAGE-007-016A)
+## Status: In Progress (STAGE-007-001..017 Complete; current: STAGE-007-016A)
 
 ## Build order + client-identity ownership (LOCKED — 2026-06-16/17 brainstorm)
 
@@ -332,7 +332,7 @@ including the opt-in SSH lease, land in Wave B before any rules).
 ### Wave F — Log alert rules (1)
 | # | Stage | Theme |
 |---|---|---|
-| STAGE-007-017 | vmalert-LOGS rules (the ~5 CEF-stream alerts) — after the syslog source exists |
+| STAGE-007-017 | vmalert-LOGS rules (the ~5 CEF-stream alerts) — after the syslog source exists | Complete |
 
 ### Wave G — UI (6)
 | # | Stage | Theme |
