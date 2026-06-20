@@ -1,6 +1,6 @@
 # EPIC-007: Unifi integration
 
-## Status: In Progress (STAGE-007-001..017 Complete; current: STAGE-007-016A)
+## Status: In Progress (STAGE-007-001..017 + 016A Complete; current: STAGE-007-018)
 
 ## Build order + client-identity ownership (LOCKED — 2026-06-16/17 brainstorm)
 
@@ -327,7 +327,7 @@ including the opt-in SSH lease, land in Wave B before any rules).
 | # | Stage | Theme |
 |---|---|---|
 | STAGE-007-016 | vector CEF `syslog` source + VL `service="udm-*"` labels + UDM-side remote-syslog enable + validate (BEFORE the log rules) | Complete |
-| STAGE-007-016A | vector config auto-reload on re-render (no manual restart; closes the deploy-propagation gap found in 016 Refinement) | Not Started |
+| STAGE-007-016A | vector config auto-reload on re-render (no manual restart; closes the deploy-propagation gap found in 016 Refinement) | Complete |
 
 ### Wave F — Log alert rules (1)
 | # | Stage | Theme |
