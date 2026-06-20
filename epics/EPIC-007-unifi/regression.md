@@ -88,3 +88,15 @@
 - Live prod-rig validation (2026-06-19): after vmalert-metrics config reload (`POST /-/reload`), the `unifi` group loaded with all 25 rules `health=ok`, zero `lastError`; `UnifiControllerDown` inactive (controller up), anomaly rule inactive (subquery warm-up). Notifier wired to `http://alertmanager:9093`. `UnifiDnsSteeringMetricMissing` was genuinely FIRING — its `absent(homelab_unifi_dhcp_dns_primary)` matched because that metric was absent in prod VM at validation time (the absent() companion working as designed; whether the networkconf collector is emitting dhcp_dns_primary on prod is a separate OPERATOR question, not a rule defect).
 - Re-validate after any edit to unifi.yaml: re-run promtool check + test, and reload vmalert-metrics; confirm the `unifi` group still reports 25 rules with health=ok and no lastError.
 - Deferred items resolved: UnifiDhcpPoolExhaustion (#18) + UnifiDnsSteeringDrift (#5) built here; DPI spike clamp relocated to STAGE-007-024.
+
+## STAGE-007-016 — UDM multi-format syslog parse
+
+- **STAGE-007-016 — UDM multi-format syslog parse.** After any vector template change or UDM firmware update, re-verify the live parse: inject/observe each format and confirm correct bucketing.
+  - Real UDM lines parse at ~0% failure: query `udm_lines_total{parse_failed="1"}` on vector:9598 (or VM) — should be ~0. A climbing parse_failed="1" counter means the UDM is emitting a format the `udm_parse` VRL doesn't handle (new firmware format, new event type). The `UnifiUdmLogParseFailed` vmalert rule (for: 0m) surfaces this immediately.
+  - iptables firewall lines → `service=udm-firewall` with src/dst/fw_proto/fw_chain/fw_descr extracted (incl. quoted DESCR with spaces+brackets like "PortForward DNAT [Nginx SSL]"; empty `OUT=` must NOT swallow the next key).
+  - systemd/sshd/daemon lines → `service=udm-system` with `process` set.
+  - CEF audit events (login "Network Accessed" / config-change "Config Modified") → `service=udm-audit` with FULL space-containing values (`udm_admin`, `udm_settings_section`, `udm_settings_entry`) — validates the $$1 boundary pre-split. Both <PRI>-present and no-<PRI> CEF envelope shapes must parse.
+  - Trailing-newline regression: real UDP datagrams carry a trailing `\n`; `strip_whitespace` must absorb it. The parametrized fixture test feeds each line with `+"\n"` to guard this.
+  - Secrets: confirm tokens (e.g. mcad authkey) are redacted in VL — the `udm_authkey` redact pattern.
+  - Vector reload: a vector template change needs `docker restart homelab-vector` AFTER the monitor re-renders (vector has no hot-reload — automated in STAGE-007-016A).
+- **STAGE-007-016 — category vocabulary still being discovered.** The real `UNIFIcategory` values are bounded only by what's been observed (mostly "Audit" so far). New categories land in `udm-other` but are COUNTED (parse_failed stays 0 — they parse, just don't match a named bucket). Periodically review `service=udm-other` with parse_failed=0 to see if a new category deserves its own bucket.

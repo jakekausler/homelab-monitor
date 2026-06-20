@@ -1,6 +1,6 @@
 # EPIC-007: Unifi integration
 
-## Status: In Progress (STAGE-007-001..015 Complete; current: STAGE-007-016)
+## Status: In Progress (STAGE-007-001..016 Complete; current: STAGE-007-016A)
 
 ## Build order + client-identity ownership (LOCKED — 2026-06-16/17 brainstorm)
 
@@ -286,7 +286,7 @@ Integrations ▸
 - **Scoping the SSH lease path** — the lease collector is built on EPIC-017's framework; the mandate to
   replace any currently-unscoped SSH access with a scoped forced-command user lives in EPIC-017.
 
-## Stage decomposition (~25 stages, sequential within waves)
+## Stage decomposition (~26 stages, sequential within waves)
 
 Each stage lands a single small slice and ships independently usable, mirroring EPIC-005's wave shape.
 Wave order is sequenced for honest data dependencies (syslog before log-rules; all data collectors,
@@ -326,7 +326,8 @@ including the opt-in SSH lease, land in Wave B before any rules).
 ### Wave E — Events pipeline (1)
 | # | Stage | Theme |
 |---|---|---|
-| STAGE-007-016 | vector CEF `syslog` source + VL `service="udm-*"` labels + UDM-side remote-syslog enable + validate (BEFORE the log rules) |
+| STAGE-007-016 | vector CEF `syslog` source + VL `service="udm-*"` labels + UDM-side remote-syslog enable + validate (BEFORE the log rules) | Complete |
+| STAGE-007-016A | vector config auto-reload on re-render (no manual restart; closes the deploy-propagation gap found in 016 Refinement) | Not Started |
 
 ### Wave F — Log alert rules (1)
 | # | Stage | Theme |
