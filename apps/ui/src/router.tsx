@@ -35,6 +35,7 @@ import { ContainerLogsTab } from '@/routes/integrations/ContainerLogsTab'
 import { ContainerActionsTab } from '@/routes/integrations/ContainerActionsTab'
 import { UnifiLayout } from '@/routes/integrations/UnifiLayout'
 import { UnifiOverviewTab } from '@/routes/integrations/UnifiOverviewTab'
+import { UnifiDevicePage } from '@/routes/integrations/UnifiDevicePage'
 import { NetworkPage } from '@/routes/integrations/NetworkPage'
 import { LogsExplorerPage } from '@/routes/logs/LogsExplorerPage'
 import { LogsLayout } from '@/routes/logs/LogsLayout'
@@ -462,6 +463,12 @@ const unifiOverviewRoute = createRoute({
   component: UnifiOverviewTab,
 })
 
+const unifiDeviceRoute = createRoute({
+  getParentRoute: () => unifiLayoutRoute,
+  path: 'devices/$device',
+  component: UnifiDevicePage,
+})
+
 const networkIntegrationRoute = createRoute({
   getParentRoute: () => protectedLayoutRoute,
   path: '/integrations/network',
@@ -555,7 +562,7 @@ const routeTree = rootRoute.addChildren([
       homeAssistantStatusRoute,
       homeAssistantLogsRoute,
     ]),
-    unifiLayoutRoute.addChildren([unifiIndexRoute, unifiOverviewRoute]),
+    unifiLayoutRoute.addChildren([unifiIndexRoute, unifiOverviewRoute, unifiDeviceRoute]),
     networkIntegrationRoute,
     containerPageRoute.addChildren([
       containerIndexRoute,

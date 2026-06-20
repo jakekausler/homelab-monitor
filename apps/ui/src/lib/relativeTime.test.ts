@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { formatAge } from './relativeTime'
+import { formatAge, formatUptime } from './relativeTime'
 
 describe('formatAge', () => {
   it('returns "just now" for sub-minute values', () => {
@@ -28,5 +28,41 @@ describe('formatAge', () => {
 
   it('clamps negatives to "just now"', () => {
     expect(formatAge(-10)).toBe('just now')
+  })
+})
+
+describe('formatUptime', () => {
+  it('returns "—" for null/undefined', () => {
+    expect(formatUptime(null)).toBe('—')
+    expect(formatUptime(undefined)).toBe('—')
+  })
+
+  it('returns seconds for < 60s', () => {
+    expect(formatUptime(0)).toBe('0s')
+    expect(formatUptime(59)).toBe('59s')
+  })
+
+  it('returns Xm Ys for 60s–3599s', () => {
+    expect(formatUptime(60)).toBe('1m 0s')
+    expect(formatUptime(3599)).toBe('59m 59s')
+  })
+
+  it('returns Xh Ym for 3600s–86399s', () => {
+    expect(formatUptime(3600)).toBe('1h 0m')
+    expect(formatUptime(86399)).toBe('23h 59m')
+  })
+
+  it('returns Xd Yh for 1d–6d', () => {
+    expect(formatUptime(86400)).toBe('1d 0h')
+    expect(formatUptime(6 * 86400 + 3600)).toBe('6d 1h')
+  })
+
+  it('returns Xw Yd at 7d', () => {
+    expect(formatUptime(7 * 86400)).toBe('1w 0d')
+    expect(formatUptime(364 * 86400)).toBe('52w 0d')
+  })
+
+  it('returns Xy Yw at 365d', () => {
+    expect(formatUptime(365 * 86400)).toBe('1y 0w')
   })
 })

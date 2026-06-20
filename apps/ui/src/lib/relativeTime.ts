@@ -83,6 +83,45 @@ export function formatDuration(seconds: number | null): string {
   return `${h}h ${m}m`
 }
 
+const MIN = 60
+const HR = 3600
+const DAY = 86400
+const WEEK = 604800
+const YEAR = 31536000
+
+/**
+ * Format a device uptime in seconds as a two-unit human-readable string.
+ * Tiers: Xy Yw | Xw Yd | Xd Yh | Xh Ym | Xm Ys | Xs | —
+ */
+export function formatUptime(seconds: number | null | undefined): string {
+  if (seconds === null || seconds === undefined) return '—'
+  const s = Math.max(0, Math.floor(seconds))
+  if (s < MIN) return `${s}s`
+  if (s < HR) {
+    const m = Math.floor(s / MIN)
+    const r = s % MIN
+    return `${m}m ${r}s`
+  }
+  if (s < DAY) {
+    const h = Math.floor(s / HR)
+    const m = Math.floor((s % HR) / MIN)
+    return `${h}h ${m}m`
+  }
+  if (s < WEEK) {
+    const d = Math.floor(s / DAY)
+    const h = Math.floor((s % DAY) / HR)
+    return `${d}d ${h}h`
+  }
+  if (s < YEAR) {
+    const w = Math.floor(s / WEEK)
+    const d = Math.floor((s % WEEK) / DAY)
+    return `${w}w ${d}d`
+  }
+  const y = Math.floor(s / YEAR)
+  const w = Math.floor((s % YEAR) / WEEK)
+  return `${y}y ${w}w`
+}
+
 /**
  * Coarse single-unit relative age with an " ago" suffix.
  * Thresholds: <60s → "just now"; <3600s → minutes; <86400s → hours; else days.

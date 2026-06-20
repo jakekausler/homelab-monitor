@@ -1,9 +1,17 @@
-// SCAFFOLD TEST: validates honest empty-state placeholder only; real behavior tests arrive in STAGE-020/021
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, screen } from '@testing-library/react'
 import type { ReactNode } from 'react'
+import type { UseQueryResult } from '@tanstack/react-query'
+
+import type { ApiError } from '@/api/client'
+import type { Schema } from '@/api/types'
+import { useUnifiSummary } from '@/api/unifi'
 
 import { UnifiLayout } from './UnifiLayout'
+
+type UnifiSummary = Schema<'UnifiSummary'>
+
+vi.mock('@/api/unifi')
 
 vi.mock('@tanstack/react-router', async () => {
   const actual = await vi.importActual('@tanstack/react-router')
@@ -26,46 +34,63 @@ vi.mock('@tanstack/react-router', async () => {
   }
 })
 
+function makeResult(overrides: Partial<UseQueryResult<UnifiSummary, ApiError>>) {
+  return {
+    data: undefined,
+    error: null,
+    isPending: false,
+    isError: false,
+    isSuccess: false,
+    status: 'pending',
+    ...overrides,
+  } as UseQueryResult<UnifiSummary, ApiError>
+}
+
+const MOCK_SUMMARY: UnifiSummary = {
+  controller_up: true,
+  controller_reason: null,
+  wan_up: true,
+  teleport_up: true,
+  devices_total: 5,
+  devices_up: 5,
+  threat_count: 0,
+  last_seen: '2026-06-12T00:00:00Z',
+}
+
 afterEach(() => {
   cleanup()
+  vi.clearAllMocks()
+})
+
+beforeEach(() => {
+  vi.mocked(useUnifiSummary).mockReturnValue(
+    makeResult({ data: MOCK_SUMMARY, isSuccess: true, status: 'success' }),
+  )
 })
 
 describe('UnifiLayout', () => {
-  it('renders without crashing', () => {
-    render(<UnifiLayout />)
-  })
-
-  it('renders the page heading', () => {
+  it('renders header, tab, and outlet', () => {
     render(<UnifiLayout />)
     expect(screen.getByRole('heading', { name: /unifi integration/i })).toBeInTheDocument()
-  })
-
-  it('renders the honest placeholder subtitle describing upcoming stages', () => {
-    render(<UnifiLayout />)
-    expect(
-      screen.getByText('Unifi gear, network, and clients land in upcoming stages.'),
-    ).toBeInTheDocument()
-  })
-
-  it('renders the Overview tab link', () => {
-    render(<UnifiLayout />)
-    expect(screen.getByTestId('unifi-tab-overview')).toBeInTheDocument()
-    expect(screen.getByText('Overview')).toBeInTheDocument()
-  })
-
-  it('renders the tabs nav with correct aria-label', () => {
-    render(<UnifiLayout />)
-    expect(screen.getByRole('navigation', { name: 'Unifi tabs' })).toBeInTheDocument()
-  })
-
-  it('renders an Outlet host', () => {
-    render(<UnifiLayout />)
+    expect(screen.getByTestId('unifi-tab-overview')).toHaveTextContent('Overview')
     expect(screen.getByTestId('unifi-outlet')).toBeInTheDocument()
   })
 
-  it('does not render any fake device/network/client data tables', () => {
+  it('renders the persistent status strip from summary', () => {
     render(<UnifiLayout />)
-    expect(screen.queryByRole('table')).not.toBeInTheDocument()
-    expect(screen.queryByRole('grid')).not.toBeInTheDocument()
+    const strip = screen.getByTestId('unifi-status-strip')
+    expect(strip).toHaveTextContent(/Controller up/i)
+    expect(strip).toHaveTextContent(/WAN up/i)
+    expect(strip).toHaveTextContent('5/5')
+  })
+
+  it('shows the 502 unavailable banner', () => {
+    const err = new Error('bad gateway') as ApiError
+    ;(err as { status: number }).status = 502
+    vi.mocked(useUnifiSummary).mockReturnValue(
+      makeResult({ error: err, isError: true, status: 'error' }),
+    )
+    render(<UnifiLayout />)
+    expect(screen.getByText(/Unifi metrics temporarily unavailable/i)).toBeInTheDocument()
   })
 })

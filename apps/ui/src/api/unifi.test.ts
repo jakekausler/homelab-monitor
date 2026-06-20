@@ -1,0 +1,160 @@
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { renderHook, waitFor } from '@testing-library/react'
+import React, { type ReactNode } from 'react'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+vi.mock('./client', () => ({
+  apiClient: {
+    GET: vi.fn(),
+  },
+  unwrap: vi.fn((result: { data?: unknown; error?: unknown; response: Response }) => {
+    if (result.data !== undefined) return result.data
+    throw new Error('mocked api error')
+  }),
+}))
+
+import { apiClient } from './client'
+import {
+  useUnifiSummary,
+  useUnifiDevices,
+  useUnifiDevice,
+  useUnifiThreats,
+  useUnifiDpi,
+  useUnifiTeleport,
+  useUnifiControllerHealth,
+} from './unifi'
+
+function fakeResponse(status: number): Response {
+  return new Response(null, { status })
+}
+
+function makeWrapper(): ({ children }: { children: ReactNode }) => ReactNode {
+  const client = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+      mutations: { retry: false },
+    },
+  })
+  return ({ children }: { children: ReactNode }) =>
+    React.createElement(QueryClientProvider, { client }, children)
+}
+
+describe('unifi hooks', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  describe('useUnifiSummary', () => {
+    it('calls GET /api/integrations/unifi/summary and returns unwrapped data', async () => {
+      const mockData = { controller_up: true, devices_total: 3, devices_up: 3, clients_total: 10 }
+      vi.mocked(apiClient.GET).mockResolvedValue({ data: mockData, response: fakeResponse(200) })
+
+      const { result } = renderHook(() => useUnifiSummary(), { wrapper: makeWrapper() })
+
+      await waitFor(() => expect(result.current.isSuccess).toBe(true))
+
+      expect(apiClient.GET).toHaveBeenCalledWith('/api/integrations/unifi/summary', {})
+      expect(result.current.data).toEqual(mockData)
+    })
+  })
+
+  describe('useUnifiDevices', () => {
+    it('calls GET /api/integrations/unifi/devices and returns device list', async () => {
+      const mockData = { devices: [] }
+      vi.mocked(apiClient.GET).mockResolvedValue({ data: mockData, response: fakeResponse(200) })
+
+      const { result } = renderHook(() => useUnifiDevices(), { wrapper: makeWrapper() })
+
+      await waitFor(() => expect(result.current.isSuccess).toBe(true))
+
+      expect(apiClient.GET).toHaveBeenCalledWith('/api/integrations/unifi/devices', {})
+      expect(result.current.data).toEqual(mockData)
+    })
+  })
+
+  describe('useUnifiDevice', () => {
+    it('calls GET /api/integrations/unifi/devices/{device} when mac is provided', async () => {
+      const mockData = {
+        mac: 'aa:bb:cc:dd:ee:ff',
+        cpu_pct: 10,
+        mem_pct: 20,
+        load: 0.5,
+        ports: [],
+        radios: [],
+        outlets: [],
+        temps: [],
+      }
+      vi.mocked(apiClient.GET).mockResolvedValue({ data: mockData, response: fakeResponse(200) })
+
+      const { result } = renderHook(() => useUnifiDevice('aa:bb:cc:dd:ee:ff'), {
+        wrapper: makeWrapper(),
+      })
+
+      await waitFor(() => expect(result.current.isSuccess).toBe(true))
+
+      expect(apiClient.GET).toHaveBeenCalledWith('/api/integrations/unifi/devices/{device}', {
+        params: { path: { device: 'aa:bb:cc:dd:ee:ff' } },
+      })
+    })
+
+    it('is disabled (queryFn not called) when device is empty string', () => {
+      const { result } = renderHook(() => useUnifiDevice(''), { wrapper: makeWrapper() })
+
+      // isPending stays true (enabled:false, query never fires)
+      expect(result.current.isPending).toBe(true)
+      expect(apiClient.GET).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('useUnifiThreats', () => {
+    it('calls GET /api/integrations/unifi/threats and returns data', async () => {
+      const mockData = { threats: [] }
+      vi.mocked(apiClient.GET).mockResolvedValue({ data: mockData, response: fakeResponse(200) })
+
+      const { result } = renderHook(() => useUnifiThreats(), { wrapper: makeWrapper() })
+
+      await waitFor(() => expect(result.current.isSuccess).toBe(true))
+
+      expect(apiClient.GET).toHaveBeenCalledWith('/api/integrations/unifi/threats', {})
+    })
+  })
+
+  describe('useUnifiDpi', () => {
+    it('calls GET /api/integrations/unifi/dpi and returns data', async () => {
+      const mockData = { apps: [] }
+      vi.mocked(apiClient.GET).mockResolvedValue({ data: mockData, response: fakeResponse(200) })
+
+      const { result } = renderHook(() => useUnifiDpi(), { wrapper: makeWrapper() })
+
+      await waitFor(() => expect(result.current.isSuccess).toBe(true))
+
+      expect(apiClient.GET).toHaveBeenCalledWith('/api/integrations/unifi/dpi', {})
+    })
+  })
+
+  describe('useUnifiTeleport', () => {
+    it('calls GET /api/integrations/unifi/teleport and returns data', async () => {
+      const mockData = { teleport_up: true, version: '1.0.0', reason: null }
+      vi.mocked(apiClient.GET).mockResolvedValue({ data: mockData, response: fakeResponse(200) })
+
+      const { result } = renderHook(() => useUnifiTeleport(), { wrapper: makeWrapper() })
+
+      await waitFor(() => expect(result.current.isSuccess).toBe(true))
+
+      expect(apiClient.GET).toHaveBeenCalledWith('/api/integrations/unifi/teleport', {})
+    })
+  })
+
+  describe('useUnifiControllerHealth', () => {
+    it('calls GET /api/integrations/unifi/controller-health and returns data', async () => {
+      const mockData = { controller_up: true, up_reasons: [], api_took_seconds: [] }
+      vi.mocked(apiClient.GET).mockResolvedValue({ data: mockData, response: fakeResponse(200) })
+
+      const { result } = renderHook(() => useUnifiControllerHealth(), { wrapper: makeWrapper() })
+
+      await waitFor(() => expect(result.current.isSuccess).toBe(true))
+
+      expect(apiClient.GET).toHaveBeenCalledWith('/api/integrations/unifi/controller-health', {})
+    })
+  })
+})
