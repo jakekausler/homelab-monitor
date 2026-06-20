@@ -1,0 +1,165 @@
+# Test-window counterpart of deploy/vmalert/logs/unifi.yaml.
+# Used ONLY by docker-compose.test.yml (vmalert-logs-test service, glob-mounted).
+#
+# Differences vs production:
+#   - interval: 5s vs 30s (~6 evals per 30s window — enough resolution for the
+#     slow integration test to observe firing).
+#   - _time:30s vs _time:5m (faster firing for the slow integration test).
+#   - UnifiWanBlockSpikeLog threshold lowered to >2 (test plants 3 firewall lines).
+#   - UnifiPortFlapLog threshold lowered to >1 (test does NOT plant port lines; it
+#     stays health-validated only — lowered for symmetry with the prod twin intent).
+#   - Same group/alert names, same labels, same summaries, same source_tool.
+#   - Description window/threshold TEXT tracks this twin's _time/filter values
+#     (mirrors deploy/vmalert/logs-test/system.yaml).
+#
+# Production rules at deploy/vmalert/logs/unifi.yaml — keep BOTH files in sync for
+# label/annotation changes; only `_time:`, `interval:` and `filter` thresholds diverge.
+
+groups:
+  - name: unifi_logs
+    type: vlogs
+    # interval: 5s gives ~6 evaluations per 30s window — sufficient resolution for
+    # the integration test to observe firing. DO NOT raise to match production's 30s;
+    # the test would only get 1 eval per window.
+    interval: 5s
+    rules:
+      # 1 — Admin login (CEF audit sig 544).
+      - alert: UnifiAdminLoginLog
+        expr: '_time:30s service:="udm-audit" cef_signature_id:="544" | stats by (host, udm_admin, src) count() as login_count | filter login_count:>0'
+        for: 0m
+        labels:
+          severity: info
+          source_tool: vmalert-logs
+          category: network
+          integration: unifi
+        annotations:
+          summary: "Unifi admin login on {{ $labels.host }}"
+          description: >-
+            Unifi admin {{ $labels.udm_admin }} logged in to {{ $labels.host }}
+            from {{ $labels.src }} ({{ $value }} login event(s) in 30s; CEF audit
+            signature 544).
+          explorer: '/logs?logsql=service:"udm-audit" AND cef_signature_id:"544"'
+
+      # 2 — Admin login from OUTSIDE the LAN.
+      # ipv4_range LogsQL syntax + non-LAN exclusion VALIDATED live (STAGE-007-017 Refinement gate A).
+      # Fallback (only if a future VictoriaLogs version drops ipv4_range support):
+      # NOT src:192.168.* NOT src:10.* NOT src:172.16.*
+      - alert: UnifiAdminLoginExternalLog
+        expr: '_time:30s service:="udm-audit" cef_signature_id:="544" NOT src:ipv4_range("192.168.0.0", "192.168.255.255") NOT src:ipv4_range("10.0.0.0", "10.255.255.255") NOT src:ipv4_range("172.16.0.0", "172.31.255.255") | stats by (host, udm_admin, src) count() as ext_login_count | filter ext_login_count:>0'
+        for: 0m
+        labels:
+          severity: warning
+          source_tool: vmalert-logs
+          category: network
+          integration: unifi
+        annotations:
+          summary: "Unifi admin login from outside the LAN on {{ $labels.host }}"
+          description: >-
+            Unifi admin {{ $labels.udm_admin }} logged in to {{ $labels.host }}
+            from off-network source {{ $labels.src }} ({{ $value }} external login
+            event(s) in 30s; CEF audit signature 544). Source is outside all RFC1918
+            ranges — verify this is an expected remote-admin session.
+          explorer: '/logs?logsql=service:"udm-audit" AND cef_signature_id:"544"'
+
+      # 3 — Configuration change (CEF audit sig 546).
+      - alert: UnifiConfigChangeLog
+        expr: '_time:30s service:="udm-audit" cef_signature_id:="546" | stats by (host, udm_admin, udm_settings_section) count() as change_count | filter change_count:>0'
+        for: 0m
+        labels:
+          severity: info
+          source_tool: vmalert-logs
+          category: network
+          integration: unifi
+        annotations:
+          summary: "Unifi config change on {{ $labels.host }}"
+          description: >-
+            Unifi admin {{ $labels.udm_admin }} modified configuration section
+            {{ $labels.udm_settings_section }} on {{ $labels.host }} ({{ $value }}
+            change event(s) in 30s; CEF audit signature 546).
+          explorer: '/logs?logsql=service:"udm-audit" AND cef_signature_id:"546"'
+
+      # 4 — WAN block-rule spike (lowered threshold >2 for the test plant).
+      - alert: UnifiWanBlockSpikeLog
+        expr: '_time:30s service:="udm-firewall" fw_chain:WAN_LOCAL-D* | stats by (host, src) count() as block_count | filter block_count:>2'
+        for: 0m
+        labels:
+          severity: warning
+          source_tool: vmalert-logs
+          category: network
+          integration: unifi
+        annotations:
+          summary: "Unifi WAN block-rule spike from {{ $labels.src }}"
+          description: >-
+            Source {{ $labels.src }} hit the UDM WAN block chain {{ $value }} times
+            in 30s on {{ $labels.host }} (>2 — likely recon/scan/DDoS against the
+            WAN interface).
+          explorer: '/logs?logsql=service:"udm-firewall" AND fw_chain:WAN_LOCAL-D*'
+
+      # 5 — UDM memory pressure (earlyoom kill).
+      # UNVALIDATED kill-line wording (see prod file). "sending SIGTERM" is MANDATORY.
+      - alert: UnifiOomPressureLog
+        expr: '_time:30s service:="udm-system" process:="earlyoom" "sending SIGTERM" | stats by (host) count() as oom_count | filter oom_count:>0'
+        for: 0m
+        labels:
+          severity: warning
+          source_tool: vmalert-logs
+          category: network
+          integration: unifi
+        annotations:
+          summary: "Unifi memory pressure (earlyoom kill) on {{ $labels.host }}"
+          description: >-
+            earlyoom on {{ $labels.host }} sent SIGTERM to a process under memory
+            pressure ({{ $value }} kill event(s) in 30s). UDM memory pressure can
+            precede dropped syslog (which would spike UnifiUdmLogParseFailed).
+          explorer: '/logs?logsql=service:"udm-system" AND process:"earlyoom" AND "sending SIGTERM"'
+
+      # 6 — Port link flap (lowered threshold >1; UNVALIDATED substring).
+      - alert: UnifiPortFlapLog
+        expr: '_time:30s service:="udm-system" ("link down" OR "link up" OR "Link is Down") | stats by (host) count() as flap_count | filter flap_count:>1'
+        for: 0m
+        labels:
+          severity: warning
+          source_tool: vmalert-logs
+          category: network
+          integration: unifi
+        annotations:
+          summary: "Unifi port link flapping on {{ $labels.host }}"
+          description: >-
+            {{ $value }} link up/down transitions in 30s on {{ $labels.host }} (>1 —
+            a port is flapping). UNVALIDATED substring: refine when a real port
+            event is observed on the live stream.
+          explorer: '/logs?logsql=service:"udm-system" AND ("link down" OR "link up" OR "Link is Down")'
+
+      # 7 — Device disconnect (UNVALIDATED substring).
+      - alert: UnifiDeviceDisconnectLog
+        expr: '_time:30s service:="udm-system" ("disconnected" OR "device" "offline" OR "adopted") | stats by (host) count() as disc_count | filter disc_count:>0'
+        for: 0m
+        labels:
+          severity: warning
+          source_tool: vmalert-logs
+          category: network
+          integration: unifi
+        annotations:
+          summary: "Unifi device disconnect on {{ $labels.host }}"
+          description: >-
+            {{ $value }} device disconnect/offline/adopt event(s) in 30s on
+            {{ $labels.host }}. UNVALIDATED substring: refine when a real device
+            event is observed on the live stream.
+          explorer: '/logs?logsql=service:"udm-system" AND ("disconnected" OR "device" "offline" OR "adopted")'
+
+      # 8 — Firmware event (UNVALIDATED substring).
+      - alert: UnifiFirmwareEventLog
+        expr: '_time:30s service:="udm-system" ("firmware" OR "Updating firmware" OR "upgrade" "complete") | stats by (host) count() as fw_count | filter fw_count:>0'
+        for: 0m
+        labels:
+          severity: info
+          source_tool: vmalert-logs
+          category: network
+          integration: unifi
+        annotations:
+          summary: "Unifi firmware event on {{ $labels.host }}"
+          description: >-
+            {{ $value }} firmware update/upgrade event(s) in 30s on {{ $labels.host }}.
+            UNVALIDATED substring: refine when a real firmware event is observed on
+            the live stream.
+          explorer: '/logs?logsql=service:"udm-system" AND ("firmware" OR "Updating firmware" OR "upgrade" "complete")'

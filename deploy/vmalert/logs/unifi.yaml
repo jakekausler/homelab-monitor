@@ -1,0 +1,187 @@
+# vmalert-logs rules for the Unifi integration (STAGE-007-017 / EPIC-007).
+# LogsQL alerts over the multi-format UDM "Activity Logging" syslog stream that
+# STAGE-007-016 established in VictoriaLogs (CEF audit + iptables firewall +
+# systemd). Picked up by the vmalert-logs sidecar (-rule=/etc/vmalert/logs/*.yaml).
+#
+# Severity vocabulary locked: info / warning / critical ONLY (spec §8.2; no 'error').
+# Group `type: vlogs` is REQUIRED so vmalert dispatches the expression to its
+# LogsQL parser rather than the PromQL parser (otherwise the rule fails to load).
+#
+# Label convention (integration style, matching deploy/vmalert/metrics/unifi.yaml):
+#   severity / source_tool: vmalert-logs / category: network / integration: unifi
+# (NOT target_kind — UDM is network gear, not a host/container. The integration
+#  label lets Karma group UDM logs + metrics alerts together.)
+#
+# Already shipped — do NOT duplicate here: UnifiUdmLogParseFailed lives in
+# deploy/vmalert/metrics/unifi.yaml (it's a METRIC rule on
+# udm_lines_total{parse_failed="1"}, not a logs rule). UnifiThreatLog is
+# FORENSICS-ONLY (LogViewer saved query) — NO alert; the threat ALERT fires off
+# the structured alarm path (STAGE-007-010), so no double-page.
+#
+# Test counterpart: deploy/vmalert/logs-test/unifi.yaml (shorter windows + lower
+# thresholds for the slow integration test). Production windows are 5m; test
+# windows are 30s. Keep BOTH files in sync for label/annotation changes; only
+# `_time:` and `filter` thresholds may diverge.
+#
+# REFINEMENT regression items (authored + health-validated at Build; live-firing
+# validation DEFERRED — these events were NOT in the STAGE-016 capture):
+#   (a) refine UnifiPortFlapLog / UnifiDeviceDisconnectLog / UnifiFirmwareEventLog
+#       substrings when a real event is observed on the live stream.
+#   (b) confirm the earlyoom kill-line wording ("sending SIGTERM") on a real OOM.
+#   (c) verify `ipv4_range` LogsQL syntax + external-login firing (no repo precedent).
+# Build's gate is ONLY: every rule loads health:"ok" at vmalert-logs /api/v1/rules.
+
+groups:
+  - name: unifi_logs
+    type: vlogs
+    interval: 30s
+    rules:
+      # 1 — Admin login to the UDM (CEF audit sig 544 "Network Accessed").
+      - alert: UnifiAdminLoginLog
+        expr: '_time:5m service:="udm-audit" cef_signature_id:="544" | stats by (host, udm_admin, src) count() as login_count | filter login_count:>0'
+        for: 0m
+        labels:
+          severity: info
+          source_tool: vmalert-logs
+          category: network
+          integration: unifi
+        annotations:
+          summary: "Unifi admin login on {{ $labels.host }}"
+          description: >-
+            Unifi admin {{ $labels.udm_admin }} logged in to {{ $labels.host }}
+            from {{ $labels.src }} ({{ $value }} login event(s) in 5m; CEF audit
+            signature 544).
+          explorer: '/logs?logsql=service:"udm-audit" AND cef_signature_id:"544"'
+
+      # 2 — Admin login from OUTSIDE the LAN (escalates rule 1 to warning).
+      # ipv4_range LogsQL syntax + non-LAN exclusion VALIDATED live (STAGE-007-017 Refinement gate A).
+      # Fallback (only if a future VictoriaLogs version drops ipv4_range support):
+      # NOT src:192.168.* NOT src:10.* NOT src:172.16.*
+      - alert: UnifiAdminLoginExternalLog
+        expr: '_time:5m service:="udm-audit" cef_signature_id:="544" NOT src:ipv4_range("192.168.0.0", "192.168.255.255") NOT src:ipv4_range("10.0.0.0", "10.255.255.255") NOT src:ipv4_range("172.16.0.0", "172.31.255.255") | stats by (host, udm_admin, src) count() as ext_login_count | filter ext_login_count:>0'
+        for: 0m
+        labels:
+          severity: warning
+          source_tool: vmalert-logs
+          category: network
+          integration: unifi
+        annotations:
+          summary: "Unifi admin login from outside the LAN on {{ $labels.host }}"
+          description: >-
+            Unifi admin {{ $labels.udm_admin }} logged in to {{ $labels.host }}
+            from off-network source {{ $labels.src }} ({{ $value }} external login
+            event(s) in 5m; CEF audit signature 544). Source is outside all RFC1918
+            ranges — verify this is an expected remote-admin session.
+          explorer: '/logs?logsql=service:"udm-audit" AND cef_signature_id:"544"'
+
+      # 3 — Configuration change (CEF audit sig 546 "Config Modified").
+      - alert: UnifiConfigChangeLog
+        expr: '_time:5m service:="udm-audit" cef_signature_id:="546" | stats by (host, udm_admin, udm_settings_section) count() as change_count | filter change_count:>0'
+        for: 0m
+        labels:
+          severity: info
+          source_tool: vmalert-logs
+          category: network
+          integration: unifi
+        annotations:
+          summary: "Unifi config change on {{ $labels.host }}"
+          description: >-
+            Unifi admin {{ $labels.udm_admin }} modified configuration section
+            {{ $labels.udm_settings_section }} on {{ $labels.host }} ({{ $value }}
+            change event(s) in 5m; CEF audit signature 546).
+          explorer: '/logs?logsql=service:"udm-audit" AND cef_signature_id:"546"'
+
+      # 4 — Spike of WAN block-rule hits from a single source = recon/scan/DDoS.
+      # >20/5m avoids firing on stray multicast/broadcast drops. Group by src
+      # (catch a single scanner); do NOT group by fw_dpt (would fragment a
+      # port-scan below threshold).
+      - alert: UnifiWanBlockSpikeLog
+        expr: '_time:5m service:="udm-firewall" fw_chain:WAN_LOCAL-D* | stats by (host, src) count() as block_count | filter block_count:>20'
+        for: 5m
+        labels:
+          severity: warning
+          source_tool: vmalert-logs
+          category: network
+          integration: unifi
+        annotations:
+          summary: "Unifi WAN block-rule spike from {{ $labels.src }}"
+          description: >-
+            Source {{ $labels.src }} hit the UDM WAN block chain {{ $value }} times
+            in 5m on {{ $labels.host }} (>20 — likely recon/scan/DDoS against the
+            WAN interface).
+          explorer: '/logs?logsql=service:"udm-firewall" AND fw_chain:WAN_LOCAL-D*'
+
+      # 5 — UDM memory pressure: earlyoom killed a process.
+      # UNVALIDATED kill-line wording: only the earlyoom heartbeat 'mem avail:' line
+      # is in the 016 fixture; confirm 'sending SIGTERM' wording on a real OOM event.
+      # The "sending SIGTERM" substring is MANDATORY — without it the periodic
+      # heartbeat fires this alert every poll.
+      - alert: UnifiOomPressureLog
+        expr: '_time:5m service:="udm-system" process:="earlyoom" "sending SIGTERM" | stats by (host) count() as oom_count | filter oom_count:>0'
+        for: 0m
+        labels:
+          severity: warning
+          source_tool: vmalert-logs
+          category: network
+          integration: unifi
+        annotations:
+          summary: "Unifi memory pressure (earlyoom kill) on {{ $labels.host }}"
+          description: >-
+            earlyoom on {{ $labels.host }} sent SIGTERM to a process under memory
+            pressure ({{ $value }} kill event(s) in 5m). UDM memory pressure can
+            precede dropped syslog (which would spike UnifiUdmLogParseFailed).
+          explorer: '/logs?logsql=service:"udm-system" AND process:"earlyoom" AND "sending SIGTERM"'
+
+      # 6 — Port link flap (up/down churn).
+      # UNVALIDATED: no 016 sample; refine substring when a real port event is observed.
+      - alert: UnifiPortFlapLog
+        expr: '_time:5m service:="udm-system" ("link down" OR "link up" OR "Link is Down") | stats by (host) count() as flap_count | filter flap_count:>4'
+        for: 5m
+        labels:
+          severity: warning
+          source_tool: vmalert-logs
+          category: network
+          integration: unifi
+        annotations:
+          summary: "Unifi port link flapping on {{ $labels.host }}"
+          description: >-
+            {{ $value }} link up/down transitions in 5m on {{ $labels.host }} (>4 —
+            a port is flapping). UNVALIDATED substring: refine when a real port
+            event is observed on the live stream.
+          explorer: '/logs?logsql=service:"udm-system" AND ("link down" OR "link up" OR "Link is Down")'
+
+      # 7 — AP / gateway device disconnect.
+      # UNVALIDATED: no 016 sample; refine substring when a real event is observed.
+      - alert: UnifiDeviceDisconnectLog
+        expr: '_time:5m service:="udm-system" ("disconnected" OR "device" "offline" OR "adopted") | stats by (host) count() as disc_count | filter disc_count:>0'
+        for: 0m
+        labels:
+          severity: warning
+          source_tool: vmalert-logs
+          category: network
+          integration: unifi
+        annotations:
+          summary: "Unifi device disconnect on {{ $labels.host }}"
+          description: >-
+            {{ $value }} device disconnect/offline/adopt event(s) in 5m on
+            {{ $labels.host }}. UNVALIDATED substring: refine when a real device
+            event is observed on the live stream.
+          explorer: '/logs?logsql=service:"udm-system" AND ("disconnected" OR "device" "offline" OR "adopted")'
+
+      # 8 — Firmware update / upgrade event (informational).
+      # UNVALIDATED: no 016 sample; refine substring when a real event is observed.
+      - alert: UnifiFirmwareEventLog
+        expr: '_time:5m service:="udm-system" ("firmware" OR "Updating firmware" OR "upgrade" "complete") | stats by (host) count() as fw_count | filter fw_count:>0'
+        for: 0m
+        labels:
+          severity: info
+          source_tool: vmalert-logs
+          category: network
+          integration: unifi
+        annotations:
+          summary: "Unifi firmware event on {{ $labels.host }}"
+          description: >-
+            {{ $value }} firmware update/upgrade event(s) in 5m on {{ $labels.host }}.
+            UNVALIDATED substring: refine when a real firmware event is observed on
+            the live stream.
+          explorer: '/logs?logsql=service:"udm-system" AND ("firmware" OR "Updating firmware" OR "upgrade" "complete")'
