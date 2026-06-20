@@ -22,7 +22,7 @@ export function RecentRunsPanel({ fingerprint }: RecentRunsPanelProps) {
       <CardHeader className="flex flex-row items-center justify-between space-y-0">
         <CardTitle id="panel-recent-runs">Recent runs</CardTitle>
         <Link
-          to="/inventory/crons/$fingerprint/runs"
+          to="/integrations/crons/$fingerprint/runs"
           params={{ fingerprint }}
           search={{ cursor: undefined, state: undefined }}
           className="inline-flex items-center text-sm text-primary hover:underline"
@@ -61,7 +61,7 @@ function RecentRunRow({ fingerprint, run }: { fingerprint: string; run: CronRunO
   return (
     <li className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 py-2">
       <Link
-        to="/inventory/crons/$fingerprint/runs/$run_id"
+        to="/integrations/crons/$fingerprint/runs/$run_id"
         params={{ fingerprint, run_id: run.run_id }}
         className="text-primary hover:underline"
         title={formatAbsolute(run.started_at)}

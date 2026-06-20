@@ -5,7 +5,7 @@ import { apiClient } from '@/api/client'
 import { queryKeys } from '@/api/queries'
 import { parseColumnsParam } from '@/api/logs'
 import type { Schema } from '@/api/types'
-import type { RunSearchSchema } from '@/routes/inventory/types'
+import type { RunSearchSchema } from '@/routes/integrations/crons/types'
 import { Route as rootRoute } from '@/routes/__root'
 import { AlertsLayout } from '@/routes/alerts/AlertsLayout'
 import { ActiveAlertsTab } from '@/routes/alerts/ActiveAlertsTab'
@@ -19,11 +19,10 @@ import { MetricsCollectorsTab } from '@/routes/metrics/MetricsCollectorsTab'
 import { MetricsHeartbeatsTab } from '@/routes/metrics/MetricsHeartbeatsTab'
 import { MetricsStorageLogsTab } from '@/routes/metrics/MetricsStorageLogsTab'
 import { MetricsHomeAssistantTab } from '@/routes/metrics/MetricsHomeAssistantTab'
-import { InventoryLayout } from '@/routes/inventory/Inventory'
-import { CronsListPage } from '@/routes/inventory/CronsList'
-import { CronDetailPage } from '@/routes/inventory/CronDetailPage'
-import { CronRunsListPage } from '@/routes/inventory/CronRunsList'
-import { CronRunLogViewerPage } from '@/routes/inventory/CronRunLogViewer'
+import { CronsListPage } from '@/routes/integrations/crons/CronsList'
+import { CronDetailPage } from '@/routes/integrations/crons/CronDetailPage'
+import { CronRunsListPage } from '@/routes/integrations/crons/CronRunsList'
+import { CronRunLogViewerPage } from '@/routes/integrations/crons/CronRunLogViewer'
 import { DockerIntegrationPage } from '@/routes/integrations/DockerIntegrationPage'
 import { HomeAssistantLayout } from '@/routes/integrations/HomeAssistantLayout'
 import { HomeAssistantHealthTab } from '@/routes/integrations/HomeAssistantHealthTab'
@@ -34,6 +33,9 @@ import { ContainerOverviewTab } from '@/routes/integrations/ContainerOverviewTab
 import { ContainerProbesTab } from '@/routes/integrations/ContainerProbesTab'
 import { ContainerLogsTab } from '@/routes/integrations/ContainerLogsTab'
 import { ContainerActionsTab } from '@/routes/integrations/ContainerActionsTab'
+import { UnifiLayout } from '@/routes/integrations/UnifiLayout'
+import { UnifiOverviewTab } from '@/routes/integrations/UnifiOverviewTab'
+import { NetworkPage } from '@/routes/integrations/NetworkPage'
 import { LogsExplorerPage } from '@/routes/logs/LogsExplorerPage'
 import { LogsLayout } from '@/routes/logs/LogsLayout'
 import { ModelsDebugPage } from '@/routes/logs/ModelsDebugPage'
@@ -307,35 +309,9 @@ const logsSilenceAllowlistRoute = createRoute({
   component: SilenceAllowlistTab,
 })
 
-const inventoryLayoutRoute = createRoute({
-  getParentRoute: () => protectedLayoutRoute,
-  path: '/inventory',
-  component: InventoryLayout,
-})
-
-const inventoryIndexRoute = createRoute({
-  getParentRoute: () => inventoryLayoutRoute,
-  path: '/',
-  beforeLoad: () => {
-    // eslint-disable-next-line @typescript-eslint/only-throw-error -- TanStack Router redirect objects are thrown by design
-    throw redirect({
-      to: '/inventory/crons',
-      search: {
-        page: 1,
-        page_size: 100,
-        host: undefined,
-        state: undefined,
-        q: undefined,
-        include_hidden: false,
-        include_soft_deleted: false,
-      },
-    })
-  },
-})
-
 const cronsListRoute = createRoute({
-  getParentRoute: () => inventoryLayoutRoute,
-  path: '/crons',
+  getParentRoute: () => protectedLayoutRoute,
+  path: '/integrations/crons',
   component: CronsListPage,
   validateSearch: (
     search: Record<string, unknown>,
@@ -370,14 +346,14 @@ const cronsListRoute = createRoute({
 })
 
 const cronDetailRoute = createRoute({
-  getParentRoute: () => inventoryLayoutRoute,
-  path: '/crons/$fingerprint',
+  getParentRoute: () => protectedLayoutRoute,
+  path: '/integrations/crons/$fingerprint',
   component: CronDetailPage,
 })
 
 const cronRunsListRoute = createRoute({
-  getParentRoute: () => inventoryLayoutRoute,
-  path: '/crons/$fingerprint/runs',
+  getParentRoute: () => protectedLayoutRoute,
+  path: '/integrations/crons/$fingerprint/runs',
   component: CronRunsListPage,
   validateSearch: (search: Record<string, unknown>): RunSearchSchema => ({
     cursor: typeof search.cursor === 'string' ? search.cursor : undefined,
@@ -392,8 +368,8 @@ const cronRunsListRoute = createRoute({
 })
 
 const cronRunLogViewerRoute = createRoute({
-  getParentRoute: () => inventoryLayoutRoute,
-  path: '/crons/$fingerprint/runs/$run_id',
+  getParentRoute: () => protectedLayoutRoute,
+  path: '/integrations/crons/$fingerprint/runs/$run_id',
   component: CronRunLogViewerPage,
   // STAGE-004-008 — custom range is CLIENT-SIDE narrowing (no backend call),
   // but reflected in the URL per the locked decision. Bounded to the run window.
@@ -463,6 +439,33 @@ const homeAssistantLogsRoute = createRoute({
   getParentRoute: () => homeAssistantLayoutRoute,
   path: 'logs',
   component: HomeAssistantLogsTab,
+})
+
+const unifiLayoutRoute = createRoute({
+  getParentRoute: () => protectedLayoutRoute,
+  path: '/integrations/unifi',
+  component: UnifiLayout,
+})
+
+const unifiIndexRoute = createRoute({
+  getParentRoute: () => unifiLayoutRoute,
+  path: '/',
+  beforeLoad: () => {
+    // eslint-disable-next-line @typescript-eslint/only-throw-error -- TanStack Router redirect objects are thrown by design
+    throw redirect({ to: '/integrations/unifi/overview' })
+  },
+})
+
+const unifiOverviewRoute = createRoute({
+  getParentRoute: () => unifiLayoutRoute,
+  path: 'overview',
+  component: UnifiOverviewTab,
+})
+
+const networkIntegrationRoute = createRoute({
+  getParentRoute: () => protectedLayoutRoute,
+  path: '/integrations/network',
+  component: NetworkPage,
 })
 
 // NEW: parent route hosts the shared header + tab strip; children render in <Outlet>.
@@ -540,21 +543,20 @@ const routeTree = rootRoute.addChildren([
       logsSilenceAllowlistRoute,
       logsModelsDebugRoute,
     ]),
-    inventoryLayoutRoute.addChildren([
-      inventoryIndexRoute,
-      cronsListRoute,
-      cronDetailRoute,
-      cronRunsListRoute,
-      cronRunLogViewerRoute,
-    ]),
     settingsLayoutRoute.addChildren([settingsIndexRoute, settingsLogsRoute]),
     dockerIntegrationRoute,
+    cronsListRoute,
+    cronDetailRoute,
+    cronRunsListRoute,
+    cronRunLogViewerRoute,
     homeAssistantLayoutRoute.addChildren([
       homeAssistantIndexRoute,
       homeAssistantHealthRoute,
       homeAssistantStatusRoute,
       homeAssistantLogsRoute,
     ]),
+    unifiLayoutRoute.addChildren([unifiIndexRoute, unifiOverviewRoute]),
+    networkIntegrationRoute,
     containerPageRoute.addChildren([
       containerIndexRoute,
       containerOverviewRoute,

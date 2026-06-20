@@ -1,9 +1,9 @@
 import { Link } from '@tanstack/react-router'
 import {
   AlertTriangle,
-  Boxes,
   Cable,
   CalendarRange,
+  Clock,
   ClipboardList,
   Cog,
   Container,
@@ -11,6 +11,8 @@ import {
   Gauge,
   HousePlug,
   Layout,
+  Network,
+  Router,
   ScrollText,
   ShieldCheck,
   Sparkles,
@@ -31,10 +33,12 @@ interface NavItem {
 const NAV_ITEMS: NavItem[] = [
   { label: 'Overview', to: '/overview', icon: Layout },
   { label: 'Alerts', to: '/alerts', icon: AlertTriangle },
-  { label: 'Inventory', to: '/inventory/crons', icon: Boxes },
   { label: 'Integrations', icon: Cable, isSectionLabel: true },
+  { label: 'Crons', to: '/integrations/crons', icon: Clock, indent: true },
   { label: 'Docker', to: '/integrations/docker', icon: Container, indent: true },
   { label: 'Home Assistant', to: '/integrations/home-assistant', icon: HousePlug, indent: true },
+  { label: 'Network', to: '/integrations/network', icon: Network, indent: true },
+  { label: 'Unifi', to: '/integrations/unifi', icon: Router, indent: true },
   { label: 'Logs', to: '/logs', icon: ScrollText },
   { label: 'Metrics', to: '/metrics', icon: Gauge },
   { label: 'Runbooks', icon: FileText, disabledNote: 'Coming soon' },

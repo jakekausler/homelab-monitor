@@ -20,7 +20,7 @@ function renderInRouter(ui: React.ReactNode) {
   const rootRoute = createRootRoute({ component: () => <>{ui}</> })
   const cronRoute = createRoute({
     getParentRoute: () => rootRoute,
-    path: '/inventory/crons/$cronId',
+    path: '/integrations/crons/$cronId',
     component: () => null,
   })
   const router = createRouter({

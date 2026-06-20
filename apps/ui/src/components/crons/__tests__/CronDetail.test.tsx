@@ -133,24 +133,24 @@ function makeGetCronResult(
 
 function renderInRouter(ui: React.ReactNode) {
   const rootRoute = createRootRoute({ component: () => <Outlet /> })
-  const detailRoute = createRoute({
+  const protectedRoute = createRoute({
     getParentRoute: () => rootRoute,
-    path: '/crons/$cronId',
+    id: 'protected',
+    component: () => <Outlet />,
+  })
+  const detailRoute = createRoute({
+    getParentRoute: () => protectedRoute,
+    path: '/integrations/crons/$cronId',
     component: () => <>{ui}</>,
   })
-  const inventoryRoute = createRoute({
-    getParentRoute: () => rootRoute,
-    path: '/inventory',
-    component: () => null,
-  })
   const cronsListRoute = createRoute({
-    getParentRoute: () => inventoryRoute,
-    path: '/crons',
+    getParentRoute: () => protectedRoute,
+    path: '/integrations/crons',
     component: () => null,
   })
   const router = createRouter({
-    routeTree: rootRoute.addChildren([detailRoute, inventoryRoute.addChildren([cronsListRoute])]),
-    history: createMemoryHistory({ initialEntries: ['/crons/c1'] }),
+    routeTree: rootRoute.addChildren([protectedRoute.addChildren([detailRoute, cronsListRoute])]),
+    history: createMemoryHistory({ initialEntries: ['/integrations/crons/c1'] }),
   })
   const qc = new QueryClient()
   return render(

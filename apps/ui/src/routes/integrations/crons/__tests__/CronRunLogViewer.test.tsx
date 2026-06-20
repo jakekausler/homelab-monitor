@@ -11,7 +11,7 @@ import { cleanup, fireEvent, render, screen, within } from '@testing-library/rea
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '@/api/client'
-import { CronRunLogViewerPage } from '@/routes/inventory/CronRunLogViewer'
+import { CronRunLogViewerPage } from '@/routes/integrations/crons/CronRunLogViewer'
 import { TooltipProvider } from '@/components/ui/tooltip'
 
 afterEach(cleanup)
@@ -88,16 +88,16 @@ function makeLogData(
 // Router helper
 // ---------------------------------------------------------------------------
 
-function renderWithRouter(initialPath: string = `/inventory/crons/${FP}/runs/${RUN_ID}`) {
+function renderWithRouter(initialPath: string = `/integrations/crons/${FP}/runs/${RUN_ID}`) {
   const rootRoute = createRootRoute({ component: () => <Outlet /> })
-  const inventoryRoute = createRoute({
+  const protectedRoute = createRoute({
     getParentRoute: () => rootRoute,
-    path: '/inventory',
+    id: 'protected',
     component: () => <Outlet />,
   })
   const cronsRoute = createRoute({
-    getParentRoute: () => inventoryRoute,
-    path: '/crons',
+    getParentRoute: () => protectedRoute,
+    path: '/integrations/crons',
     component: () => <Outlet />,
   })
   const cronDetailRoute = createRoute({
@@ -133,7 +133,7 @@ function renderWithRouter(initialPath: string = `/inventory/crons/${FP}/runs/${R
 
   const router = createRouter({
     routeTree: rootRoute.addChildren([
-      inventoryRoute.addChildren([
+      protectedRoute.addChildren([
         cronsRoute.addChildren([
           cronDetailRoute.addChildren([cronRunsListRoute.addChildren([cronRunLogRoute])]),
         ]),
@@ -458,7 +458,7 @@ describe('CronRunLogViewerPage', () => {
       isFetchingNextPage: false,
       fetchNextPage: vi.fn(),
     } as unknown as ReturnType<typeof useCronRunLog>)
-    renderWithRouter(`/inventory/crons/${FP}/runs/${longRunId}`)
+    renderWithRouter(`/integrations/crons/${FP}/runs/${longRunId}`)
     const header = await screen.findByTestId('run-log-header')
     const code = header.querySelector('code')
     expect(code?.textContent).toMatch(/…$/)
@@ -469,7 +469,10 @@ describe('CronRunLogViewerPage', () => {
     renderWithRouter()
     await screen.findByTestId('run-log-header')
     const backLink = screen.getByRole('link', { name: /Back to runs/ })
-    expect(backLink).toHaveAttribute('href', expect.stringContaining(`/inventory/crons/${FP}/runs`))
+    expect(backLink).toHaveAttribute(
+      'href',
+      expect.stringContaining(`/integrations/crons/${FP}/runs`),
+    )
   })
 
   it('renders run state badge in header', async () => {
@@ -641,7 +644,9 @@ describe('CronRunLogViewerPage', () => {
     } as unknown as ReturnType<typeof useCronRunLog>)
 
     // URL has only ?start= (no end) → open end should resolve to runMax (12:00:20Z).
-    renderWithRouter(`/inventory/crons/${FP}/runs/${RUN_ID}?start=${encodeURIComponent(startIso)}`)
+    renderWithRouter(
+      `/integrations/crons/${FP}/runs/${RUN_ID}?start=${encodeURIComponent(startIso)}`,
+    )
 
     const body = await screen.findByTestId('logs-body')
     const text = body.textContent ?? ''
@@ -710,7 +715,9 @@ describe('CronRunLogViewerPage', () => {
       fetchNextPage: vi.fn(),
     } as unknown as ReturnType<typeof useCronRunLog>)
 
-    renderWithRouter(`/inventory/crons/${FP}/runs/${RUN_ID}?start=${encodeURIComponent(startIso)}`)
+    renderWithRouter(
+      `/integrations/crons/${FP}/runs/${RUN_ID}?start=${encodeURIComponent(startIso)}`,
+    )
     const el = await screen.findByTestId('open-in-explorer')
     const anchor = el.closest('a')
     expect(anchor).not.toBeNull()
@@ -746,7 +753,7 @@ describe('CronRunLogViewerPage', () => {
       fetchNextPage: vi.fn(),
     } as unknown as ReturnType<typeof useCronRunLog>)
 
-    renderWithRouter(`/inventory/crons/${FP}/runs/${RUN_ID}?end=${encodeURIComponent(endIso)}`)
+    renderWithRouter(`/integrations/crons/${FP}/runs/${RUN_ID}?end=${encodeURIComponent(endIso)}`)
     const el = await screen.findByTestId('open-in-explorer')
     const anchor = el.closest('a')
     expect(anchor).not.toBeNull()

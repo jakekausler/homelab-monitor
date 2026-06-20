@@ -22,7 +22,7 @@ const STATE_OPTIONS: ReadonlyArray<{ value: '' | RunState; label: string }> = [
 export function CronRunsListPage() {
   const params = useParams({ strict: false })
   const fingerprint = params.fingerprint ?? ''
-  const search = useSearch({ from: '/protected/inventory/crons/$fingerprint/runs' })
+  const search = useSearch({ from: '/protected/integrations/crons/$fingerprint/runs' })
   const navigate = useNavigate()
   const cron = useGetCron(fingerprint, { includeHidden: true })
   const runs = useListCronRuns(fingerprint, {
@@ -36,7 +36,7 @@ export function CronRunsListPage() {
     const next: RunState | undefined =
       v === 'running' || v === 'ok' || v === 'fail' || v === 'unknown' ? v : undefined
     void navigate({
-      to: '/inventory/crons/$fingerprint/runs',
+      to: '/integrations/crons/$fingerprint/runs',
       params: { fingerprint },
       search: { cursor: undefined, state: next },
     })
@@ -45,7 +45,7 @@ export function CronRunsListPage() {
   const handleNextPage = () => {
     if (runs.data?.next_cursor != null) {
       void navigate({
-        to: '/inventory/crons/$fingerprint/runs',
+        to: '/integrations/crons/$fingerprint/runs',
         params: { fingerprint },
         search: {
           cursor: runs.data.next_cursor,
@@ -60,7 +60,7 @@ export function CronRunsListPage() {
   return (
     <div className="space-y-4">
       <Link
-        to="/inventory/crons/$fingerprint"
+        to="/integrations/crons/$fingerprint"
         params={{ fingerprint }}
         className="inline-flex items-center text-sm text-muted-foreground hover:text-foreground"
       >
@@ -170,7 +170,7 @@ function RunsDesktopTable({ fingerprint, items }: { fingerprint: string; items: 
               <tr key={r.run_id} className="hover:bg-accent/30">
                 <td className="px-3 py-2">
                   <Link
-                    to="/inventory/crons/$fingerprint/runs/$run_id"
+                    to="/integrations/crons/$fingerprint/runs/$run_id"
                     params={{ fingerprint, run_id: r.run_id }}
                     className="text-primary hover:underline"
                     title={formatAbsolute(r.started_at)}
@@ -223,7 +223,7 @@ function RunsMobileCards({ fingerprint, items }: { fingerprint: string; items: C
         return (
           <li key={r.run_id} className="rounded-md border border-border bg-card p-3 text-sm">
             <Link
-              to="/inventory/crons/$fingerprint/runs/$run_id"
+              to="/integrations/crons/$fingerprint/runs/$run_id"
               params={{ fingerprint, run_id: r.run_id }}
               className="block space-y-2"
             >

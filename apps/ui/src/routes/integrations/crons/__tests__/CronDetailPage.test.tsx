@@ -10,7 +10,7 @@ import {
 import { cleanup, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { CronDetailPage } from '@/routes/inventory/CronDetailPage'
+import { CronDetailPage } from '@/routes/integrations/crons/CronDetailPage'
 import { TooltipProvider } from '@/components/ui/tooltip'
 
 afterEach(cleanup)
@@ -31,19 +31,19 @@ vi.mock('@/lib/relativeTime', () => ({
 
 function renderPage(fingerprint?: string) {
   const rootRoute = createRootRoute({ component: () => <Outlet /> })
-  const inventoryRoute = createRoute({
+  const protectedRoute = createRoute({
     getParentRoute: () => rootRoute,
-    path: '/inventory',
+    id: 'protected',
     component: () => <Outlet />,
   })
   const cronsRoute = createRoute({
-    getParentRoute: () => inventoryRoute,
-    path: '/crons',
+    getParentRoute: () => protectedRoute,
+    path: '/integrations/crons',
     component: () => <div>Crons list</div>,
   })
   const cronDetailRoute = createRoute({
-    getParentRoute: () => inventoryRoute,
-    path: '/crons/$fingerprint',
+    getParentRoute: () => protectedRoute,
+    path: '/integrations/crons/$fingerprint',
     component: CronDetailPage,
   })
   const noIdRoute = createRoute({
@@ -51,10 +51,10 @@ function renderPage(fingerprint?: string) {
     path: '/',
     component: CronDetailPage,
   })
-  const initialPath = fingerprint ? `/inventory/crons/${fingerprint}` : '/'
+  const initialPath = fingerprint ? `/integrations/crons/${fingerprint}` : '/'
   const router = createRouter({
     routeTree: rootRoute.addChildren([
-      inventoryRoute.addChildren([cronsRoute, cronDetailRoute]),
+      protectedRoute.addChildren([cronsRoute, cronDetailRoute]),
       noIdRoute,
     ]),
     history: createMemoryHistory({ initialEntries: [initialPath] }),

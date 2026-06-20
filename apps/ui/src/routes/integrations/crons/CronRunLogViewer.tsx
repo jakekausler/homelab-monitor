@@ -85,7 +85,7 @@ export function CronRunLogViewerPage() {
   const handleRangeChange = (v: TimeRangeValue): void => {
     if (v.kind === 'custom') {
       void navigate({
-        to: '/inventory/crons/$fingerprint/runs/$run_id',
+        to: '/integrations/crons/$fingerprint/runs/$run_id',
         params: { fingerprint, run_id: runId },
         search: {
           start: v.start !== undefined ? toIsoZ(v.start) : undefined,
@@ -95,7 +95,7 @@ export function CronRunLogViewerPage() {
     } else {
       // Preset in bounded mode is unusual; treat as "clear narrowing".
       void navigate({
-        to: '/inventory/crons/$fingerprint/runs/$run_id',
+        to: '/integrations/crons/$fingerprint/runs/$run_id',
         params: { fingerprint, run_id: runId },
         search: { start: undefined, end: undefined },
       })
@@ -133,7 +133,7 @@ export function CronRunLogViewerPage() {
   const header = (
     <>
       <Link
-        to="/inventory/crons/$fingerprint/runs"
+        to="/integrations/crons/$fingerprint/runs"
         params={{ fingerprint }}
         search={{ cursor: undefined, state: undefined }}
         className="inline-flex items-center text-sm text-muted-foreground hover:text-foreground"

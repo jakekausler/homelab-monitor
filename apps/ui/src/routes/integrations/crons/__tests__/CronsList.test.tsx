@@ -11,7 +11,7 @@ import { cleanup, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { CronsListPage } from '@/routes/inventory/CronsList'
+import { CronsListPage } from '@/routes/integrations/crons/CronsList'
 
 afterEach(cleanup)
 
@@ -74,14 +74,9 @@ function renderPage(search = '') {
     id: 'protected',
     component: () => <Outlet />,
   })
-  const inventoryRoute = createRoute({
-    getParentRoute: () => protectedRoute,
-    path: '/inventory',
-    component: () => <Outlet />,
-  })
   const cronsRoute = createRoute({
-    getParentRoute: () => inventoryRoute,
-    path: '/crons',
+    getParentRoute: () => protectedRoute,
+    path: '/integrations/crons',
     component: CronsListPage,
     validateSearch: (search: Record<string, unknown>) => ({
       page: search.page !== undefined ? Number(search.page) : undefined,
@@ -106,12 +101,10 @@ function renderPage(search = '') {
     path: '/$cronId',
     component: () => null,
   })
-  const path = `/inventory/crons${search}`
+  const path = `/integrations/crons${search}`
   const router = createRouter({
     routeTree: rootRoute.addChildren([
-      protectedRoute.addChildren([
-        inventoryRoute.addChildren([cronsRoute.addChildren([cronDetailRoute])]),
-      ]),
+      protectedRoute.addChildren([cronsRoute.addChildren([cronDetailRoute])]),
     ]),
     history: createMemoryHistory({ initialEntries: [path] }),
   })

@@ -72,15 +72,15 @@ function makeRun(
 
 function renderInRouter(ui: React.ReactNode) {
   const rootRoute = createRootRoute({ component: () => <Outlet /> })
-  // Register the /inventory/crons/$fingerprint/runs route so Link can resolve it
-  const inventoryRoute = createRoute({
+  // Register the /integrations/crons/$fingerprint/runs route so Link can resolve it
+  const protectedRoute = createRoute({
     getParentRoute: () => rootRoute,
-    path: '/inventory',
+    id: 'protected',
     component: () => <Outlet />,
   })
   const cronsRoute = createRoute({
-    getParentRoute: () => inventoryRoute,
-    path: '/crons',
+    getParentRoute: () => protectedRoute,
+    path: '/integrations/crons',
     component: () => <Outlet />,
   })
   const cronDetailRoute = createRoute({
@@ -106,7 +106,7 @@ function renderInRouter(ui: React.ReactNode) {
   const router = createRouter({
     routeTree: rootRoute.addChildren([
       panelRoute,
-      inventoryRoute.addChildren([
+      protectedRoute.addChildren([
         cronsRoute.addChildren([
           cronDetailRoute.addChildren([cronRunsListRoute.addChildren([cronRunLogRoute])]),
         ]),
@@ -202,7 +202,7 @@ describe('RecentRunsPanel', () => {
   it('renders View all runs link with correct href', async () => {
     renderInRouter(<RecentRunsPanel fingerprint={FP} />)
     const link = await screen.findByTestId('view-all-runs-link')
-    expect(link).toHaveAttribute('href', expect.stringContaining(`/inventory/crons/${FP}/runs`))
+    expect(link).toHaveAttribute('href', expect.stringContaining(`/integrations/crons/${FP}/runs`))
   })
 
   it('renders anomaly badge when anomaly_flags is non-empty (single flag)', async () => {

@@ -11,7 +11,7 @@ import { cleanup, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { CronRunsListPage } from '@/routes/inventory/CronRunsList'
+import { CronRunsListPage } from '@/routes/integrations/crons/CronRunsList'
 import { TooltipProvider } from '@/components/ui/tooltip'
 
 afterEach(cleanup)
@@ -106,7 +106,7 @@ const baseCronResult = {
 // Router helper
 // ---------------------------------------------------------------------------
 
-// The component calls useSearch({ from: '/protected/inventory/crons/$fingerprint/runs' }).
+// The component calls useSearch({ from: '/protected/integrations/crons/$fingerprint/runs' }).
 // We must define a route tree that matches this "from" path so TanStack Router
 // can resolve the search params. We name the protected layout segment and nest
 // the runs route under it.
@@ -117,14 +117,9 @@ function renderWithRouter(initialSearch: string = '') {
     id: 'protected',
     component: () => <Outlet />,
   })
-  const inventoryRoute = createRoute({
-    getParentRoute: () => protectedRoute,
-    path: '/inventory',
-    component: () => <Outlet />,
-  })
   const cronsRoute = createRoute({
-    getParentRoute: () => inventoryRoute,
-    path: '/crons',
+    getParentRoute: () => protectedRoute,
+    path: '/integrations/crons',
     component: () => <Outlet />,
   })
   const cronDetailRoute = createRoute({
@@ -161,15 +156,13 @@ function renderWithRouter(initialSearch: string = '') {
   const router = createRouter({
     routeTree: rootRoute.addChildren([
       protectedRoute.addChildren([
-        inventoryRoute.addChildren([
-          cronsRoute.addChildren([
-            cronDetailRoute.addChildren([cronRunsListRoute.addChildren([cronRunLogRoute])]),
-          ]),
+        cronsRoute.addChildren([
+          cronDetailRoute.addChildren([cronRunsListRoute.addChildren([cronRunLogRoute])]),
         ]),
       ]),
     ]),
     history: createMemoryHistory({
-      initialEntries: [`/inventory/crons/${FP}/runs${initialSearch}`],
+      initialEntries: [`/integrations/crons/${FP}/runs${initialSearch}`],
     }),
   })
   const qc = new QueryClient()
@@ -413,7 +406,7 @@ describe('CronRunsListPage', () => {
     renderWithRouter()
     await screen.findByText('Run history')
     const backLink = screen.getByRole('link', { name: /Back to my-cron/ })
-    expect(backLink).toHaveAttribute('href', expect.stringContaining(`/inventory/crons/${FP}`))
+    expect(backLink).toHaveAttribute('href', expect.stringContaining(`/integrations/crons/${FP}`))
   })
 
   it('renders cron name and host subtitle when cron data available', async () => {

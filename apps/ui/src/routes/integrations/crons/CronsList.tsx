@@ -9,7 +9,7 @@ import { CronsToolbar, type ToolbarFilters } from '@/components/crons/CronsToolb
 import { Button } from '@/components/ui/button'
 
 export function CronsListPage() {
-  const search = useSearch({ from: '/protected/inventory/crons' })
+  const search = useSearch({ from: '/protected/integrations/crons' })
   const navigate = useNavigate()
   const discover = useDiscoverNow()
 
@@ -65,7 +65,7 @@ export function CronsListPage() {
 
   const handleFiltersChange = (next: ToolbarFilters) => {
     void navigate({
-      to: '/inventory/crons',
+      to: '/integrations/crons',
       search: {
         page: 1,
         page_size: search.page_size ?? 100,
@@ -107,7 +107,7 @@ export function CronsListPage() {
           total={total}
           onPageChange={(p) =>
             void navigate({
-              to: '/inventory/crons',
+              to: '/integrations/crons',
               search: {
                 page: p,
                 page_size: search.page_size ?? 100,

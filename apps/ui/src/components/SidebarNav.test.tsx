@@ -67,11 +67,20 @@ describe('SidebarNav', () => {
     expect(metricsLink.getAttribute('href')).toBe('/metrics')
   })
 
-  it('renders Inventory as enabled link (STAGE-001-021)', () => {
+  it('renders Crons under Integrations as an enabled link (STAGE-007-018)', () => {
     renderNav()
-    // Inventory is now enabled as a link
-    const inventoryLink = screen.getByRole('link', { name: /Inventory/ })
-    expect(inventoryLink).toBeInTheDocument()
+    const cronsLink = screen.getByRole('link', { name: /Crons/ })
+    expect(cronsLink.getAttribute('href')).toBe('/integrations/crons')
+  })
+
+  it('renders Network and Unifi placeholder links (STAGE-007-018)', () => {
+    renderNav()
+    expect(screen.getByRole('link', { name: /Network/ }).getAttribute('href')).toBe(
+      '/integrations/network',
+    )
+    expect(screen.getByRole('link', { name: /Unifi/ }).getAttribute('href')).toBe(
+      '/integrations/unifi',
+    )
   })
 
   it('hides item labels when collapsed', () => {

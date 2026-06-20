@@ -10,7 +10,7 @@ export function CronDetailPage() {
   return (
     <div className="space-y-4">
       <Link
-        to="/inventory/crons"
+        to="/integrations/crons"
         search={{
           page: 1,
           page_size: 100,

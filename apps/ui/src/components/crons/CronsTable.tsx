@@ -67,7 +67,7 @@ export function CronsTable({ items, isLoading, emptyHint }: CronsTableProps) {
             >
               <td className="px-3 py-2">
                 <Link
-                  to="/inventory/crons/$fingerprint"
+                  to="/integrations/crons/$fingerprint"
                   params={{ fingerprint: c.fingerprint }}
                   className="font-medium text-primary hover:underline"
                 >
