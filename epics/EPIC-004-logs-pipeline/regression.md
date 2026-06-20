@@ -33,7 +33,7 @@
 - Raw `.label.*` bag is KEPT alongside promoted fields (no del(.label)).
 - journald/systemd lines are NOT docker-enriched (exists(.label)/exists(.image) guards): bare systemd lines have empty compose_*/image_*.
 - docker_enrich VRL must pass authoritative `vector validate` (NOT --no-environment, which masks VRL compile errors). VRL array index requires an integer literal, not a computed expression (use for_each, not segs[length-1]).
-- Deployment: vector config is render-on-boot; after a template change, restart the monitor container (re-render) THEN the vector container (reload). Vector does not hot-reload.
+- Deployment: vector config is render-on-boot; after a template change, restart the monitor container (re-render). The vector container runs with `--watch-config` (STAGE-007-016A) and auto-reloads the new config — no `docker restart homelab-vector` needed. (Vector re-arms its inode watch across the monitor's os.replace atomic rename; `--watch-config-method poll` is only in vector 0.43.0+ and is unnecessary here on a local-fs named volume.) Manual fallback: `docker restart homelab-vector` still forces an immediate reload if ever needed.
 
 ## STAGE-004-004A — Docker log severity-level extraction
 

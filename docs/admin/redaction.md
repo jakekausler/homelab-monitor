@@ -96,14 +96,15 @@ would disable bearer/jwt/password/aws/api-key redaction.
 
 Patterns are rendered into Vector's config (`vector.toml`) **at monitor boot**.
 After editing `homelab-monitor.yaml` you must **restart the monitor** so it
-re-renders `vector.toml` and Vector restarts with the new redaction VRL:
+re-renders `vector.toml`:
 
 ```bash
-docker compose restart monitor vector
+docker compose restart monitor
 ```
 
-(Vector reads the freshly rendered config at container start — there is no live
-reload.)
+(Vector runs with `--watch-config` (STAGE-007-016A) and auto-reloads the freshly
+rendered config within ~30s — no explicit vector restart is needed. Manual
+fallback if ever required: `docker compose restart vector`.)
 
 > If the config is invalid, the monitor logs `vector.redact.config_invalid` at
 > ERROR and renders an **empty** redaction block for that boot — meaning

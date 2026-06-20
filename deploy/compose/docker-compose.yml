@@ -322,7 +322,7 @@ services:
     # rendered file. A named volume cannot overlay a single file path, so the
     # volume is mounted as a DIRECTORY and --config points at <dir>/vector.toml
     # (same pattern as alertmanager's config-dir mount).
-    command: ["--config", "/etc/vector/vector.toml"]
+    command: ["--config", "/etc/vector/vector.toml", "--watch-config"]
     volumes:
       - data_vector_config:/etc/vector:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro

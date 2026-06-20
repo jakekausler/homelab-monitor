@@ -26,9 +26,9 @@
    docker compose exec vector cat /etc/vector/vector.toml | grep -A 2 docker_logs
    ```
 
-3. Opt-out test: set `VECTOR_DOCKER_EXCLUDE=<container-name>` in `.env`, restart `monitor` and `vector` containers (vector restart MUST be explicit), confirm new logs from that container stop arriving within 30s.
+3. Opt-out test: set `VECTOR_DOCKER_EXCLUDE=<container-name>` in `.env`, restart the `monitor` container to re-render the config; vector auto-reloads it within ~30s (it runs with `--watch-config` as of STAGE-007-016A — explicit `docker compose restart vector` is now only a fallback). Confirm new logs from that container stop arriving within ~60s.
 
-**Known gotcha:** Vector container must be explicitly restarted after monitor rebuild — `docker compose up -d monitor vector` will NOT restart vector if its image/env hasn't changed.
+**Known gotcha (updated by STAGE-007-016A):** vector now auto-reloads via `--watch-config`, so it no longer needs an explicit restart after the monitor re-renders. (Historically — before 016A — `docker compose up -d monitor vector` would NOT restart vector if its image/env was unchanged, so a manual `docker compose restart vector` was required; that explicit restart is now only a fallback if the watch ever fails to fire.)
 
 ## STAGE-003-003: Docker drill-down UI skeleton
 

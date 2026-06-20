@@ -5,8 +5,10 @@ Extended in STAGE-003-002 to also substitute the docker_logs ``exclude_container
 list from the ``VECTOR_DOCKER_EXCLUDE`` env var.
 
 Mirrors kernel/alertmanager/render.py::render_config / render_on_boot, MINUS
-the Alertmanager /-/reload step: Vector picks up the rendered config at
-container start (depends_on: monitor: service_healthy), so no reload is needed.
+the Alertmanager /-/reload step: the vector container runs with ``--watch-config``
+(STAGE-007-016A), so it auto-reloads the rendered config when this writer replaces
+it (vector re-arms its inode watch across our os.replace atomic rename). No manual
+``docker restart homelab-vector`` is needed after a re-render.
 
 The monitor renders deploy/vector/vector.toml.template to a shared named
 volume with all required placeholders substituted in, so a first-ever
