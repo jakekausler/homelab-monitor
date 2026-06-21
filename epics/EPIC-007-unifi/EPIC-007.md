@@ -1,6 +1,6 @@
 # EPIC-007: Unifi integration
 
-## Status: In Progress (STAGE-007-001..021 + 016A Complete; current: STAGE-007-021)
+## Status: In Progress (STAGE-007-001..021 + 016A Complete; current: STAGE-007-022; +026 DNS-posture deferral)
 
 ## Build order + client-identity ownership (LOCKED — 2026-06-16/17 brainstorm)
 
@@ -286,7 +286,7 @@ Integrations ▸
 - **Scoping the SSH lease path** — the lease collector is built on EPIC-017's framework; the mandate to
   replace any currently-unscoped SSH access with a scoped forced-command user lives in EPIC-017.
 
-## Stage decomposition (~26 stages, sequential within waves)
+## Stage decomposition (~27 stages, sequential within waves)
 
 Each stage lands a single small slice and ships independently usable, mirroring EPIC-005's wave shape.
 Wave order is sequenced for honest data dependencies (syslog before log-rules; all data collectors,
@@ -340,7 +340,7 @@ including the opt-in SSH lease, land in Wave B before any rules).
 | STAGE-007-018 | **Nav restructure** (remove Inventory page; relocate Crons under Integrations; add Integrations entries) — FIRST UI stage so all subsequent UI registers into the final structure. Design verifies live what's on Inventory today. Cross-epic UI move (EPIC-002 crons provenance noted). | Complete |
 | STAGE-007-019 | Backend panel/page data endpoints (Unifi panel + Network page + Client page) | Complete |
 | STAGE-007-020 | Integrations → Unifi panel (device table + drill-down + threats/DPI/Teleport/controller + `<LogViewer>`) | Complete |
-| STAGE-007-021 | Integrations → Network page shell + WAN/DHCP-pool/WiFi-experience/SSID widgets + DNS-posture indicator |
+| STAGE-007-021 | Integrations → Network page shell + WAN/DHCP-pool/WiFi-experience/SSID widgets + DNS-posture indicator | Complete |
 | STAGE-007-022 | Clients tab (registry table + lease-expiry column) + Client page (per-client drill-down + DPI + lease field + **DNS-enrichment extension point** for EPIC-006) |
 | STAGE-007-023 | Embedded `<LogViewer>` wiring (UDM syslog, device/category filter) + threat-forensics view |
 
@@ -349,6 +349,11 @@ including the opt-in SSH lease, land in Wave B before any rules).
 |---|---|---|
 | STAGE-007-024 | `unifi.json` (gear-centric) + Metrics-tab embed + readability pass |
 | STAGE-007-025 | `network.json` (network-centric: WAN/speedtest/DHCP-occupancy/clients/WiFi) + Metrics-tab embed + readability pass |
+
+### Wave I — DNS-posture refinements (1)
+| # | Stage | Theme |
+|---|---|---|
+| STAGE-007-026 | DNS-posture drift badge (backend expected_dns/drift on the DNS-posture contract + ✓/drift UI) — deferred from STAGE-007-021 | Not Started |
 
 ## Cross-stage acceptance criteria
 
