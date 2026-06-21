@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  formatBand,
   formatBitrate,
   formatBytes,
   formatDeviceKind,
+  formatLink,
   formatPct,
   formatSatisfaction,
   formatTemp,
@@ -44,5 +46,21 @@ describe('unifiFormat', () => {
     expect(formatDeviceKind('switch')).toBe('Switch')
     expect(formatDeviceKind(null)).toBe('—')
     expect(formatDeviceKind(undefined)).toBe('—')
+  })
+  it('formats WiFi band keys', () => {
+    expect(formatBand('2.4ghz')).toBe('2.4 GHz')
+    expect(formatBand('5ghz')).toBe('5 GHz')
+    expect(formatBand('6ghz')).toBe('6 GHz')
+    // fallback: unknown key ending in "ghz"
+    expect(formatBand('60ghz')).toBe('60 GHz')
+    // fallback: unknown key not ending in "ghz"
+    expect(formatBand('unknown')).toBe('Unknown')
+  })
+  it('formats WiFi link type keys', () => {
+    expect(formatLink('wired')).toBe('Wired')
+    expect(formatLink('wireless')).toBe('Wireless')
+    // fallback: unknown key
+    expect(formatLink('fiber')).toBe('Fiber')
+    expect(formatLink('')).toBe('')
   })
 })

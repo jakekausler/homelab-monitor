@@ -22,6 +22,10 @@ import {
   useUnifiDpi,
   useUnifiTeleport,
   useUnifiControllerHealth,
+  useUnifiWan,
+  useUnifiDhcp,
+  useUnifiWifi,
+  useUnifiDnsPosture,
 } from './unifi'
 
 function fakeResponse(status: number): Response {
@@ -155,6 +159,47 @@ describe('unifi hooks', () => {
       await waitFor(() => expect(result.current.isSuccess).toBe(true))
 
       expect(apiClient.GET).toHaveBeenCalledWith('/api/integrations/unifi/controller-health', {})
+    })
+  })
+
+  describe('useUnifiWan', () => {
+    it('calls GET /api/integrations/unifi/network/wan and returns data', async () => {
+      const mockData = { wan_up: true }
+      vi.mocked(apiClient.GET).mockResolvedValue({ data: mockData, response: fakeResponse(200) })
+      const { result } = renderHook(() => useUnifiWan(), { wrapper: makeWrapper() })
+      await waitFor(() => expect(result.current.isSuccess).toBe(true))
+      expect(apiClient.GET).toHaveBeenCalledWith('/api/integrations/unifi/network/wan', {})
+      expect(result.current.data).toEqual(mockData)
+    })
+  })
+
+  describe('useUnifiDhcp', () => {
+    it('calls GET /api/integrations/unifi/network/dhcp and returns data', async () => {
+      const mockData = { networks: [] }
+      vi.mocked(apiClient.GET).mockResolvedValue({ data: mockData, response: fakeResponse(200) })
+      const { result } = renderHook(() => useUnifiDhcp(), { wrapper: makeWrapper() })
+      await waitFor(() => expect(result.current.isSuccess).toBe(true))
+      expect(apiClient.GET).toHaveBeenCalledWith('/api/integrations/unifi/network/dhcp', {})
+    })
+  })
+
+  describe('useUnifiWifi', () => {
+    it('calls GET /api/integrations/unifi/network/wifi and returns data', async () => {
+      const mockData = { poor_signal: 0, by_band: [], by_link: [], ssids: [] }
+      vi.mocked(apiClient.GET).mockResolvedValue({ data: mockData, response: fakeResponse(200) })
+      const { result } = renderHook(() => useUnifiWifi(), { wrapper: makeWrapper() })
+      await waitFor(() => expect(result.current.isSuccess).toBe(true))
+      expect(apiClient.GET).toHaveBeenCalledWith('/api/integrations/unifi/network/wifi', {})
+    })
+  })
+
+  describe('useUnifiDnsPosture', () => {
+    it('calls GET /api/integrations/unifi/network/dns-posture and returns data', async () => {
+      const mockData = { networks: [] }
+      vi.mocked(apiClient.GET).mockResolvedValue({ data: mockData, response: fakeResponse(200) })
+      const { result } = renderHook(() => useUnifiDnsPosture(), { wrapper: makeWrapper() })
+      await waitFor(() => expect(result.current.isSuccess).toBe(true))
+      expect(apiClient.GET).toHaveBeenCalledWith('/api/integrations/unifi/network/dns-posture', {})
     })
   })
 })

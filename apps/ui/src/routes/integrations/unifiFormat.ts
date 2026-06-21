@@ -56,6 +56,31 @@ export function formatDeviceKind(kind: string | null | undefined): string {
   return lower.charAt(0).toUpperCase() + lower.slice(1)
 }
 
+/** Map a backend WiFi band key to a display label (e.g. "2.4ghz" → "2.4 GHz"). */
+export function formatBand(key: string): string {
+  const BANDS: Record<string, string> = {
+    '2.4ghz': '2.4 GHz',
+    '5ghz': '5 GHz',
+    '6ghz': '6 GHz',
+  }
+  if (key in BANDS) return BANDS[key]!
+  // Fallback: if key ends with "ghz", treat the prefix as the numeric part.
+  if (key.toLowerCase().endsWith('ghz')) {
+    return key.slice(0, key.length - 3) + ' GHz'
+  }
+  return key.charAt(0).toUpperCase() + key.slice(1)
+}
+
+/** Map a backend WiFi link type key to a display label (e.g. "wired" → "Wired"). */
+export function formatLink(key: string): string {
+  const LINKS: Record<string, string> = {
+    wired: 'Wired',
+    wireless: 'Wireless',
+  }
+  if (key in LINKS) return LINKS[key]!
+  return key.charAt(0).toUpperCase() + key.slice(1)
+}
+
 /** Render a bits-per-second value using decimal (÷1000) bit-rate units. */
 export function formatBitrate(bps: number | null | undefined): string {
   if (bps === null || bps === undefined) return '—'

@@ -10,6 +10,10 @@ type UnifiThreatsResponse = Schema<'UnifiThreatsResponse'>
 type UnifiDpiResponse = Schema<'UnifiDpiResponse'>
 type UnifiTeleport = Schema<'UnifiTeleport'>
 type UnifiControllerHealth = Schema<'UnifiControllerHealth'>
+type UnifiWanCurrent = Schema<'UnifiWanCurrent'>
+type UnifiNetworkDhcpResponse = Schema<'UnifiNetworkDhcpResponse'>
+type UnifiWifiResponse = Schema<'UnifiWifiResponse'>
+type UnifiDnsPostureResponse = Schema<'UnifiDnsPostureResponse'>
 
 export const unifiQueryKeys = {
   summary: ['integrations', 'unifi', 'summary'] as const,
@@ -19,6 +23,10 @@ export const unifiQueryKeys = {
   dpi: ['integrations', 'unifi', 'dpi'] as const,
   teleport: ['integrations', 'unifi', 'teleport'] as const,
   controllerHealth: ['integrations', 'unifi', 'controller-health'] as const,
+  networkWan: ['integrations', 'unifi', 'network', 'wan'] as const,
+  networkDhcp: ['integrations', 'unifi', 'network', 'dhcp'] as const,
+  networkWifi: ['integrations', 'unifi', 'network', 'wifi'] as const,
+  networkDnsPosture: ['integrations', 'unifi', 'network', 'dns-posture'] as const,
 }
 
 const REFETCH_INTERVAL_MS = 30_000
@@ -98,6 +106,50 @@ export function useUnifiControllerHealth(): UseQueryResult<UnifiControllerHealth
     queryFn: async () => {
       const result = await apiClient.GET('/api/integrations/unifi/controller-health', {})
       return unwrap<UnifiControllerHealth>(result)
+    },
+    refetchInterval: REFETCH_INTERVAL_MS,
+  })
+}
+
+export function useUnifiWan(): UseQueryResult<UnifiWanCurrent, ApiError> {
+  return useQuery({
+    queryKey: unifiQueryKeys.networkWan,
+    queryFn: async () => {
+      const result = await apiClient.GET('/api/integrations/unifi/network/wan', {})
+      return unwrap<UnifiWanCurrent>(result)
+    },
+    refetchInterval: REFETCH_INTERVAL_MS,
+  })
+}
+
+export function useUnifiDhcp(): UseQueryResult<UnifiNetworkDhcpResponse, ApiError> {
+  return useQuery({
+    queryKey: unifiQueryKeys.networkDhcp,
+    queryFn: async () => {
+      const result = await apiClient.GET('/api/integrations/unifi/network/dhcp', {})
+      return unwrap<UnifiNetworkDhcpResponse>(result)
+    },
+    refetchInterval: REFETCH_INTERVAL_MS,
+  })
+}
+
+export function useUnifiWifi(): UseQueryResult<UnifiWifiResponse, ApiError> {
+  return useQuery({
+    queryKey: unifiQueryKeys.networkWifi,
+    queryFn: async () => {
+      const result = await apiClient.GET('/api/integrations/unifi/network/wifi', {})
+      return unwrap<UnifiWifiResponse>(result)
+    },
+    refetchInterval: REFETCH_INTERVAL_MS,
+  })
+}
+
+export function useUnifiDnsPosture(): UseQueryResult<UnifiDnsPostureResponse, ApiError> {
+  return useQuery({
+    queryKey: unifiQueryKeys.networkDnsPosture,
+    queryFn: async () => {
+      const result = await apiClient.GET('/api/integrations/unifi/network/dns-posture', {})
+      return unwrap<UnifiDnsPostureResponse>(result)
     },
     refetchInterval: REFETCH_INTERVAL_MS,
   })

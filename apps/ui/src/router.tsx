@@ -36,7 +36,9 @@ import { ContainerActionsTab } from '@/routes/integrations/ContainerActionsTab'
 import { UnifiLayout } from '@/routes/integrations/UnifiLayout'
 import { UnifiOverviewTab } from '@/routes/integrations/UnifiOverviewTab'
 import { UnifiDevicePage } from '@/routes/integrations/UnifiDevicePage'
-import { NetworkPage } from '@/routes/integrations/NetworkPage'
+import { NetworkLayout } from '@/routes/integrations/NetworkLayout'
+import { NetworkOverviewTab } from '@/routes/integrations/NetworkOverviewTab'
+import { NetworkClientsTab } from '@/routes/integrations/NetworkClientsTab'
 import { LogsExplorerPage } from '@/routes/logs/LogsExplorerPage'
 import { LogsLayout } from '@/routes/logs/LogsLayout'
 import { ModelsDebugPage } from '@/routes/logs/ModelsDebugPage'
@@ -469,10 +471,31 @@ const unifiDeviceRoute = createRoute({
   component: UnifiDevicePage,
 })
 
-const networkIntegrationRoute = createRoute({
+const networkLayoutRoute = createRoute({
   getParentRoute: () => protectedLayoutRoute,
   path: '/integrations/network',
-  component: NetworkPage,
+  component: NetworkLayout,
+})
+
+const networkIndexRoute = createRoute({
+  getParentRoute: () => networkLayoutRoute,
+  path: '/',
+  beforeLoad: () => {
+    // eslint-disable-next-line @typescript-eslint/only-throw-error -- TanStack Router redirect objects are thrown by design
+    throw redirect({ to: '/integrations/network/overview' })
+  },
+})
+
+const networkOverviewRoute = createRoute({
+  getParentRoute: () => networkLayoutRoute,
+  path: 'overview',
+  component: NetworkOverviewTab,
+})
+
+const networkClientsRoute = createRoute({
+  getParentRoute: () => networkLayoutRoute,
+  path: 'clients',
+  component: NetworkClientsTab,
 })
 
 // NEW: parent route hosts the shared header + tab strip; children render in <Outlet>.
@@ -563,7 +586,7 @@ const routeTree = rootRoute.addChildren([
       homeAssistantLogsRoute,
     ]),
     unifiLayoutRoute.addChildren([unifiIndexRoute, unifiOverviewRoute, unifiDeviceRoute]),
-    networkIntegrationRoute,
+    networkLayoutRoute.addChildren([networkIndexRoute, networkOverviewRoute, networkClientsRoute]),
     containerPageRoute.addChildren([
       containerIndexRoute,
       containerOverviewRoute,
