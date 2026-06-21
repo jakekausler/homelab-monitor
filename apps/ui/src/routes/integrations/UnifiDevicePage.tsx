@@ -6,6 +6,7 @@ import { ErrorDisplay } from '@/components/ErrorDisplay'
 import { useUnifiDevice } from '@/api/unifi'
 
 import { PanelSection } from './PanelSection'
+import { UnifiDeviceLogsSection } from './UnifiDeviceLogsSection'
 import { formatBitrate, formatPct, formatSatisfaction } from './unifiFormat'
 
 export function UnifiDevicePage(): JSX.Element {
@@ -150,6 +151,8 @@ export function UnifiDevicePage(): JSX.Element {
               </ul>
             </PanelSection>
           )}
+
+          <UnifiDeviceLogsSection />
 
           {result.data.ports.length === 0 &&
             result.data.radios.length === 0 &&

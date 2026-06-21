@@ -20,6 +20,10 @@ vi.mock('@tanstack/react-router', async () => {
   }
 })
 
+vi.mock('./UnifiDeviceLogsSection', () => ({
+  UnifiDeviceLogsSection: () => <div data-testid="unifi-device-logs-section-mock" />,
+}))
+
 type Detail = Schema<'UnifiDeviceDetail'>
 
 function ok(data: Detail): UseQueryResult<Detail, ApiError> {

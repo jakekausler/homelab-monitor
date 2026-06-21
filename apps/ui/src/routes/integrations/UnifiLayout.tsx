@@ -5,7 +5,11 @@ import { ErrorDisplay } from '@/components/ErrorDisplay'
 import { Badge } from '@/components/ui/badge'
 import { useUnifiSummary } from '@/api/unifi'
 
-const TABS = [{ path: '/integrations/unifi/overview', label: 'Overview' }] as const
+const TABS = [
+  { path: '/integrations/unifi/overview', label: 'Overview' },
+  { path: '/integrations/unifi/logs', label: 'Logs' },
+  { path: '/integrations/unifi/threats', label: 'Threats' },
+] as const
 
 function UnifiStatusStrip(): JSX.Element {
   const result = useUnifiSummary()
