@@ -1,6 +1,6 @@
 # EPIC-007: Unifi integration
 
-## Status: In Progress (STAGE-007-001..022 + 016A Complete; current: STAGE-007-023; +026 DNS-posture deferral)
+## Status: In Progress (STAGE-007-001..023 + 016A Complete; current: STAGE-007-024; +026 DNS-posture deferral)
 
 ## Build order + client-identity ownership (LOCKED — 2026-06-16/17 brainstorm)
 
@@ -342,7 +342,7 @@ including the opt-in SSH lease, land in Wave B before any rules).
 | STAGE-007-020 | Integrations → Unifi panel (device table + drill-down + threats/DPI/Teleport/controller + `<LogViewer>`) | Complete |
 | STAGE-007-021 | Integrations → Network page shell + WAN/DHCP-pool/WiFi-experience/SSID widgets + DNS-posture indicator | Complete |
 | STAGE-007-022 | Clients tab (registry table + lease-expiry column) + Client page (per-client drill-down + DPI + lease field + **DNS-enrichment extension point** for EPIC-006) | Complete |
-| STAGE-007-023 | Embedded `<LogViewer>` wiring (UDM syslog, device/category filter) + threat-forensics view |
+| STAGE-007-023 | Embedded `<LogViewer>` wiring (UDM syslog, device/category filter) + threat-forensics view | Complete |
 
 ### Wave H — Grafana (2)
 | # | Stage | Theme |
