@@ -110,3 +110,12 @@ export function formatBitrate(bps: number | null | undefined): string {
 
   return `${bps} bps`
 }
+
+/**
+ * Render a Wi-Fi signal strength in dBm. Values are negative (e.g. -58).
+ * null/undefined -> "—" (wired/offline clients have no signal).
+ */
+export function formatSignal(dbm: number | null | undefined): string {
+  if (dbm === null || dbm === undefined) return '—'
+  return `${dbm} dBm`
+}

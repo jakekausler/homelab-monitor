@@ -110,7 +110,7 @@ class _FakeUnifiBase:
     async def stat_health(self) -> UnifiResponse | UnifiError:
         return UnifiError(reason="bad_response", message="stub")
 
-    async def stat_dpi(self) -> UnifiResponse | UnifiError:
+    async def stat_stadpi(self) -> UnifiResponse | UnifiError:
         return UnifiError(reason="bad_response", message="stub")
 
     async def rest_networkconf(self) -> UnifiResponse | UnifiError:
@@ -120,6 +120,9 @@ class _FakeUnifiBase:
         return UnifiError(reason="bad_response", message="stub")
 
     async def stat_sysinfo(self) -> UnifiResponse | UnifiError:
+        return UnifiError(reason="bad_response", message="stub")
+
+    async def v2_traffic(self, start_ms: int, end_ms: int) -> UnifiResponse | UnifiError:
         return UnifiError(reason="bad_response", message="stub")
 
     async def resolve_site_id(self) -> UnifiError | None:

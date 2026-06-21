@@ -39,6 +39,7 @@ import { UnifiDevicePage } from '@/routes/integrations/UnifiDevicePage'
 import { NetworkLayout } from '@/routes/integrations/NetworkLayout'
 import { NetworkOverviewTab } from '@/routes/integrations/NetworkOverviewTab'
 import { NetworkClientsTab } from '@/routes/integrations/NetworkClientsTab'
+import { NetworkClientPage } from '@/routes/integrations/NetworkClientPage'
 import { LogsExplorerPage } from '@/routes/logs/LogsExplorerPage'
 import { LogsLayout } from '@/routes/logs/LogsLayout'
 import { ModelsDebugPage } from '@/routes/logs/ModelsDebugPage'
@@ -498,6 +499,12 @@ const networkClientsRoute = createRoute({
   component: NetworkClientsTab,
 })
 
+const networkClientRoute = createRoute({
+  getParentRoute: () => networkLayoutRoute,
+  path: 'clients/$mac',
+  component: NetworkClientPage,
+})
+
 // NEW: parent route hosts the shared header + tab strip; children render in <Outlet>.
 const containerPageRoute = createRoute({
   getParentRoute: () => protectedLayoutRoute,
@@ -586,7 +593,12 @@ const routeTree = rootRoute.addChildren([
       homeAssistantLogsRoute,
     ]),
     unifiLayoutRoute.addChildren([unifiIndexRoute, unifiOverviewRoute, unifiDeviceRoute]),
-    networkLayoutRoute.addChildren([networkIndexRoute, networkOverviewRoute, networkClientsRoute]),
+    networkLayoutRoute.addChildren([
+      networkIndexRoute,
+      networkOverviewRoute,
+      networkClientsRoute,
+      networkClientRoute,
+    ]),
     containerPageRoute.addChildren([
       containerIndexRoute,
       containerOverviewRoute,

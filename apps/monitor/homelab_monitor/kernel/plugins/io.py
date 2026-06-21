@@ -220,10 +220,6 @@ class UnifiClient(Protocol):
         """GET classic stat/health — subsystem/WAN health, or a typed UnifiError."""
         ...
 
-    async def stat_dpi(self) -> UnifiResponse | UnifiError:
-        """GET classic stat/dpi — per-app DPI counters, or a typed UnifiError."""
-        ...
-
     async def stat_stadpi(self) -> UnifiResponse | UnifiError:
         """GET classic stat/stadpi — per-client per-app DPI counters, or a typed UnifiError."""
         ...
@@ -238,6 +234,10 @@ class UnifiClient(Protocol):
 
     async def stat_sysinfo(self) -> UnifiResponse | UnifiError:
         """GET classic stat/sysinfo — controller version/system info, or a typed UnifiError."""
+        ...
+
+    async def v2_traffic(self, start_ms: int, end_ms: int) -> UnifiResponse | UnifiError:
+        """GET v2 traffic — per-client per-app usage for [start_ms, end_ms] (epoch-ms)."""
         ...
 
     async def resolve_site_id(self) -> UnifiError | None:

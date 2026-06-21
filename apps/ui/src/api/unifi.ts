@@ -14,6 +14,8 @@ type UnifiWanCurrent = Schema<'UnifiWanCurrent'>
 type UnifiNetworkDhcpResponse = Schema<'UnifiNetworkDhcpResponse'>
 type UnifiWifiResponse = Schema<'UnifiWifiResponse'>
 type UnifiDnsPostureResponse = Schema<'UnifiDnsPostureResponse'>
+type UnifiClientsResponse = Schema<'UnifiClientsResponse'>
+type UnifiClientDetail = Schema<'UnifiClientDetail'>
 
 export const unifiQueryKeys = {
   summary: ['integrations', 'unifi', 'summary'] as const,
@@ -27,6 +29,9 @@ export const unifiQueryKeys = {
   networkDhcp: ['integrations', 'unifi', 'network', 'dhcp'] as const,
   networkWifi: ['integrations', 'unifi', 'network', 'wifi'] as const,
   networkDnsPosture: ['integrations', 'unifi', 'network', 'dns-posture'] as const,
+  clients: (limit: number, offset: number) =>
+    ['integrations', 'unifi', 'clients', limit, offset] as const,
+  client: (mac: string) => ['integrations', 'unifi', 'client', mac] as const,
 }
 
 const REFETCH_INTERVAL_MS = 30_000
@@ -151,6 +156,36 @@ export function useUnifiDnsPosture(): UseQueryResult<UnifiDnsPostureResponse, Ap
       const result = await apiClient.GET('/api/integrations/unifi/network/dns-posture', {})
       return unwrap<UnifiDnsPostureResponse>(result)
     },
+    refetchInterval: REFETCH_INTERVAL_MS,
+  })
+}
+
+export function useUnifiClients(
+  limit = 500,
+  offset = 0,
+): UseQueryResult<UnifiClientsResponse, ApiError> {
+  return useQuery({
+    queryKey: unifiQueryKeys.clients(limit, offset),
+    queryFn: async () => {
+      const result = await apiClient.GET('/api/integrations/unifi/clients', {
+        params: { query: { limit, offset } },
+      })
+      return unwrap<UnifiClientsResponse>(result)
+    },
+    refetchInterval: REFETCH_INTERVAL_MS,
+  })
+}
+
+export function useUnifiClient(mac: string): UseQueryResult<UnifiClientDetail, ApiError> {
+  return useQuery({
+    queryKey: unifiQueryKeys.client(mac),
+    queryFn: async () => {
+      const result = await apiClient.GET('/api/integrations/unifi/clients/{mac}', {
+        params: { path: { mac } },
+      })
+      return unwrap<UnifiClientDetail>(result)
+    },
+    enabled: mac.length > 0,
     refetchInterval: REFETCH_INTERVAL_MS,
   })
 }

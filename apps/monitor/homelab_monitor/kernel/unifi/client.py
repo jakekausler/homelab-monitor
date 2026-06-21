@@ -51,6 +51,7 @@ _HTTP_OK_FLOOR: Final[int] = 200
 _HTTP_OK_CEIL: Final[int] = 300  # exclusive upper bound for the 2xx success band
 
 _V1_PREFIX: Final[str] = "/proxy/network/integrations/v1"
+_V2_PREFIX: Final[str] = "/proxy/network/v2/api/site"
 
 
 @dataclass(frozen=True, slots=True)
@@ -146,10 +147,6 @@ class UnifiRestClient:
         """GET classic stat/health — subsystem health incl. the www/WAN block."""
         return await self._get_classic("stat/health")
 
-    async def stat_dpi(self) -> UnifiResponse | UnifiError:
-        """GET classic stat/dpi — per-app DPI byte counters."""
-        return await self._get_classic("stat/dpi")
-
     async def stat_stadpi(self) -> UnifiResponse | UnifiError:
         """GET classic stat/stadpi — per-client per-app DPI byte counters."""
         return await self._get_classic("stat/stadpi")
@@ -165,6 +162,16 @@ class UnifiRestClient:
     async def stat_sysinfo(self) -> UnifiResponse | UnifiError:
         """GET classic stat/sysinfo — controller version + system info."""
         return await self._get_classic("stat/sysinfo")
+
+    async def v2_traffic(self, start_ms: int, end_ms: int) -> UnifiResponse | UnifiError:
+        """GET v2 traffic — per-client per-app usage for the [start_ms, end_ms] window.
+
+        ``start_ms``/``end_ms`` are epoch-MILLISECONDS (epoch-seconds silently returns an
+        empty 200 on this firmware). The payload is a bare object with ``client_usage_by_app``
+        and ``total_usage_by_app`` arrays (no ``{meta,data}`` envelope).
+        """
+        params = {"start": str(start_ms), "end": str(end_ms)}
+        return await self._get_v2("traffic", "v2/traffic", params)
 
     # ---- eager, non-fatal site-id resolution ----
 
@@ -230,6 +237,21 @@ class UnifiRestClient:
         """
         url = f"{self._base_url}/proxy/network/api/s/{self.site_name}/{ep}"
         return await self._request("GET", url, ep)
+
+    async def _get_v2(
+        self, ep: str, endpoint: str, params: dict[str, str]
+    ) -> UnifiResponse | UnifiError:
+        """Build a v2 site-scoped API URL (with query params) and perform the GET.
+
+        ``ep`` is appended to ``{base_url}/proxy/network/v2/api/site/{site_name}/`` — so
+        ``_get_v2("traffic", "v2/traffic", {...})`` hits
+        ``.../v2/api/site/default/traffic?start=...&end=...``. The v2 API returns a BARE
+        JSON object (NO ``{meta,data}`` envelope); ``UnifiResponse.payload`` is that object.
+        The v2 API uses the classic SHORT site NAME (``self.site_name``), not the v1 UUID.
+        """
+        query = "&".join(f"{k}={v}" for k, v in params.items())
+        url = f"{self._base_url}{_V2_PREFIX}/{self.site_name}/{ep}?{query}"
+        return await self._request("GET", url, endpoint)
 
     async def _request(self, method: str, url: str, endpoint: str) -> UnifiResponse | UnifiError:
         """Perform an authenticated GET, timing it and mapping every failure to UnifiError.

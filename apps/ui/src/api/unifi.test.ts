@@ -26,6 +26,8 @@ import {
   useUnifiDhcp,
   useUnifiWifi,
   useUnifiDnsPosture,
+  useUnifiClients,
+  useUnifiClient,
 } from './unifi'
 
 function fakeResponse(status: number): Response {
@@ -200,6 +202,65 @@ describe('unifi hooks', () => {
       const { result } = renderHook(() => useUnifiDnsPosture(), { wrapper: makeWrapper() })
       await waitFor(() => expect(result.current.isSuccess).toBe(true))
       expect(apiClient.GET).toHaveBeenCalledWith('/api/integrations/unifi/network/dns-posture', {})
+    })
+  })
+
+  describe('useUnifiClients', () => {
+    it('calls GET /api/integrations/unifi/clients with limit/offset and returns data', async () => {
+      const mockData = { clients: [], limit: 500, offset: 0, total: 0 }
+      vi.mocked(apiClient.GET).mockResolvedValue({ data: mockData, response: fakeResponse(200) })
+
+      const { result } = renderHook(() => useUnifiClients(500, 0), { wrapper: makeWrapper() })
+
+      await waitFor(() => expect(result.current.isSuccess).toBe(true))
+
+      expect(apiClient.GET).toHaveBeenCalledWith('/api/integrations/unifi/clients', {
+        params: { query: { limit: 500, offset: 0 } },
+      })
+      expect(result.current.data).toEqual(mockData)
+    })
+  })
+
+  describe('useUnifiClient', () => {
+    it('calls GET /api/integrations/unifi/clients/{mac} when mac is provided', async () => {
+      const mockData = {
+        mac: 'aa:bb:cc:dd:ee:ff',
+        name: 'Box',
+        hostname: null,
+        ip: '192.168.1.5',
+        network: 'LAN',
+        is_host: false,
+        online: true,
+        ap_mac: null,
+        sw_mac: null,
+        sw_port: null,
+        oui: null,
+        first_seen: '2026-06-20T00:00:00Z',
+        last_seen: '2026-06-20T00:00:00Z',
+        lease_expiry: null,
+        fixed_ip: null,
+        use_fixedip: false,
+        dns: null,
+        dpi: [],
+        series: { signal_dbm: null, tx_rate_bps: null, rx_rate_bps: null },
+      }
+      vi.mocked(apiClient.GET).mockResolvedValue({ data: mockData, response: fakeResponse(200) })
+
+      const { result } = renderHook(() => useUnifiClient('aa:bb:cc:dd:ee:ff'), {
+        wrapper: makeWrapper(),
+      })
+
+      await waitFor(() => expect(result.current.isSuccess).toBe(true))
+
+      expect(apiClient.GET).toHaveBeenCalledWith('/api/integrations/unifi/clients/{mac}', {
+        params: { path: { mac: 'aa:bb:cc:dd:ee:ff' } },
+      })
+    })
+
+    it('is disabled (queryFn not called) when mac is empty string', () => {
+      const { result } = renderHook(() => useUnifiClient(''), { wrapper: makeWrapper() })
+      expect(result.current.isPending).toBe(true)
+      expect(apiClient.GET).not.toHaveBeenCalled()
     })
   })
 })

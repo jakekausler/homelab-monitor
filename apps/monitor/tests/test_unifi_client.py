@@ -157,7 +157,6 @@ async def test_remaining_classic_helpers_build_urls() -> None:
         (lambda c: c.stat_sta(), "stat/sta"),
         (lambda c: c.stat_alluser(), "stat/alluser"),
         (lambda c: c.stat_health(), "stat/health"),
-        (lambda c: c.stat_dpi(), "stat/dpi"),
         (lambda c: c.stat_stadpi(), "stat/stadpi"),
         (lambda c: c.rest_networkconf(), "rest/networkconf"),
     ]
@@ -180,6 +179,53 @@ async def test_took_seconds_is_float() -> None:
     assert isinstance(result, UnifiResponse)
     assert isinstance(result.took_seconds, float)
     assert result.took_seconds >= 0.0
+
+
+@pytest.mark.asyncio
+async def test_v2_traffic_success_returns_bare_object() -> None:
+    """v2_traffic returns a bare object (no {meta,data} envelope)."""
+    client, mock_http = _client()
+    payload = {
+        "client_usage_by_app": [
+            {
+                "client": {"mac": "aa:bb:cc:dd:ee:ff"},
+                "usage_by_app": [{"application": 7, "category": 13, "total_bytes": 1000}],
+            }
+        ],
+        "total_usage_by_app": [],
+    }
+    mock_http.request.return_value = _ok_response(json_value=payload)
+    result = await client.v2_traffic(1000, 2000)
+    assert isinstance(result, UnifiResponse)
+    assert result.payload == payload
+    assert result.endpoint == "v2/traffic"
+    # Verify URL includes v2 prefix, site name, and query params.
+    call_url = mock_http.request.call_args.args[1]
+    assert "/proxy/network/v2/api/site/default/traffic?" in call_url
+    assert "start=1000" in call_url
+    assert "end=2000" in call_url
+    assert call_url.startswith("https://192.168.2.1")
+
+
+@pytest.mark.asyncio
+async def test_v2_traffic_empty_clients() -> None:
+    """v2_traffic with empty client_usage_by_app returns bare object."""
+    client, mock_http = _client()
+    payload: dict[str, object] = {"client_usage_by_app": [], "total_usage_by_app": []}
+    mock_http.request.return_value = _ok_response(json_value=payload)
+    result = await client.v2_traffic(1000, 2000)
+    assert isinstance(result, UnifiResponse)
+    assert result.payload == payload
+
+
+@pytest.mark.asyncio
+async def test_v2_traffic_http_error() -> None:
+    """v2_traffic 403 maps to auth UnifiError."""
+    client, mock_http = _client()
+    mock_http.request.return_value = _ok_response(json_value={}, status=_HTTP_FORBIDDEN)
+    result = await client.v2_traffic(1000, 2000)
+    assert isinstance(result, UnifiError)
+    assert result.reason == "auth"
 
 
 # ---- error mapping ----

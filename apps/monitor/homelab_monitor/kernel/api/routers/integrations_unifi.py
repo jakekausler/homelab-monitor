@@ -1331,7 +1331,7 @@ async def get_unifi_client(
         vm_instant_query(http_client, vm_url, f'{_Q_CLIENT_SIGNAL}{{mac="{mac_esc}"}}'),
         vm_instant_query(http_client, vm_url, f'{_Q_CLIENT_TX_RATE}{{mac="{mac_esc}"}}'),
         vm_instant_query(http_client, vm_url, f'{_Q_CLIENT_RX_RATE}{{mac="{mac_esc}"}}'),
-        vm_instant_query(http_client, vm_url, f'{_Q_CLIENT_DPI}{{mac="{mac_esc}"}}'),
+        vm_instant_query(http_client, vm_url, f'{_Q_CLIENT_DPI}{{client="{mac_esc}"}}'),
     )
 
     series = UnifiClientSeries(

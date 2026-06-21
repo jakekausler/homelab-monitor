@@ -8,6 +8,7 @@ import {
   formatLink,
   formatPct,
   formatSatisfaction,
+  formatSignal,
   formatTemp,
 } from './unifiFormat'
 
@@ -62,5 +63,11 @@ describe('unifiFormat', () => {
     // fallback: unknown key
     expect(formatLink('fiber')).toBe('Fiber')
     expect(formatLink('')).toBe('')
+  })
+  it('formats wifi signal dbm', () => {
+    expect(formatSignal(-58)).toBe('-58 dBm')
+    expect(formatSignal(-90)).toBe('-90 dBm')
+    expect(formatSignal(null)).toBe('—')
+    expect(formatSignal(undefined)).toBe('—')
   })
 })

@@ -387,8 +387,8 @@ async def test_client_detail_found_with_vm_series(
         'homelab_unifi_client_signal_dbm{mac="aa:00:00:00:00:01"}': _vector_response("-60"),
         'homelab_unifi_client_tx_rate_bps{mac="aa:00:00:00:00:01"}': _vector_response("1000000"),
         'homelab_unifi_client_rx_rate_bps{mac="aa:00:00:00:00:01"}': _vector_response("5000000"),
-        'homelab_unifi_client_dpi_bytes{mac="aa:00:00:00:00:01"}': _vector_response(
-            "123456", labels={"app": "netflix", "cat": "video"}
+        'homelab_unifi_client_dpi_bytes{client="aa:00:00:00:00:01"}': _vector_response(
+            "123456", labels={"client": "aa:00:00:00:00:01", "app": "netflix", "cat": "video"}
         ),
     }
     httpx_mock.add_callback(
