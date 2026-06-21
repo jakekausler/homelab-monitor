@@ -68,7 +68,7 @@ def _kind_for(rec: dict[str, object]) -> str:
     return "switch"
 
 
-def _emit_device_level(
+def _emit_device_level(  # noqa: PLR0915
     ctx: CollectorContext,
     rec: dict[str, object],
     emitted: list[int],
@@ -143,6 +143,16 @@ def _emit_device_level(
             device_label,
             emitted,
         )
+
+    # device satisfaction (AP top-level field; -1 means not available -- skip sentinel)
+    sat_val = rec.get("satisfaction")
+    if isinstance(sat_val, (int, float)) and not isinstance(sat_val, bool) and sat_val >= 0:
+        ctx.vm.write_gauge(
+            "homelab_unifi_device_satisfaction",
+            float(sat_val),
+            device_label,
+        )
+        emitted[0] += 1
 
     # temperatures array (UDM only; absent on switch/AP/PDU)
     temperatures = rec.get("temperatures")

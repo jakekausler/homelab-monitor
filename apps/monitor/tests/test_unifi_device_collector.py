@@ -72,6 +72,7 @@ _SWITCH_RECORD: dict[str, object] = {
     "displayable_version": "6.6.63",
     "upgradable": True,
     "uptime": 654321,
+    "satisfaction": -1,
     "system-stats": {"cpu": "10.0", "mem": "30.0"},
     "sys_stats": {"loadavg_1": "0.1"},
     "temperatures": [],
@@ -128,6 +129,7 @@ _AP_RECORD: dict[str, object] = {
     "displayable_version": "7.0.0",
     "upgradable": False,
     "uptime": 99999,
+    "satisfaction": 98,
     "system-stats": {"cpu": "5.0", "mem": "25.0"},
     "sys_stats": {"loadavg_1": "0.2"},
     "temperatures": [],
@@ -604,6 +606,56 @@ async def test_metrics_emitted_count() -> None:
     # Every recorded entry is a gauge (no counters/summaries from this collector)
     gauge_count = len(writer.recorded)
     assert result.metrics_emitted == gauge_count
+
+
+async def test_device_satisfaction_emitted_for_ap_skipped_for_sentinel() -> None:
+    """device_satisfaction emitted for AP (sat=98); NOT emitted for switch (sat=-1 sentinel);
+    NOT emitted for PDU or UDM (no satisfaction field in fixtures).
+    Covers all guard branches: present+>=0 (emit), present+<0 (skip), absent (skip).
+    """
+    writer = InMemoryMetricsWriter()
+    await UnifiDeviceCollector().run(_ctx(writer, _FakeUnifiOk()))
+
+    # Branch A: AP has satisfaction=98 -> must be emitted
+    ap_sat = _gauge_value(writer, "homelab_unifi_device_satisfaction", {"device": "ap-1"})
+    assert ap_sat == 98.0  # noqa: PLR2004
+
+    # Branch B: switch-poe has satisfaction=-1 (sentinel) -> must NOT be emitted
+    sw_sat = _gauge_value(writer, "homelab_unifi_device_satisfaction", {"device": "switch-poe"})
+    assert sw_sat is None
+
+    # Branch C: UDM has no satisfaction field -> must NOT be emitted
+    udm_sat = _gauge_value(writer, "homelab_unifi_device_satisfaction", {"device": "udm"})
+    assert udm_sat is None
+
+    # Confirm only one device_satisfaction gauge total (the AP)
+    all_sat = _gauges(writer, "homelab_unifi_device_satisfaction")
+    assert len(all_sat) == 1
+
+
+async def test_device_satisfaction_skips_bool() -> None:
+    """satisfaction=True (bool) must not be emitted even though bool is subclass of int.
+    Covers Branch D: bool exclusion.
+    """
+    writer = InMemoryMetricsWriter()
+    fake = _FakeUnifiCustom(
+        payload={
+            "meta": {"rc": "ok"},
+            "data": [
+                {
+                    "name": "bool-device",
+                    "type": "uap",
+                    "model": "U7PIW",
+                    "state": 1,
+                    "satisfaction": True,  # bool, must be skipped
+                }
+            ],
+        }
+    )
+    result = await UnifiDeviceCollector().run(_ctx(writer, fake))
+    assert result.ok is True
+    sat = _gauges(writer, "homelab_unifi_device_satisfaction")
+    assert sat == []
 
 
 # ---------------------------------------------------------------------------
