@@ -154,3 +154,11 @@
 - Unifi panel → Threats tab (`/integrations/unifi/threats`): reframed to "Security Events" — filter `source_type:udm (service:udm-audit OR service:udm-firewall)`; ALWAYS-VISIBLE honest banner (IDS/IPS via structured-alarm path, not syslog; requires CyberSecure). Banner must remain visible even with zero rows. NOTE: `udm_category:threat` is NOT a valid syslog discriminator on this controller (do not reintroduce it).
 - Device page (`/integrations/unifi/devices/$device`): embedded gateway-sourced logs section with honest note (UDM syslog is gateway-sourced; no per-device IP field on `UnifiDeviceDetail`) + an Open-in-Explorer button (regression guard — it was missing at first).
 - All three surfaces consume the EXISTING `/api/logs/query` + `<LogViewer>` contract (no new backend). Generic (non-502) API error surfaces as the LogViewer `unavailable` state (not a misleading "no lines").
+
+## STAGE-007-024 — Grafana `unifi.json` (gear-centric) + Metrics-tab embed + readability pass
+
+- Grafana `unifi.json` (uid `homelab-unifi`, gear-centric) provisions cleanly (bind-mount, 30s poll) + embeds as the Metrics → Unifi tab (`/metrics/unifi`, src `/api/grafana/d/homelab-unifi/homelab-unifi?kiosk`). `jq -e .` valid; no gridPos overlap; datasource `victoriametrics` on every target.
+- Fleet table renders ONE row per device with named columns (NOT repeated/"Value #X") — guard against the merge-fracture regression; every fleet-table target uses `max by (device)` to strip extra labels.
+- DPI top-apps panel: timeseries with target `interval:"5m"` (DPI is polled every 300s; a shorter `$__rate_interval` renders 0 — do NOT remove the 5m min-step) + `clamp_max(...,125000000)` spike-guard + excludes the `SSL/TLS` catch-all (`{app!="SSL/TLS"}`). Renders non-zero lines.
+- `homelab_unifi_device_satisfaction{device}` metric (device.py) emitted only when the value is present AND `>= 0` (skips the `-1` sentinel + bool); "Device satisfaction" panel shows it. Per-radio satisfaction is `-1`/unavailable on U7-Pro-Wall (do NOT re-add a per-radio satisfaction panel).
+- Threats row honest: scalar `homelab_unifi_threat_count` (=0) + a markdown note (IPS disabled; threats via alarm path). No `threat{type}` panel.

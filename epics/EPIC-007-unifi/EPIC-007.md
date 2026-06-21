@@ -1,6 +1,6 @@
 # EPIC-007: Unifi integration
 
-## Status: In Progress (STAGE-007-001..023 + 016A Complete; current: STAGE-007-024; +026 DNS-posture deferral)
+## Status: In Progress (STAGE-007-001..024 + 016A Complete; current: STAGE-007-025; +026 DNS-posture deferral)
 
 ## Build order + client-identity ownership (LOCKED — 2026-06-16/17 brainstorm)
 
@@ -347,7 +347,7 @@ including the opt-in SSH lease, land in Wave B before any rules).
 ### Wave H — Grafana (2)
 | # | Stage | Theme |
 |---|---|---|
-| STAGE-007-024 | `unifi.json` (gear-centric) + Metrics-tab embed + readability pass |
+| STAGE-007-024 | `unifi.json` (gear-centric) + Metrics-tab embed + readability pass | Complete |
 | STAGE-007-025 | `network.json` (network-centric: WAN/speedtest/DHCP-occupancy/clients/WiFi) + Metrics-tab embed + readability pass |
 
 ### Wave I — DNS-posture refinements (1)
