@@ -35,11 +35,10 @@
 
 ## ⚠️ Git / branch caveat (read first)
 
-At the time this plan was written, **another agent is doing vulnerability fixes on a non-main branch**. It will switch back to `main` at some point and may **not** commit this document. Consequences:
+This file (`parallel-instance-plan.md`) is now committed at `docs/dev/parallel-instance-plan.md` (was originally an untracked root file during Build). For current work:
 
-- This file (`PARALLEL-INSTANCE-PLAN.md`) lives at repo root and is **untracked**. If a branch switch / checkout discards it, **re-create it from this content** (it is self-contained).
 - Do **not** assume the current branch. Before starting Build, confirm we are on `main` (or a fresh branch off `main`) with a clean tree: `git status`, `git branch --show-current`.
-- All Build work for this plan should happen on a **dedicated branch off `main`** (e.g. `feat/parallel-instance`), created only after the vuln-fix agent has merged/landed and we are cleanly on `main`. Do NOT interleave with the vuln-fix branch.
+- All Build work for this plan should happen on a **dedicated branch off `main`** (e.g. `feat/parallel-instance`). Do NOT interleave with unrelated feature branches.
 - Per project convention: **never `git add -A`** — always explicit paths.
 
 ---

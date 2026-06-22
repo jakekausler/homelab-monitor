@@ -7,7 +7,7 @@ procedure that was validated live, A's one-time migration, teardown, and the
 known limitations.
 
 > Source of truth for the rationale and the defects that were found/fixed during
-> validation: `PARALLEL-INSTANCE-PLAN.md` at the repo root. The authoritative
+> validation: the implementation plan at `docs/dev/parallel-instance-plan.md`. The authoritative
 > variable list with inline comments lives in `deploy/compose/.env.example`.
 
 ---
