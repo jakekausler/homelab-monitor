@@ -1,6 +1,6 @@
 # Parallel Instance Support — Implementation Plan
 
-> **Status:** Refinement IN PROGRESS — instance B validated on freshly-built image; A-rebuild decision pending
+> **Status:** COMPLETE — Build + Refinement + Finalize done. Both instances (A on 29090, B on 39090) live on rebuilt branch images. Commits: 1ff8aaf (Build), 5b7cf43 (Refinement fixes + docs), 296421f (changelog).
 >
 > **Refinement findings (live two-instance run on host):**
 > - Instance A migrated to new compose (project/containers/volumes/network byte-identical; cadvisor+vector kept via `COMPOSE_PROFILES=host-collectors` added to A's live `.env`; A restarted, healthy). A's `.env.bak-prerestart` backup exists.
@@ -10,7 +10,7 @@
 > - **DEFECT 3 (process, fixed):** the running images for BOTH A and B PREDATED all parallel-instance code (A `:dev` built 3h before the B1 commit; B pulled `:latest` from 5 weeks ago). Initial B validation was INVALID (reflected old image). Resolution: build B's image LOCALLY from the branch (`GITHUB_REPOSITORY=homelab-monitor-local-b`, `IMAGE_TAG=dev`). Fresh-clone build requires `pnpm install` + `pnpm --filter ui run generate-types` (gitignored `apps/ui/src/api/schema.ts`) + UI build before `docker compose build`.
 > - **Re-validation on the real image: ALL PASS** — `DockerConfig(enabled=False)` live in B's container; no docker collector registered; no socket access; docker route serves no data; cron discovery clean (`inserted=0 errors=0`) against empty dirs; B-private mount sources; A healthy/undisturbed. e2e-tester 8/8 PASS.
 >
-> **OPEN — A rebuild decision:** A still runs the STALE image (no parallel-instance code, no config-init `/data` fix, no docker-flag plumbing). For A to actually carry these changes, A's monitor image must be rebuilt from the branch and A restarted (a real prod deploy). Awaiting user go.
+> **A rebuild COMPLETE:** A was rebuilt from the branch (image homelab-monitor-local:dev), restarted, healthy. DockerConfig(enabled=True) confirmed in A's running container. The config-init fix (`chown` to 995:995) was verified applied and `/data` ownership confirmed. A now runs the same code as B (parallel-instance feature complete, both instances on reviewed/finalized branch code).
 >
 > **Minor open item (deferred):** B still mounts `/var/run/docker.sock` (unused when docker disabled). Could omit for B; no functional impact. Noted for operator docs.
 >
