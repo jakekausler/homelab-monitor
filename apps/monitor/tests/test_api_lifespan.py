@@ -966,3 +966,77 @@ async def test_lifespan_unifi_site_resolution_success_skips_warning(
         assert app.state.scheduler.running
         assert hasattr(app.state, "unifi_client")
         assert app.state.unifi_client is not None
+
+
+@pytest.mark.asyncio
+async def test_docker_disabled_skips_registration_and_socket_client(
+    db_url: str,
+    master_key: bytes,
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,  # type: ignore[name-defined]
+) -> None:
+    """B1: HOMELAB_MONITOR_DOCKER_ENABLED=false fully disables the Docker plugin.
+
+    Asserts that with the flag off:
+      * the DockerSocketCollector + DockerDiscoverer are NOT registered (no
+        docker_discoverer / docker_socket_client wired onto app.state, so the
+        instance never touches the docker socket),
+      * the ComposeActionRunner + OverrideLoader are not constructed,
+      * the docker router's compose-action-runner dependency returns 503,
+      * the three auto-degrading consumers (ProbeSupervisor,
+        ImageUpdateCollector, LocalBuildUpdateCollector) still register/run
+        cleanly with a None socket client (graceful degradation, no crash).
+    """
+    from types import SimpleNamespace  # noqa: PLC0415
+
+    import pytest as _pytest  # noqa: PLC0415
+    from fastapi import HTTPException, status  # noqa: PLC0415
+
+    from homelab_monitor.kernel.api.routers.docker import (  # noqa: PLC0415
+        _get_compose_action_runner,  # pyright: ignore[reportPrivateUsage]
+    )
+    from homelab_monitor.kernel.metrics.image_update_collector import (  # noqa: PLC0415
+        ImageUpdateCollector,
+    )
+    from homelab_monitor.kernel.metrics.local_build_update_collector import (  # noqa: PLC0415
+        LocalBuildUpdateCollector,
+    )
+    from homelab_monitor.kernel.metrics.probe_supervisor import (  # noqa: PLC0415
+        ProbeSupervisor,
+    )
+
+    monkeypatch.setenv("HOMELAB_MONITOR_DB_URL", db_url)
+    monkeypatch.setenv("HOMELAB_MONITOR_MASTER_KEY", base64.b64encode(master_key).decode())
+    monkeypatch.setenv("HOMELAB_MONITOR_DOCKER_ENABLED", "false")
+
+    app = create_app(lifespan_enabled=True)
+
+    async with app.router.lifespan_context(app):
+        # Scheduler boots clean even with docker disabled.
+        assert app.state.scheduler is not None
+        assert app.state.scheduler.running
+
+        # No Docker collectors wired (registration was skipped entirely).
+        assert getattr(app.state, "docker_discoverer", None) is None
+        # docker_socket_client is never constructed — no docker socket access.
+        assert getattr(app.state, "docker_socket_client", None) is None
+        # ComposeActionRunner + OverrideLoader gated off.
+        assert getattr(app.state, "compose_action_runner", None) is None
+        assert getattr(app.state, "override_loader", None) is None
+
+        # Docker router compose-action endpoint dependency returns 503.
+        fake_request = SimpleNamespace(app=app)
+        with _pytest.raises(HTTPException) as exc_info:
+            _get_compose_action_runner(fake_request)  # type: ignore[arg-type]
+        assert exc_info.value.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+
+        # The three auto-degrading consumers still register/run; they receive a
+        # None socket client and degrade gracefully (no crash at boot).
+        supervisor = getattr(app.state, "probe_supervisor", None)
+        assert isinstance(supervisor, ProbeSupervisor)
+        image_collector = getattr(app.state, "image_update_collector", None)
+        assert isinstance(image_collector, ImageUpdateCollector)
+        assert image_collector._socket_client is None  # pyright: ignore[reportPrivateUsage]
+        local_build_collector = getattr(app.state, "local_build_update_collector", None)
+        assert isinstance(local_build_collector, LocalBuildUpdateCollector)
+        assert local_build_collector._socket_client is None  # pyright: ignore[reportPrivateUsage]
