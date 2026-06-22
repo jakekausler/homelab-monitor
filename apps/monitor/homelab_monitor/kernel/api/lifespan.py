@@ -20,6 +20,7 @@ from homelab_monitor.kernel.alerts.repository import AlertRepository
 from homelab_monitor.kernel.api.sse import SseBroker
 from homelab_monitor.kernel.backup.service import BackupService
 from homelab_monitor.kernel.config import (
+    load_docker_config,
     load_ha_config,
     load_ha_registry_config,
     load_pihole_config,
@@ -161,6 +162,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
     # 5. Loader
     loader = PluginLoader(log=log)
     degraded: list[str] = []
+    # B1 (parallel-instance): master switch for the Docker plugin. When disabled,
+    # the DockerSocketCollector + DockerDiscoverer are never registered and no
+    # DockerSocketClient is constructed, so the instance does no container
+    # monitoring and never touches the docker socket. Defaults True -> unset env
+    # reproduces today's behavior exactly.
+    docker_config = load_docker_config()
     try:
         loader.register(NoopCollector, {"name": "noop", "interval_seconds": 60})
     except Exception as exc:  # pragma: no cover -- NoopCollector always succeeds
@@ -420,50 +427,54 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
         )
         degraded.append("redaction_audit")
 
-    try:
-        from homelab_monitor.kernel.metrics.docker_socket_collector import (  # noqa: PLC0415
-            DockerSocketCollector,
-        )
+    # B1 (parallel-instance): skip Docker collector registration entirely when
+    # the Docker plugin is disabled. The post-construction isinstance() wiring
+    # blocks below become automatic no-ops when nothing is registered.
+    if docker_config.enabled:
+        try:
+            from homelab_monitor.kernel.metrics.docker_socket_collector import (  # noqa: PLC0415
+                DockerSocketCollector,
+            )
 
-        loader.register(
-            DockerSocketCollector,
-            {
-                "name": "docker_socket",
-                "interval_seconds": int(DockerSocketCollector.interval.total_seconds()),
-                "timeout_seconds": int(DockerSocketCollector.timeout.total_seconds()),
-            },
-        )
-    except Exception as exc:  # pragma: no cover -- defensive
-        log.warning(
-            "lifespan.collector_register_failed",
-            name="docker_socket",
-            error=str(exc),
-        )
-        degraded.append("docker_socket")
+            loader.register(
+                DockerSocketCollector,
+                {
+                    "name": "docker_socket",
+                    "interval_seconds": int(DockerSocketCollector.interval.total_seconds()),
+                    "timeout_seconds": int(DockerSocketCollector.timeout.total_seconds()),
+                },
+            )
+        except Exception as exc:  # pragma: no cover -- defensive
+            log.warning(
+                "lifespan.collector_register_failed",
+                name="docker_socket",
+                error=str(exc),
+            )
+            degraded.append("docker_socket")
 
-    try:
-        from homelab_monitor.plugins.discoverers.docker_discoverer import (  # noqa: PLC0415
-            DockerDiscoverer,
-        )
+        try:
+            from homelab_monitor.plugins.discoverers.docker_discoverer import (  # noqa: PLC0415
+                DockerDiscoverer,
+            )
 
-        # TODO: add load test for high-event-rate scenarios where events_loop +
-        # periodic_task contend on the asyncio.Lock during docker compose up bursts.
-        # Current tests serialize the two paths. See code review I4.
-        loader.register(
-            DockerDiscoverer,
-            {
-                "name": "docker_discoverer",
-                "interval_seconds": int(DockerDiscoverer.interval.total_seconds()),
-                "timeout_seconds": int(DockerDiscoverer.timeout.total_seconds()),
-            },
-        )
-    except Exception as exc:  # pragma: no cover -- defensive
-        log.warning(
-            "lifespan.collector_register_failed",
-            name="docker_discoverer",
-            error=str(exc),
-        )
-        degraded.append("docker_discoverer")
+            # TODO: add load test for high-event-rate scenarios where events_loop +
+            # periodic_task contend on the asyncio.Lock during docker compose up bursts.
+            # Current tests serialize the two paths. See code review I4.
+            loader.register(
+                DockerDiscoverer,
+                {
+                    "name": "docker_discoverer",
+                    "interval_seconds": int(DockerDiscoverer.interval.total_seconds()),
+                    "timeout_seconds": int(DockerDiscoverer.timeout.total_seconds()),
+                },
+            )
+        except Exception as exc:  # pragma: no cover -- defensive
+            log.warning(
+                "lifespan.collector_register_failed",
+                name="docker_discoverer",
+                error=str(exc),
+            )
+            degraded.append("docker_discoverer")
 
     try:
         from homelab_monitor.kernel.metrics.probe_supervisor import (  # noqa: PLC0415
@@ -850,33 +861,40 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
     app.state.build_sources_loader = build_sources_loader
 
     # STAGE-003-010: ComposeActionRunner — owns per-container locks + bg tasks.
-    from homelab_monitor.kernel.db.repositories.compose_actions_repository import (  # noqa: PLC0415
-        ComposeActionsRepository,
-    )
-    from homelab_monitor.kernel.docker.compose_action_runner import (  # noqa: PLC0415
-        ComposeActionRunner,
-    )
-
-    # Fetch or create the DockerSocketClient (same as in collector wiring below)
-    socket_client = getattr(app.state, "docker_socket_client", None)
-    if socket_client is None:
-        from homelab_monitor.kernel.docker.socket_client import (  # noqa: PLC0415
-            DockerSocketClient,
+    # B1 (parallel-instance): gate the ComposeActionRunner (and the early
+    # DockerSocketClient it constructs) behind the Docker master switch. With
+    # docker disabled, no socket client is constructed (the instance never
+    # touches the docker socket) and app.state.compose_action_runner stays unset;
+    # the docker router's _get_compose_action_runner already returns 503 in that
+    # case, and the post-pull/-rebuild refresher wiring below no-ops on None.
+    if docker_config.enabled:
+        from homelab_monitor.kernel.db.repositories.compose_actions_repository import (  # noqa: PLC0415
+            ComposeActionsRepository,
+        )
+        from homelab_monitor.kernel.docker.compose_action_runner import (  # noqa: PLC0415
+            ComposeActionRunner,
         )
 
-        socket_path = os.environ.get("HOMELAB_MONITOR_DOCKER_SOCKET", "/var/run/docker.sock")
-        socket_client = DockerSocketClient(socket_path=socket_path, log=log)
-        app.state.docker_socket_client = socket_client
+        # Fetch or create the DockerSocketClient (same as in collector wiring below)
+        socket_client = getattr(app.state, "docker_socket_client", None)
+        if socket_client is None:
+            from homelab_monitor.kernel.docker.socket_client import (  # noqa: PLC0415
+                DockerSocketClient,
+            )
 
-    compose_action_runner = ComposeActionRunner(
-        repo=repo,
-        actions_repo=ComposeActionsRepository(repo),
-        build_sources_loader=build_sources_loader,
-        socket_client=socket_client,
-        prom_registry=prom_registry,
-        log=log,
-    )
-    app.state.compose_action_runner = compose_action_runner
+            socket_path = os.environ.get("HOMELAB_MONITOR_DOCKER_SOCKET", "/var/run/docker.sock")
+            socket_client = DockerSocketClient(socket_path=socket_path, log=log)
+            app.state.docker_socket_client = socket_client
+
+        compose_action_runner = ComposeActionRunner(
+            repo=repo,
+            actions_repo=ComposeActionsRepository(repo),
+            build_sources_loader=build_sources_loader,
+            socket_client=socket_client,
+            prom_registry=prom_registry,
+            log=log,
+        )
+        app.state.compose_action_runner = compose_action_runner
 
     collectors = loader.load_all()
     # TODO(refactor): inject log_stream_state via CollectorContext rather
@@ -996,8 +1014,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
             c._state_repo = ImageUpdateStateRepository(repo)  # pyright: ignore[reportPrivateUsage]
             app.state.image_update_collector = c
             # Wire post-pull refresher into compose_action_runner.
+            # B1: compose_action_runner is None when the Docker plugin is disabled
+            # (ComposeActionRunner construction is gated), so guard before wiring.
             compose_runner = getattr(app.state, "compose_action_runner", None)
-            if compose_runner is not None:  # pragma: no branch -- always set before plugin loop
+            if compose_runner is not None:
                 compose_runner.set_image_update_refresher(c.refresh_container)
         from homelab_monitor.kernel.metrics.local_build_update_collector import (  # noqa: PLC0415
             LocalBuildUpdateCollector,
@@ -1027,8 +1047,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
             c._build_sources_loader = build_sources_loader  # pyright: ignore[reportPrivateUsage]
             app.state.local_build_update_collector = c
             # Wire post-rebuild refresher into compose_action_runner.
+            # B1: compose_action_runner is None when the Docker plugin is disabled
+            # (ComposeActionRunner construction is gated), so guard before wiring.
             compose_runner = getattr(app.state, "compose_action_runner", None)
-            if compose_runner is not None:  # pragma: no branch -- always set before plugin loop
+            if compose_runner is not None:
                 compose_runner.set_local_build_refresher(c.refresh_container)
         from homelab_monitor.kernel.metrics.new_signature_collector import (  # noqa: PLC0415
             NewSignatureCollector,
@@ -1104,8 +1126,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
     image_events_task: asyncio.Task[None] | None = None
     image_update_collector_handle = getattr(app.state, "image_update_collector", None)
     docker_socket_client = getattr(app.state, "docker_socket_client", None)
-    if (  # pragma: no branch -- both branches need full lifespan boot
-        image_update_collector_handle is not None
+    if (
+        # B1: explicit docker master-switch guard (docker_socket_client is also
+        # None when disabled, but state the intent so this loop never starts).
+        docker_config.enabled
+        and image_update_collector_handle is not None
         and docker_socket_client is not None
         and "image_update_checker" not in degraded
     ):
@@ -1185,44 +1210,48 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
         app.state.image_events_task = image_events_task
 
     # 7c. Start OverrideLoader periodic task (D-HOTRELOAD-PERIODIC-30S).
-    from homelab_monitor.kernel.db.repositories.override_ownership_repository import (  # noqa: PLC0415
-        OverrideOwnershipRepository,
-    )
-    from homelab_monitor.kernel.db.repositories.probe_targets_repository import (  # noqa: PLC0415
-        ProbeTargetsRepository,
-    )
-    from homelab_monitor.kernel.db.repositories.suggestions_repository import (  # noqa: PLC0415
-        SuggestionsRepository,
-    )
-    from homelab_monitor.kernel.docker.override_loader import OverrideLoader  # noqa: PLC0415
-
-    overrides_dir = Path(
-        os.environ.get(
-            "HOMELAB_MONITOR_DOCKER_OVERRIDES_DIR",
-            "/config/plugins/docker",
+    # B1: the override loader resolves docker-container probe overrides, so it is
+    # gated behind the Docker master switch — when disabled it is never
+    # constructed/started and app.state.override_loader stays unset.
+    if docker_config.enabled:
+        from homelab_monitor.kernel.db.repositories.override_ownership_repository import (  # noqa: PLC0415
+            OverrideOwnershipRepository,
         )
-    )
-    exec_enabled_globally = (
-        os.environ.get("HOMELAB_MONITOR_DOCKER_PROBES_EXEC_ENABLED", "false").lower() == "true"
-    )
-    override_loader = OverrideLoader(
-        db=repo,
-        suggestions_repo=SuggestionsRepository(repo),
-        probe_targets_repo=ProbeTargetsRepository(repo),
-        ownership_repo=OverrideOwnershipRepository(repo),
-        overrides_dir=overrides_dir,
-        exec_enabled_globally=exec_enabled_globally,
-        log=log,
-        socket_client=getattr(app.state, "docker_socket_client", None),
-    )
-    # Run one synchronous tick at startup so the API surface sees current
-    # ownership + errors before the first 30s sleep elapses.
-    try:
-        await override_loader.refresh_once()
-    except Exception as exc:  # pragma: no cover -- defensive; refresh_once tolerates dir-missing
-        log.warning("lifespan.override_loader_initial_refresh_failed", error=str(exc))
-    override_loader.start_task()
-    app.state.override_loader = override_loader
+        from homelab_monitor.kernel.db.repositories.probe_targets_repository import (  # noqa: PLC0415
+            ProbeTargetsRepository,
+        )
+        from homelab_monitor.kernel.db.repositories.suggestions_repository import (  # noqa: PLC0415
+            SuggestionsRepository,
+        )
+        from homelab_monitor.kernel.docker.override_loader import OverrideLoader  # noqa: PLC0415
+
+        overrides_dir = Path(
+            os.environ.get(
+                "HOMELAB_MONITOR_DOCKER_OVERRIDES_DIR",
+                "/config/plugins/docker",
+            )
+        )
+        exec_enabled_globally = (
+            os.environ.get("HOMELAB_MONITOR_DOCKER_PROBES_EXEC_ENABLED", "false").lower() == "true"
+        )
+        override_loader = OverrideLoader(
+            db=repo,
+            suggestions_repo=SuggestionsRepository(repo),
+            probe_targets_repo=ProbeTargetsRepository(repo),
+            ownership_repo=OverrideOwnershipRepository(repo),
+            overrides_dir=overrides_dir,
+            exec_enabled_globally=exec_enabled_globally,
+            log=log,
+            socket_client=getattr(app.state, "docker_socket_client", None),
+        )
+        # Run one synchronous tick at startup so the API surface sees current
+        # ownership + errors before the first 30s sleep elapses.
+        try:
+            await override_loader.refresh_once()
+        except Exception as exc:  # pragma: no cover -- defensive; tolerates dir-missing
+            log.warning("lifespan.override_loader_initial_refresh_failed", error=str(exc))
+        override_loader.start_task()
+        app.state.override_loader = override_loader
 
     # 7g. Start DrainConsumer periodic task (STAGE-004-026). Env-gated; reuses
     # the existing repo + http_client + vl_url already constructed above.
@@ -1481,16 +1510,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
             await drain_consumer_handle.stop_task()
         # Stop OverrideLoader before discoverer/supervisor so its in-flight
         # tx cannot race with shutdown ownership reads.
+        # B1: override_loader is unset when the Docker plugin is disabled.
         override_loader_handle = getattr(app.state, "override_loader", None)
-        if override_loader_handle is not None:  # pragma: no branch
+        if override_loader_handle is not None:
             await override_loader_handle.stop_task()
         build_sources_loader_handle = getattr(app.state, "build_sources_loader", None)
         if build_sources_loader_handle is not None:  # pragma: no branch
             await build_sources_loader_handle.stop_task()
         # STAGE-003-010: cancel any in-flight compose actions before scheduler shutdown
         # so subprocess children get SIGTERM via task.cancel().
+        # B1: compose_action_runner is unset when the Docker plugin is disabled.
         compose_runner_handle = getattr(app.state, "compose_action_runner", None)
-        if compose_runner_handle is not None:  # pragma: no branch
+        if compose_runner_handle is not None:
             await compose_runner_handle.shutdown()
         # Stop ProbeSupervisor per-container tasks before scheduler shutdown
         supervisor = getattr(app.state, "probe_supervisor", None)
@@ -1529,9 +1560,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
         await http_client.aclose()
         await unifi_http_client.aclose()
         docker_client = getattr(app.state, "docker_socket_client", None)
-        # Defensive guard: triggers only when DockerSocketCollector registration failed
-        # during startup (degraded path) and lifespan still tries to close the client
-        # during shutdown. Not exercised by tests since the degraded path isn't simulated.
-        if docker_client is not None:  # pragma: no branch
+        # B1: docker_socket_client is unset when the Docker plugin is disabled.
+        # Otherwise this guard is defensive (degraded DockerSocketCollector path).
+        if docker_client is not None:
             await docker_client.aclose()
         await dispose_engine()

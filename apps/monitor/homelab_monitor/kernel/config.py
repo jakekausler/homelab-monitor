@@ -1707,6 +1707,41 @@ def load_ha_registry_config() -> HaRegistryConfig:
     )
 
 
+@dataclass(frozen=True, slots=True)
+class DockerConfig:
+    """Master switch for the Docker plugin (DockerDiscoverer + DockerSocketCollector).
+
+    When ``enabled`` is False, the lifespan skips registering the Docker
+    collectors and never constructs a ``DockerSocketClient``, so the instance
+    does no container monitoring and never touches the docker socket. The docker
+    router endpoints already return 503 defensively when the socket client is
+    None, and the auto-degrading consumers (ProbeSupervisor, ImageUpdateCollector,
+    LocalBuildUpdateCollector) receive ``None`` and degrade gracefully.
+
+    - ``enabled`` — master switch; defaults True so unset env reproduces today's
+      behavior exactly (fail-on for the primary instance).
+    """
+
+    enabled: bool = True
+
+
+def load_docker_config() -> DockerConfig:
+    """Load DockerConfig from env (HOMELAB_MONITOR_DOCKER_*).
+
+    - ``HOMELAB_MONITOR_DOCKER_ENABLED`` (bool) -> ``enabled``. Truthy values are
+      ``1``/``true``/``yes`` (lowercased), matching the DrainConfig convention.
+      Unset leaves the default (True).
+    """
+    defaults = DockerConfig()
+    enabled = defaults.enabled
+
+    raw_enabled = os.environ.get("HOMELAB_MONITOR_DOCKER_ENABLED")
+    if raw_enabled is not None:
+        enabled = raw_enabled.strip().lower() in ("1", "true", "yes")
+
+    return DockerConfig(enabled=enabled)
+
+
 # ---------------------------------------------------------------------------
 # STAGE-005-016: HA safety binary-sensor + HA temp/humidity value collectors.
 # Both use the established frozen-dataclass + load_* env-loader pattern (read
@@ -1793,6 +1828,7 @@ __all__ = [
     "CronAnomalyConfig",
     "CronRunReconcilerConfig",
     "DiskBudgetConfig",
+    "DockerConfig",
     "DrainConfig",
     "ErrorPattern",
     "ErrorRateOverride",
@@ -1818,6 +1854,7 @@ __all__ = [
     "load_cron_anomaly_config",
     "load_cron_run_reconciler_config",
     "load_disk_budget_config",
+    "load_docker_config",
     "load_drain_config",
     "load_ha_config",
     "load_ha_registry_config",
