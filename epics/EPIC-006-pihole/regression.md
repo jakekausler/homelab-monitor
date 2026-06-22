@@ -15,8 +15,17 @@
 ## STAGE-006-002 — Pi-hole integration bundle skeleton
 
 - [ ] **Bundle registers cleanly:** at monitor startup, NO `pihole_integration.collector_register_failed` warning appears in `docker logs homelab-monitor` (the per-collector try/except did not fire).
-- [ ] **Placeholder in collectors surface:** `GET /api/collectors` (authenticated) lists `pihole_placeholder` with `status:"healthy"`, `interval_seconds:60`. (NOTE: `pihole_placeholder` is SCAFFOLDING — STAGE-006-005 removes it when the first real collector lands; after 006-005 this check changes to "the first real pihole collector is present".)
-- [ ] **Sentinel metric:** `homelab_pihole_bundle_loaded` = 1 in VictoriaMetrics (`/api/v1/query?query=homelab_pihole_bundle_loaded`) — confirms the bundle loaded and a collector ran. (Also removed/replaced by STAGE-006-005.)
+
+## STAGE-006-005 — Core query-stats collector
+
+- [ ] **Collector present + healthy:** `pihole_stats_summary` appears in `GET /api/collectors` (authenticated) healthy with `interval_seconds:30`; the old `pihole_placeholder` is GONE.
+- [ ] **Core metrics in VM:** `homelab_pihole_queries_total`, `_blocked_total`, `_forwarded_total`, `_cached_total`, `_percent_blocked`, `_query_frequency`, `_unique_domains`, `_active_clients`, `_total_clients` all present in VictoriaMetrics (`docker exec homelab-vm wget -qO- 'http://127.0.0.1:8428/api/v1/query?query=homelab_pihole_queries_total'`).
+- [ ] **Enum families:** `homelab_pihole_query_by_type{type}` (~16), `homelab_pihole_query_by_status{status}` (~19-20), `homelab_pihole_query_by_reply{reply}` (~14-15) emit per-label series faithfully (zero-count labels may be absent that tick).
+- [ ] **API latency:** `homelab_pihole_api_took_seconds{endpoint="stats/summary"}` present.
+- [ ] **Metric names match the card (NO `queries_` infix):** the scalars are `homelab_pihole_blocked_total` / `_percent_blocked` / `_forwarded_total` / `_cached_total` / `_query_frequency` / `_unique_domains` — NOT `homelab_pihole_queries_blocked_total` etc. (a Refinement correction; downstream alert rules 016/017 + Grafana 026 depend on these exact names).
+- [ ] **24h-rolling semantics:** the summary scalars are 24h-rolling window-gauges, NOT lifetime counters — alert rules must NOT `rate()` them.
+- [ ] **`homelab_pihole_unique_clients` NOT emitted:** retracted (no source in Pi-hole v6); `_active_clients`/`_total_clients` cover distinct-client info.
+- [ ] **Live values sane vs Pi-hole web UI:** VM values for queries_total/blocked/percent_blocked are in-ballpark with the live `/api/stats/summary` (small deltas from ongoing traffic are expected).
 
 ## STAGE-006-003 — Unbound-control access layer
 
