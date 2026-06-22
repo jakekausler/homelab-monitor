@@ -6,6 +6,7 @@ import re
 from typing import cast
 from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
 from fastapi import FastAPI
 from httpx import AsyncClient
@@ -247,7 +248,7 @@ class TestServiceUnavailableProblemHandler:
         register_error_handlers(mini_app)
 
         client = TestClient(mini_app, raise_server_exceptions=False)
-        resp = client.get("/test-503-no-details")
+        resp: httpx.Response = cast(httpx.Response, client.get("/test-503-no-details"))  # type: ignore[reportUnknownMemberType]
         assert resp.status_code == 503  # noqa: PLR2004
         assert "Retry-After" not in resp.headers
         assert resp.json()["error"]["code"] == "service_unavailable"
@@ -271,7 +272,7 @@ class TestServiceUnavailableProblemHandler:
         register_error_handlers(mini_app)
 
         client = TestClient(mini_app, raise_server_exceptions=False)
-        resp = client.get("/test-503-no-key")
+        resp: httpx.Response = cast(httpx.Response, client.get("/test-503-no-key"))  # type: ignore[reportUnknownMemberType]
         assert resp.status_code == 503  # noqa: PLR2004
         assert "Retry-After" not in resp.headers
         assert resp.json()["error"]["code"] == "service_unavailable"

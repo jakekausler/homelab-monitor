@@ -5,14 +5,18 @@ description = "Self-hosted homelab monitoring service"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115",
+    # starlette/idna floors pinned to remediate transitive CVEs (pulled via
+    # fastapi and httpx/anyio respectively); fastapi accepts newer starlette.
+    "starlette>=1.3.1",
+    "idna>=3.15",
     "uvicorn[standard]>=0.32",
     "pydantic>=2.9",
     "structlog>=24.4",
     "httpx>=0.28",
-    "cryptography>=43",
+    "cryptography>=48.0.1",
     "drain3>=0.9.11",
     "bcrypt>=4.2",
-    "python-multipart>=0.0.18",
+    "python-multipart>=0.0.31",
     "sqlalchemy[asyncio]>=2.0.36",
     "alembic>=1.14",
     "aiosqlite>=0.20",
