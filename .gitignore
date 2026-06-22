@@ -63,6 +63,9 @@ data/
 
 # Claude Code local session/config state
 .claude/
+# Per-checkout, untracked Claude instructions (auto-loaded alongside CLAUDE.md).
+# Used e.g. by the parallel "instance B" checkout to mark itself limited.
+CLAUDE.local.md
 
 # Rendered Alertmanager config in test-rig seed dir contains the rig's
 # bootstrap bearer token. Generated at boot, never committed.
