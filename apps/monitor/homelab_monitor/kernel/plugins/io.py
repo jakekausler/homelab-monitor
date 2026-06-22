@@ -25,6 +25,8 @@ from homelab_monitor.kernel.ha.client import (
     HaState,
 )
 from homelab_monitor.kernel.ha.errors import HaError
+from homelab_monitor.kernel.pihole.client import PiholeResponse
+from homelab_monitor.kernel.pihole.errors import PiholeError
 from homelab_monitor.kernel.ssh.result import SshCommandResult
 from homelab_monitor.kernel.unifi.client import UnifiResponse
 from homelab_monitor.kernel.unifi.errors import UnifiError
@@ -242,6 +244,84 @@ class UnifiClient(Protocol):
 
     async def resolve_site_id(self) -> UnifiError | None:
         """Resolve + cache the site id from v1/sites; None on success, UnifiError on failure."""
+        ...
+
+
+@runtime_checkable
+class PiholeClient(Protocol):
+    """Read surface for reaching a Pi-hole v6 instance (STAGE-006-001).
+
+    Every method is return-not-raise: it returns a :class:`PiholeResponse` OR a
+    :class:`PiholeError`, so a Pi-hole 5xx / timeout / auth failure never propagates
+    as our own 5xx. The concrete implementation is
+    :class:`homelab_monitor.kernel.pihole.client.PiholeRestClient`.
+
+    SCAFFOLDING: collectors consuming these helpers land in Wave B/C
+    (STAGE-006-005..015).
+    """
+
+    async def info_version(self) -> PiholeResponse | PiholeError:
+        """GET /api/info/version — Pi-hole / FTL version, or a typed PiholeError."""
+        ...
+
+    async def info_ftl(self) -> PiholeResponse | PiholeError:
+        """GET /api/info/ftl — FTL process info, or a typed PiholeError."""
+        ...
+
+    async def info_database(self) -> PiholeResponse | PiholeError:
+        """GET /api/info/database — query database info, or a typed PiholeError."""
+        ...
+
+    async def info_messages(self) -> PiholeResponse | PiholeError:
+        """GET /api/info/messages — diagnostic messages, or a typed PiholeError."""
+        ...
+
+    async def info_system(self) -> PiholeResponse | PiholeError:
+        """GET /api/info/system — host system metrics, or a typed PiholeError."""
+        ...
+
+    async def stats_summary(self) -> PiholeResponse | PiholeError:
+        """GET /api/stats/summary — top-line query stats, or a typed PiholeError."""
+        ...
+
+    async def stats_upstreams(self) -> PiholeResponse | PiholeError:
+        """GET /api/stats/upstreams — per-upstream counts, or a typed PiholeError."""
+        ...
+
+    async def stats_query_types(self) -> PiholeResponse | PiholeError:
+        """GET /api/stats/query_types — per-type query counts, or a typed PiholeError."""
+        ...
+
+    async def stats_top_clients(self) -> PiholeResponse | PiholeError:
+        """GET /api/stats/top_clients — top querying clients, or a typed PiholeError."""
+        ...
+
+    async def stats_top_domains(self) -> PiholeResponse | PiholeError:
+        """GET /api/stats/top_domains — top queried domains, or a typed PiholeError."""
+        ...
+
+    async def stats_recent_blocked(self) -> PiholeResponse | PiholeError:
+        """GET /api/stats/recent_blocked — recently blocked domains, or a typed PiholeError."""
+        ...
+
+    async def dns_blocking(self) -> PiholeResponse | PiholeError:
+        """GET /api/dns/blocking — blocking enabled state, or a typed PiholeError."""
+        ...
+
+    async def lists(self) -> PiholeResponse | PiholeError:
+        """GET /api/lists — adlists, or a typed PiholeError."""
+        ...
+
+    async def network_devices(self) -> PiholeResponse | PiholeError:
+        """GET /api/network/devices — network device inventory, or a typed PiholeError."""
+        ...
+
+    async def queries(self, params: dict[str, str]) -> PiholeResponse | PiholeError:
+        """GET /api/queries — recent queries (filtered by ``params``), or a typed PiholeError."""
+        ...
+
+    async def aclose(self) -> None:
+        """Best-effort logout (DELETE /api/auth); never raises."""
         ...
 
 

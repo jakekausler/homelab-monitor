@@ -621,6 +621,35 @@ def load_unifi_config() -> UnifiConfig:
     )
 
 
+@dataclass(frozen=True, slots=True)
+class PiholeConfig:
+    """Pi-hole connection config (STAGE-006-001). Env-only.
+
+    ``base_url`` is the Pi-hole instance base URL (no trailing slash; the loader
+    strips it). The app password is NOT here — it lives in the secret store under
+    ``pihole_api_password_ro`` (read-only collectors) and ``pihole_api_password_rw``
+    (Wave-E write actions, first used STAGE-006-018) and is resolved at request time
+    via ``POST /api/auth``. Pi-hole is plain HTTP on the LAN, so the default points
+    at the host's LAN IP (mirrors HaConfig; the bridge-network container cannot reach
+    ``localhost`` which is its own loopback).
+    """
+
+    base_url: str = "http://192.168.2.148:8080"  # host LAN IP (container cannot reach localhost)
+
+
+def load_pihole_config() -> PiholeConfig:
+    """Load Pi-hole connection config from env.
+
+    ``HOMELAB_MONITOR_PIHOLE_URL`` -> ``base_url`` (trailing slash stripped so client
+    path concatenation is unambiguous; default ``http://192.168.2.148:8080`` — the host's
+    LAN IP — when unset, because the prod monitor runs on a bridge network and cannot reach
+    localhost which is its own container loopback).
+    """
+    raw = os.environ.get("HOMELAB_MONITOR_PIHOLE_URL")
+    base_url = PiholeConfig().base_url if raw is None else raw.rstrip("/")
+    return PiholeConfig(base_url=base_url)
+
+
 # Built-in per-family cardinality caps (STAGE-005-006).
 # A typical large HA deployment emits ~1906 entity-family series; 2500 gives
 # comfortable headroom while still bounding runaway growth.

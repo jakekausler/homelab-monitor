@@ -22,6 +22,7 @@ from homelab_monitor.kernel.backup.service import BackupService
 from homelab_monitor.kernel.config import (
     load_ha_config,
     load_ha_registry_config,
+    load_pihole_config,
     load_tail_config,
     load_unifi_config,
 )
@@ -50,6 +51,7 @@ from homelab_monitor.kernel.logs.tail_service import TailRegistry
 from homelab_monitor.kernel.logs.vl_writer import VictoriaLogsWriter
 from homelab_monitor.kernel.metrics.multiplex import MultiplexMetricsWriter
 from homelab_monitor.kernel.metrics.prometheus_writer import PrometheusRegistryWriter
+from homelab_monitor.kernel.pihole.client import PiholeRestClient
 from homelab_monitor.kernel.plugins.base import Collector
 from homelab_monitor.kernel.plugins.context import CollectorContext
 from homelab_monitor.kernel.plugins.io import (
@@ -713,6 +715,22 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
     except Exception as exc:  # pragma: no cover -- defensive; ensure_host_row is safe
         log.warning("lifespan.unifi_host_row_seed_failed", error=str(exc))
 
+    # 7a-pihole. Pi-hole v6 REST client (STAGE-006-001).
+    #
+    # Reuses the SHARED http_client (Pi-hole is plain HTTP on the LAN — no TLS, so no
+    # dedicated verify=False client like Unifi needs). The app password is read
+    # per-login via the TTL resolver (mirrors HA's token_provider) and is never stored
+    # on the client nor logged. The client is ALWAYS constructed (never None); a
+    # missing password surfaces as PiholeError(auth) inside the client without a
+    # network call. Logout (DELETE /api/auth) runs best-effort in the finally block.
+    pihole_config = load_pihole_config()
+    pihole_client = PiholeRestClient(
+        base_url=pihole_config.base_url,
+        http=http_client,  # reuse the shared pool (plain HTTP, no TLS)
+        password_provider=lambda: ttl_resolver.current().get("pihole_api_password_ro"),
+    )
+    app.state.pihole_client = pihole_client
+
     in_memory_metrics_writer = MemoryRetainingMetricsWriter()
     prom_registry = CollectorRegistry()
     prom_writer = PrometheusRegistryWriter(prom_registry)
@@ -805,6 +823,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
             ha=ha_client,
             ha_registry=getattr(app.state, "ha_entity_registry", None),
             unifi=unifi_client,
+            pihole=pihole_client,
         )
 
     # 7f. BuildSourcesLoader — STAGE-003-009 generic config (scope expansion).
@@ -1502,6 +1521,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
         await vl_writer.aclose()
         with contextlib.suppress(asyncio.CancelledError):
             await flusher_task
+        # Best-effort Pi-hole logout (STAGE-006-001) — uses the shared http_client, so
+        # it MUST run before that client is closed. aclose() swallows all errors.
+        pihole_client = getattr(app.state, "pihole_client", None)
+        if pihole_client is not None:
+            await pihole_client.aclose()
         await http_client.aclose()
         await unifi_http_client.aclose()
         docker_client = getattr(app.state, "docker_socket_client", None)

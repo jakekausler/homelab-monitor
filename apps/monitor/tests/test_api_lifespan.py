@@ -210,6 +210,29 @@ async def test_lifespan_cleanup_on_shutdown(
 
 
 @pytest.mark.asyncio
+async def test_lifespan_pihole_client_none_at_shutdown_skips_aclose(
+    db_url: str, master_key: bytes, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """pihole_client = None at shutdown → aclose() is not called, shutdown completes cleanly.
+
+    Covers lifespan.py branch: ``if pihole_client is not None`` false-branch
+    (lines 1526-1528). When getattr returns None, aclose is skipped.
+    """
+    monkeypatch.setenv("HOMELAB_MONITOR_DB_URL", db_url)
+    monkeypatch.setenv("HOMELAB_MONITOR_MASTER_KEY", base64.b64encode(master_key).decode())
+
+    app = create_app(lifespan_enabled=True)
+
+    async with app.router.lifespan_context(app):
+        scheduler = app.state.scheduler
+        # Null out the pihole_client so the shutdown finally-block sees None.
+        app.state.pihole_client = None
+
+    # Shutdown completed without exception; scheduler is stopped.
+    assert not scheduler.running
+
+
+@pytest.mark.asyncio
 async def test_app_state_accessible_after_lifespan_startup(
     db_url: str, master_key: bytes, monkeypatch: pytest.MonkeyPatch
 ) -> None:

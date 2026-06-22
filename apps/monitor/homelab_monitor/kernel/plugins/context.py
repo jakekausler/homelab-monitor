@@ -18,6 +18,7 @@ from homelab_monitor.kernel.plugins.io import (
     HomeAssistantClient,
     LogsWriter,
     MetricsWriter,
+    PiholeClient,
     SshClientFactory,
     UnifiClient,
 )
@@ -32,9 +33,9 @@ if TYPE_CHECKING:
 class CollectorContext:
     """Runtime context handed to a collector's ``run`` coroutine.
 
-    All fields are required EXCEPT ``ha`` and ``ha_registry`` (both None when the
-    collector does not target Home Assistant). Fields are listed in spec §5.2 order;
-    the two optional HA handles are moved to the end so the slots-dataclass
+    All fields are required EXCEPT the integration handles ``ha``, ``ha_registry``,
+    ``unifi`` and ``pihole`` (each None when the collector does not target that
+    integration). The optional handles are listed last so the slots-dataclass
     field-default ordering rule is satisfied.
     """
 
@@ -50,3 +51,4 @@ class CollectorContext:
     ha: HomeAssistantClient | None = None
     ha_registry: HaEntityRegistryCache | None = None
     unifi: UnifiClient | None = None
+    pihole: PiholeClient | None = None
