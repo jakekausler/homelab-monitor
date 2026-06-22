@@ -530,6 +530,22 @@ def test_load_unifi_config_host_lan_ip_override(monkeypatch: pytest.MonkeyPatch)
     assert cfg.host_lan_ip == "10.0.0.5"
 
 
+def test_load_unifi_config_expected_dns_steering_ip_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("HOMELAB_MONITOR_UNIFI_EXPECTED_DNS_STEERING_IP", raising=False)
+    cfg = load_unifi_config()
+    assert cfg.expected_dns_steering_ip == "192.168.2.148"
+
+
+def test_load_unifi_config_expected_dns_steering_ip_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HOMELAB_MONITOR_UNIFI_EXPECTED_DNS_STEERING_IP", "10.0.0.9")
+    cfg = load_unifi_config()
+    assert cfg.expected_dns_steering_ip == "10.0.0.9"
+
+
 def test_load_unifi_config_ssh_lease_enabled_default(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("HOMELAB_MONITOR_UNIFI_SSH_LEASE_ENABLED", raising=False)
     cfg = load_unifi_config()

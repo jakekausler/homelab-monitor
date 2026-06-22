@@ -551,11 +551,17 @@ class UnifiConfig:
     unifi_client_observations span prune (default 90 days). The caller computes a
     cutoff = now - observation_retention_days and passes it to
     UnifiClientRepo.append_observation_conn, which deletes spans older than the cutoff.
+
+    ``expected_dns_steering_ip`` (STAGE-007-026) is the expected per-network DNS-steering
+    IP the dns-posture endpoint compares each handout against to flag drift (default
+    ``"192.168.2.148"``; env ``HOMELAB_MONITOR_UNIFI_EXPECTED_DNS_STEERING_IP``). An empty
+    value is treated as "not configured" by the endpoint (no drift flagged).
     """
 
     base_url: str = "https://192.168.2.1"
     site_id: str = "default"
     host_lan_ip: str = "192.168.2.148"
+    expected_dns_steering_ip: str = "192.168.2.148"
     ssh_lease_enabled: bool = False
     ssh_lease_target_id: str = "udm"
     observation_retention_days: int = 90
@@ -569,6 +575,9 @@ def load_unifi_config() -> UnifiConfig:
     ``HOMELAB_MONITOR_UNIFI_SITE_ID`` -> ``site_id`` (default ``"default"``).
     ``HOMELAB_MONITOR_UNIFI_HOST_LAN_IP`` -> ``host_lan_ip`` (default
     ``"192.168.2.148"``; raw value, no strip — an IP carries no trailing slash).
+    ``HOMELAB_MONITOR_UNIFI_EXPECTED_DNS_STEERING_IP`` -> ``expected_dns_steering_ip``
+    (default ``"192.168.2.148"``; raw value, no strip; empty string is meaningful —
+    the dns-posture endpoint treats it as "not configured").
     ``HOMELAB_MONITOR_UNIFI_SSH_LEASE_ENABLED`` -> ``ssh_lease_enabled`` (default
     ``False``; truthy when the env value lowercases to one of 1/true/yes).
     ``HOMELAB_MONITOR_UNIFI_SSH_LEASE_TARGET_ID`` -> ``ssh_lease_target_id`` (default
@@ -581,6 +590,10 @@ def load_unifi_config() -> UnifiConfig:
     base_url = UnifiConfig().base_url if raw is None else raw.rstrip("/")
     site_id = os.environ.get("HOMELAB_MONITOR_UNIFI_SITE_ID", "default")
     host_lan_ip = os.environ.get("HOMELAB_MONITOR_UNIFI_HOST_LAN_IP", UnifiConfig().host_lan_ip)
+    expected_dns_steering_ip = os.environ.get(
+        "HOMELAB_MONITOR_UNIFI_EXPECTED_DNS_STEERING_IP",
+        UnifiConfig().expected_dns_steering_ip,
+    )
     raw_ssh_lease = os.environ.get("HOMELAB_MONITOR_UNIFI_SSH_LEASE_ENABLED")
     ssh_lease_enabled = (
         UnifiConfig().ssh_lease_enabled
@@ -601,6 +614,7 @@ def load_unifi_config() -> UnifiConfig:
         base_url=base_url,
         site_id=site_id,
         host_lan_ip=host_lan_ip,
+        expected_dns_steering_ip=expected_dns_steering_ip,
         ssh_lease_enabled=ssh_lease_enabled,
         ssh_lease_target_id=ssh_lease_target_id,
         observation_retention_days=observation_retention_days,

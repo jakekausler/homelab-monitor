@@ -1769,3 +1769,92 @@ async def test_dns_posture_with_data(
     assert len(body["networks"]) == 1
     assert body["networks"][0]["network"] == "LAN"
     assert body["networks"][0]["dns"] == "192.168.2.1"
+
+
+@pytest.mark.asyncio
+async def test_dns_posture_drift_true(
+    authenticated_client: AsyncClient,
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Handout dns != configured expected -> drift True, expected_dns echoed."""
+    monkeypatch.setenv("HOMELAB_MONITOR_VM_URL", _VM_URL)
+    monkeypatch.setenv("HOMELAB_MONITOR_UNIFI_EXPECTED_DNS_STEERING_IP", "192.168.2.148")
+    queries: dict[str, dict[str, object]] = {
+        "homelab_unifi_dhcp_dns_primary": _vector_response(
+            "1", labels={"network": "LAN", "dns": "192.168.2.1"}
+        ),
+    }
+    httpx_mock.add_callback(
+        _make_callback(queries),
+        url=re.compile(r"http://vm-test:8428/api/v1/query\b.*"),
+        method="GET",
+        is_reusable=True,
+    )
+    resp = await authenticated_client.get("/api/integrations/unifi/network/dns-posture")
+    assert resp.status_code == _HTTP_OK
+    body = resp.json()
+    assert len(body["networks"]) == 1
+    row = body["networks"][0]
+    assert row["network"] == "LAN"
+    assert row["dns"] == "192.168.2.1"
+    assert row["expected_dns"] == "192.168.2.148"
+    assert row["drift"] is True
+
+
+@pytest.mark.asyncio
+async def test_dns_posture_drift_false_match(
+    authenticated_client: AsyncClient,
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Handout dns == configured expected -> drift False, expected_dns echoed."""
+    monkeypatch.setenv("HOMELAB_MONITOR_VM_URL", _VM_URL)
+    monkeypatch.setenv("HOMELAB_MONITOR_UNIFI_EXPECTED_DNS_STEERING_IP", "192.168.2.148")
+    queries: dict[str, dict[str, object]] = {
+        "homelab_unifi_dhcp_dns_primary": _vector_response(
+            "1", labels={"network": "LAN", "dns": "192.168.2.148"}
+        ),
+    }
+    httpx_mock.add_callback(
+        _make_callback(queries),
+        url=re.compile(r"http://vm-test:8428/api/v1/query\b.*"),
+        method="GET",
+        is_reusable=True,
+    )
+    resp = await authenticated_client.get("/api/integrations/unifi/network/dns-posture")
+    assert resp.status_code == _HTTP_OK
+    body = resp.json()
+    assert len(body["networks"]) == 1
+    row = body["networks"][0]
+    assert row["expected_dns"] == "192.168.2.148"
+    assert row["drift"] is False
+
+
+@pytest.mark.asyncio
+async def test_dns_posture_expected_unset(
+    authenticated_client: AsyncClient,
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Empty expected env -> expected_dns None, drift always False (no false positives)."""
+    monkeypatch.setenv("HOMELAB_MONITOR_VM_URL", _VM_URL)
+    monkeypatch.setenv("HOMELAB_MONITOR_UNIFI_EXPECTED_DNS_STEERING_IP", "")
+    queries: dict[str, dict[str, object]] = {
+        "homelab_unifi_dhcp_dns_primary": _vector_response(
+            "1", labels={"network": "LAN", "dns": "192.168.2.1"}
+        ),
+    }
+    httpx_mock.add_callback(
+        _make_callback(queries),
+        url=re.compile(r"http://vm-test:8428/api/v1/query\b.*"),
+        method="GET",
+        is_reusable=True,
+    )
+    resp = await authenticated_client.get("/api/integrations/unifi/network/dns-posture")
+    assert resp.status_code == _HTTP_OK
+    body = resp.json()
+    assert len(body["networks"]) == 1
+    row = body["networks"][0]
+    assert row["expected_dns"] is None
+    assert row["drift"] is False

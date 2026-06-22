@@ -6816,6 +6816,22 @@
             "title": "Dns",
             "type": "string"
           },
+          "drift": {
+            "default": false,
+            "title": "Drift",
+            "type": "boolean"
+          },
+          "expected_dns": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Dns"
+          },
           "network": {
             "title": "Network",
             "type": "string"
@@ -11189,7 +11205,7 @@
     },
     "/api/integrations/unifi/network/dns-posture": {
       "get": {
-        "description": "Return DNS handout (primary DNS servers) per network.\n\nAuth: cookie session required. CSRF NOT enforced on GET.\n\nEmpty vector -> networks=[].",
+        "description": "Return DNS handout (primary DNS servers) per network.\n\nAuth: cookie session required. CSRF NOT enforced on GET.\n\nEach handout carries the expected DNS-steering IP (from\n``HOMELAB_MONITOR_UNIFI_EXPECTED_DNS_STEERING_IP``) and a ``drift`` flag set\nwhen the network's handed-out DNS differs from that expected IP. An empty\nexpected value (env unset / empty) is treated as \"not configured\": ``expected_dns``\nis None and ``drift`` is always False (no false positives, no false check-marks).\n\nEmpty vector -> networks=[].",
         "operationId": "get_unifi_dns_posture_api_integrations_unifi_network_dns_posture_get",
         "responses": {
           "200": {

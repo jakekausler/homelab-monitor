@@ -40,6 +40,7 @@ from homelab_monitor.kernel.api.vm_query import (
     vm_instant_query,
 )
 from homelab_monitor.kernel.auth.models import User
+from homelab_monitor.kernel.config import load_unifi_config
 from homelab_monitor.kernel.db.repositories.unifi_clients_repository import UnifiClientRepo
 from homelab_monitor.kernel.db.repository import SqliteRepository
 
@@ -468,6 +469,8 @@ class UnifiDnsHandout(BaseModel):
 
     network: str
     dns: str
+    expected_dns: str | None = None
+    drift: bool = False
 
 
 class UnifiDnsPostureResponse(BaseModel):
@@ -1233,18 +1236,29 @@ async def get_unifi_dns_posture(
 
     Auth: cookie session required. CSRF NOT enforced on GET.
 
+    Each handout carries the expected DNS-steering IP (from
+    ``HOMELAB_MONITOR_UNIFI_EXPECTED_DNS_STEERING_IP``) and a ``drift`` flag set
+    when the network's handed-out DNS differs from that expected IP. An empty
+    expected value (env unset / empty) is treated as "not configured": ``expected_dns``
+    is None and ``drift`` is always False (no false positives, no false check-marks).
+
     Empty vector -> networks=[].
     """
+    expected = load_unifi_config().expected_dns_steering_ip or None
+
     dns_samples = await vm_instant_query(http_client, vm_url, _Q_DHCP_DNS_PRIMARY)
 
     networks: list[UnifiDnsHandout] = []
     for sample in dns_samples:
         network = sample.labels.get("network", "")
         dns = sample.labels.get("dns", "")
+        drift = expected is not None and dns != expected
         networks.append(
             UnifiDnsHandout(
                 network=network,
                 dns=dns,
+                expected_dns=expected,
+                drift=drift,
             )
         )
 

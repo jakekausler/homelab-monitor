@@ -135,7 +135,7 @@ describe('NetworkOverviewTab', () => {
 
   it('renders DNS posture rows when present', () => {
     vi.mocked(useUnifiDnsPosture).mockReturnValue(
-      ok({ networks: [{ network: 'Guest', dns: '1.1.1.1' }] }),
+      ok({ networks: [{ network: 'Guest', dns: '1.1.1.1', drift: false }] }),
     )
     render(<NetworkOverviewTab />)
     expect(screen.getByText('Guest')).toBeInTheDocument()
