@@ -13,11 +13,25 @@ from homelab_monitor.kernel.pihole.client import (
     PiholeSession,
 )
 from homelab_monitor.kernel.pihole.errors import PiholeError, PiholeErrorReason
+from homelab_monitor.kernel.pihole.unbound_control import (
+    ExecCapture,
+    UnboundError,
+    UnboundErrorReason,
+    UnboundStats,
+    fetch_unbound_stats,
+    parse_unbound_stats,
+)
 
 __all__ = [
+    "ExecCapture",
     "PiholeError",
     "PiholeErrorReason",
     "PiholeResponse",
     "PiholeRestClient",
     "PiholeSession",
+    "UnboundError",
+    "UnboundErrorReason",
+    "UnboundStats",
+    "fetch_unbound_stats",
+    "parse_unbound_stats",
 ]

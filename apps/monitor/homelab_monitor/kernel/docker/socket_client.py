@@ -14,8 +14,11 @@ the operator opts in via global flag + per-container label.
 
 from __future__ import annotations
 
+import asyncio
 import json
+import struct
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 from typing import Final, NotRequired, TypedDict, cast
 
 import httpx
@@ -45,6 +48,64 @@ class DockerSocketConnectionError(DockerSocketError):
 
 class DockerSocketProtocolError(DockerSocketError):
     """HTTP/JSON unexpected shape; includes status code + raw snippet."""
+
+
+# Docker exec stream-frame layout (Tty:false). Each frame is an 8-byte header
+# followed by a payload. Header byte0 = stream type (1=stdout, 2=stderr,
+# 0=stdin, 3=systemerr); bytes 1-3 = zero padding; bytes 4-7 = big-endian
+# uint32 payload length. CONFIRMED via real socket hexdump:
+#   01 00 00 00 00 00 00 06 68 65 6c 6c 6f 0a  -> stdout frame, len 6, "hello\n"
+_EXEC_FRAME_HEADER_LEN: Final[int] = 8
+_EXEC_STREAM_STDOUT: Final[int] = 1
+_EXEC_STREAM_STDERR: Final[int] = 2
+
+
+@dataclass(frozen=True, slots=True)
+class ExecResult:
+    """Captured result of an exec_capture() run: exit code + decoded stdout/stderr."""
+
+    exit_code: int
+    stdout: str
+    stderr: str
+
+
+def _demux_stream(data: bytes) -> tuple[str, str]:
+    """De-multiplex a Docker exec start-response body into (stdout, stderr).
+
+    Parses the multiplexed frame stream (8-byte header + payload per frame; see
+    the layout note above). Frames typed stdout (1) accumulate into the stdout
+    buffer, stderr (2) into the stderr buffer; any other stream type is ignored.
+    Buffers are decoded utf-8 with errors="replace".
+
+    Robust to malformed input:
+      - empty input -> ("", "")
+      - a truncated final header (<8 bytes remaining) -> stop, return what we have
+      - a truncated payload (header claims N but <N bytes remain) -> stop, return
+        what we have
+    """
+    stdout_chunks: list[bytes] = []
+    stderr_chunks: list[bytes] = []
+    offset = 0
+    total = len(data)
+    while offset + _EXEC_FRAME_HEADER_LEN <= total:
+        header = data[offset : offset + _EXEC_FRAME_HEADER_LEN]
+        # '>BxxxI' = stream-type byte, 3 pad bytes, big-endian uint32 length.
+        stream_type, length = cast("tuple[int, int]", struct.unpack(">BxxxI", header))
+        payload_start = offset + _EXEC_FRAME_HEADER_LEN
+        payload_end = payload_start + length
+        if payload_end > total:
+            # Truncated payload: header claims more bytes than remain. Stop gracefully.
+            break
+        payload = data[payload_start:payload_end]
+        if stream_type == _EXEC_STREAM_STDOUT:
+            stdout_chunks.append(payload)
+        elif stream_type == _EXEC_STREAM_STDERR:
+            stderr_chunks.append(payload)
+        # any other stream type (stdin / systemerr) is ignored.
+        offset = payload_end
+    stdout = b"".join(stdout_chunks).decode("utf-8", errors="replace")
+    stderr = b"".join(stderr_chunks).decode("utf-8", errors="replace")
+    return stdout, stderr
 
 
 class ContainerListEntry(TypedDict):
@@ -387,3 +448,126 @@ class DockerSocketClient:
         if exit_code_raw is None:
             return 1
         return int(cast(int, exit_code_raw))
+
+    async def exec_capture(
+        self,
+        *,
+        container_id: str,
+        cmd: list[str],
+        timeout_seconds: float,
+    ) -> ExecResult:
+        """Run ``cmd`` (argv list) inside container_id; CAPTURE stdout/stderr + exit code.
+
+        The stdout-capturing sibling of :meth:`exec_in_container` (which is
+        exit-code-only). Performs the same three-call dance but attaches stdout +
+        stderr, reads the (multiplexed) start-response body, and de-muxes it:
+          1. POST /containers/{id}/exec  — create with AttachStdout/AttachStderr.
+          2. POST /exec/{id}/start       — start; read ``resp.content`` (raw bytes).
+          3. GET  /exec/{id}/json        — inspect for ExitCode.
+
+        ``cmd`` is passed as argv directly (no ``sh -c`` shell layer), e.g.
+        ``["unbound-control", "stats_noreset"]``.
+
+        The whole operation is bounded by ``asyncio.wait_for(timeout_seconds)``; a
+        timeout surfaces as DockerSocketConnectionError (a timed-out socket is a
+        connectivity failure), keeping the typed-error surface identical to
+        exec_in_container so callers need no new exception type.
+
+        NEVER raises on a non-zero exit code — the caller interprets ExitCode.
+
+        SCAFFOLDING NOTE: this is a general capability. Only the unbound-control
+        access layer (STAGE-006-003) consumes it today; it is NOT throwaway.
+
+        Raises:
+            DockerSocketConnectionError: socket unreachable, transport error, or timeout.
+            DockerSocketProtocolError: non-200/201 status or malformed JSON from any call.
+        """
+        try:
+            return await asyncio.wait_for(
+                self._exec_capture_inner(container_id=container_id, cmd=cmd),
+                timeout=timeout_seconds,
+            )
+        except TimeoutError as exc:
+            raise DockerSocketConnectionError(
+                f"docker exec timed out after {timeout_seconds}s in {container_id}: {exc}"
+            ) from exc
+
+    async def _exec_capture_inner(
+        self,
+        *,
+        container_id: str,
+        cmd: list[str],
+    ) -> ExecResult:
+        """Unbounded body of exec_capture (wrapped in a timeout by the caller)."""
+        # 1. Create the exec instance (attach stdout + stderr for capture).
+        create_body = {
+            "Cmd": cmd,
+            "AttachStdout": True,
+            "AttachStderr": True,
+            "Tty": False,
+        }
+        try:
+            resp = await self._client.post(
+                f"/containers/{container_id}/exec",
+                json=create_body,
+            )
+        except httpx.ConnectError as exc:
+            raise DockerSocketConnectionError(
+                f"docker socket unreachable at {self._socket_path}: {exc}"
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise DockerSocketConnectionError(f"docker socket transport error: {exc}") from exc
+        if resp.status_code not in (200, 201):
+            raise DockerSocketProtocolError(
+                f"unexpected status {resp.status_code} from /containers/{container_id}/exec: "
+                f"{resp.text[:200]}"
+            )
+        try:
+            data = resp.json()
+        except json.JSONDecodeError as exc:
+            raise DockerSocketProtocolError(
+                f"malformed JSON from /containers/{container_id}/exec: {exc}"
+            ) from exc
+        if not isinstance(data, dict) or "Id" not in data:
+            raise DockerSocketProtocolError(
+                f"expected exec_id in /containers/{container_id}/exec response, got: {data}"
+            )
+        exec_id: str = str(cast(dict[str, object], data)["Id"])
+
+        # 2. Start the exec instance and READ the multiplexed stream body.
+        try:
+            start_resp = await self._client.post(
+                f"/exec/{exec_id}/start",
+                json={"Detach": False, "Tty": False},
+            )
+        except httpx.HTTPError as exc:
+            raise DockerSocketConnectionError(f"docker socket transport error: {exc}") from exc
+        if start_resp.status_code not in (200, 201):
+            raise DockerSocketProtocolError(
+                f"unexpected status {start_resp.status_code} from /exec/{exec_id}/start"
+            )
+        stdout, stderr = _demux_stream(start_resp.content)
+
+        # 3. Inspect to get the exit code.
+        try:
+            inspect_resp = await self._client.get(f"/exec/{exec_id}/json")
+        except httpx.HTTPError as exc:
+            raise DockerSocketConnectionError(f"docker socket transport error: {exc}") from exc
+        if inspect_resp.status_code != HTTP_OK:
+            raise DockerSocketProtocolError(
+                f"unexpected status {inspect_resp.status_code} from /exec/{exec_id}/json"
+            )
+        try:
+            idata = inspect_resp.json()
+        except json.JSONDecodeError as exc:
+            raise DockerSocketProtocolError(
+                f"malformed JSON from /exec/{exec_id}/json: {exc}"
+            ) from exc
+        if not isinstance(idata, dict):
+            raise DockerSocketProtocolError(
+                f"expected dict from /exec/{exec_id}/json, got {type(idata).__name__}"
+            )
+        typed_idata: dict[str, object] = cast(dict[str, object], idata)
+        exit_code_raw = typed_idata.get("ExitCode")
+        exit_code = 1 if exit_code_raw is None else int(cast(int, exit_code_raw))
+        return ExecResult(exit_code=exit_code, stdout=stdout, stderr=stderr)

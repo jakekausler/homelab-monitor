@@ -650,6 +650,30 @@ def load_pihole_config() -> PiholeConfig:
     return PiholeConfig(base_url=base_url)
 
 
+@dataclass(frozen=True, slots=True)
+class PiholeUnboundConfig:
+    """unbound-control access config (STAGE-006-003). Env-only.
+
+    ``container`` is the Docker container that runs unbound (and into which the
+    access layer execs ``unbound-control stats_noreset``). On this homelab Pi-hole
+    and unbound share one container, ``pihole-unbound``.
+    """
+
+    container: str = "pihole-unbound"
+
+
+def load_pihole_unbound_config() -> PiholeUnboundConfig:
+    """Load the unbound-control container name from env.
+
+    ``HOMELAB_MONITOR_PIHOLE_UNBOUND_CONTAINER`` -> ``container`` (default
+    ``pihole-unbound`` when unset/empty).
+    """
+    container = os.environ.get(
+        "HOMELAB_MONITOR_PIHOLE_UNBOUND_CONTAINER", PiholeUnboundConfig().container
+    )
+    return PiholeUnboundConfig(container=container)
+
+
 # Built-in per-family cardinality caps (STAGE-005-006).
 # A typical large HA deployment emits ~1906 entity-family series; 2500 gives
 # comfortable headroom while still bounding runaway growth.
