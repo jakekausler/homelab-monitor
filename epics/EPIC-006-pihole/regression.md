@@ -11,3 +11,9 @@
 - [ ] **Vector label:** VictoriaLogs `service:"pihole-unbound"` still returns live FTL log hits (scope for STAGE-006-017 + 006-024).
 - [ ] **base_url default is host LAN IP:** `load_pihole_config().base_url` defaults to `http://192.168.2.148:8080` (overridable via `HOMELAB_MONITOR_PIHOLE_URL`), NOT `localhost`.
 - [ ] **App password never logged:** No Pi-hole error message or log line ever contains the app-password value.
+
+## STAGE-006-002 — Pi-hole integration bundle skeleton
+
+- [ ] **Bundle registers cleanly:** at monitor startup, NO `pihole_integration.collector_register_failed` warning appears in `docker logs homelab-monitor` (the per-collector try/except did not fire).
+- [ ] **Placeholder in collectors surface:** `GET /api/collectors` (authenticated) lists `pihole_placeholder` with `status:"healthy"`, `interval_seconds:60`. (NOTE: `pihole_placeholder` is SCAFFOLDING — STAGE-006-005 removes it when the first real collector lands; after 006-005 this check changes to "the first real pihole collector is present".)
+- [ ] **Sentinel metric:** `homelab_pihole_bundle_loaded` = 1 in VictoriaMetrics (`/api/v1/query?query=homelab_pihole_bundle_loaded`) — confirms the bundle loaded and a collector ran. (Also removed/replaced by STAGE-006-005.)
