@@ -158,6 +158,14 @@
 ## STAGE-007-024 — Grafana `unifi.json` (gear-centric) + Metrics-tab embed + readability pass
 
 - Grafana `unifi.json` (uid `homelab-unifi`, gear-centric) provisions cleanly (bind-mount, 30s poll) + embeds as the Metrics → Unifi tab (`/metrics/unifi`, src `/api/grafana/d/homelab-unifi/homelab-unifi?kiosk`). `jq -e .` valid; no gridPos overlap; datasource `victoriametrics` on every target.
+
+## STAGE-007-025 — Grafana `network.json` (network-centric) + Metrics-tab embed + readability pass
+
+- Grafana `network.json` (uid `network`, network-centric) provisions cleanly (bind-mount, 30s poll) + embeds as the Metrics → Network tab (`/metrics/network`, src `/api/grafana/d/network/network?kiosk`). `jq -e .` valid; no gridPos overlap; datasource `victoriametrics` on every target.
+- The 4 "Clients by band/link/ssid/AP" barcharts MUST render the LABEL as the category axis (NOT the metric name, NOT the "2026" timestamp). REQUIRED config: target `format:"table"` + `instant:true` + an `organize` transform excluding Time/__name__/instance/job/service (+ ap_mac for the AP panel) + explicit `options.xField` = the label column. Grafana barchart takes its x-axis from the first STRING field, not legendFormat — do NOT revert to time_series-format or remove the organize transform.
+- band/link labels prettified via `label_replace` in the expr (2.4ghz→"2.4 GHz", wired→"Wired"). by-AP joins device name via `* on(ap_mac) group_left(device) label_replace(device_info,...)`.
+- New backend metrics `homelab_unifi_client_info{mac,name}` (client_stats.py, capped family, name→hostname→mac fallback) + `homelab_unifi_device_info{mac,device,kind,model}` (device.py) — enable mac→name joins in Grafana. Emitted only for the capped roster.
+- DHCP occupancy both-paths expr `(sum(dhcp_lease_count) or sum(client_count_by_network{network="Default"})) / scalar(dhcp_pool_size{network="Default"}) * 100` reads sensibly lease-ON (lease path) and lease-OFF (active-client ≈22%). DNS-posture is a plain table (no drift badge — that's STAGE-026).
 - Fleet table renders ONE row per device with named columns (NOT repeated/"Value #X") — guard against the merge-fracture regression; every fleet-table target uses `max by (device)` to strip extra labels.
 - DPI top-apps panel: timeseries with target `interval:"5m"` (DPI is polled every 300s; a shorter `$__rate_interval` renders 0 — do NOT remove the 5m min-step) + `clamp_max(...,125000000)` spike-guard + excludes the `SSL/TLS` catch-all (`{app!="SSL/TLS"}`). Renders non-zero lines.
 - `homelab_unifi_device_satisfaction{device}` metric (device.py) emitted only when the value is present AND `>= 0` (skips the `-1` sentinel + bool); "Device satisfaction" panel shows it. Per-radio satisfaction is `-1`/unavailable on U7-Pro-Wall (do NOT re-add a per-radio satisfaction panel).
