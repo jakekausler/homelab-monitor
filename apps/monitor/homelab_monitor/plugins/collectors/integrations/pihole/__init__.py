@@ -6,11 +6,7 @@ register does not abort the rest), mirroring the homeassistant bundle exemplar
 (EPIC-005 STAGE-005-003) and the unifi bundle (EPIC-007 STAGE-007-002).
 
 Wave-B stages (STAGE-006-005+) append their collector classes to
-``_PIHOLE_COLLECTORS`` — that 1-line edit is the whole wiring step — and remove
-the placeholder scaffolding (see below).
-
-Note: the placeholder is removed by STAGE-006-005 (first real collector,
-core query-stats).
+``_PIHOLE_COLLECTORS`` — that 1-line edit is the whole wiring step.
 """
 
 from __future__ import annotations
@@ -19,16 +15,15 @@ import structlog
 
 from homelab_monitor.kernel.plugins.base import BaseCollector
 from homelab_monitor.kernel.plugins.loader import PluginLoader, config_from_classvars
-from homelab_monitor.plugins.collectors.integrations.pihole.placeholder import (
-    PiholePlaceholderCollector,
+from homelab_monitor.plugins.collectors.integrations.pihole.stats_summary import (
+    PiholeStatsSummaryCollector,
 )
 
 _log = structlog.get_logger()
 
 # Wave-B stages append their collector class here.
-# SCAFFOLDING: PiholePlaceholderCollector removed in STAGE-006-005 (first real collector)
 _PIHOLE_COLLECTORS: list[type[BaseCollector]] = [
-    PiholePlaceholderCollector,
+    PiholeStatsSummaryCollector,
 ]
 
 
