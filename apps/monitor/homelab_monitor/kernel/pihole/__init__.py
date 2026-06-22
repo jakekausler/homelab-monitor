@@ -12,6 +12,15 @@ from homelab_monitor.kernel.pihole.client import (
     PiholeRestClient,
     PiholeSession,
 )
+from homelab_monitor.kernel.pihole.clients import (
+    ClassifiedClient,
+    ClientClassification,
+    ClientKind,
+    RawClient,
+    cap_domains,
+    classify_clients,
+    classify_one,
+)
 from homelab_monitor.kernel.pihole.errors import PiholeError, PiholeErrorReason
 from homelab_monitor.kernel.pihole.unbound_control import (
     ExecCapture,
@@ -23,15 +32,22 @@ from homelab_monitor.kernel.pihole.unbound_control import (
 )
 
 __all__ = [
+    "ClassifiedClient",
+    "ClientClassification",
+    "ClientKind",
     "ExecCapture",
     "PiholeError",
     "PiholeErrorReason",
     "PiholeResponse",
     "PiholeRestClient",
     "PiholeSession",
+    "RawClient",
     "UnboundError",
     "UnboundErrorReason",
     "UnboundStats",
+    "cap_domains",
+    "classify_clients",
+    "classify_one",
     "fetch_unbound_stats",
     "parse_unbound_stats",
 ]

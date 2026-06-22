@@ -632,9 +632,18 @@ class PiholeConfig:
     via ``POST /api/auth``. Pi-hole is plain HTTP on the LAN, so the default points
     at the host's LAN IP (mirrors HaConfig; the bridge-network container cannot reach
     ``localhost`` which is its own loopback).
+
+    ``host_lan_ip`` (STAGE-006-004) is the LAN IP of the monitor host on the Pi-hole
+    network, used by the client classification helper to attribute loopback clients.
+    Defaults to empty string — callers must set ``HOMELAB_MONITOR_PIHOLE_HOST_LAN_IP``
+    to enable full attribution; without it, loopback clients receive kind
+    ``"unattributed"``. The empty default is intentional: unlike Unifi (where the host
+    IP is always required for registry reconciliation), Pi-hole classification degrades
+    gracefully.
     """
 
     base_url: str = "http://192.168.2.148:8080"  # host LAN IP (container cannot reach localhost)
+    host_lan_ip: str = ""
 
 
 def load_pihole_config() -> PiholeConfig:
@@ -644,10 +653,14 @@ def load_pihole_config() -> PiholeConfig:
     path concatenation is unambiguous; default ``http://192.168.2.148:8080`` — the host's
     LAN IP — when unset, because the prod monitor runs on a bridge network and cannot reach
     localhost which is its own container loopback).
+    ``HOMELAB_MONITOR_PIHOLE_HOST_LAN_IP`` -> ``host_lan_ip`` (raw value, no strip — an
+    IP carries no trailing slash; default ``""`` when unset, preserving graceful
+    degradation to ``"unattributed"`` in the client classifier).
     """
     raw = os.environ.get("HOMELAB_MONITOR_PIHOLE_URL")
     base_url = PiholeConfig().base_url if raw is None else raw.rstrip("/")
-    return PiholeConfig(base_url=base_url)
+    host_lan_ip = os.environ.get("HOMELAB_MONITOR_PIHOLE_HOST_LAN_IP", PiholeConfig().host_lan_ip)
+    return PiholeConfig(base_url=base_url, host_lan_ip=host_lan_ip)
 
 
 @dataclass(frozen=True, slots=True)

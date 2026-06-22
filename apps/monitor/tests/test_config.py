@@ -34,6 +34,7 @@ from homelab_monitor.kernel.config import (
     load_log_stream_budget_config,
     load_logs_config,
     load_new_signature_config,
+    load_pihole_config,
     load_silence_detection_config,
     load_tail_config,
     load_vl_health_config,
@@ -1524,3 +1525,43 @@ def test_load_anomaly_zscore_config_device_classes_blank_keeps_default(
 
     cfg = load_anomaly_zscore_config()
     assert cfg.device_classes == DEFAULT_ZSCORE_DEVICE_CLASSES
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# PiholeConfig.host_lan_ip / load_pihole_config (STAGE-006-004)
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def test_load_pihole_config_host_lan_ip_default_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    """host_lan_ip defaults to empty string when env var is unset."""
+    monkeypatch.delenv("HOMELAB_MONITOR_PIHOLE_HOST_LAN_IP", raising=False)
+    monkeypatch.delenv("HOMELAB_MONITOR_PIHOLE_URL", raising=False)
+    cfg = load_pihole_config()
+    assert cfg.host_lan_ip == ""
+
+
+def test_load_pihole_config_host_lan_ip_env_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    """HOMELAB_MONITOR_PIHOLE_HOST_LAN_IP overrides host_lan_ip."""
+    monkeypatch.setenv("HOMELAB_MONITOR_PIHOLE_HOST_LAN_IP", "192.168.2.148")
+    monkeypatch.delenv("HOMELAB_MONITOR_PIHOLE_URL", raising=False)
+    cfg = load_pihole_config()
+    assert cfg.host_lan_ip == "192.168.2.148"
+
+
+def test_load_pihole_config_host_lan_ip_empty_string(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Setting env var to empty string results in empty host_lan_ip (graceful degradation)."""
+    monkeypatch.setenv("HOMELAB_MONITOR_PIHOLE_HOST_LAN_IP", "")
+    monkeypatch.delenv("HOMELAB_MONITOR_PIHOLE_URL", raising=False)
+    cfg = load_pihole_config()
+    assert cfg.host_lan_ip == ""
+
+
+def test_load_pihole_config_base_url_unaffected_by_host_lan_ip(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Setting host_lan_ip env var does not affect base_url loading."""
+    monkeypatch.setenv("HOMELAB_MONITOR_PIHOLE_HOST_LAN_IP", "10.0.0.1")
+    monkeypatch.setenv("HOMELAB_MONITOR_PIHOLE_URL", "http://pihole.local:8080/")
+    cfg = load_pihole_config()
+    assert cfg.base_url == "http://pihole.local:8080"  # trailing slash stripped
+    assert cfg.host_lan_ip == "10.0.0.1"

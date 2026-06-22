@@ -44,7 +44,8 @@ HOMELAB_MONITOR_REVEAL=1 hm secrets get pihole_api_password_ro
 
 | Env var                       | Default                     | Meaning                                  |
 | ----------------------------- | --------------------------- | ---------------------------------------- |
-| `HOMELAB_MONITOR_PIHOLE_URL`  | `http://192.168.2.148:8080` | Pi-hole base URL (trailing slash stripped). |
+| `HOMELAB_MONITOR_PIHOLE_URL`            | `http://192.168.2.148:8080` | Pi-hole base URL (trailing slash stripped).                                                                                                                                                                                                               |
+| `HOMELAB_MONITOR_PIHOLE_HOST_LAN_IP`   | `(empty)`                   | Host LAN IP used to attribute Pi-hole loopback DNS clients (`127.0.0.1`/`::1`/`::`/`pi.hole`) to the monitor host. Empty (the public-release default) leaves loopback clients classified as `unattributed`; set to the host's LAN IP (e.g. `192.168.2.148`) to attribute them as `local`/`resolver_self`. |
 
 The default targets the monitor host's LAN IP (`192.168.2.148`) because the prod monitor
 runs on a bridge network and cannot reach `localhost` (its own container loopback);
