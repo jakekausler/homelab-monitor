@@ -625,6 +625,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
 
     register_unifi_collectors(loader)
 
+    # ------------------------------------------------------------------
+    # STAGE-006-002: Pi-hole integration bundle (integrations/pihole/).
+    # The bundle owns per-collector failure isolation internally. Wave-B
+    # Pi-hole collectors are added inside the bundle, not here. The placeholder
+    # collector is throwaway scaffolding (removed by STAGE-006-005).
+    # ------------------------------------------------------------------
+    from homelab_monitor.plugins.collectors.integrations.pihole import (  # noqa: PLC0415
+        register_all as register_pihole_collectors,
+    )
+
+    register_pihole_collectors(loader)
+
     plugins_env = os.environ.get("HOMELAB_MONITOR_PLUGINS_DIR")
     if plugins_env is not None:
         plugins_dir: Path | None = Path(plugins_env)
