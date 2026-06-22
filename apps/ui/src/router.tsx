@@ -20,6 +20,7 @@ import { MetricsHeartbeatsTab } from '@/routes/metrics/MetricsHeartbeatsTab'
 import { MetricsStorageLogsTab } from '@/routes/metrics/MetricsStorageLogsTab'
 import { MetricsHomeAssistantTab } from '@/routes/metrics/MetricsHomeAssistantTab'
 import { MetricsUnifiTab } from '@/routes/metrics/MetricsUnifiTab'
+import { MetricsNetworkTab } from '@/routes/metrics/MetricsNetworkTab'
 import { CronsListPage } from '@/routes/integrations/crons/CronsList'
 import { CronDetailPage } from '@/routes/integrations/crons/CronDetailPage'
 import { CronRunsListPage } from '@/routes/integrations/crons/CronRunsList'
@@ -194,6 +195,12 @@ const metricsUnifiRoute = createRoute({
   getParentRoute: () => metricsLayoutRoute,
   path: 'unifi',
   component: MetricsUnifiTab,
+})
+
+const metricsNetworkRoute = createRoute({
+  getParentRoute: () => metricsLayoutRoute,
+  path: 'network',
+  component: MetricsNetworkTab,
 })
 
 /**
@@ -593,6 +600,7 @@ const routeTree = rootRoute.addChildren([
       metricsStorageLogsRoute,
       metricsHomeAssistantRoute,
       metricsUnifiRoute,
+      metricsNetworkRoute,
     ]),
     logsLayoutRoute.addChildren([
       logsIndexRoute,

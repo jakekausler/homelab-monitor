@@ -1,0 +1,559 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "description": "Network-centric view: WAN/ISP health & speedtest, DHCP occupancy, client distribution, WiFi experience, and DNS handout. Provisioned by homelab-monitor (STAGE-007-025).",
+  "editable": false,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "id": 1,
+      "type": "row",
+      "title": "WAN / ISP",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "panels": []
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "WAN up",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 1 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "green", "value": 1 } ] },
+          "mappings": [ { "type": "value", "options": { "1": { "text": "Up", "color": "green", "index": 0 }, "0": { "text": "Down", "color": "red", "index": 1 } } } ]
+        },
+        "overrides": []
+      },
+      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "value" },
+      "targets": [ { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_unifi_wan_up", "legendFormat": "up", "instant": true } ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "WAN latency",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 1 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 0.05 }, { "color": "red", "value": 0.15 } ] }
+        },
+        "overrides": []
+      },
+      "options": { "colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
+      "targets": [ { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_unifi_wan_latency_seconds", "legendFormat": "latency", "instant": true } ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "WAN failover active",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 1 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 1 } ] },
+          "mappings": [ { "type": "value", "options": { "0": { "text": "Inactive", "color": "green", "index": 0 }, "1": { "text": "ACTIVE", "color": "red", "index": 1 } } } ]
+        },
+        "overrides": []
+      },
+      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "value" },
+      "targets": [ { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_unifi_wan_failover_active", "legendFormat": "failover", "instant": true } ]
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Last speedtest",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 1 },
+      "description": "Time since the UDM last ran a speedtest. Note: the last recorded run returned 0 Mbps down/up/ping — that is a UDM 0-result, not missing data.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "dateTimeFromNow",
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null } ] }
+        },
+        "overrides": []
+      },
+      "options": { "colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
+      "targets": [ { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_unifi_speedtest_lastrun * 1000", "legendFormat": "lastrun", "instant": true } ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "WAN throughput (Mbps)",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 5 },
+      "fieldConfig": { "defaults": { "unit": "Mbits", "color": { "mode": "palette-classic" }, "min": 0 }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "none" } },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_unifi_wan_xput_down_bytes_per_sec * 8 / 1e6", "legendFormat": "down", "range": true },
+        { "refId": "B", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_unifi_wan_xput_up_bytes_per_sec * 8 / 1e6", "legendFormat": "up", "range": true }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Speedtest down/up (Mbps)",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 5 },
+      "description": "0 = last UDM speedtest run returned 0, not missing data. The series will sit at 0 until a non-zero UDM run lands.",
+      "fieldConfig": { "defaults": { "unit": "Mbits", "color": { "mode": "palette-classic" }, "min": 0 }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "none" } },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_unifi_speedtest_download_mbps", "legendFormat": "download", "range": true },
+        { "refId": "B", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_unifi_speedtest_upload_mbps", "legendFormat": "upload", "range": true }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "WAN latency over time",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 13 },
+      "fieldConfig": { "defaults": { "unit": "s", "color": { "mode": "palette-classic" }, "min": 0 }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "none" } },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_unifi_wan_latency_seconds", "legendFormat": "latency", "range": true }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "WAN drops over time",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 13 },
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "palette-classic" }, "min": 0 }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "none" } },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_unifi_wan_drops", "legendFormat": "drops", "range": true }
+      ]
+    },
+    {
+      "id": 20,
+      "type": "row",
+      "title": "DHCP",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 21 },
+      "panels": []
+    },
+    {
+      "id": 21,
+      "type": "gauge",
+      "title": "DHCP pool occupancy %",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "h": 6, "w": 8, "x": 0, "y": 22 },
+      "description": "Pool occupancy = leased-or-active clients / DHCP pool size, on network=Default. Prefers the SSH lease collector (`homelab_unifi_dhcp_lease_count`) when enabled; otherwise approximates with the active client count. Reads ~22% currently (lease collector OFF). VERIFY this expr returns a value live in Refinement — if the `or` fallback misbehaves, fall back to the `scalar() or scalar()` form noted in the spec.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 70 }, { "color": "red", "value": 90 } ] },
+          "min": 0,
+          "max": 100
+        },
+        "overrides": []
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "orientation": "auto", "showThresholdLabels": false, "showThresholdMarkers": true },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "(sum(homelab_unifi_dhcp_lease_count) or sum(homelab_unifi_client_count_by_network{network=\"Default\"})) / scalar(homelab_unifi_dhcp_pool_size{network=\"Default\"}) * 100", "legendFormat": "occupancy", "range": true }
+      ]
+    },
+    {
+      "id": 22,
+      "type": "stat",
+      "title": "DHCP pool size",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "h": 6, "w": 4, "x": 8, "y": 22 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null } ] }
+        },
+        "overrides": []
+      },
+      "options": { "colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
+      "targets": [ { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_unifi_dhcp_pool_size{network=\"Default\"}", "legendFormat": "size", "instant": true } ]
+    },
+    {
+      "id": 23,
+      "type": "stat",
+      "title": "Reservations",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "h": 6, "w": 4, "x": 12, "y": 22 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null } ] }
+        },
+        "overrides": []
+      },
+      "options": { "colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
+      "targets": [ { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_unifi_dhcp_reservation_count{network=\"Default\"}", "legendFormat": "reservations", "instant": true } ]
+    },
+    {
+      "id": 24,
+      "type": "stat",
+      "title": "DHCP-enabled networks",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "h": 6, "w": 4, "x": 16, "y": 22 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null } ] }
+        },
+        "overrides": []
+      },
+      "options": { "colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
+      "targets": [ { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_unifi_dhcp_enabled_network_count", "legendFormat": "networks", "instant": true } ]
+    },
+    {
+      "id": 25,
+      "type": "stat",
+      "title": "Primary DNS handout",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "h": 6, "w": 4, "x": 20, "y": 22 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "string",
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null } ] }
+        },
+        "overrides": []
+      },
+      "options": { "colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "name" },
+      "targets": [ { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_unifi_dhcp_dns_primary{network=\"Default\"}", "legendFormat": "{{dns}}", "instant": true } ]
+    },
+    {
+      "id": 26,
+      "type": "table",
+      "title": "DHCP per-network",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 28 },
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "options": {
+        "showHeader": true,
+        "sortBy": []
+      },
+      "transformations": [
+        { "id": "merge" },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": { "Time": true, "__name__": true, "job": true, "instance": true, "service": true, "Value #C": true },
+            "indexByName": { "network": 0, "Value #A": 1, "Value #B": 2, "dns": 3 },
+            "renameByName": { "network": "Network", "Value #A": "Pool size", "Value #B": "Reservations", "dns": "Primary DNS" }
+          }
+        }
+      ],
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "max by (network) (homelab_unifi_dhcp_pool_size)", "legendFormat": "Pool size", "instant": true, "format": "table" },
+        { "refId": "B", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "max by (network) (homelab_unifi_dhcp_reservation_count)", "legendFormat": "Reservations", "instant": true, "format": "table" },
+        { "refId": "C", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "max by (network, dns) (homelab_unifi_dhcp_dns_primary)", "legendFormat": "Primary DNS", "instant": true, "format": "table" }
+      ]
+    },
+    {
+      "id": 40,
+      "type": "row",
+      "title": "Clients",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 34 },
+      "panels": []
+    },
+    {
+      "id": 41,
+      "type": "stat",
+      "title": "Active clients",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 35 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null } ] }
+        },
+        "overrides": []
+      },
+      "options": { "colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
+      "targets": [ { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_unifi_active_client_count", "legendFormat": "active", "instant": true } ]
+    },
+    {
+      "id": 42,
+      "type": "stat",
+      "title": "Known clients",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 35 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null } ] }
+        },
+        "overrides": []
+      },
+      "options": { "colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
+      "targets": [ { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_unifi_known_client_count", "legendFormat": "known", "instant": true } ]
+    },
+    {
+      "id": 43,
+      "type": "stat",
+      "title": "Offline clients",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 35 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 40 } ] }
+        },
+        "overrides": []
+      },
+      "options": { "colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
+      "targets": [ { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_unifi_offline_client_count", "legendFormat": "offline", "instant": true } ]
+    },
+    {
+      "id": 44,
+      "type": "timeseries",
+      "title": "Clients over time",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 39 },
+      "description": "Active/known/offline client counts over time — surfaces count anomalies.",
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "palette-classic" }, "min": 0 }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "none" } },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_unifi_active_client_count", "legendFormat": "active", "range": true },
+        { "refId": "B", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_unifi_known_client_count", "legendFormat": "known", "range": true },
+        { "refId": "C", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_unifi_offline_client_count", "legendFormat": "offline", "range": true }
+      ]
+    },
+    {
+      "id": 45,
+      "type": "barchart",
+      "title": "Clients by band",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 39 },
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "palette-classic" } }, "overrides": [] },
+      "options": { "orientation": "horizontal", "xField": "band", "xTickLabelRotation": 0, "showValue": "auto", "stacking": "none", "legend": { "displayMode": "list", "placement": "bottom", "showLegend": false }, "tooltip": { "mode": "single", "sort": "none" } },
+      "transformations": [ { "id": "organize", "options": { "excludeByName": { "Time": true, "__name__": true, "instance": true, "job": true, "service": true }, "indexByName": {}, "renameByName": {} } } ],
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "label_replace(label_replace(label_replace(homelab_unifi_client_count_by_band, \"band\", \"2.4 GHz\", \"band\", \"2.4ghz\"), \"band\", \"5 GHz\", \"band\", \"5ghz\"), \"band\", \"6 GHz\", \"band\", \"6ghz\")", "legendFormat": "__auto", "instant": true, "format": "table" }
+      ]
+    },
+    {
+      "id": 46,
+      "type": "barchart",
+      "title": "Clients by link",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 47 },
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "palette-classic" } }, "overrides": [] },
+      "options": { "orientation": "horizontal", "xField": "link", "xTickLabelRotation": 0, "showValue": "auto", "stacking": "none", "legend": { "displayMode": "list", "placement": "bottom", "showLegend": false }, "tooltip": { "mode": "single", "sort": "none" } },
+      "transformations": [ { "id": "organize", "options": { "excludeByName": { "Time": true, "__name__": true, "instance": true, "job": true, "service": true }, "indexByName": {}, "renameByName": {} } } ],
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "label_replace(label_replace(homelab_unifi_client_count_by_link, \"link\", \"Wired\", \"link\", \"wired\"), \"link\", \"Wireless\", \"link\", \"wireless\")", "legendFormat": "__auto", "instant": true, "format": "table" }
+      ]
+    },
+    {
+      "id": 47,
+      "type": "barchart",
+      "title": "Clients by SSID",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 47 },
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "palette-classic" } }, "overrides": [] },
+      "options": { "orientation": "horizontal", "xField": "ssid", "xTickLabelRotation": 0, "showValue": "auto", "stacking": "none", "legend": { "displayMode": "list", "placement": "bottom", "showLegend": false }, "tooltip": { "mode": "single", "sort": "none" } },
+      "transformations": [ { "id": "organize", "options": { "excludeByName": { "Time": true, "__name__": true, "instance": true, "job": true, "service": true }, "indexByName": {}, "renameByName": {} } } ],
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_unifi_ssid_client_count", "legendFormat": "__auto", "instant": true, "format": "table" }
+      ]
+    },
+    {
+      "id": 48,
+      "type": "barchart",
+      "title": "Clients by AP",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 47 },
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "palette-classic" } }, "overrides": [] },
+      "options": { "orientation": "horizontal", "xField": "device", "xTickLabelRotation": 0, "showValue": "auto", "stacking": "none", "legend": { "displayMode": "list", "placement": "bottom", "showLegend": false }, "tooltip": { "mode": "single", "sort": "none" } },
+      "transformations": [ { "id": "organize", "options": { "excludeByName": { "Time": true, "__name__": true, "ap_mac": true, "instance": true, "job": true, "service": true }, "indexByName": {}, "renameByName": {} } } ],
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_unifi_client_count_by_ap * on(ap_mac) group_left(device) label_replace(homelab_unifi_device_info, \"ap_mac\", \"$1\", \"mac\", \"(.*)\")", "legendFormat": "__auto", "instant": true, "format": "table" }
+      ]
+    },
+    {
+      "id": 60,
+      "type": "row",
+      "title": "WiFi experience",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 55 },
+      "panels": []
+    },
+    {
+      "id": 61,
+      "type": "stat",
+      "title": "Poor signal clients",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "h": 4, "w": 8, "x": 0, "y": 56 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 1 }, { "color": "red", "value": 10 } ] }
+        },
+        "overrides": []
+      },
+      "options": { "colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
+      "targets": [ { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_unifi_clients_poor_signal{threshold=\"-70\"}", "legendFormat": "poor_signal", "instant": true } ]
+    },
+    {
+      "id": 62,
+      "type": "stat",
+      "title": "Poor satisfaction clients",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "h": 4, "w": 8, "x": 8, "y": 56 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 1 } ] }
+        },
+        "overrides": []
+      },
+      "options": { "colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
+      "targets": [ { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_unifi_clients_poor_satisfaction{threshold=\"50\"}", "legendFormat": "poor_satisfaction", "instant": true } ]
+    },
+    {
+      "id": 63,
+      "type": "stat",
+      "title": "High-retry clients",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "h": 4, "w": 8, "x": 16, "y": 56 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 1 } ] }
+        },
+        "overrides": []
+      },
+      "options": { "colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
+      "targets": [ { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_unifi_clients_high_retries{threshold=\"10\"}", "legendFormat": "high_retries", "instant": true } ]
+    },
+    {
+      "id": 64,
+      "type": "timeseries",
+      "title": "Per-AP channel utilization",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 60 },
+      "fieldConfig": { "defaults": { "unit": "percent", "color": { "mode": "palette-classic" }, "min": 0, "max": 100 }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "none" } },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_unifi_radio_cu_total", "legendFormat": "{{device}} {{radio}}", "range": true }
+      ]
+    },
+    {
+      "id": 65,
+      "type": "bargauge",
+      "title": "Device satisfaction",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 60 },
+      "description": "Per-device satisfaction (0-100). Only emitted for devices with real data.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "yellow", "value": 50 }, { "color": "green", "value": 80 } ] },
+          "min": 0,
+          "max": 100
+        },
+        "overrides": []
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "orientation": "horizontal", "displayMode": "gradient", "showUnfilled": true },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_unifi_device_satisfaction", "legendFormat": "{{device}}", "instant": true }
+      ]
+    },
+    {
+      "id": 66,
+      "type": "histogram",
+      "title": "Client signal (dBm) distribution",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 68 },
+      "fieldConfig": { "defaults": { "unit": "dBm", "color": { "mode": "palette-classic" } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": false }, "bucketOffset": 0 },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_unifi_client_signal_dbm", "range": true }
+      ]
+    },
+    {
+      "id": 80,
+      "type": "row",
+      "title": "DNS posture",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 76 },
+      "panels": []
+    },
+    {
+      "id": 81,
+      "type": "table",
+      "title": "DHCP DNS handout (per network)",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 77 },
+      "description": "DHCP DNS primary handout per network (the handout address is the `dns` label). Plain inventory table — no expected-value/drift comparison (that lands in a later stage).",
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "options": {
+        "showHeader": true,
+        "sortBy": []
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": { "Time": true, "__name__": true, "job": true, "instance": true, "service": true, "Value": true },
+            "indexByName": { "network": 0, "dns": 1 },
+            "renameByName": { "network": "Network", "dns": "Primary DNS" }
+          }
+        }
+      ],
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_unifi_dhcp_dns_primary", "legendFormat": "", "instant": true, "format": "table" }
+      ]
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 40,
+  "tags": ["homelab-monitor", "network"],
+  "templating": { "list": [] },
+  "time": { "from": "now-1h", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Network",
+  "uid": "network",
+  "version": 1,
+  "weekStart": ""
+}

@@ -4,6 +4,8 @@ Fetches ``stat/device`` once per 60s tick and emits:
 
 - ``homelab_unifi_device_*`` gauges (up, state, firmware info, update_available,
   uptime, cpu, mem, load, temperature).
+- ``homelab_unifi_device_info{mac,device,kind,model}`` info gauge (value 1.0) —
+  device MAC -> friendly name.
 - ``homelab_unifi_port_*`` gauges per port in ``port_table``.
 - ``homelab_unifi_radio_*`` gauges per radio in ``radio_table_stats``.
 - ``homelab_unifi_outlet_relay_state`` per outlet in ``outlet_table`` (PDU only).
@@ -68,7 +70,7 @@ def _kind_for(rec: dict[str, object]) -> str:
     return "switch"
 
 
-def _emit_device_level(  # noqa: PLR0915
+def _emit_device_level(  # noqa: PLR0915,PLR0912
     ctx: CollectorContext,
     rec: dict[str, object],
     emitted: list[int],
@@ -83,6 +85,17 @@ def _emit_device_level(  # noqa: PLR0915
 
     device_label = {"device": name_val}
     device_model_kind = {"device": name_val, "model": model, "kind": kind}
+
+    # device_info (info gauge, value=1.0) — maps the device MAC to its friendly name/kind/model so
+    # mac-keyed metrics (e.g. client_count_by_ap{ap_mac}) can group_left-join to the device name.
+    mac_val = rec.get("mac")
+    if isinstance(mac_val, str):
+        ctx.vm.write_gauge(
+            "homelab_unifi_device_info",
+            1.0,
+            {"mac": mac_val, "device": name_val, "model": model, "kind": kind},
+        )
+        emitted[0] += 1
 
     # device_up
     state_val = rec.get("state")

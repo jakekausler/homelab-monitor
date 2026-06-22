@@ -9,6 +9,7 @@ const TABS = [
   { path: '/metrics/storage-logs', label: 'Storage & Logs' },
   { path: '/metrics/home-assistant', label: 'Home Assistant' },
   { path: '/metrics/unifi', label: 'Unifi' },
+  { path: '/metrics/network', label: 'Network' },
 ] as const
 
 export function MetricsLayout(): JSX.Element {

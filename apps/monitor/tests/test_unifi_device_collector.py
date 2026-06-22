@@ -27,6 +27,7 @@ _UDM_RECORD: dict[str, object] = {
     "type": "udm",
     "model": "UDMPRO",
     "name": "udm",
+    "mac": "aa:bb:cc:00:00:01",
     "state": 1,
     "version": "7.4.1.16850",
     "displayable_version": "7.4.1",
@@ -67,6 +68,7 @@ _SWITCH_RECORD: dict[str, object] = {
     "type": "usw",
     "model": "USL48PB",
     "name": "switch-poe",
+    "mac": "aa:bb:cc:00:00:02",
     "state": 1,
     "version": "6.6.63.15693",
     "displayable_version": "6.6.63",
@@ -124,6 +126,7 @@ _AP_RECORD: dict[str, object] = {
     "type": "uap",
     "model": "U7PIW",
     "name": "ap-1",
+    "mac": "aa:bb:cc:00:00:03",
     "state": 1,
     "version": "7.0.0.1",
     "displayable_version": "7.0.0",
@@ -171,6 +174,7 @@ _PDU_RECORD: dict[str, object] = {
     "type": "usw",
     "model": "USPPDUP",
     "name": "pdu",
+    "mac": "aa:bb:cc:00:00:04",
     "state": 1,
     "version": "6.0.0.1",
     "displayable_version": "6.0.0",
@@ -883,3 +887,40 @@ async def test_emit_device_level_direct_no_name() -> None:
     _emit_device_level(ctx, rec, emitted)
     assert emitted[0] == 0
     assert writer.recorded == []
+
+
+async def test_device_info_emitted_with_mac() -> None:
+    """device_info{mac,device,kind,model} value 1.0 emitted per device with a str mac."""
+    writer = InMemoryMetricsWriter()
+    await UnifiDeviceCollector().run(_ctx(writer, _FakeUnifiOk()))
+
+    # AP record: mac present -> device_info emitted with device name + kind 'ap' + model.
+    ap_info = _gauge_value(
+        writer,
+        "homelab_unifi_device_info",
+        {"mac": "aa:bb:cc:00:00:03", "device": "ap-1", "kind": "ap", "model": "U7PIW"},
+    )
+    assert ap_info == 1.0
+
+    # One device_info series per fixture device (all four now carry a mac).
+    all_info = _gauges(writer, "homelab_unifi_device_info")
+    assert len(all_info) == 4  # noqa: PLR2004
+
+
+async def test_device_info_skipped_when_mac_absent_or_non_str() -> None:
+    """No device_info series when mac is missing or non-str (both FALSE-branch cases)."""
+    writer = InMemoryMetricsWriter()
+    fake = _FakeUnifiCustom(
+        payload={
+            "meta": {"rc": "ok"},
+            "data": [
+                # mac absent entirely
+                {"name": "no-mac", "type": "usw", "model": "USL48", "state": 1},
+                # mac present but non-str (int) -> isinstance(str) False
+                {"name": "int-mac", "type": "usw", "model": "USL48", "state": 1, "mac": 12345},
+            ],
+        }
+    )
+    result = await UnifiDeviceCollector().run(_ctx(writer, fake))
+    assert result.ok is True
+    assert _gauges(writer, "homelab_unifi_device_info") == []

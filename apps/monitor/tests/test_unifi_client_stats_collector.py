@@ -24,6 +24,7 @@ from homelab_monitor.kernel.unifi.client import UnifiResponse
 from homelab_monitor.kernel.unifi.errors import UnifiError
 from homelab_monitor.plugins.collectors.integrations.unifi.client_stats import (
     M_AP_CLIENT_COUNT,
+    M_CLIENT_INFO,
     M_HIGH_RETRIES,
     M_POOR_SATISFACTION,
     M_POOR_SIGNAL,
@@ -270,13 +271,21 @@ async def test_over_cap_drops_and_one_suggestion_per_family(
 
     assert result.ok is True
     # Each capped family that received >cap observations -> exactly cap survivors.
-    for fam in (M_SIGNAL_DBM, M_TX_RATE_BPS, M_RX_RATE_BPS, M_UPTIME, M_TX_BYTES, M_RX_BYTES):
+    for fam in (
+        M_SIGNAL_DBM,
+        M_TX_RATE_BPS,
+        M_RX_RATE_BPS,
+        M_UPTIME,
+        M_TX_BYTES,
+        M_RX_BYTES,
+        M_CLIENT_INFO,
+    ):
         assert len(_gauges(writer, fam)) == 3  # noqa: PLR2004
         assert _drop_value(writer, fam) == 4.0  # 7 - 3  # noqa: PLR2004
 
-    # One SuggestionEvent per over-cap family (6 families each over cap here).
+    # One SuggestionEvent per over-cap family (7 families each over cap here).
     suggestions = [e for e in result.events if isinstance(e, SuggestionEvent)]
-    assert len(suggestions) == 6  # noqa: PLR2004
+    assert len(suggestions) == 7  # noqa: PLR2004
     assert all(s.severity == "warning" for s in suggestions)
 
 
@@ -511,7 +520,15 @@ async def test_malformed_payload_emits_drops_and_zero_rollups() -> None:
     result = await UnifiClientStatsCollector().run(_ctx(writer, _FakeStaMalformed()))
 
     assert result.ok is True
-    for fam in (M_SIGNAL_DBM, M_TX_RATE_BPS, M_RX_RATE_BPS, M_UPTIME, M_TX_BYTES, M_RX_BYTES):
+    for fam in (
+        M_SIGNAL_DBM,
+        M_TX_RATE_BPS,
+        M_RX_RATE_BPS,
+        M_UPTIME,
+        M_TX_BYTES,
+        M_RX_BYTES,
+        M_CLIENT_INFO,
+    ):
         assert _drop_value(writer, fam) == 0.0
         assert _gauges(writer, fam) == []  # no survivor series
     assert _gauge_value(writer, M_POOR_SIGNAL, {"threshold": "-70"}) == 0.0
@@ -583,7 +600,15 @@ async def test_non_dict_payload_emits_drops_and_zero_rollups() -> None:
     result = await UnifiClientStatsCollector().run(_ctx(writer, _FakeStaNonDict()))
 
     assert result.ok is True
-    for fam in (M_SIGNAL_DBM, M_TX_RATE_BPS, M_RX_RATE_BPS, M_UPTIME, M_TX_BYTES, M_RX_BYTES):
+    for fam in (
+        M_SIGNAL_DBM,
+        M_TX_RATE_BPS,
+        M_RX_RATE_BPS,
+        M_UPTIME,
+        M_TX_BYTES,
+        M_RX_BYTES,
+        M_CLIENT_INFO,
+    ):
         assert _drop_value(writer, fam) == 0.0
         assert _gauges(writer, fam) == []  # no survivor series
     assert _gauge_value(writer, M_POOR_SIGNAL, {"threshold": "-70"}) == 0.0
@@ -626,3 +651,52 @@ async def test_sparse_wireless_record_skips_all_optional_families() -> None:
     assert _gauge_value(writer, M_POOR_SIGNAL, {"threshold": "-70"}) == 0.0
     assert _gauge_value(writer, M_POOR_SATISFACTION, {"threshold": "50"}) == 0.0
     assert _gauge_value(writer, M_HIGH_RETRIES, {"threshold": "10"}) == 0.0
+
+
+# ============================================================================
+# Test 14: client_info{mac,name} — name-fallback branches (name / hostname / mac).
+# ============================================================================
+@pytest.mark.asyncio
+async def test_client_info_name_fallback_all_branches() -> None:
+    """client_info emits value 1.0 per mac; name = name -> hostname -> mac.
+
+    Covers every branch of _best_name:
+      * with_name:     rec['name'] present            -> name label == name
+      * hostname_only: name absent, hostname present   -> name label == hostname
+      * mac_only:      neither name nor hostname        -> name label == mac
+    """
+    with_name = _wireless_ok("aa:aa:aa:aa:aa:01", ap_mac="ap1")
+    with_name["name"] = "Living Room TV"
+
+    hostname_only = _wireless_ok("aa:aa:aa:aa:aa:02", ap_mac="ap1")
+    hostname_only["name"] = ""  # empty string falls through to hostname
+    hostname_only["hostname"] = "laptop-1"
+
+    mac_only = _wireless_ok("aa:aa:aa:aa:aa:03", ap_mac="ap1")
+    # neither 'name' nor 'hostname' present
+
+    records: list[dict[str, object]] = [with_name, hostname_only, mac_only]
+    writer = InMemoryMetricsWriter()
+    result = await UnifiClientStatsCollector().run(_ctx(writer, _FakeStaOk(records)))
+    assert result.ok is True
+
+    # Branch A: explicit name.
+    assert (
+        _gauge_value(writer, M_CLIENT_INFO, {"mac": "aa:aa:aa:aa:aa:01", "name": "Living Room TV"})
+        == 1.0
+    )
+    # Branch B: hostname fallback.
+    assert (
+        _gauge_value(writer, M_CLIENT_INFO, {"mac": "aa:aa:aa:aa:aa:02", "name": "laptop-1"}) == 1.0
+    )
+    # Branch C: mac fallback (name label == mac).
+    assert (
+        _gauge_value(
+            writer,
+            M_CLIENT_INFO,
+            {"mac": "aa:aa:aa:aa:aa:03", "name": "aa:aa:aa:aa:aa:03"},
+        )
+        == 1.0
+    )
+    # Exactly three client_info series (one per client).
+    assert len(_gauges(writer, M_CLIENT_INFO)) == 3  # noqa: PLR2004

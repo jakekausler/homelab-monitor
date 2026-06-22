@@ -18,6 +18,7 @@ Polls classic ``stat/sta`` once per 60s tick and emits two layers of signal:
    - ``homelab_unifi_client_uptime{mac}``      (all clients)
    - ``homelab_unifi_client_tx_bytes{mac}`` (all; ``tx_bytes`` / wired ``wired-tx_bytes``)
    - ``homelab_unifi_client_rx_bytes{mac}`` (all; ``rx_bytes`` / wired ``wired-rx_bytes``)
+   - ``homelab_unifi_client_info{mac, name}`` (info gauge, value 1.0; name = name->hostname->mac)
 
    Capped via :class:`CappedEmitter` with ``cap_for("unifi_client_stats")`` (=200).
 
@@ -67,6 +68,7 @@ M_RX_RATE_BPS: Final[str] = "homelab_unifi_client_rx_rate_bps"
 M_UPTIME: Final[str] = "homelab_unifi_client_uptime"
 M_TX_BYTES: Final[str] = "homelab_unifi_client_tx_bytes"
 M_RX_BYTES: Final[str] = "homelab_unifi_client_rx_bytes"
+M_CLIENT_INFO: Final[str] = "homelab_unifi_client_info"
 
 # --- Bounded rollup gauge names -------------------------------------------------
 M_POOR_SIGNAL: Final[str] = "homelab_unifi_clients_poor_signal"
@@ -113,11 +115,29 @@ def _str_field(rec: dict[str, object], key: str) -> str | None:
     return val if isinstance(val, str) else None
 
 
+def _best_name(rec: dict[str, object], mac: str) -> str:
+    """Best-available friendly name: rec['name'] -> rec['hostname'] -> mac.
+
+    Three branches (all must be covered for the 100% branch gate):
+      * name is a non-empty str       -> return it
+      * name empty/absent, hostname non-empty -> return hostname
+      * both empty/absent             -> return mac
+    """
+    name = _str_field(rec, "name")
+    if name:
+        return name
+    hostname = _str_field(rec, "hostname")
+    if hostname:
+        return hostname
+    return mac
+
+
 class _Built:
     """Per-tick observation lists + rollup accumulators, built in one pass."""
 
     __slots__ = (
         "ap_counts",
+        "client_info_obs",
         "high_retries_count",
         "poor_satisfaction_count",
         "poor_signal_count",
@@ -137,6 +157,7 @@ class _Built:
         self.uptime_obs: list[tuple[dict[str, str], float]] = []
         self.tx_bytes_obs: list[tuple[dict[str, str], float]] = []
         self.rx_bytes_obs: list[tuple[dict[str, str], float]] = []
+        self.client_info_obs: list[tuple[dict[str, str], float]] = []
         self.poor_signal_count: int = 0
         self.poor_satisfaction_count: int = 0
         self.high_retries_count: int = 0
@@ -222,6 +243,7 @@ def _build(records: list[dict[str, object]]) -> _Built:
         if mac is None:
             continue
         labels = {"mac": mac}
+        built.client_info_obs.append(({"mac": mac, "name": _best_name(rec, mac)}, 1.0))
         is_wired = as_bool(rec.get("is_wired"))
         _accumulate_observations(built, rec, labels, is_wired=is_wired)
         _accumulate_rollups(built, rec, is_wired=is_wired)
@@ -246,6 +268,7 @@ def _emit_capped(emitter: CappedEmitter, cap: int, built: _Built, emitted: list[
     emitted[0] += emitter.emit_family(M_UPTIME, cap, built.uptime_obs) + 1
     emitted[0] += emitter.emit_family(M_TX_BYTES, cap, built.tx_bytes_obs) + 1
     emitted[0] += emitter.emit_family(M_RX_BYTES, cap, built.rx_bytes_obs) + 1
+    emitted[0] += emitter.emit_family(M_CLIENT_INFO, cap, built.client_info_obs) + 1
 
 
 def _emit_rollups(ctx: CollectorContext, built: _Built, emitted: list[int]) -> None:
