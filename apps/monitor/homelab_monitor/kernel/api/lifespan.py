@@ -952,9 +952,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
             # skipped it). Otherwise construct a dedicated one.
             discoverer_socket_client = getattr(app.state, "docker_socket_client", None)
             if discoverer_socket_client is None:  # pragma: no cover
-                # Unreachable in practice: lines 496-503 always construct and
-                # store docker_socket_client on app.state before this wiring
-                # loop runs, so this branch can never be entered. It is kept
+                # Unreachable in practice: when docker is enabled, the
+                # DockerSocketCollector wiring block above always constructs and
+                # stores docker_socket_client on app.state before this wiring
+                # loop runs; when docker is disabled, DockerDiscoverer is never
+                # registered so this isinstance branch never runs at all. Kept
                 # as a defensive fallback.
                 from homelab_monitor.kernel.docker.socket_client import (  # noqa: PLC0415
                     DockerSocketClient,

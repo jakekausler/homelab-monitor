@@ -1,6 +1,21 @@
 # Parallel Instance Support — Implementation Plan
 
-> **Status:** Build COMPLETE (verify green) — pending Refinement
+> **Status:** Refinement IN PROGRESS — instance B validated on freshly-built image; A-rebuild decision pending
+>
+> **Refinement findings (live two-instance run on host):**
+> - Instance A migrated to new compose (project/containers/volumes/network byte-identical; cadvisor+vector kept via `COMPOSE_PROFILES=host-collectors` added to A's live `.env`; A restarted, healthy). A's `.env.bak-prerestart` backup exists.
+> - Instance B stood up at `/storage/programs/homelab-monitor-b` (project `homelab-monitor-b`, monitor on 39090), coexisting with A. No name/port/volume/network collision; A undisturbed throughout.
+> - **DEFECT 1 (fixed):** config-init did not chown `/data` + `/storage/backup` → fresh `data_monitor` volume (baked 1000:1000/755 by image) was unwritable by the runtime uid (995) → SQLite "unable to open database file". This is a LATENT bug for ANY fresh instance incl. a fresh A. Fix: extended config-init to `chown ${HM_CRON_HOST_UID}:${HM_CRON_HOST_GID} /data /storage/backup && chmod 755`. **Verified on a truly fresh volume** (removed B's data_monitor, re-upped → config-init chowned to 995:995, monitor healthy, no manual step). Reviewed APPROVED.
+> - **DEFECT 2 (fixed):** the monitor compose service never forwarded `HOMELAB_MONITOR_DOCKER_ENABLED` into the container (was comment-only) → the B1 flag was silently dropped. Fix: added `HOMELAB_MONITOR_DOCKER_ENABLED: ${HOMELAB_MONITOR_DOCKER_ENABLED:-true}` to the monitor `environment:`.
+> - **DEFECT 3 (process, fixed):** the running images for BOTH A and B PREDATED all parallel-instance code (A `:dev` built 3h before the B1 commit; B pulled `:latest` from 5 weeks ago). Initial B validation was INVALID (reflected old image). Resolution: build B's image LOCALLY from the branch (`GITHUB_REPOSITORY=homelab-monitor-local-b`, `IMAGE_TAG=dev`). Fresh-clone build requires `pnpm install` + `pnpm --filter ui run generate-types` (gitignored `apps/ui/src/api/schema.ts`) + UI build before `docker compose build`.
+> - **Re-validation on the real image: ALL PASS** — `DockerConfig(enabled=False)` live in B's container; no docker collector registered; no socket access; docker route serves no data; cron discovery clean (`inserted=0 errors=0`) against empty dirs; B-private mount sources; A healthy/undisturbed. e2e-tester 8/8 PASS.
+>
+> **OPEN — A rebuild decision:** A still runs the STALE image (no parallel-instance code, no config-init `/data` fix, no docker-flag plumbing). For A to actually carry these changes, A's monitor image must be rebuilt from the branch and A restarted (a real prod deploy). Awaiting user go.
+>
+> **Minor open item (deferred):** B still mounts `/var/run/docker.sock` (unused when docker disabled). Could omit for B; no functional impact. Noted for operator docs.
+>
+> ---
+> **Original Build outcome (branch `feat/parallel-instance`):**
 >
 > **Build outcome (branch `feat/parallel-instance`, uncommitted):**
 > - **B1 done:** `DockerConfig`/`load_docker_config()` in `config.py`; `HOMELAB_MONITOR_DOCKER_ENABLED` gates DockerSocketCollector + DockerDiscoverer registration, the image-update loop, the override-loader, AND the whole `ComposeActionRunner` block (its `__init__` requires a non-None socket client, so gating the entire block is the type-safe reading; the docker router already 503s when the runner is absent). New test `test_docker_disabled_skips_registration_and_socket_client`. The 3 auto-degrading consumers stay None-safe.

@@ -87,7 +87,7 @@ All host bindings are `127.0.0.1`-only (isolated to localhost).
 
 | Service              | Dev host (1xxxx) | Prod host (2xxxx) | Container | Notes |
 | -------------------- | ---------------- | ----------------- | --------- | ----- |
-| monitor backend      | 19090            | 29090             | 9090      | Host :9090 is bound by an unrelated process. Bind host configurable via `HOMELAB_MONITOR_BIND_HOST` (default `127.0.0.1`). Set to `0.0.0.0` for LAN access in trusted homelab networks. |
+| monitor backend      | 19090            | 29090 (A) / 39090 (B) | 9090  | Host :9090 is bound by an unrelated process. Bind host configurable via `HOMELAB_MONITOR_BIND_HOST` (default `127.0.0.1`). Set to `0.0.0.0` for LAN access in trusted homelab networks. `3xxxx` is the parallel-instance "B" band (39090); see `docs/dev/parallel-instance.md`. |
 | UI dev server (Vite) | 5180             | n/a               | n/a       | Prod serves built UI from the monitor container. |
 | VictoriaMetrics      | 18428            | container-internal | 8428    | Dev publishes for hybrid-mode backend. Prod reaches it via `victoriametrics:8428`. |
 | VictoriaLogs         | 19428            | container-internal | 9428    | |
@@ -101,6 +101,8 @@ All host bindings are `127.0.0.1`-only (isolated to localhost).
 | UDM syslog (vector)  | 15514            | 5514 (0.0.0.0)     | 5514    | DELIBERATE EXCEPTION: a LAN syslog source (the UDM Pro) cannot reach a container-internal sidecar, so this is the ONE prod sidecar port host-published, and on `0.0.0.0` (not `127.0.0.1`) by necessity. UDP. Dev binds `127.0.0.1` only (no real UDM traffic in dev). |
 
 **Invariant:** Dev published ports start with `1xxxx`. Prod publishes only the monitor backend on `2xxxx` (29090). All other sidecars are container-internal in prod and proxied via the monitor's `/api/<sidecar>/` endpoints.
+
+**Parallel instance ("B"):** a second, fully independent prod-like stack can run alongside A on the `3xxxx` band (monitor backend 39090). B sets `HM_INSTANCE` + `HM_CONTAINER_PREFIX` (both equal, e.g. `homelab-monitor-b`) to namespace project/network/volumes/containers, runs with `HOMELAB_MONITOR_DOCKER_ENABLED=false` (no container monitoring) and empty `COMPOSE_PROFILES` (no cadvisor/vector); host integration (cron/systemd) stays owned by A. Full procedure: `docs/dev/parallel-instance.md`.
 
 **Documented exception (STAGE-007-016):** the UDM syslog listener (vector, UDP `5514`) is the sole prod sidecar port host-published, bound `0.0.0.0` not `127.0.0.1`, because an off-host LAN syslog source cannot reach a container-internal sidecar. Its prod port (`5514`) does not follow the `2xxxx` convention because it must match the syslog default the UDM emits to.
 

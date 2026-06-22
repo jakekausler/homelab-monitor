@@ -27,6 +27,7 @@ services:
       HOMELAB_MONITOR_VM_URL: http://victoriametrics:8428
       HOMELAB_MONITOR_VL_URL: http://victorialogs:9428
       HOMELAB_MONITOR_HTTPS_ONLY_COOKIES: ${HOMELAB_MONITOR_HTTPS_ONLY_COOKIES:-true}
+      HOMELAB_MONITOR_DOCKER_ENABLED: ${HOMELAB_MONITOR_DOCKER_ENABLED:-true}
       HOMELAB_MONITOR_AUTO_MIGRATE: "1"
       HOMELAB_MONITOR_VM_DATA_DIR: /var/vm-data
       HOMELAB_MONITOR_VL_DATA_DIR: /var/vl-data
@@ -155,13 +156,17 @@ services:
   # files, then exits. depends_on gates the monitor and the vector/alertmanager
   # sidecars on its successful completion.
   #
-  # NON-DESTRUCTIVE BY DESIGN: this container only chmods. It MUST NOT delete
+  # Also ensures data_monitor (/data) and data_backup are owned by the runtime
+  # monitor uid so the database can be created and written. Fresh volumes are
+  # seeded as 1000:1000 0755; runtime uid may differ (${HM_CRON_HOST_UID}).
+  #
+  # NON-DESTRUCTIVE BY DESIGN: this container only chowns and chmods. It MUST NOT delete
   # anything. The monitor's render-on-boot is the only writer of vector.toml /
   # alertmanager.yml, and it runs on the MONITOR's lifecycle, not this one.
   # compose re-runs this init whenever vector/alertmanager are recreated
   # (depends_on: service_completed_successfully) WITHOUT recreating the
   # monitor — so a destructive op here would wipe the rendered config and the
-  # sidecar would crash-loop. chmod is idempotent and safe to re-run forever.
+  # sidecar would crash-loop. chown/chmod are idempotent and safe to re-run forever.
   # Stray stock seed files (timberio's vector.yaml, prom's alertmanager.yml)
   # are harmless: vector --config and alertmanager --config.file each name ONE
   # explicit file; neither scans the directory.
@@ -177,9 +182,13 @@ services:
       - >
         chown 0:2000 /var/vector-config /var/alertmanager-config /var/vmalert-user-logs /var/vmalert-user-metrics &&
         chmod 3777 /var/vector-config /var/alertmanager-config /var/vmalert-user-logs /var/vmalert-user-metrics &&
+        chown ${HM_CRON_HOST_UID:-1000}:${HM_CRON_HOST_GID:-1000} /data /storage/backup/homelab-monitor &&
+        chmod 755 /data /storage/backup/homelab-monitor &&
         if [ -f /var/alertmanager-config/alertmanager.yml ]; then chown ${HM_CRON_HOST_UID:-1000}:2000 /var/alertmanager-config/alertmanager.yml; fi &&
-        echo "config-init: render-config volumes set to root:amconfig 3777, am seed reowned to monitor uid"
+        echo "config-init: render-config volumes set to root:amconfig 3777, data volumes reowned to monitor uid, am seed reowned to monitor uid"
     volumes:
+      - data_monitor:/data
+      - data_backup:/storage/backup/homelab-monitor
       - data_vector_config:/var/vector-config
       - data_alertmanager_config:/var/alertmanager-config
       - data_vmalert_user_logs:/var/vmalert-user-logs
