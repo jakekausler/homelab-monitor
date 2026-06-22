@@ -1,6 +1,6 @@
 # EPIC-006: Pi-hole + Unbound integration
 
-## Status: Not Started
+## Status: In Progress (current: STAGE-006-001 Complete; next: STAGE-006-002)
 
 ## Build order (IMPORTANT)
 
