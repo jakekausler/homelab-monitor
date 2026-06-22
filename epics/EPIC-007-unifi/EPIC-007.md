@@ -1,6 +1,6 @@
 # EPIC-007: Unifi integration
 
-## Status: In Progress (STAGE-007-001..025 + 016A Complete; current: STAGE-007-026; +026 DNS-posture deferral)
+## Status: Complete (27/27 stages — STAGE-007-001..026 + 016A Complete; EPIC-007 closed 2026-06-22)
 
 ## Build order + client-identity ownership (LOCKED — 2026-06-16/17 brainstorm)
 
@@ -353,7 +353,7 @@ including the opt-in SSH lease, land in Wave B before any rules).
 ### Wave I — DNS-posture refinements (1)
 | # | Stage | Theme |
 |---|---|---|
-| STAGE-007-026 | DNS-posture drift badge (backend expected_dns/drift on the DNS-posture contract + ✓/drift UI) — deferred from STAGE-007-021 | Not Started |
+| STAGE-007-026 | DNS-posture drift badge (backend expected_dns/drift on the DNS-posture contract + ✓/drift UI) — deferred from STAGE-007-021 | Complete |
 
 ## Cross-stage acceptance criteria
 
