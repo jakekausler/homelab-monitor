@@ -15,6 +15,9 @@ import structlog
 
 from homelab_monitor.kernel.plugins.base import BaseCollector
 from homelab_monitor.kernel.plugins.loader import PluginLoader, config_from_classvars
+from homelab_monitor.plugins.collectors.integrations.pihole.gravity import (
+    PiholeGravityCollector,
+)
 from homelab_monitor.plugins.collectors.integrations.pihole.stats_summary import (
     PiholeStatsSummaryCollector,
 )
@@ -28,6 +31,7 @@ _log = structlog.get_logger()
 _PIHOLE_COLLECTORS: list[type[BaseCollector]] = [
     PiholeStatsSummaryCollector,
     PiholeUpstreamsCollector,
+    PiholeGravityCollector,
 ]
 
 
