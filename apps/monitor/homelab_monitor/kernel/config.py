@@ -706,6 +706,10 @@ _DEFAULT_CARDINALITY_FAMILIES: dict[str, int] = {
     "unifi_client_stats": 200,
     # DPI top-N clients x top-N apps → 100.
     "unifi_dpi": 100,
+    # STAGE-006-012 — Pi-hole per-client & top-domain metric-family caps.
+    # ~85 home clients + headroom; top-domain lists are small but capped defensively.
+    "pihole_client_queries": 50,
+    "pihole_top_domains": 50,
 }
 
 

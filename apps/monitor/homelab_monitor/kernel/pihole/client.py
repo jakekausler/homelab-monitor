@@ -144,13 +144,27 @@ class PiholeRestClient:
         # SCAFFOLDING: consumed in Wave B/C (STAGE-006-005..015)
         return await self._get("/api/stats/query_types", "stats/query_types")
 
-    async def stats_top_clients(self) -> PiholeResponse | PiholeError:
-        # SCAFFOLDING: consumed in Wave B/C (STAGE-006-005..015)
-        return await self._get("/api/stats/top_clients", "stats/top_clients")
+    async def stats_top_clients(
+        self, *, blocked: bool = False, count: int | None = None
+    ) -> PiholeResponse | PiholeError:
+        params: dict[str, str] = {}
+        if blocked:
+            params["blocked"] = "true"
+        if count is not None:
+            params["count"] = str(count)
+        endpoint = "stats/top_clients_blocked" if blocked else "stats/top_clients"
+        return await self._get("/api/stats/top_clients", endpoint, params=params or None)
 
-    async def stats_top_domains(self) -> PiholeResponse | PiholeError:
-        # SCAFFOLDING: consumed in Wave B/C (STAGE-006-005..015)
-        return await self._get("/api/stats/top_domains", "stats/top_domains")
+    async def stats_top_domains(
+        self, *, blocked: bool = False, count: int | None = None
+    ) -> PiholeResponse | PiholeError:
+        params: dict[str, str] = {}
+        if blocked:
+            params["blocked"] = "true"
+        if count is not None:
+            params["count"] = str(count)
+        endpoint = "stats/top_domains_blocked" if blocked else "stats/top_domains"
+        return await self._get("/api/stats/top_domains", endpoint, params=params or None)
 
     async def stats_recent_blocked(self) -> PiholeResponse | PiholeError:
         # SCAFFOLDING: consumed in Wave B/C (STAGE-006-005..015)

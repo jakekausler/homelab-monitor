@@ -218,6 +218,16 @@ def test_cap_for_unifi_dpi() -> None:
     assert CardinalityCapsConfig().cap_for("unifi_dpi") == 100  # noqa: PLR2004
 
 
+def test_cap_for_pihole_client_queries() -> None:
+    """The pihole_client_queries family resolves to its configured cap (50)."""
+    assert CardinalityCapsConfig().cap_for("pihole_client_queries") == 50  # noqa: PLR2004
+
+
+def test_cap_for_pihole_top_domains() -> None:
+    """The pihole_top_domains family resolves to its configured cap (50)."""
+    assert CardinalityCapsConfig().cap_for("pihole_top_domains") == 50  # noqa: PLR2004
+
+
 def test_cap_for_unknown_family_returns_default() -> None:
     """An unconfigured family falls back to the default cap (500)."""
     assert CardinalityCapsConfig().cap_for("no_such_family") == 500  # noqa: PLR2004

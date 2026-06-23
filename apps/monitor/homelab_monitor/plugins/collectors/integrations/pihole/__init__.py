@@ -30,6 +30,9 @@ from homelab_monitor.plugins.collectors.integrations.pihole.gravity import (
 from homelab_monitor.plugins.collectors.integrations.pihole.stats_summary import (
     PiholeStatsSummaryCollector,
 )
+from homelab_monitor.plugins.collectors.integrations.pihole.top_clients import (
+    PiholeClientsCollector,
+)
 from homelab_monitor.plugins.collectors.integrations.pihole.upstreams import (
     PiholeUpstreamsCollector,
 )
@@ -48,6 +51,7 @@ _PIHOLE_COLLECTORS: list[type[BaseCollector]] = [
     PiholeUpstreamsCollector,
     PiholeGravityCollector,
     PiholeVersionCollector,
+    PiholeClientsCollector,
 ]
 
 

@@ -540,3 +540,55 @@ async def test_second_call_skips_login() -> None:
         if c.args[0] == "POST" and "/api/auth" in c.args[1]
     ]
     assert len(auth_calls) == 1
+
+
+# ---- stats_top_clients / stats_top_domains parameter tests (STAGE-006-012) ----
+
+
+@pytest.mark.asyncio
+async def test_stats_top_clients_blocked_and_count_params() -> None:
+    """blocked=True + count sets params and the _blocked endpoint label."""
+    client, mock_http = _client()
+    mock_http.request.side_effect = [_auth_ok(), _resp(json_value={"took": 0.001})]
+    result = await client.stats_top_clients(blocked=True, count=60)
+    assert isinstance(result, PiholeResponse)
+    assert result.endpoint == "stats/top_clients_blocked"
+    # Last GET carries the params.
+    last = mock_http.request.call_args_list[-1]
+    assert last.kwargs["params"] == {"blocked": "true", "count": "60"}
+
+
+@pytest.mark.asyncio
+async def test_stats_top_clients_no_params_sends_none() -> None:
+    """Default (blocked=False, count=None) -> params=None on the wire."""
+    client, mock_http = _client()
+    mock_http.request.side_effect = [_auth_ok(), _resp(json_value={"took": 0.001})]
+    result = await client.stats_top_clients()
+    assert isinstance(result, PiholeResponse)
+    assert result.endpoint == "stats/top_clients"
+    last = mock_http.request.call_args_list[-1]
+    assert last.kwargs["params"] is None
+
+
+@pytest.mark.asyncio
+async def test_stats_top_domains_blocked_only() -> None:
+    """blocked=True with no count -> params={'blocked':'true'}, _blocked label."""
+    client, mock_http = _client()
+    mock_http.request.side_effect = [_auth_ok(), _resp(json_value={"took": 0.001})]
+    result = await client.stats_top_domains(blocked=True)
+    assert isinstance(result, PiholeResponse)
+    assert result.endpoint == "stats/top_domains_blocked"
+    last = mock_http.request.call_args_list[-1]
+    assert last.kwargs["params"] == {"blocked": "true"}
+
+
+@pytest.mark.asyncio
+async def test_stats_top_domains_count_only() -> None:
+    """count only (blocked False) -> params={'count':'N'}, base label."""
+    client, mock_http = _client()
+    mock_http.request.side_effect = [_auth_ok(), _resp(json_value={"took": 0.001})]
+    result = await client.stats_top_domains(count=25)
+    assert isinstance(result, PiholeResponse)
+    assert result.endpoint == "stats/top_domains"
+    last = mock_http.request.call_args_list[-1]
+    assert last.kwargs["params"] == {"count": "25"}

@@ -292,11 +292,15 @@ class PiholeClient(Protocol):
         """GET /api/stats/query_types — per-type query counts, or a typed PiholeError."""
         ...
 
-    async def stats_top_clients(self) -> PiholeResponse | PiholeError:
+    async def stats_top_clients(
+        self, *, blocked: bool = False, count: int | None = None
+    ) -> PiholeResponse | PiholeError:
         """GET /api/stats/top_clients — top querying clients, or a typed PiholeError."""
         ...
 
-    async def stats_top_domains(self) -> PiholeResponse | PiholeError:
+    async def stats_top_domains(
+        self, *, blocked: bool = False, count: int | None = None
+    ) -> PiholeResponse | PiholeError:
         """GET /api/stats/top_domains — top queried domains, or a typed PiholeError."""
         ...
 

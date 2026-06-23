@@ -54,7 +54,8 @@ class RawClient:
     ``name`` is the optional reverse-DNS hostname (empty string when Pi-hole has no
     PTR record; the helper treats empty the same as an unrecognized name).
     ``value`` is the query count for this client in the current polling window;
-    used as the ordering key when the cardinality cap evicts LAN clients.
+    retained only for downstream metric emission (cap eviction is deterministic by
+    canonical label/IP order, not by query count).
     ``mac`` is present only when the caller can supply it (e.g. from a Unifi
     cross-reference); it is carried through unchanged and is never used for
     classification logic.
@@ -182,7 +183,9 @@ def classify_clients(
        ``labels = {"client_ip": client.client_ip}`` (single-key dict; deterministic
        sort order — a single-key dict sorts identically every call). ``value =`` the
        original ``RawClient.value`` (query count).
-    5. Run ``CardinalityCapper(cap).apply(lan_obs)``.
+    5. Run ``CardinalityCapper(cap).apply(lan_obs)``. The capper selects survivors
+       deterministically by canonical label order (sorted by client_ip); ``value`` is
+       retained only to populate the emitted metric value, not to decide survival.
     6. Map survivors back to their ``ClassifiedClient`` via ``client_ip`` lookup.
        Each LAN IP is a single capper candidate (deduped at source, first
        occurrence wins), so the mapping is exactly 1:1. If Pi-hole reports the
