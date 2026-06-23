@@ -55,3 +55,14 @@
 - [ ] **24h-rolling semantics:** `count` is a 24h-rolling window-gauge, NOT a counter — alert rules must NOT `rate()` it.
 - [ ] **Omitted by design:** NO `kind`/`is_pseudo` label, NO `homelab_pihole_upstream_response_seconds`, NO duplicate top-level totals (005 owns `queries_total`/`forwarded_total`).
 - [ ] **Live values sane vs Pi-hole:** VM upstream counts in-ballpark with live `/api/stats/upstreams` (small deltas from ongoing traffic expected).
+
+## STAGE-006-007 — Gravity + per-adlist collector
+
+- [ ] **Collector present:** `pihole_gravity` registered + healthy (`GET /api/collectors`, `interval_seconds:30`).
+- [ ] **Gravity domains:** `homelab_pihole_gravity_domains` present in VM, the DEDUP'd count from `ftl.database.gravity` (~5.86M), NOT a sum of per-list `number` (`docker exec homelab-vm wget -qO- 'http://127.0.0.1:8428/api/v1/query?query=homelab_pihole_gravity_domains'`).
+- [ ] **Gravity age:** `homelab_pihole_gravity_last_update_age_seconds` present, positive/sane, DERIVED from `max(date_updated)` across adlists (the `/api/info/ftl` endpoint has NO timestamp; age comes from `/api/lists`). Skipped (not 0) if no adlist has a valid `date_updated`.
+- [ ] **Per-adlist metrics:** `homelab_pihole_adlist_domains{list,address}`, `_adlist_enabled{list,address}` (1/0), `_adlist_status{list,address,status}` — one series per adlist; series keyed by `id`, `address` carried as a label, NO `comment` label.
+- [ ] **Failing adlists by name:** the 2 live failing adlists (id=4, id=5, the xRuffKez NRD GitHub URLs) surface as `homelab_pihole_adlist_status{status="parse_failed"}`; the 3 healthy lists carry `status="ok"`. (v6 status int map: 0=not_run, 1=ok, 2=download_failed, 3=parse_failed; unknown→`unknown_<n>`.)
+- [ ] **016 alert contract:** `PiholeAdlistFailing` matches `homelab_pihole_adlist_status{status!="ok"} == 1`; `PiholeGravityStale` thresholds on `_gravity_last_update_age_seconds`. No TZ-guard needed — the source timestamps are epoch seconds (unambiguous UTC); only a clock-skew `max(0.0)` clamp applies.
+- [ ] **Two-endpoint resilience:** the collector polls BOTH `/api/info/ftl` and `/api/lists`; emits two `homelab_pihole_api_took_seconds{endpoint}` (info/ftl + lists); `ok=True` if EITHER endpoint succeeds, `ok=False` only if BOTH error.
+- [ ] **Live values sane vs Pi-hole:** VM `gravity_domains` exactly matches live `ftl.database.gravity`; failing-adlist ids + per-list `number` match the live `/api/lists`.
