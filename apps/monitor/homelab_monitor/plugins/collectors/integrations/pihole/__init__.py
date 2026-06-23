@@ -21,6 +21,9 @@ from homelab_monitor.plugins.collectors.integrations.pihole.blocking import (
 from homelab_monitor.plugins.collectors.integrations.pihole.ftl_health import (
     PiholeFtlHealthCollector,
 )
+from homelab_monitor.plugins.collectors.integrations.pihole.ftl_messages import (
+    PiholeFtlMessagesCollector,
+)
 from homelab_monitor.plugins.collectors.integrations.pihole.gravity import (
     PiholeGravityCollector,
 )
@@ -37,6 +40,7 @@ _log = structlog.get_logger()
 _PIHOLE_COLLECTORS: list[type[BaseCollector]] = [
     PiholeBlockingCollector,
     PiholeFtlHealthCollector,
+    PiholeFtlMessagesCollector,
     PiholeStatsSummaryCollector,
     PiholeUpstreamsCollector,
     PiholeGravityCollector,
