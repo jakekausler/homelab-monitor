@@ -18,12 +18,16 @@ from homelab_monitor.kernel.plugins.loader import PluginLoader, config_from_clas
 from homelab_monitor.plugins.collectors.integrations.pihole.stats_summary import (
     PiholeStatsSummaryCollector,
 )
+from homelab_monitor.plugins.collectors.integrations.pihole.upstreams import (
+    PiholeUpstreamsCollector,
+)
 
 _log = structlog.get_logger()
 
 # Wave-B stages append their collector class here.
 _PIHOLE_COLLECTORS: list[type[BaseCollector]] = [
     PiholeStatsSummaryCollector,
+    PiholeUpstreamsCollector,
 ]
 
 
