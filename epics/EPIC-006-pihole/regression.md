@@ -94,3 +94,11 @@
 - [ ] Self-metric `homelab_collector_run_success_total{name="pihole_ftl_messages"}` increments on each successful run.
 - [ ] Malformed-payload resilience: payload not a dict, or "messages" key missing/not-a-list → run reports ok=False with an error (api_took still counted); does NOT falsely emit messages_count=0.
 - [ ] Metric name is PLURAL `homelab_pihole_messages{type}` (corrected from the card's singular `homelab_pihole_message` during Design — per-type count semantics).
+
+## STAGE-006-011 — Version/update collector
+
+- [ ] Version collector (`pihole_version`) emits `homelab_pihole_update_available{component}` (1/0) — `1` when local != remote, `0` when equal, emitted ONLY when BOTH versions present (missing either → no series, never a false 0). Verify in VM: components with updates show 1, up-to-date show 0, matching the live Pi-hole `/api/info/version`.
+- [ ] `homelab_pihole_version_info{component, version}` info-gauge (value 1.0, LOCAL version as the `version` label) emitted whenever local present. Verify all present components have a series with the correct installed-version label — INCLUDING docker, whose `local`/`remote` are BARE STRINGS (not objects with a `.version` sub-key); a regression to a uniform `local.version` accessor would drop docker.
+- [ ] `homelab_pihole_api_took_seconds{endpoint="info/version"}` emitted each run.
+- [ ] Self-metric `homelab_collector_run_success_total{name="pihole_version"}` increments on each successful run.
+- [ ] STARTUP LATENCY (tracked to STAGE-006-020): the `pihole_version` collector (3600s interval, no startup-run hook) leaves version metrics absent for up to ~1h after a monitor restart. Sibling slow update-checkers run on startup via `lifespan.py` `await_immediate_run` blocks. Evaluate at STAGE-006-020 whether slow pihole collectors should get a startup-run hook (a cross-cutting lifespan change).
