@@ -66,3 +66,11 @@
 - [ ] **016 alert contract:** `PiholeAdlistFailing` matches `homelab_pihole_adlist_status{status!="ok"} == 1`; `PiholeGravityStale` thresholds on `_gravity_last_update_age_seconds`. No TZ-guard needed — the source timestamps are epoch seconds (unambiguous UTC); only a clock-skew `max(0.0)` clamp applies.
 - [ ] **Two-endpoint resilience:** the collector polls BOTH `/api/info/ftl` and `/api/lists`; emits two `homelab_pihole_api_took_seconds{endpoint}` (info/ftl + lists); `ok=True` if EITHER endpoint succeeds, `ok=False` only if BOTH error.
 - [ ] **Live values sane vs Pi-hole:** VM `gravity_domains` exactly matches live `ftl.database.gravity`; failing-adlist ids + per-list `number` match the live `/api/lists`.
+
+## STAGE-006-008 — Blocking-state collector
+
+- [ ] **Pi-hole blocking-state collector (`pihole_blocking`) emits `homelab_pihole_blocking_enabled`** (1.0 when `blocking=="enabled"`, 0.0 otherwise — fail-closed for disabled/failed/unknown/non-string/missing). Verify in VM: `homelab_pihole_blocking_enabled` is present with value matching the live Pi-hole blocking toggle.
+- [ ] **`homelab_pihole_blocking_timer_seconds` omitted when no timer active:** the series is emitted ONLY when a temporary-disable timer is active (non-null `timer`); it is OMITTED (not zeroed) when no timer is active. Verify: with blocking enabled / no timer, the series is ABSENT in VM (empty query result), not `0`.
+- [ ] **API latency metric present:** `homelab_pihole_api_took_seconds{endpoint="dns/blocking"}` is emitted each run with a small positive value.
+- [ ] **Self-metric correct label:** Self-metric `homelab_collector_run_success_total{name="pihole_blocking"}` increments on each successful run (label key is `name`, not `collector`).
+- [ ] **Fail-closed semantics on enum edge cases:** a `blocking` value other than `"enabled"` (incl. `disabled`, `failed`, `unknown`, unrecognized, or non-string/missing) yields `homelab_pihole_blocking_enabled == 0`.
