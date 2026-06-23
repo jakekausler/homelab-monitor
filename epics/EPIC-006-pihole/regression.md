@@ -123,3 +123,14 @@
 - [ ] Source-key fallback: the collector reads `total.*` preferred, `thread0.*` fallback (verify metrics emit on a single-thread unbound where total==thread0; if a future multi-thread unbound only exposes `thread0.*` without `total.*`, the fallback keeps metrics flowing).
 - [ ] Histogram quantile derivation: `_recursion_time_seconds{quantile="0.95"}` etc. are derived by linear interpolation over the unbound `histogram.*` log-scale buckets; on an empty/zero-total histogram the quantiles are SKIPPED (not emitted as 0) while avg/median still emit. `num.rrset.bogus` is intentionally NOT emitted (not in card scope).
 - [ ] Docker-exec dependency: the collector execs `unbound-control stats_noreset` inside the `pihole-unbound` container via the shared docker socket (`app.state.docker_socket_client`). When docker is disabled (no socket injected), the collector degrades cleanly (`ok=False, errors=["client_unconfigured"]`, 0 emits) — it does NOT crash.
+
+## STAGE-006-014 — DNS health probe (composite up + direct :53 probe)
+
+- [ ] Collector `pihole_dns_health` is registered: `register_all` loads it into the pihole bundle (it appears in `_PIHOLE_COLLECTORS`); `make verify` bundle-registration test passes.
+- [ ] After `make dev-prod` + `POST /api/collectors/pihole_dns_health/retry`, the monitor `/metrics` emits `homelab_pihole_up 1.0` against the live Pi-hole DNS at `192.168.2.148:53` (proves UDP egress from the bridge network still works).
+- [ ] `/metrics` emits `homelab_pihole_dns_probe_result{outcome="ok"} 1.0` on a healthy probe (one-hot outcome series; exactly one outcome series per run).
+- [ ] `/metrics` emits `homelab_pihole_dns_probe_seconds` with a small positive value (sane LAN latency, e.g. ~0.001–0.5s) when the probe gets a response; the latency metric is OMITTED on a no-response outcome (timeout/socket_error/malformed/id_mismatch).
+- [ ] The composite is DNS-decisive and independent of the Pi-hole REST API: `homelab_pihole_up` is driven by the direct `:53` probe alone (the API-reachability signal is NOT folded in) — verify by code-reading `dns_health.py` that `up` derives only from `DnsProbeResult.ok`.
+- [ ] The DNS query primitive `kernel/dns/resolver.py::resolve_a(resolver_ip, qname, *, port=53, timeout_seconds)` is parameterized by resolver IP (reusable by STAGE-006-015's split-check) and NEVER raises — maps timeout/OSError/malformed/id-mismatch to a typed `DnsProbeResult`.
+- [ ] Resolver host/port come from config: `PiholeConfig.dns_host` (env `HOMELAB_MONITOR_PIHOLE_DNS_HOST`, defaults to deriving from base_url hostname when empty) + `dns_port` (env `HOMELAB_MONITOR_PIHOLE_DNS_PORT`, default 53) — `make verify` config tests cover the explicit-env, empty→derive, and urlparse-hostname branches.
+- [ ] `make verify` GREEN with 100% branch coverage including `kernel/dns/resolver.py` (note the provably-unreachable `finally`-block branch carries `# pragma: no branch` with an inline proof; do NOT remove it).
