@@ -63,6 +63,33 @@ def _mock_vm_lifespan_tick(httpx_mock: HTTPXMock) -> None:  # pyright: ignore[re
         is_optional=True,
         is_reusable=True,
     )
+    # Tolerate the unbound-stats collector's docker-exec tick. The lifespan-
+    # enabled tests in this file start the full scheduler; with a randomized
+    # PYTHONHASHSEED the UnboundStatsCollector's initial offset can be 0, so its
+    # `unbound-control` exec (POST /containers/pihole-unbound/exec + the
+    # /exec/<id>/start and /exec/<id>/json follow-ups) can fire inside the test
+    # window. Optional + reusable so it never affects tests that don't tick it.
+    httpx_mock.add_response(
+        method="POST",
+        url=re.compile(r"http://localhost/containers/.*/exec"),
+        json={"Id": "exec123"},
+        is_optional=True,
+        is_reusable=True,
+    )
+    httpx_mock.add_response(
+        method="POST",
+        url=re.compile(r"http://localhost/exec/.*/start"),
+        content=b"",
+        is_optional=True,
+        is_reusable=True,
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(r"http://localhost/exec/.*/json"),
+        json={"ExitCode": 0, "Running": False},
+        is_optional=True,
+        is_reusable=True,
+    )
 
 
 def _set_compose_config(app: FastAPI, tmp_path: Path) -> None:

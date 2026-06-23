@@ -19,6 +19,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
+from urllib.parse import urlparse
 
 import yaml
 
@@ -640,10 +641,17 @@ class PiholeConfig:
     ``"unattributed"``. The empty default is intentional: unlike Unifi (where the host
     IP is always required for registry reconciliation), Pi-hole classification degrades
     gracefully.
+
+    ``dns_host`` (STAGE-006-014) is the resolver IP for the INDEPENDENT direct
+    UDP :53 DNS health probe. Empty (the default) means "derive from base_url's
+    hostname" in the loader. ``dns_port`` defaults to 53. A future stage
+    (STAGE-006-015) adds a second resolver for split-check vs WAN upstream.
     """
 
     base_url: str = "http://192.168.2.148:8080"  # host LAN IP (container cannot reach localhost)
     host_lan_ip: str = ""
+    dns_host: str = ""  # resolver IP for the direct :53 DNS probe; empty -> derive from base_url
+    dns_port: int = 53
 
 
 def load_pihole_config() -> PiholeConfig:
@@ -656,11 +664,27 @@ def load_pihole_config() -> PiholeConfig:
     ``HOMELAB_MONITOR_PIHOLE_HOST_LAN_IP`` -> ``host_lan_ip`` (raw value, no strip — an
     IP carries no trailing slash; default ``""`` when unset, preserving graceful
     degradation to ``"unattributed"`` in the client classifier).
+    ``HOMELAB_MONITOR_PIHOLE_DNS_HOST`` -> ``dns_host`` (raw IP; empty default means
+    derive from base_url's hostname). ``HOMELAB_MONITOR_PIHOLE_DNS_PORT`` -> ``dns_port``
+    (int; default 53).
     """
     raw = os.environ.get("HOMELAB_MONITOR_PIHOLE_URL")
     base_url = PiholeConfig().base_url if raw is None else raw.rstrip("/")
     host_lan_ip = os.environ.get("HOMELAB_MONITOR_PIHOLE_HOST_LAN_IP", PiholeConfig().host_lan_ip)
-    return PiholeConfig(base_url=base_url, host_lan_ip=host_lan_ip)
+
+    dns_host = os.environ.get("HOMELAB_MONITOR_PIHOLE_DNS_HOST", "")
+    if not dns_host:
+        dns_host = urlparse(base_url).hostname or ""
+
+    raw_port = os.environ.get("HOMELAB_MONITOR_PIHOLE_DNS_PORT")
+    dns_port = PiholeConfig().dns_port if raw_port is None else int(raw_port)
+
+    return PiholeConfig(
+        base_url=base_url,
+        host_lan_ip=host_lan_ip,
+        dns_host=dns_host,
+        dns_port=dns_port,
+    )
 
 
 @dataclass(frozen=True, slots=True)

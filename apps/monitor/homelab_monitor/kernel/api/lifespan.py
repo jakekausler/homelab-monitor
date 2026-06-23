@@ -1017,6 +1017,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
                 app.state, "docker_socket_client", None
             )
             c._cfg = load_pihole_unbound_config()  # pyright: ignore[reportPrivateUsage]
+        from homelab_monitor.plugins.collectors.integrations.pihole.dns_health import (  # noqa: PLC0415
+            PiholeDnsHealthCollector,
+        )
+
+        if isinstance(c, PiholeDnsHealthCollector):
+            c._dns_host = pihole_config.dns_host  # pyright: ignore[reportPrivateUsage]
+            c._dns_port = pihole_config.dns_port  # pyright: ignore[reportPrivateUsage]
         from homelab_monitor.kernel.metrics.image_update_collector import (  # noqa: PLC0415
             ImageUpdateCollector,
         )

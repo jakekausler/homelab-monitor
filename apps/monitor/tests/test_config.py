@@ -1565,3 +1565,57 @@ def test_load_pihole_config_base_url_unaffected_by_host_lan_ip(
     cfg = load_pihole_config()
     assert cfg.base_url == "http://pihole.local:8080"  # trailing slash stripped
     assert cfg.host_lan_ip == "10.0.0.1"
+
+
+def test_load_pihole_config_dns_host_derived_from_base_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """dns_host derived from base_url hostname when env unset (true branch)."""
+    monkeypatch.delenv("HOMELAB_MONITOR_PIHOLE_DNS_HOST", raising=False)
+    monkeypatch.setenv("HOMELAB_MONITOR_PIHOLE_URL", "http://192.168.9.9:8080")
+    cfg = load_pihole_config()
+    assert cfg.dns_host == "192.168.9.9"
+    assert cfg.dns_port == 53  # noqa: PLR2004
+
+
+def test_load_pihole_config_dns_host_explicit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """dns_host from env takes precedence (false branch of if not dns_host)."""
+    monkeypatch.setenv("HOMELAB_MONITOR_PIHOLE_DNS_HOST", "10.0.0.5")
+    monkeypatch.delenv("HOMELAB_MONITOR_PIHOLE_URL", raising=False)
+    cfg = load_pihole_config()
+    assert cfg.dns_host == "10.0.0.5"
+
+
+def test_load_pihole_config_dns_host_derive_none_hostname(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """dns_host defaults to empty when base_url has no hostname."""
+    monkeypatch.delenv("HOMELAB_MONITOR_PIHOLE_DNS_HOST", raising=False)
+    monkeypatch.setenv("HOMELAB_MONITOR_PIHOLE_URL", "")
+    cfg = load_pihole_config()
+    assert cfg.dns_host == ""
+
+
+def test_load_pihole_config_dns_port_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """dns_port defaults to 53 when env unset."""
+    monkeypatch.delenv("HOMELAB_MONITOR_PIHOLE_DNS_PORT", raising=False)
+    cfg = load_pihole_config()
+    assert cfg.dns_port == 53  # noqa: PLR2004
+
+
+def test_load_pihole_config_dns_port_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """dns_port from env overrides default."""
+    monkeypatch.setenv("HOMELAB_MONITOR_PIHOLE_DNS_PORT", "5353")
+    cfg = load_pihole_config()
+    assert cfg.dns_port == 5353  # noqa: PLR2004
+
+
+def test_load_pihole_config_non_numeric_dns_port_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Non-numeric HOMELAB_MONITOR_PIHOLE_DNS_PORT raises ValueError."""
+    monkeypatch.setenv("HOMELAB_MONITOR_PIHOLE_DNS_PORT", "abc")
+    with pytest.raises(ValueError):
+        load_pihole_config()

@@ -1112,3 +1112,58 @@ async def test_docker_disabled_skips_registration_and_socket_client(
         local_build_collector = getattr(app.state, "local_build_update_collector", None)
         assert isinstance(local_build_collector, LocalBuildUpdateCollector)
         assert local_build_collector._socket_client is None  # pyright: ignore[reportPrivateUsage]
+
+
+@pytest.mark.asyncio
+async def test_lifespan_wires_pihole_dns_health_collector(
+    db_url: str,
+    master_key: bytes,
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,  # type: ignore[name-defined]
+) -> None:
+    """After startup, the PiholeDnsHealthCollector isinstance branch is covered.
+
+    Verifies the lifespan wiring loop injects _dns_host / _dns_port onto the
+    collector (mirrors test_lifespan_wires_unbound_stats_collector).
+    """
+    import re  # noqa: PLC0415
+
+    from homelab_monitor.plugins.collectors.integrations.pihole.dns_health import (  # noqa: PLC0415
+        PiholeDnsHealthCollector,
+    )
+
+    monkeypatch.setenv("HOMELAB_MONITOR_DB_URL", db_url)
+    monkeypatch.setenv("HOMELAB_MONITOR_MASTER_KEY", base64.b64encode(master_key).decode())
+    monkeypatch.setenv("HOMELAB_MONITOR_PIHOLE_DNS_HOST", "192.168.2.149")
+    monkeypatch.setenv("HOMELAB_MONITOR_PIHOLE_DNS_PORT", "53")
+
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(r".*localhost/events.*"),
+        content=b"",
+        is_optional=True,
+        is_reusable=True,
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(r".*localhost/containers/json.*"),
+        json=[],
+        is_optional=True,
+        is_reusable=True,
+    )
+
+    app = create_app(lifespan_enabled=True)
+
+    async with app.router.lifespan_context(app):
+        assert app.state.scheduler is not None
+        assert app.state.scheduler.running
+
+        dns_collector = None
+        for lc in app.state.scheduler._loaded:  # pyright: ignore[reportPrivateUsage]
+            if isinstance(lc.collector, PiholeDnsHealthCollector):
+                dns_collector = lc.collector
+                break
+
+        assert dns_collector is not None, "PiholeDnsHealthCollector should be registered"
+        assert dns_collector._dns_host == "192.168.2.149"  # pyright: ignore[reportPrivateUsage]
+        assert dns_collector._dns_port == 53  # pyright: ignore[reportPrivateUsage]  # noqa: PLR2004
