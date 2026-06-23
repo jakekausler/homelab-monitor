@@ -18,6 +18,9 @@ from homelab_monitor.kernel.plugins.loader import PluginLoader, config_from_clas
 from homelab_monitor.plugins.collectors.integrations.pihole.blocking import (
     PiholeBlockingCollector,
 )
+from homelab_monitor.plugins.collectors.integrations.pihole.ftl_health import (
+    PiholeFtlHealthCollector,
+)
 from homelab_monitor.plugins.collectors.integrations.pihole.gravity import (
     PiholeGravityCollector,
 )
@@ -33,6 +36,7 @@ _log = structlog.get_logger()
 # Wave-B stages append their collector class here.
 _PIHOLE_COLLECTORS: list[type[BaseCollector]] = [
     PiholeBlockingCollector,
+    PiholeFtlHealthCollector,
     PiholeStatsSummaryCollector,
     PiholeUpstreamsCollector,
     PiholeGravityCollector,
