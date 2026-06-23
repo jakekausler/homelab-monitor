@@ -561,6 +561,122 @@ def test_install_instructions_dedicated_user(
     assert "PRIVATE KEY" not in err
 
 
+def test_install_instructions_dedicated_user_with_script_id(
+    cli_env: str,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """install-instructions dedicated-user with script_id: renders the 5-step recipe."""
+    _write_install_config(
+        tmp_path,
+        monkeypatch,
+        "ssh_targets:\n"
+        "  - id: synology\n"
+        "    host: 192.168.2.4\n"
+        "    port: 53197\n"
+        "    user: homelab-probe\n"
+        "    account_mode: dedicated-user\n"
+        "    script_id: synology_probe\n",
+    )
+    main(["migrate"])
+    capsys.readouterr()
+
+    assert main(["ssh-probe", "keygen", "synology"]) == 0
+    capsys.readouterr()
+
+    rc = main(["ssh-probe", "install-instructions", "synology"])
+    _captured = capsys.readouterr()
+    out, err = _captured.out, _captured.err
+    assert rc == 0
+    # Dedicated-user 5-step recipe present.
+    assert "sudo useradd -m -s /bin/sh homelab-probe" in out
+    assert "cat /proc/uptime" in out
+    # Advisory sudoers step is present (rendered as optional/advisory — not a hard requirement).
+    assert "homelab-probe ALL=(root) NOPASSWD: <ABSOLUTE_PATHS_OF_READ_ONLY_COMMANDS>" in out
+    assert "(Only if your script needs privileged read commands)" in out
+    # Forced-command authorized_keys line with correct user path and target comment.
+    assert (
+        'command="/home/homelab-probe/hm-probe.sh",no-port-forwarding,no-pty,no-X11-forwarding,no-agent-forwarding'
+        in out
+    )
+    assert "hm-probe-synology" in out
+    # Public key is present.
+    assert "ssh-ed25519 " in out
+    # No appliance-mode persistence warning.
+    assert "WARNING (UniFi OS firmware persistence)" not in out
+    # Private key never printed.
+    assert "PRIVATE KEY" not in out
+    assert "PRIVATE KEY" not in err
+
+
+@pytest.mark.asyncio
+async def test_test_dedicated_user_restriction_enforced(
+    cli_env: str,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    ssh_test_server_forced_command: SshTestServer,  # noqa: F811
+) -> None:
+    """test command PASS path (dedicated-user): forced server, marker absent → restriction holds."""
+    _write_install_config(
+        tmp_path,
+        monkeypatch,
+        "ssh_targets:\n"
+        "  - id: synology\n"
+        "    host: 127.0.0.1\n"
+        f"    port: {ssh_test_server_forced_command.port}\n"
+        "    user: homelab-probe\n"
+        "    account_mode: dedicated-user\n"
+        "    script_id: synology_probe\n"
+        f"    host_key: {ssh_test_server_forced_command.host_pubkey_line.strip()}\n",
+    )
+    main(["migrate"])
+    capsys.readouterr()
+
+    await _astore_secret("ssh_probe_key_synology", ssh_test_server_forced_command.client_key_pem)
+
+    rc = await _cmd_test("synology")
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "PASS: forced-command restriction enforced" in out
+    assert "forced-command output:" in out
+    assert "HM_PROBE_RESTRICTION_CHECK_synology" not in out
+
+
+@pytest.mark.asyncio
+async def test_test_dedicated_user_restriction_broken(
+    cli_env: str,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    ssh_test_server: SshTestServer,  # noqa: F811
+) -> None:
+    """test command NEGATIVE path (dedicated-user): plain server, marker → restriction broken."""
+    _write_install_config(
+        tmp_path,
+        monkeypatch,
+        "ssh_targets:\n"
+        "  - id: synology\n"
+        "    host: 127.0.0.1\n"
+        f"    port: {ssh_test_server.port}\n"
+        "    user: homelab-probe\n"
+        "    account_mode: dedicated-user\n"
+        "    script_id: synology_probe\n"
+        f"    host_key: {ssh_test_server.host_pubkey_line.strip()}\n",
+    )
+    main(["migrate"])
+    capsys.readouterr()
+
+    await _astore_secret("ssh_probe_key_synology", ssh_test_server.client_key_pem)
+
+    rc = await _cmd_test("synology")
+    err = capsys.readouterr().err
+    assert rc == _RESTRICTION_EXIT_CODE
+    assert "FAIL: restriction NOT enforced" in err
+    assert 'command="' in err
+
+
 def test_install_instructions_target_not_in_config(
     cli_env: str,
     capsys: pytest.CaptureFixture[str],

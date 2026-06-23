@@ -320,6 +320,147 @@ command="/home/<user>/hm-probe.sh",no-port-forwarding,no-pty,no-X11-forwarding,n
 > add a narrow `NOPASSWD` sudoers entry scoped to specific absolute command paths —
 > but that is **out of scope** for the uptime exemplar; skip it.
 
+#### Synology NAS (`homelab-probe`, EPIC-008)
+
+This subsection walks through provisioning the Synology NAS (`192.168.2.4`, non-standard port
+`53197`) as a dedicated-user SSH probe target for EPIC-008. The real probe body (combined
+SMART/array/UPS/hwmon collector) arrives in STAGE-008-014. This stage installs the placeholder
+script and wires up the framework.
+
+> **Overrides-repo only.** The `ssh_targets` entry below belongs in your **overrides repo**
+> (the private, gitignored `homelab-monitor-overrides` repo mounted as a volume), **not** in
+> the public `homelab-monitor` config. Do not add it to `deploy/compose/.env` or any file in
+> this repo.
+
+**(1) Declare the target in your overrides config:**
+
+```yaml
+ssh_targets:
+  - id: synology
+    host: 192.168.2.4
+    port: 53197
+    user: homelab-probe
+    account_mode: dedicated-user
+    script_id: synology_probe
+    # host_key: filled after Step 3 (capture-hostkey)
+```
+
+`script_id: synology_probe` identifies which probe script body to load (STAGE-008-014 will
+supply the real implementation). Until that stage, the installed script is the placeholder
+below.
+
+**(2) Run the four CLI provisioning steps:**
+
+```bash
+# Step 2 — generate the probe key (writes secret ssh_probe_key_synology)
+hm ssh-probe keygen synology
+
+# Step 3 — capture and pin the host key; paste the printed bare line into host_key above
+hm ssh-probe capture-hostkey synology
+
+# Step 4 — get the DSM-side install instructions
+hm ssh-probe install-instructions synology
+
+# Step 6 — verify the restriction holds (run after DSM steps below)
+hm ssh-probe test synology
+```
+
+**(3) DSM-side manual steps (perform as a DSM admin in Control Panel → User & Group):**
+
+a. **Create the `homelab-probe` DSM user.** Use Control Panel → User & Group → Create. Assign
+   it to **no** admin group and **no** privileged groups. This is a read-only service account —
+   do not grant it any DSM admin privileges or shell access beyond the forced command.
+
+b. **Determine the user's real home directory.** DSM creates service-user homes under a
+   path that may differ from `/home/homelab-probe`. After creating the user, log in via SSH
+   as admin and run:
+
+   ```bash
+   getent passwd homelab-probe
+   ```
+
+   The sixth colon-separated field is the real home. Substitute it for `/home/homelab-probe`
+   everywhere below (script path, `.ssh/authorized_keys` path, and the `command="..."` path).
+
+c. **Set the login shell to `/bin/sh`.** DSM may default service users to `/sbin/nologin`,
+   which prevents the forced command from running. Check the last field of
+   `getent passwd homelab-probe`; if it's a nologin shell, set it:
+
+   ```bash
+   sudo sed -i '/^homelab-probe:/ s#/sbin/nologin#/bin/sh#' /etc/passwd
+   getent passwd homelab-probe   # verify
+   ```
+
+   > **DSM caveat.** DSM can rewrite `/etc/passwd` from its user database on reboot or
+   > after user-config changes, reverting the shell to `nologin`. If the probe reports
+   > `up=0` after a reboot, re-check and re-apply this step.
+
+d. **Install the placeholder probe script** at `/home/homelab-probe/hm-probe.sh` (owned by
+   `homelab-probe`, mode `0755`). STAGE-008-014 replaces the body with the real combined
+   Synology collector (SMART, array, UPS, hwmon via DSM API + SSH cross-check):
+
+   ```sh
+   #!/bin/sh
+   # hm-probe-synology exemplar — STAGE-008-014 replaces this body
+   # with the real combined Synology probe (SMART/array/UPS/hwmon).
+   cat /proc/uptime
+   ```
+
+   Install it:
+
+   ```bash
+   sudo mkdir -p /home/homelab-probe/.ssh
+   cat > /tmp/hm-probe.sh <<'EOF'
+   #!/bin/sh
+   # hm-probe-synology exemplar — STAGE-008-014 replaces this body
+   # with the real combined Synology probe (SMART/array/UPS/hwmon).
+   cat /proc/uptime
+   EOF
+   sudo install -o homelab-probe -m 0755 /tmp/hm-probe.sh /home/homelab-probe/hm-probe.sh
+   ```
+
+e. **Append the forced-command `authorized_keys` line.** Copy the exact line printed by
+   `hm ssh-probe install-instructions synology` (it includes your actual public key). It
+   will look like:
+
+   ```
+   command="/home/homelab-probe/hm-probe.sh",no-port-forwarding,no-pty,no-X11-forwarding,no-agent-forwarding ssh-ed25519 AAAA... hm-probe-synology
+   ```
+
+   Install wrap-proof (one physical line — do **not** paste into a terminal editor):
+
+   ```bash
+   sudo mkdir -p /home/homelab-probe/.ssh
+   sudo chmod 700 /home/homelab-probe/.ssh
+   printf '%s\n' '<the full authorized_keys line from install-instructions>' \
+     | sudo tee -a /home/homelab-probe/.ssh/authorized_keys > /dev/null
+   sudo chown -R homelab-probe:homelab-probe /home/homelab-probe/.ssh
+   sudo chmod 600 /home/homelab-probe/.ssh/authorized_keys
+   ```
+
+   Verify it's one physical line:
+   ```bash
+   wc -l /home/homelab-probe/.ssh/authorized_keys   # should be 1
+   cat /home/homelab-probe/.ssh/authorized_keys      # options + key + comment on ONE line
+   ```
+
+> **No sudoers entry needed for Synology.** Per EPIC-008 Amendment 3, the Synology probe
+> reads everything **unprivileged**: per-attribute SMART data via `synodisk --enum` /
+> `--smart_info_get`, array status via `/proc/mdstat`, UPS data via `upsc`, hardware
+> sensors via hwmon sysfs, and filesystem usage via `df`. The only root-level read
+> (btrfs scrub status) is fetched from the DSM API instead of the shell — so the probe
+> script needs **no** elevated privileges. Skip the advisory sudoers step (step 3 in the
+> generic recipe) entirely.
+
+**(4) Verify:**
+
+```bash
+hm ssh-probe test synology
+```
+
+Exit 0 = restriction holds = setup correct. The probe is ready for STAGE-008-014 to install
+the real collector body.
+
 ---
 
 ## 7. Step 5 — Perform the install by hand
