@@ -33,6 +33,9 @@ from homelab_monitor.plugins.collectors.integrations.pihole.stats_summary import
 from homelab_monitor.plugins.collectors.integrations.pihole.upstreams import (
     PiholeUpstreamsCollector,
 )
+from homelab_monitor.plugins.collectors.integrations.pihole.version import (
+    PiholeVersionCollector,
+)
 
 _log = structlog.get_logger()
 
@@ -44,6 +47,7 @@ _PIHOLE_COLLECTORS: list[type[BaseCollector]] = [
     PiholeStatsSummaryCollector,
     PiholeUpstreamsCollector,
     PiholeGravityCollector,
+    PiholeVersionCollector,
 ]
 
 
