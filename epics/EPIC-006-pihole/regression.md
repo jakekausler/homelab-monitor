@@ -84,3 +84,13 @@
 - [ ] **Does NOT double-emit `homelab_pihole_gravity_domains` (STAGE-007 owns it) and does NOT emit host cpu/mem (scope-out).
 - [ ] **KNOWN FLAKY (pre-existing, unrelated): `tests/test_scheduler.py::test_process_run_kind` is order-dependent — can fail in a full `make verify` run, passes in isolation/on re-run. If it fails, re-run before investigating; it is NOT caused by Pi-hole collector work.
 - [ ] **CLIENT HARDENING GAP (tracked to STAGE-006-018): `PiholeRestClient._get()` does not detect a 200-response carrying an `{"error": {...}}` body; all pihole collectors would silently emit nothing if Pi-hole returns 200-with-error-envelope. Verify STAGE-006-018 adds 200-error-body detection to the client.
+
+## STAGE-006-010 — FTL diagnostic-messages collector
+
+- [ ] FTL diagnostic-messages collector (`pihole_ftl_messages`) emits `homelab_pihole_messages_count` (= total list length, always emitted incl. 0 when no messages) — verify present in VM, value matches the live Pi-hole message count.
+- [ ] `homelab_pihole_messages{type}` emits a per-type COUNT, grouped by the message `type` field (duplicate types collapse: 2 LIST messages → `{type="LIST"}=2`, NOT two series). Verify grouping in VM matches the live by-type breakdown. Present types only (no zero-fill).
+- [ ] Non-string/missing `type` falls back to `{type="unknown"}`; non-dict message entries are skipped (counted in messages_count total but not in any per-type series, so sum(per-type) may be < count when malformed entries exist).
+- [ ] `homelab_pihole_api_took_seconds{endpoint="info/messages"}` emitted each run.
+- [ ] Self-metric `homelab_collector_run_success_total{name="pihole_ftl_messages"}` increments on each successful run.
+- [ ] Malformed-payload resilience: payload not a dict, or "messages" key missing/not-a-list → run reports ok=False with an error (api_took still counted); does NOT falsely emit messages_count=0.
+- [ ] Metric name is PLURAL `homelab_pihole_messages{type}` (corrected from the card's singular `homelab_pihole_message` during Design — per-type count semantics).
