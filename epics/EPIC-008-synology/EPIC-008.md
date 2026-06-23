@@ -1,6 +1,6 @@
 # EPIC-008: Synology integration
 
-## Status: In Progress (current: STAGE-008-008 Complete; next: STAGE-008-009)
+## Status: In Progress (current: STAGE-008-009 Complete — Wave B closed; next: STAGE-008-010)
 
 ## Build order + framework dependencies (LOCKED — 2026-06-22 brainstorm)
 
@@ -371,7 +371,7 @@ rules; mount-health + Docker-suppression before the rules/UI/dashboards that sur
 | STAGE-008-006 | Pool & RAID collector: `raidStatus`, normal/designed disk count, rebuild `progress.percent`, `scrubbingStatus`, unverified-disk attention — ✅ Complete |
 | STAGE-008-007 | System info + temps collector (`Core.System` v3): model/serial/uptime/`sys_temp`/fan status/`NeedReboot` — ✅ Complete |
 | STAGE-008-008 | Utilization collector (`System.Utilization`): CPU load, mem/swap %, per-disk IO, per-NIC rx/tx, NFS OPS+latency — ✅ Complete |
-| STAGE-008-009 | UPS collector (`ExternalDevice.UPS`) + SystemHealth `rule` status metric |
+| STAGE-008-009 | UPS collector (`ExternalDevice.UPS`) + SystemHealth `rule` status metric — ✅ Complete |
 
 ### Wave C — Protect / maintain collectors (4)
 | # | Stage | Theme |
