@@ -7,6 +7,9 @@ import pytest
 from homelab_monitor.kernel.plugins.base import BaseCollector
 from homelab_monitor.kernel.plugins.loader import LoadedCollector, PluginLoader
 from homelab_monitor.plugins.collectors.integrations.synology import register_all
+from homelab_monitor.plugins.collectors.integrations.synology.pool import (
+    SynologyPoolCollector,
+)
 from homelab_monitor.plugins.collectors.integrations.synology.storage import (
     SynologyStorageCollector,
 )
@@ -25,6 +28,20 @@ def test_register_all_registers_storage() -> None:
     record = records[0]
     assert isinstance(record, LoadedCollector)
     assert record.config.name == "synology_storage"
+    assert record.config.interval_seconds == _EXPECTED_INTERVAL
+    assert record.config.timeout_seconds == _EXPECTED_TIMEOUT
+
+
+def test_register_all_registers_pool() -> None:
+    """register_all registers SynologyPoolCollector with the derived config."""
+    loader = PluginLoader()
+    register_all(loader)
+    loaded = loader.load_all()
+    records = [r for r in loaded if isinstance(r.collector, SynologyPoolCollector)]
+    assert len(records) == 1
+    record = records[0]
+    assert isinstance(record, LoadedCollector)
+    assert record.config.name == "synology_pool"
     assert record.config.interval_seconds == _EXPECTED_INTERVAL
     assert record.config.timeout_seconds == _EXPECTED_TIMEOUT
 
