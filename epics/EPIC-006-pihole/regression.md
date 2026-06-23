@@ -74,3 +74,13 @@
 - [ ] **API latency metric present:** `homelab_pihole_api_took_seconds{endpoint="dns/blocking"}` is emitted each run with a small positive value.
 - [ ] **Self-metric correct label:** Self-metric `homelab_collector_run_success_total{name="pihole_blocking"}` increments on each successful run (label key is `name`, not `collector`).
 - [ ] **Fail-closed semantics on enum edge cases:** a `blocking` value other than `"enabled"` (incl. `disabled`, `failed`, `unknown`, unrecognized, or non-string/missing) yields `homelab_pihole_blocking_enabled == 0`.
+
+## STAGE-006-009 — FTL health + DB collector
+
+- [ ] **FTL-health collector (`pihole_ftl_health`) emits `homelab_pihole_ftl_uptime_seconds`, `_ftl_cpu_percent`, `_ftl_memory_percent`, `_privacy_level` from `/api/info/ftl` — verify present in VM with sane values. CRITICAL: these read from the NESTED `payload["ftl"]` object (not top-level) — a regression to top-level reads would silently drop all of them.
+- [ ] **`homelab_pihole_dnsmasq_cache_insertions` / `_evictions` emitted from `ftl.dnsmasq.dns_cache_inserted` / `dns_cache_live_freed` — verify present.
+- [ ] **`homelab_pihole_db_size_bytes` (from `size`) and `homelab_pihole_db_queries_total` (from `queries_disk`, the on-disk total ~11.6M — NOT `queries` ~97k) — verify present and that db_queries_total is the large on-disk number.
+- [ ] **Per-endpoint resilience: `ok = ftl_ok or db_ok` — run succeeds if at least one of `/api/info/ftl` / `/api/info/database` succeeds.
+- [ ] **Does NOT double-emit `homelab_pihole_gravity_domains` (STAGE-007 owns it) and does NOT emit host cpu/mem (scope-out).
+- [ ] **KNOWN FLAKY (pre-existing, unrelated): `tests/test_scheduler.py::test_process_run_kind` is order-dependent — can fail in a full `make verify` run, passes in isolation/on re-run. If it fails, re-run before investigating; it is NOT caused by Pi-hole collector work.
+- [ ] **CLIENT HARDENING GAP (tracked to STAGE-006-018): `PiholeRestClient._get()` does not detect a 200-response carrying an `{"error": {...}}` body; all pihole collectors would silently emit nothing if Pi-hole returns 200-with-error-envelope. Verify STAGE-006-018 adds 200-error-body detection to the client.
