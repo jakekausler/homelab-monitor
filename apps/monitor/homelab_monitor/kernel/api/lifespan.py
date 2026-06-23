@@ -24,6 +24,7 @@ from homelab_monitor.kernel.config import (
     load_ha_config,
     load_ha_registry_config,
     load_pihole_config,
+    load_pihole_unbound_config,
     load_tail_config,
     load_unifi_config,
 )
@@ -1007,6 +1008,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
                 == "true"
             )
             app.state.probe_supervisor = c
+        from homelab_monitor.plugins.collectors.integrations.pihole.unbound_stats import (  # noqa: PLC0415
+            UnboundStatsCollector,
+        )
+
+        if isinstance(c, UnboundStatsCollector):
+            c._socket_client = getattr(  # pyright: ignore[reportPrivateUsage]
+                app.state, "docker_socket_client", None
+            )
+            c._cfg = load_pihole_unbound_config()  # pyright: ignore[reportPrivateUsage]
         from homelab_monitor.kernel.metrics.image_update_collector import (  # noqa: PLC0415
             ImageUpdateCollector,
         )

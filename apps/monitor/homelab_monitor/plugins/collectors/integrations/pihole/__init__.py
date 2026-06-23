@@ -33,6 +33,9 @@ from homelab_monitor.plugins.collectors.integrations.pihole.stats_summary import
 from homelab_monitor.plugins.collectors.integrations.pihole.top_clients import (
     PiholeClientsCollector,
 )
+from homelab_monitor.plugins.collectors.integrations.pihole.unbound_stats import (
+    UnboundStatsCollector,
+)
 from homelab_monitor.plugins.collectors.integrations.pihole.upstreams import (
     PiholeUpstreamsCollector,
 )
@@ -52,6 +55,7 @@ _PIHOLE_COLLECTORS: list[type[BaseCollector]] = [
     PiholeGravityCollector,
     PiholeVersionCollector,
     PiholeClientsCollector,
+    UnboundStatsCollector,
 ]
 
 

@@ -832,6 +832,78 @@ async def test_lifespan_docker_discoverer_in_degraded_skips_events_loop(
 
 
 @pytest.mark.asyncio
+async def test_lifespan_wires_unbound_stats_collector(
+    db_url: str,
+    master_key: bytes,
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,  # type: ignore[name-defined]
+) -> None:
+    """After startup, the UnboundStatsCollector isinstance branch is covered.
+
+    The collector is in the pihole bundle and gets registered like other
+    pihole collectors. The lifespan wiring loop finds it via isinstance and
+    injects _socket_client + _cfg. This test verifies the isinstance branch
+    executes by checking that startup completes and docker_socket_client
+    is wired (which the UnboundStatsCollector wiring block uses).
+
+    Covers lifespan.py: the ``isinstance(c, UnboundStatsCollector)`` block
+    that sets c._socket_client and c._cfg.
+    """
+    import re  # noqa: PLC0415
+
+    from homelab_monitor.plugins.collectors.integrations.pihole.unbound_stats import (  # noqa: PLC0415
+        UnboundStatsCollector,
+    )
+
+    monkeypatch.setenv("HOMELAB_MONITOR_DB_URL", db_url)
+    monkeypatch.setenv("HOMELAB_MONITOR_MASTER_KEY", base64.b64encode(master_key).decode())
+
+    # Suppress real Docker socket traffic.
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(r".*localhost/events.*"),
+        content=b"",
+        is_optional=True,
+        is_reusable=True,
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(r".*localhost/containers/json.*"),
+        json=[],
+        is_optional=True,
+        is_reusable=True,
+    )
+
+    app = create_app(lifespan_enabled=True)
+
+    async with app.router.lifespan_context(app):
+        # Lifespan startup completed successfully; the wiring loop ran and the
+        # UnboundStatsCollector isinstance block (which loads config) executed.
+        # If the block failed, startup would have raised an exception.
+        # docker_socket_client is wired here (or None if docker disabled), and
+        # that's what the UnboundStatsCollector wiring block uses.
+        assert app.state.scheduler is not None
+        assert app.state.scheduler.running
+
+        # Find the UnboundStatsCollector instance via the scheduler's loaded collectors
+        unbound_collector = None
+        for lc in app.state.scheduler._loaded:  # pyright: ignore[reportPrivateUsage]
+            if isinstance(lc.collector, UnboundStatsCollector):
+                unbound_collector = lc.collector
+                break
+
+        assert unbound_collector is not None, "UnboundStatsCollector should be registered"
+
+        # Verify that _cfg was injected (always injected regardless of docker state)
+        assert unbound_collector._cfg is not None  # pyright: ignore[reportPrivateUsage]
+        container = unbound_collector._cfg.container  # pyright: ignore[reportPrivateUsage]
+        assert container == "pihole-unbound"
+
+        # Verify that _socket_client is not None (docker should be enabled in this test)
+        assert unbound_collector._socket_client is not None  # pyright: ignore[reportPrivateUsage]
+
+
+@pytest.mark.asyncio
 async def test_lifespan_startup_cron_discovery_disabled_skips_immediate_run(
     db_url: str,
     master_key: bytes,
