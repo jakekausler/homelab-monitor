@@ -24,6 +24,9 @@ from homelab_monitor.plugins.collectors.integrations.synology.storage import (
 from homelab_monitor.plugins.collectors.integrations.synology.system import (
     SynologySystemCollector,
 )
+from homelab_monitor.plugins.collectors.integrations.synology.utilization import (
+    SynologyUtilizationCollector,
+)
 
 _log = structlog.get_logger()
 
@@ -31,6 +34,7 @@ _SYNOLOGY_COLLECTORS: list[type[BaseCollector]] = [
     SynologyStorageCollector,
     SynologyPoolCollector,
     SynologySystemCollector,
+    SynologyUtilizationCollector,
 ]
 
 

@@ -16,10 +16,14 @@ from homelab_monitor.plugins.collectors.integrations.synology.storage import (
 from homelab_monitor.plugins.collectors.integrations.synology.system import (
     SynologySystemCollector,
 )
+from homelab_monitor.plugins.collectors.integrations.synology.utilization import (
+    SynologyUtilizationCollector,
+)
 
 _EXPECTED_INTERVAL = 300
 _EXPECTED_TIMEOUT = 30
 _EXPECTED_SYSTEM_INTERVAL = 60
+_EXPECTED_UTILIZATION_INTERVAL = 60
 
 
 def test_register_all_registers_storage() -> None:
@@ -61,6 +65,20 @@ def test_register_all_registers_system() -> None:
     assert isinstance(record, LoadedCollector)
     assert record.config.name == "synology_system"
     assert record.config.interval_seconds == _EXPECTED_SYSTEM_INTERVAL
+    assert record.config.timeout_seconds == _EXPECTED_TIMEOUT
+
+
+def test_register_all_registers_utilization() -> None:
+    """register_all registers SynologyUtilizationCollector with the derived config."""
+    loader = PluginLoader()
+    register_all(loader)
+    loaded = loader.load_all()
+    records = [r for r in loaded if isinstance(r.collector, SynologyUtilizationCollector)]
+    assert len(records) == 1
+    record = records[0]
+    assert isinstance(record, LoadedCollector)
+    assert record.config.name == "synology_utilization"
+    assert record.config.interval_seconds == _EXPECTED_UTILIZATION_INTERVAL
     assert record.config.timeout_seconds == _EXPECTED_TIMEOUT
 
 
