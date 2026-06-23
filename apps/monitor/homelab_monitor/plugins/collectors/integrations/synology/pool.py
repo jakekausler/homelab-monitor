@@ -5,9 +5,9 @@ STAGE-008-005 uses) and emits the POOL and RAID slices. The volume/disk slice
 is STAGE-008-005's job; this file is single-purpose by design. Both collectors
 read from the same one cached fetch via the shared client.
 
-PARSE — defensive. ``_as_dict`` / ``_as_list_of_dicts`` / ``_nested`` walk the
+PARSE — defensive. ``as_dict`` / ``as_list_of_dicts`` / ``nested`` walk the
 structure tolerantly and degrade a wrong-nesting guess to None (metric skipped),
-never a crash or a pyright failure. ``_bool_to_gauge``, ``_raid_status_to_gauge``,
+never a crash or a pyright failure. ``bool_to_gauge``, ``_raid_status_to_gauge``,
 and ``_unverified_disk`` map DSM bool flags / the ``raidStatus`` int / the
 multi-field unverified-disk condition to gauges.
 
@@ -29,17 +29,21 @@ from __future__ import annotations
 
 import time
 from datetime import timedelta
-from typing import ClassVar, Final, cast
+from typing import ClassVar, Final
 
 from homelab_monitor.kernel.plugins.base import BaseCollector
 from homelab_monitor.kernel.plugins.context import CollectorContext
 from homelab_monitor.kernel.plugins.types import CollectorEvent, CollectorResult
 from homelab_monitor.plugins.collectors.integrations.synology._shared import (
+    as_dict,
     as_float,
+    as_list_of_dicts,
+    bool_to_gauge,
     cap_for_synology,
     capped_emitter,
     client_unconfigured_result,
     fetch_or_result,
+    nested,
 )
 
 # --- Per-pool metric family names -------------------------------------------
@@ -65,48 +69,6 @@ M_RAID_HAS_PARITY: Final[str] = "homelab_synology_raid_has_parity"  # {pool,raid
 M_RAID_CRASHED_REASON: Final[str] = "homelab_synology_raid_crashed_reason"  # {pool,raid}
 
 
-# ---------------------------------------------------------------------------
-# Defensive nesting navigators (local copies — rule-of-three not met)
-# ---------------------------------------------------------------------------
-
-
-def _as_dict(v: object) -> dict[str, object] | None:
-    """Return v as a dict[str, object] when it is a dict, else None."""
-    if isinstance(v, dict):
-        return cast("dict[str, object]", v)
-    return None
-
-
-def _as_list_of_dicts(v: object) -> list[dict[str, object]]:
-    """Return v as a list of record dicts (non-dict entries skipped), [] otherwise."""
-    if not isinstance(v, list):
-        return []
-    items = cast("list[object]", v)
-    return [cast("dict[str, object]", r) for r in items if isinstance(r, dict)]
-
-
-def _nested(rec: dict[str, object], *path: str) -> object:
-    """Walk a dotted path tolerating missing keys / non-dict intermediates.
-
-    Returns the leaf value, or None if any step is absent or a non-dict is hit
-    before the final key.
-    """
-    cur: object = rec
-    for key in path:
-        d = _as_dict(cur)
-        if d is None:
-            return None
-        cur = d.get(key)
-    return cur
-
-
-def _bool_to_gauge(v: object) -> float | None:
-    """Map a DSM boolean flag to 1.0/0.0; None when the field is absent or not a bool."""
-    if isinstance(v, bool):
-        return 1.0 if v else 0.0
-    return None
-
-
 def _raid_status_to_gauge(v: object) -> float | None:
     """Map raidStatus int to a binary gauge: 1 (normal) -> 1.0, other int -> 0.0, non-int -> None.
 
@@ -128,9 +90,9 @@ def _unverified_disk(pool: dict[str, object]) -> float:
     """
     if pool.get("status") == "has_unverified_disk":
         return 1.0
-    if _nested(pool, "space_status", "show_attention") is True:
+    if nested(pool, "space_status", "show_attention") is True:
         return 1.0
-    if _nested(pool, "space_status", "show_danger") is True:
+    if nested(pool, "space_status", "show_danger") is True:
         return 1.0
     return 0.0
 
@@ -210,7 +172,7 @@ def _parse_raid(built: _Built, pool_id: str, raid: dict[str, object]) -> None:
     if designed_count is not None:
         built.raid_designed_disk_count_obs.append((labels, designed_count))
 
-    has_parity = _bool_to_gauge(raid.get("hasParity"))
+    has_parity = bool_to_gauge(raid.get("hasParity"))
     if has_parity is not None:
         built.raid_has_parity_obs.append((labels, has_parity))
 
@@ -224,11 +186,11 @@ def _parse_pool_scrub(built: _Built, plabels: dict[str, str], pool: dict[str, ob
 
     Split out of _parse_pool to keep its branch count within the lint budget.
     """
-    can_manual = _bool_to_gauge(_nested(pool, "data_scrubbing", "can_do_manual"))
+    can_manual = bool_to_gauge(nested(pool, "data_scrubbing", "can_do_manual"))
     if can_manual is not None:
         built.pool_scrub_can_do_manual_obs.append((plabels, can_manual))
 
-    can_schedule = _bool_to_gauge(_nested(pool, "data_scrubbing", "can_do_schedule"))
+    can_schedule = bool_to_gauge(nested(pool, "data_scrubbing", "can_do_schedule"))
     if can_schedule is not None:
         built.pool_scrub_can_schedule_obs.append((plabels, can_schedule))
 
@@ -257,7 +219,7 @@ def _parse_pool(built: _Built, pool: dict[str, object]) -> None:
     if isinstance(status, str):
         built.pool_status_obs.append(({"pool": pool_id, "status": status}, 1.0))
     # STATE-SET: space_status.status (second obs, mirrors storage.py volume_status double-emit)
-    space_status = _nested(pool, "space_status", "status")
+    space_status = nested(pool, "space_status", "status")
     if isinstance(space_status, str):
         built.pool_status_obs.append(({"pool": pool_id, "status": space_status}, 1.0))
 
@@ -267,7 +229,7 @@ def _parse_pool(built: _Built, pool: dict[str, object]) -> None:
         built.pool_scrub_status_obs.append(({"pool": pool_id, "state": scrub_status}, 1.0))
 
     # STATE-SET: progress.step
-    progress_step = _nested(pool, "progress", "step")
+    progress_step = nested(pool, "progress", "step")
     if isinstance(progress_step, str):
         built.pool_progress_step_obs.append(({"pool": pool_id, "step": progress_step}, 1.0))
 
@@ -277,7 +239,7 @@ def _parse_pool(built: _Built, pool: dict[str, object]) -> None:
         built.pool_disk_failure_number_obs.append((plabels, disk_failure))
 
     # Scalar: is_writable (bool)
-    writable = _bool_to_gauge(pool.get("is_writable"))
+    writable = bool_to_gauge(pool.get("is_writable"))
     if writable is not None:
         built.pool_writable_obs.append((plabels, writable))
 
@@ -285,7 +247,7 @@ def _parse_pool(built: _Built, pool: dict[str, object]) -> None:
     built.pool_unverified_disk_obs.append((plabels, _unverified_disk(pool)))
 
     # Scalar: progress.percent (string "-1" parses to -1.0)
-    progress_pct = as_float(_nested(pool, "progress", "percent"))
+    progress_pct = as_float(nested(pool, "progress", "percent"))
     if progress_pct is not None:
         built.pool_progress_percent_obs.append((plabels, progress_pct))
 
@@ -293,14 +255,14 @@ def _parse_pool(built: _Built, pool: dict[str, object]) -> None:
     _parse_pool_scrub(built, plabels, pool)
 
     # Per-raid sub-parse
-    for raid in _as_list_of_dicts(pool.get("raids")):
+    for raid in as_list_of_dicts(pool.get("raids")):
         _parse_raid(built, pool_id, raid)
 
 
 def _build(payload: dict[str, object]) -> _Built:
     """Single pass over storagePools[] -> populated observation lists."""
     built = _Built()
-    for pool in _as_list_of_dicts(payload.get("storagePools")):
+    for pool in as_list_of_dicts(payload.get("storagePools")):
         _parse_pool(built, pool)
     return built
 
@@ -360,7 +322,7 @@ class SynologyPoolCollector(BaseCollector):
             return resp
 
         events: list[CollectorEvent] = []
-        payload = _as_dict(resp.payload)
+        payload = as_dict(resp.payload)
         if payload is not None:
             built = _build(payload)
             _emit(ctx, built, events, emitted)

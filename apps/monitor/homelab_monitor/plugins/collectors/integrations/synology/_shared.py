@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import math
 import time
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, cast
 
 from homelab_monitor.kernel.metrics.cardinality import CappedEmitter
 from homelab_monitor.kernel.plugins.types import CollectorResult
@@ -105,3 +105,48 @@ def cap_for_synology(family: str) -> int:
 def capped_emitter(ctx: CollectorContext, events: list[CollectorEvent]) -> CappedEmitter:
     """Construct a CappedEmitter wired to ctx.vm for Synology collectors."""
     return CappedEmitter(writer=ctx.vm, events=events)
+
+
+# ---------------------------------------------------------------------------
+# Defensive nesting navigators (shared by storage / pool / system collectors,
+# STAGE-008-007 extraction). Each tolerates wrong-nesting guesses by degrading
+# to None / [] rather than raising — keeps the parse defensive AND pyright-clean.
+# ---------------------------------------------------------------------------
+
+
+def as_dict(v: object) -> dict[str, object] | None:
+    """Return v as a dict[str, object] when it is a dict, else None."""
+    if isinstance(v, dict):
+        return cast("dict[str, object]", v)
+    return None
+
+
+def as_list_of_dicts(v: object) -> list[dict[str, object]]:
+    """Return v as a list of record dicts (non-dict entries skipped), [] otherwise."""
+    if not isinstance(v, list):
+        return []
+    items = cast("list[object]", v)
+    return [cast("dict[str, object]", r) for r in items if isinstance(r, dict)]
+
+
+def nested(rec: dict[str, object], *path: str) -> object:
+    """Walk a dotted path tolerating missing keys / non-dict intermediates.
+
+    Returns the leaf value, or None if any step is absent or a non-dict is hit
+    before the final key. A wrong-nesting guess therefore degrades to None
+    (metric skipped) rather than raising.
+    """
+    cur: object = rec
+    for key in path:
+        d = as_dict(cur)
+        if d is None:
+            return None
+        cur = d.get(key)
+    return cur
+
+
+def bool_to_gauge(v: object) -> float | None:
+    """Map a DSM boolean flag to 1.0/0.0; None when the field is absent or not a bool."""
+    if isinstance(v, bool):
+        return 1.0 if v else 0.0
+    return None

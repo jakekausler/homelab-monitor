@@ -8,8 +8,8 @@ the shared client.
 
 PARSE — defensive. Recon (EPIC-008 "Verified deployment reality") confirmed the
 LEAF field names but NOT the exact JSON nesting (no live Design-time capture was
-possible). So the parse navigates tolerantly: ``_as_dict`` / ``_as_list_of_dicts``
-/ ``_nested`` walk the structure and degrade a wrong-nesting guess to "metric
+possible). So the parse navigates tolerantly: ``as_dict`` / ``as_list_of_dicts``
+/ ``nested`` walk the structure and degrade a wrong-nesting guess to "metric
 absent" (None -> skip emit), never a crash or a pyright failure. The 3a fixture
 is hand-built from recon field names; Refinement 3b captures the REAL payload and
 validates/corrects the nesting (the candidate-path comments below mark where).
@@ -41,18 +41,22 @@ from __future__ import annotations
 
 import time
 from datetime import timedelta
-from typing import ClassVar, Final, cast
+from typing import ClassVar, Final
 
 from homelab_monitor.kernel.plugins.base import BaseCollector
 from homelab_monitor.kernel.plugins.context import CollectorContext
 from homelab_monitor.kernel.plugins.types import CollectorEvent, CollectorResult
 from homelab_monitor.plugins.collectors.integrations.synology._shared import (
+    as_dict,
     as_float,
+    as_list_of_dicts,
+    bool_to_gauge,
     bytes_field,
     cap_for_synology,
     capped_emitter,
     client_unconfigured_result,
     fetch_or_result,
+    nested,
     percent_field,
 )
 
@@ -89,42 +93,6 @@ _SMART_NORMAL: Final[str] = "normal"
 
 
 # ---------------------------------------------------------------------------
-# Defensive nesting navigators (minimal, branch-coverable)
-# ---------------------------------------------------------------------------
-
-
-def _as_dict(v: object) -> dict[str, object] | None:
-    """Return v as a dict[str, object] when it is a dict, else None."""
-    if isinstance(v, dict):
-        return cast("dict[str, object]", v)
-    return None
-
-
-def _as_list_of_dicts(v: object) -> list[dict[str, object]]:
-    """Return v as a list of record dicts (non-dict entries skipped), [] otherwise."""
-    if not isinstance(v, list):
-        return []
-    items = cast("list[object]", v)
-    return [cast("dict[str, object]", r) for r in items if isinstance(r, dict)]
-
-
-def _nested(rec: dict[str, object], *path: str) -> object:
-    """Walk a dotted path tolerating missing keys / non-dict intermediates.
-
-    Returns the leaf value, or None if any step is absent or a non-dict is hit
-    before the final key. A wrong-nesting guess therefore degrades to None
-    (metric skipped) rather than raising.
-    """
-    cur: object = rec
-    for key in path:
-        d = _as_dict(cur)
-        if d is None:
-            return None
-        cur = d.get(key)
-    return cur
-
-
-# ---------------------------------------------------------------------------
 # Local enum maps (NOT shared — shapes diverge; see module docstring)
 # ---------------------------------------------------------------------------
 
@@ -140,13 +108,6 @@ def _status_str_to_gauge(v: object) -> float | None:
     if not isinstance(v, str):
         return None
     return 1.0 if v == _SMART_NORMAL else 0.0
-
-
-def _bool_to_gauge(v: object) -> float | None:
-    """Map a DSM boolean flag to 1.0/0.0; None when the field is absent or not a bool."""
-    if isinstance(v, bool):
-        return 1.0 if v else 0.0
-    return None
 
 
 # ---------------------------------------------------------------------------
@@ -229,13 +190,13 @@ def _parse_volume(built: _Built, vol: dict[str, object]) -> None:  # noqa: PLR09
     vid = raw_id
     vlabels = {"volume": vid}
 
-    used = bytes_field(_nested(vol, "size", "used"))
+    used = bytes_field(nested(vol, "size", "used"))
     if used is None:
         used = bytes_field(vol.get("used_size"))
     if used is not None:
         built.volume_used_bytes_obs.append((vlabels, used))
 
-    total = bytes_field(_nested(vol, "size", "total"))
+    total = bytes_field(nested(vol, "size", "total"))
     if total is None:
         total = bytes_field(vol.get("total_size"))
     if total is not None:
@@ -253,7 +214,7 @@ def _parse_volume(built: _Built, vol: dict[str, object]) -> None:  # noqa: PLR09
     # Also emit space_status.status when present (e.g. "fs_almost_full").
     # Real payload has volumes[].space_status.status = "fs_almost_full" in addition to
     # the top-level status = "has_unverified_disk". Both are useful alert signals.
-    space_status = _nested(vol, "space_status", "status")
+    space_status = nested(vol, "space_status", "status")
     if isinstance(space_status, str) and space_status:
         built.volume_status_obs.append(({"volume": vid, "status": space_status}, 1.0))
 
@@ -262,17 +223,17 @@ def _parse_volume(built: _Built, vol: dict[str, object]) -> None:  # noqa: PLR09
         built.volume_fs_type_obs.append(({"volume": vid, "fs": fs_type}, 1.0))
 
     # Real payload uses is_writable / is_encrypted / is_locked / is_inode_full (bools).
-    writable = _bool_to_gauge(vol.get("is_writable"))  # OPTIONAL — emit-if-present (None->skip)
+    writable = bool_to_gauge(vol.get("is_writable"))  # OPTIONAL — emit-if-present (None->skip)
     if writable is not None:
         built.volume_writable_obs.append((vlabels, writable))
-    encrypted = _bool_to_gauge(vol.get("is_encrypted"))  # OPTIONAL
+    encrypted = bool_to_gauge(vol.get("is_encrypted"))  # OPTIONAL
     if encrypted is not None:
         built.volume_encrypted_obs.append((vlabels, encrypted))
-    locked = _bool_to_gauge(vol.get("is_locked"))  # OPTIONAL
+    locked = bool_to_gauge(vol.get("is_locked"))  # OPTIONAL
     if locked is not None:
         built.volume_locked_obs.append((vlabels, locked))
     # is_inode_full is a bool (True->1.0 / False->0.0); no inode-percent field exists.
-    inode_full = _bool_to_gauge(vol.get("is_inode_full"))
+    inode_full = bool_to_gauge(vol.get("is_inode_full"))
     if inode_full is not None:
         built.volume_inode_full_obs.append((vlabels, inode_full))
 
@@ -321,7 +282,7 @@ def _parse_disk(built: _Built, disk: dict[str, object]) -> None:
         built.disk_unc_obs.append((dlabels, unc))
 
     # Real payload: remain_life is {"trustable": bool, "value": int}, NOT a scalar.
-    remain = as_float(_nested(disk, "remain_life", "value"))  # -1.0 passes through LITERALLY
+    remain = as_float(nested(disk, "remain_life", "value"))  # -1.0 passes through LITERALLY
     if remain is not None:
         built.disk_remain_life_obs.append((dlabels, remain))
 
@@ -345,9 +306,9 @@ def _build(payload: dict[str, object]) -> _Built:
     CANDIDATE PATHS (3b validates): payload["volumes"], payload["disks"].
     """
     built = _Built()
-    for vol in _as_list_of_dicts(payload.get("volumes")):
+    for vol in as_list_of_dicts(payload.get("volumes")):
         _parse_volume(built, vol)
-    for disk in _as_list_of_dicts(payload.get("disks")):
+    for disk in as_list_of_dicts(payload.get("disks")):
         _parse_disk(built, disk)
     return built
 
@@ -417,7 +378,7 @@ class SynologyStorageCollector(BaseCollector):
             return resp
 
         events: list[CollectorEvent] = []
-        payload = _as_dict(resp.payload)
+        payload = as_dict(resp.payload)
         if payload is not None:
             built = _build(payload)
             _emit(ctx, built, events, emitted)
