@@ -46,3 +46,9 @@
 - [ ] **volume_status is a state-set (2 obs live):** emits `homelab_synology_volume_status{volume,status}=1` for BOTH the top-level `status` and the nested `space_status.status`. Don't expect a single observation.
 - [ ] **Cardinality cap guardrail:** all 17 families cap-routed; `homelab_metric_family_dropped_series{family}` emitted (0.0 live — 8 disks/1 vol far under the default-500 cap).
 - [ ] **No pool/RAID metrics here:** `storagePools[]` is STAGE-008-006's slice; 005 emits only volumes + disks from the shared `load_info` response.
+
+## STAGE-008-006 — Synology Pool & RAID collector (`pool.py`)
+
+- [ ] **Run the live 3b exercise:** build a real `SynologyRestClient` against `https://192.168.2.4:5001` (account `homelab-monitor`, secret `synology_dsm_password` from B's store) and call `await SynologyPoolCollector().run(ctx)` with a `MemoryRetainingMetricsWriter`. Expect `ok=True`, ~34 metrics, zero errors.
+- [ ] **Verify the `homelab_synology_pool_status` family emits ≥2 series** (top-level `status` + nested `space_status.status`), `homelab_synology_pool_unverified_disk=1.0` while the live pool is unverified, `homelab_synology_raid_status{raid="/dev/md2"}=1.0` with normal/designed disk count 8/8, and `homelab_synology_pool_progress_percent=-1.0` when idle.
+- [ ] **Unit:** `make uv ARGS="--directory apps/monitor pytest tests/test_synology_pool_collector.py"` passes with 100% branch coverage on `pool.py`; `tests/test_synology_integration_bundle.py` asserts `SynologyPoolCollector` registers (name `synology_pool`, interval 300, timeout 30).
