@@ -1,0 +1,2 @@
+# Reboot-only job for bob
+@reboot /opt/init.sh

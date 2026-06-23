@@ -20,6 +20,7 @@ from homelab_monitor.kernel.plugins.io import (
     MetricsWriter,
     PiholeClient,
     SshClientFactory,
+    SynologyClient,
     UnifiClient,
 )
 from homelab_monitor.kernel.plugins.types import CollectorConfig
@@ -34,9 +35,9 @@ class CollectorContext:
     """Runtime context handed to a collector's ``run`` coroutine.
 
     All fields are required EXCEPT the integration handles ``ha``, ``ha_registry``,
-    ``unifi`` and ``pihole`` (each None when the collector does not target that
-    integration). The optional handles are listed last so the slots-dataclass
-    field-default ordering rule is satisfied.
+    ``unifi``, ``pihole`` and ``synology`` (each None when the collector does not
+    target that integration). The optional handles are listed last so the
+    slots-dataclass field-default ordering rule is satisfied.
     """
 
     config: CollectorConfig
@@ -52,3 +53,4 @@ class CollectorContext:
     ha_registry: HaEntityRegistryCache | None = None
     unifi: UnifiClient | None = None
     pihole: PiholeClient | None = None
+    synology: SynologyClient | None = None

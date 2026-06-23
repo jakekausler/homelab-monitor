@@ -1,0 +1,6 @@
+# System cron fixture for testing
+0 4 * * * root /usr/local/bin/backup.sh
+*/15 * * * * nobody /usr/local/bin/rtlamr.sh
+0 3 1 * * root /usr/bin/certbot renew
+@hourly root /opt/hourly_task.sh
+@broken this line is malformed on purpose
