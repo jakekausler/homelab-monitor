@@ -11,3 +11,11 @@
 - [ ] **Self-signed TLS:** the dedicated Synology httpx client uses `verify=False` (DSM cert `CN=synology`).
 - [ ] **DSM password never logged:** no Synology error message or log line ever contains the password or the `_sid`.
 - [ ] **Cron fixtures present:** `apps/monitor/tests/data/cron_fixtures/{system_cron,user_crontab,reboot_only}.example` exist + are git-tracked (the `!apps/monitor/tests/data/` `.gitignore` exception) so the 3 cron-parser tests pass on a clean checkout. (Pre-existing failure fixed in this stage.)
+
+## STAGE-008-002 — Synology integration bundle skeleton
+
+- [ ] **Bundle registers:** `register_all` (called from lifespan after the Unifi registration) registers `synology_placeholder` via `loader.load_all()` with config name `synology_placeholder`, interval 60s, timeout 5s, concurrency_group `default` (NOT `synology`).
+- [ ] **Defensive isolation:** a raising `loader.register` for one collector is logged (`synology_integration.collector_register_failed`) and does NOT propagate (other collectors still register).
+- [ ] **Placeholder emits:** `SynologyPlaceholderCollector.run()` returns ok=True, metrics_emitted==1, emits `homelab_synology_bundle_loaded=1.0`, and never touches `ctx.synology`.
+- [ ] **Placeholder is scaffolding:** `placeholder.py` + the `_SYNOLOGY_COLLECTORS` entry + `test_synology_placeholder_collector.py` are REMOVED in STAGE-008-005 (the first Wave-B collector). After 008-005, `homelab_synology_bundle_loaded` no longer emits.
+- [ ] **No `_shared.py` yet:** `integrations/synology/_shared.py` is created by STAGE-008-003 (not 008-002).

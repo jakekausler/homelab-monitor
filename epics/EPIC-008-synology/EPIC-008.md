@@ -1,6 +1,6 @@
 # EPIC-008: Synology integration
 
-## Status: In Progress (current: STAGE-008-001 Complete; next: STAGE-008-002)
+## Status: In Progress (current: STAGE-008-002 Complete; next: STAGE-008-003)
 
 ## Build order + framework dependencies (LOCKED — 2026-06-22 brainstorm)
 
@@ -360,7 +360,7 @@ rules; mount-health + Docker-suppression before the rules/UI/dashboards that sur
 | # | Stage | Theme |
 |---|---|---|
 | STAGE-008-001 | DSM API client (`SynologyClient`: v7 session auth, no `session=` param, `verify=False`, re-auth on 119, `took` capture) + `synology_dsm_password` secret + `synology_url` config + lifespan wiring + smoke (`Core.System info`) — ✅ Complete |
-| STAGE-008-002 | `integrations/synology/` bundle skeleton + registration (mirror 005-003) |
+| STAGE-008-002 | `integrations/synology/` bundle skeleton + registration (mirror 005-003) — ✅ Complete |
 | STAGE-008-003 | Cardinality-cap reuse hook + shared parse / typed-error helpers (`_shared.py`) for Synology collectors |
 | STAGE-008-004 | SSH `homelab-probe` dedicated-user target config on the EPIC-017 framework (keygen / capture-hostkey / install-instructions / test; no sudoers) — probe BODY lands in Wave D |
 
