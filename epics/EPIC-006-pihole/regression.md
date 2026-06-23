@@ -44,3 +44,14 @@
 - [ ] **Case and MAC preservation:** `ClassifiedClient.client_name` preserves the ORIGINAL-case name and `client_mac` passes through verbatim (classification lowercases internally for comparison only).
 - [ ] **Domain cap determinism:** `cap_domains` caps top-domain series deterministically (no loopback exemption — domains have no loopback concept).
 - [ ] **Config envvar wiring:** config `HOMELAB_MONITOR_PIHOLE_HOST_LAN_IP` env → `PiholeConfig.host_lan_ip` (empty default when unset).
+
+## STAGE-006-006 — Upstreams collector
+
+- [ ] **Collector present:** `pihole_upstreams` registered + healthy (`GET /api/collectors`, `interval_seconds:30`).
+- [ ] **Upstream metric in VM:** `homelab_pihole_upstream_queries{upstream}` present with one series per forward destination (`docker exec homelab-vm wget -qO- 'http://127.0.0.1:8428/api/v1/query?query=homelab_pihole_upstream_queries'`). The REAL unbound upstream `upstream="127.0.0.1#5335"` MUST be present.
+- [ ] **Pseudo-upstream labels:** `upstream="cache"` and `upstream="blocklist"` present as BARE names (NOT `cache#-1`); real upstreams use `ip#port` format. (Pseudo = `port == -1` in the API.)
+- [ ] **016 alert contract:** the `PiholeUpstreamAllDown` / `PiholeUpstreamDown` rules (STAGE-006-016) MUST exclude `upstream="cache"` and `upstream="blocklist"` so the alert fires only when the REAL resolver share → 0.
+- [ ] **API latency:** `homelab_pihole_api_took_seconds{endpoint="stats/upstreams"}` present.
+- [ ] **24h-rolling semantics:** `count` is a 24h-rolling window-gauge, NOT a counter — alert rules must NOT `rate()` it.
+- [ ] **Omitted by design:** NO `kind`/`is_pseudo` label, NO `homelab_pihole_upstream_response_seconds`, NO duplicate top-level totals (005 owns `queries_total`/`forwarded_total`).
+- [ ] **Live values sane vs Pi-hole:** VM upstream counts in-ballpark with live `/api/stats/upstreams` (small deltas from ongoing traffic expected).
