@@ -392,6 +392,14 @@ class SynologyClient(Protocol):
         """SYNO.Core.Share.Snapshot v2 list — snapshots for share ``name``."""
         ...
 
+    async def share_list(self) -> SynologyResponse | SynologyError:
+        """SYNO.Core.Share v1 list — shares on the NAS."""
+        ...
+
+    async def replica_core_list(self) -> SynologyResponse | SynologyError:
+        """SYNO.Btrfs.Replica.Core v1 list — Btrfs replication availability."""
+        ...
+
     async def security_scan_status(self) -> SynologyResponse | SynologyError:
         """SYNO.Core.SecurityScan.Status system_get — Security Advisor status."""
         ...

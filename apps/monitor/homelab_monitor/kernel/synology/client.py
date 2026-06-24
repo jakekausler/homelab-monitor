@@ -189,6 +189,14 @@ class SynologyRestClient:
         # SCAFFOLDING: consumed in STAGE-008-011
         return await self._get("SYNO.Core.Share.Snapshot", "2", "list", params={"name": name})
 
+    async def share_list(self) -> SynologyResponse | SynologyError:
+        # SCAFFOLDING: consumed in STAGE-008-011
+        return await self._get("SYNO.Core.Share", "1", "list")
+
+    async def replica_core_list(self) -> SynologyResponse | SynologyError:
+        # SCAFFOLDING: consumed in STAGE-008-011
+        return await self._get("SYNO.Btrfs.Replica.Core", "1", "list")
+
     async def security_scan_status(self) -> SynologyResponse | SynologyError:
         # SCAFFOLDING: consumed in STAGE-008-013
         return await self._get("SYNO.Core.SecurityScan.Status", "1", "system_get")
