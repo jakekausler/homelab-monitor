@@ -15,6 +15,9 @@ import structlog
 
 from homelab_monitor.kernel.plugins.base import BaseCollector
 from homelab_monitor.kernel.plugins.loader import PluginLoader, config_from_classvars
+from homelab_monitor.plugins.collectors.integrations.synology.backup import (
+    SynologyBackupCollector,
+)
 from homelab_monitor.plugins.collectors.integrations.synology.pool import (
     SynologyPoolCollector,
 )
@@ -39,6 +42,7 @@ _SYNOLOGY_COLLECTORS: list[type[BaseCollector]] = [
     SynologySystemCollector,
     SynologyUtilizationCollector,
     SynologyUPSCollector,
+    SynologyBackupCollector,
 ]
 
 
