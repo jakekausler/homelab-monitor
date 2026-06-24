@@ -1295,6 +1295,52 @@
         "title": "ContainerHealthcheckIncidentsResponse",
         "type": "object"
       },
+      "ContainerLifecycleRequest": {
+        "properties": {
+          "confirm_phrase": {
+            "title": "Confirm Phrase",
+            "type": "string"
+          }
+        },
+        "required": [
+          "confirm_phrase"
+        ],
+        "title": "ContainerLifecycleRequest",
+        "type": "object"
+      },
+      "ContainerLifecycleResponse": {
+        "properties": {
+          "action": {
+            "enum": [
+              "restart",
+              "start",
+              "stop"
+            ],
+            "title": "Action",
+            "type": "string"
+          },
+          "audit_id": {
+            "title": "Audit Id",
+            "type": "string"
+          },
+          "container_id": {
+            "title": "Container Id",
+            "type": "string"
+          },
+          "container_name": {
+            "title": "Container Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "action",
+          "container_name",
+          "container_id",
+          "audit_id"
+        ],
+        "title": "ContainerLifecycleResponse",
+        "type": "object"
+      },
       "ContainerListResponse": {
         "properties": {
           "containers": {
@@ -10255,6 +10301,165 @@
           }
         },
         "summary": "Pull And Restart Container",
+        "tags": [
+          "docker"
+        ]
+      }
+    },
+    "/api/integrations/docker/containers/{name}/restart": {
+      "post": {
+        "description": "Restart container `name`. confirm_phrase must equal 'restart'.",
+        "operationId": "restart_container_endpoint_api_integrations_docker_containers__name__restart_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ContainerLifecycleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContainerLifecycleResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Restart Container Endpoint",
+        "tags": [
+          "docker"
+        ]
+      }
+    },
+    "/api/integrations/docker/containers/{name}/start": {
+      "post": {
+        "description": "Start container `name`. confirm_phrase must equal 'start'.",
+        "operationId": "start_container_endpoint_api_integrations_docker_containers__name__start_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ContainerLifecycleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContainerLifecycleResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start Container Endpoint",
+        "tags": [
+          "docker"
+        ]
+      }
+    },
+    "/api/integrations/docker/containers/{name}/stop": {
+      "post": {
+        "description": "Stop container `name`. confirm_phrase must equal 'stop'.",
+        "operationId": "stop_container_endpoint_api_integrations_docker_containers__name__stop_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ContainerLifecycleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContainerLifecycleResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stop Container Endpoint",
         "tags": [
           "docker"
         ]

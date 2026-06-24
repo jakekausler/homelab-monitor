@@ -1459,3 +1459,430 @@ async def test_exec_capture_timeout_raises_connection_error() -> None:
         await client.exec_capture(container_id="c1", cmd=["x"], timeout_seconds=0.01)
     assert "timed out" in str(exc_info.value)
     await client.aclose()
+
+
+# ======================================================================
+# STAGE-006-019: Container lifecycle tests (restart/start/stop)
+# ======================================================================
+
+
+@pytest.mark.asyncio
+async def test_restart_container_204_success() -> None:
+    """restart_container with status 204 returns None."""
+    log = structlog.get_logger()
+
+    mock_response = AsyncMock()
+    mock_response.status_code = 204
+
+    mock_http = AsyncMock(spec=httpx.AsyncClient)
+    mock_http.post.return_value = mock_response
+    client = DockerSocketClient(socket_path="/var/run/docker.sock", log=log, httpx_client=mock_http)
+
+    result = await client.restart_container("abc123")
+
+    assert result is None
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_restart_container_304_idempotent() -> None:
+    """restart_container with status 304 returns None (idempotent)."""
+    log = structlog.get_logger()
+
+    mock_response = AsyncMock()
+    mock_response.status_code = 304
+
+    mock_http = AsyncMock(spec=httpx.AsyncClient)
+    mock_http.post.return_value = mock_response
+    client = DockerSocketClient(socket_path="/var/run/docker.sock", log=log, httpx_client=mock_http)
+
+    result = await client.restart_container("abc123")
+
+    assert result is None
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_restart_container_connect_error() -> None:
+    """restart_container with ConnectError raises DockerSocketConnectionError."""
+    log = structlog.get_logger()
+    socket_path = "/var/run/docker.sock"
+
+    mock_http = AsyncMock(spec=httpx.AsyncClient)
+    mock_http.post.side_effect = httpx.ConnectError("refused")
+    client = DockerSocketClient(socket_path=socket_path, log=log, httpx_client=mock_http)
+
+    with pytest.raises(DockerSocketConnectionError) as exc_info:
+        await client.restart_container("abc123")
+
+    assert socket_path in str(exc_info.value)
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_restart_container_http_error() -> None:
+    """restart_container with other httpx.HTTPError raises DockerSocketConnectionError."""
+    log = structlog.get_logger()
+
+    mock_http = AsyncMock(spec=httpx.AsyncClient)
+    mock_http.post.side_effect = httpx.ReadTimeout("timeout")
+    client = DockerSocketClient(socket_path="/var/run/docker.sock", log=log, httpx_client=mock_http)
+
+    with pytest.raises(DockerSocketConnectionError) as exc_info:
+        await client.restart_container("abc123")
+
+    assert "transport error" in str(exc_info.value)
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_restart_container_unexpected_status() -> None:
+    """restart_container with status 500 raises DockerSocketProtocolError."""
+    log = structlog.get_logger()
+
+    mock_response = AsyncMock()
+    mock_response.status_code = 500
+    mock_response.text = "server error"
+
+    mock_http = AsyncMock(spec=httpx.AsyncClient)
+    mock_http.post.return_value = mock_response
+    client = DockerSocketClient(socket_path="/var/run/docker.sock", log=log, httpx_client=mock_http)
+
+    with pytest.raises(DockerSocketProtocolError) as exc_info:
+        await client.restart_container("abc123")
+
+    assert "500" in str(exc_info.value)
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_restart_container_with_timeout_seconds() -> None:
+    """restart_container with timeout_seconds includes 't' param."""
+    log = structlog.get_logger()
+
+    mock_response = AsyncMock()
+    mock_response.status_code = 204
+
+    mock_http = AsyncMock(spec=httpx.AsyncClient)
+    mock_http.post.return_value = mock_response
+    client = DockerSocketClient(socket_path="/var/run/docker.sock", log=log, httpx_client=mock_http)
+
+    await client.restart_container("abc123", timeout_seconds=20)
+
+    call_kwargs = mock_http.post.call_args.kwargs
+    assert call_kwargs["params"] == {"t": "20"}
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_restart_container_without_timeout_seconds() -> None:
+    """restart_container without timeout_seconds has empty params dict."""
+    log = structlog.get_logger()
+
+    mock_response = AsyncMock()
+    mock_response.status_code = 204
+
+    mock_http = AsyncMock(spec=httpx.AsyncClient)
+    mock_http.post.return_value = mock_response
+    client = DockerSocketClient(socket_path="/var/run/docker.sock", log=log, httpx_client=mock_http)
+
+    await client.restart_container("abc123")
+
+    call_kwargs = mock_http.post.call_args.kwargs
+    assert call_kwargs["params"] == {}
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_restart_container_per_call_timeout() -> None:
+    """restart_container passes per-call timeout kwarg."""
+    log = structlog.get_logger()
+
+    mock_response = AsyncMock()
+    mock_response.status_code = 204
+
+    mock_http = AsyncMock(spec=httpx.AsyncClient)
+    mock_http.post.return_value = mock_response
+    client = DockerSocketClient(socket_path="/var/run/docker.sock", log=log, httpx_client=mock_http)
+
+    await client.restart_container("abc123")
+
+    call_kwargs = mock_http.post.call_args.kwargs
+    assert "timeout" in call_kwargs
+    assert isinstance(call_kwargs["timeout"], httpx.Timeout)
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_start_container_204_success() -> None:
+    """start_container with status 204 returns None."""
+    log = structlog.get_logger()
+
+    mock_response = AsyncMock()
+    mock_response.status_code = 204
+
+    mock_http = AsyncMock(spec=httpx.AsyncClient)
+    mock_http.post.return_value = mock_response
+    client = DockerSocketClient(socket_path="/var/run/docker.sock", log=log, httpx_client=mock_http)
+
+    result = await client.start_container("abc123")
+
+    assert result is None
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_start_container_304_idempotent() -> None:
+    """start_container with status 304 returns None (already running)."""
+    log = structlog.get_logger()
+
+    mock_response = AsyncMock()
+    mock_response.status_code = 304
+
+    mock_http = AsyncMock(spec=httpx.AsyncClient)
+    mock_http.post.return_value = mock_response
+    client = DockerSocketClient(socket_path="/var/run/docker.sock", log=log, httpx_client=mock_http)
+
+    result = await client.start_container("abc123")
+
+    assert result is None
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_start_container_connect_error() -> None:
+    """start_container with ConnectError raises DockerSocketConnectionError."""
+    log = structlog.get_logger()
+    socket_path = "/var/run/docker.sock"
+
+    mock_http = AsyncMock(spec=httpx.AsyncClient)
+    mock_http.post.side_effect = httpx.ConnectError("refused")
+    client = DockerSocketClient(socket_path=socket_path, log=log, httpx_client=mock_http)
+
+    with pytest.raises(DockerSocketConnectionError) as exc_info:
+        await client.start_container("abc123")
+
+    assert socket_path in str(exc_info.value)
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_start_container_http_error() -> None:
+    """start_container with other httpx.HTTPError raises DockerSocketConnectionError."""
+    log = structlog.get_logger()
+
+    mock_http = AsyncMock(spec=httpx.AsyncClient)
+    mock_http.post.side_effect = httpx.ReadTimeout("timeout")
+    client = DockerSocketClient(socket_path="/var/run/docker.sock", log=log, httpx_client=mock_http)
+
+    with pytest.raises(DockerSocketConnectionError) as exc_info:
+        await client.start_container("abc123")
+
+    assert "transport error" in str(exc_info.value)
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_start_container_unexpected_status() -> None:
+    """start_container with status 500 raises DockerSocketProtocolError."""
+    log = structlog.get_logger()
+
+    mock_response = AsyncMock()
+    mock_response.status_code = 500
+    mock_response.text = "server error"
+
+    mock_http = AsyncMock(spec=httpx.AsyncClient)
+    mock_http.post.return_value = mock_response
+    client = DockerSocketClient(socket_path="/var/run/docker.sock", log=log, httpx_client=mock_http)
+
+    with pytest.raises(DockerSocketProtocolError) as exc_info:
+        await client.start_container("abc123")
+
+    assert "500" in str(exc_info.value)
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_start_container_no_params() -> None:
+    """start_container does not pass params kwarg."""
+    log = structlog.get_logger()
+
+    mock_response = AsyncMock()
+    mock_response.status_code = 204
+
+    mock_http = AsyncMock(spec=httpx.AsyncClient)
+    mock_http.post.return_value = mock_response
+    client = DockerSocketClient(socket_path="/var/run/docker.sock", log=log, httpx_client=mock_http)
+
+    await client.start_container("abc123")
+
+    call_kwargs = mock_http.post.call_args.kwargs
+    assert "params" not in call_kwargs
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_start_container_per_call_timeout() -> None:
+    """start_container passes per-call timeout kwarg."""
+    log = structlog.get_logger()
+
+    mock_response = AsyncMock()
+    mock_response.status_code = 204
+
+    mock_http = AsyncMock(spec=httpx.AsyncClient)
+    mock_http.post.return_value = mock_response
+    client = DockerSocketClient(socket_path="/var/run/docker.sock", log=log, httpx_client=mock_http)
+
+    await client.start_container("abc123")
+
+    call_kwargs = mock_http.post.call_args.kwargs
+    assert "timeout" in call_kwargs
+    assert isinstance(call_kwargs["timeout"], httpx.Timeout)
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_stop_container_204_success() -> None:
+    """stop_container with status 204 returns None."""
+    log = structlog.get_logger()
+
+    mock_response = AsyncMock()
+    mock_response.status_code = 204
+
+    mock_http = AsyncMock(spec=httpx.AsyncClient)
+    mock_http.post.return_value = mock_response
+    client = DockerSocketClient(socket_path="/var/run/docker.sock", log=log, httpx_client=mock_http)
+
+    result = await client.stop_container("abc123")
+
+    assert result is None
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_stop_container_304_idempotent() -> None:
+    """stop_container with status 304 returns None (already stopped)."""
+    log = structlog.get_logger()
+
+    mock_response = AsyncMock()
+    mock_response.status_code = 304
+
+    mock_http = AsyncMock(spec=httpx.AsyncClient)
+    mock_http.post.return_value = mock_response
+    client = DockerSocketClient(socket_path="/var/run/docker.sock", log=log, httpx_client=mock_http)
+
+    result = await client.stop_container("abc123")
+
+    assert result is None
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_stop_container_connect_error() -> None:
+    """stop_container with ConnectError raises DockerSocketConnectionError."""
+    log = structlog.get_logger()
+    socket_path = "/var/run/docker.sock"
+
+    mock_http = AsyncMock(spec=httpx.AsyncClient)
+    mock_http.post.side_effect = httpx.ConnectError("refused")
+    client = DockerSocketClient(socket_path=socket_path, log=log, httpx_client=mock_http)
+
+    with pytest.raises(DockerSocketConnectionError) as exc_info:
+        await client.stop_container("abc123")
+
+    assert socket_path in str(exc_info.value)
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_stop_container_http_error() -> None:
+    """stop_container with other httpx.HTTPError raises DockerSocketConnectionError."""
+    log = structlog.get_logger()
+
+    mock_http = AsyncMock(spec=httpx.AsyncClient)
+    mock_http.post.side_effect = httpx.ReadTimeout("timeout")
+    client = DockerSocketClient(socket_path="/var/run/docker.sock", log=log, httpx_client=mock_http)
+
+    with pytest.raises(DockerSocketConnectionError) as exc_info:
+        await client.stop_container("abc123")
+
+    assert "transport error" in str(exc_info.value)
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_stop_container_unexpected_status() -> None:
+    """stop_container with status 500 raises DockerSocketProtocolError."""
+    log = structlog.get_logger()
+
+    mock_response = AsyncMock()
+    mock_response.status_code = 500
+    mock_response.text = "server error"
+
+    mock_http = AsyncMock(spec=httpx.AsyncClient)
+    mock_http.post.return_value = mock_response
+    client = DockerSocketClient(socket_path="/var/run/docker.sock", log=log, httpx_client=mock_http)
+
+    with pytest.raises(DockerSocketProtocolError) as exc_info:
+        await client.stop_container("abc123")
+
+    assert "500" in str(exc_info.value)
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_stop_container_with_timeout_seconds() -> None:
+    """stop_container with timeout_seconds includes 't' param."""
+    log = structlog.get_logger()
+
+    mock_response = AsyncMock()
+    mock_response.status_code = 204
+
+    mock_http = AsyncMock(spec=httpx.AsyncClient)
+    mock_http.post.return_value = mock_response
+    client = DockerSocketClient(socket_path="/var/run/docker.sock", log=log, httpx_client=mock_http)
+
+    await client.stop_container("abc123", timeout_seconds=15)
+
+    call_kwargs = mock_http.post.call_args.kwargs
+    assert call_kwargs["params"] == {"t": "15"}
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_stop_container_without_timeout_seconds() -> None:
+    """stop_container without timeout_seconds has empty params dict."""
+    log = structlog.get_logger()
+
+    mock_response = AsyncMock()
+    mock_response.status_code = 204
+
+    mock_http = AsyncMock(spec=httpx.AsyncClient)
+    mock_http.post.return_value = mock_response
+    client = DockerSocketClient(socket_path="/var/run/docker.sock", log=log, httpx_client=mock_http)
+
+    await client.stop_container("abc123")
+
+    call_kwargs = mock_http.post.call_args.kwargs
+    assert call_kwargs["params"] == {}
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_stop_container_per_call_timeout() -> None:
+    """stop_container passes per-call timeout kwarg."""
+    log = structlog.get_logger()
+
+    mock_response = AsyncMock()
+    mock_response.status_code = 204
+
+    mock_http = AsyncMock(spec=httpx.AsyncClient)
+    mock_http.post.return_value = mock_response
+    client = DockerSocketClient(socket_path="/var/run/docker.sock", log=log, httpx_client=mock_http)
+
+    await client.stop_container("abc123")
+
+    call_kwargs = mock_http.post.call_args.kwargs
+    assert "timeout" in call_kwargs
+    assert isinstance(call_kwargs["timeout"], httpx.Timeout)
+    await client.aclose()

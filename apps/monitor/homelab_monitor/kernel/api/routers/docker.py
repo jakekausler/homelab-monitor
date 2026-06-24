@@ -9,6 +9,7 @@ step (T-MERGE-LOCATION) — sub-10ms read, no live VM query.
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Literal, cast
 
@@ -27,6 +28,8 @@ from homelab_monitor.kernel.api.errors import HttpProblem
 from homelab_monitor.kernel.auth.models import ApiToken, User
 from homelab_monitor.kernel.auth.scopes import Scope
 from homelab_monitor.kernel.config import load_vl_query_limits
+from homelab_monitor.kernel.db.audit import insert_audit
+from homelab_monitor.kernel.db.ids import uuid7
 from homelab_monitor.kernel.db.repositories.compose_actions_repository import (
     ComposeActionRow,
     ComposeActionsRepository,
@@ -53,7 +56,7 @@ from homelab_monitor.kernel.db.repositories.suggestions_repository import (
 from homelab_monitor.kernel.db.repositories.targets_repository import TargetsRepository
 from homelab_monitor.kernel.db.repository import SqliteRepository
 from homelab_monitor.kernel.docker.compose_action_runner import ComposeActionRunner
-from homelab_monitor.kernel.docker.socket_client import DockerSocketClient
+from homelab_monitor.kernel.docker.socket_client import DockerSocketClient, DockerSocketError
 from homelab_monitor.kernel.logs.crash_enrichments_repo import CrashEnrichmentsRepository
 from homelab_monitor.kernel.logs.healthcheck_enrichments_repo import (
     HealthcheckEnrichmentsRepository,
@@ -261,6 +264,46 @@ def _get_healthcheck_repo(
 ) -> HealthcheckEnrichmentsRepository:
     """Construct a HealthcheckEnrichmentsRepository from the injected SqliteRepository."""
     return HealthcheckEnrichmentsRepository(repo)
+
+
+def _who(principal: User | ApiToken) -> str:
+    """User -> username, ApiToken -> 'token:<name>'."""
+    return principal.username if isinstance(principal, User) else f"token:{principal.name}"
+
+
+def _client_ip(request: Request) -> str | None:
+    return request.client.host if request.client is not None else None
+
+
+def _make_lifecycle_confirm_validator(
+    action: Literal["restart", "start", "stop"],
+) -> Callable[[ContainerLifecycleRequest], ContainerLifecycleRequest]:
+    """Return a body-only Depends validator: confirm_phrase must equal `action`."""
+
+    def _validate(body: ContainerLifecycleRequest) -> ContainerLifecycleRequest:
+        if body.confirm_phrase.strip().lower() != action:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"confirm_phrase must equal '{action}'",
+            )
+        return body
+
+    return _validate
+
+
+def _get_docker_socket_client_required(request: Request) -> DockerSocketClient:
+    """Like _get_docker_socket_client but 503s instead of returning None.
+
+    Write endpoints cannot degrade gracefully — no socket means the action
+    cannot be performed.
+    """
+    client = _get_docker_socket_client(request)
+    if client is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="docker socket client is not available",
+        )
+    return client
 
 
 @router.get("/containers", response_model=ContainerListResponse)
@@ -1474,6 +1517,19 @@ class PullAndRestartAcceptedResponse(BaseModel):
     state: Literal["pulling", "building", "restarting", "failed"]
 
 
+class ContainerLifecycleRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    confirm_phrase: str
+
+
+class ContainerLifecycleResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    action: Literal["restart", "start", "stop"]
+    container_name: str
+    container_id: str
+    audit_id: str
+
+
 class ComposeActionDetailResponse(BaseModel):
     model_config = ConfigDict(extra="ignore")
     action_id: int
@@ -1584,6 +1640,152 @@ async def pull_and_restart_container(  # noqa: PLR0913 -- FastAPI route with inj
     if row is not None and row.state == "failed":
         state = "failed"
     return PullAndRestartAcceptedResponse(action_id=action_id, state=state)
+
+
+async def _lifecycle_action(  # noqa: PLR0913 -- shared helper with many deps
+    *,
+    action: Literal["restart", "start", "stop"],
+    name: str,
+    request: Request,
+    principal: User | ApiToken,
+    client: DockerSocketClient,
+    targets_repo: TargetsRepository,
+    repo: SqliteRepository,
+) -> ContainerLifecycleResponse:
+    """Shared body for the 3 lifecycle endpoints (restart/start/stop).
+
+    Order of operations (mirrors 018 sync write):
+      1. 404 if the container is not discovered (or has no container_id).
+      2. inspect for the audit `before` state; 502 if inspect raises.
+      3. call the matching socket method; 502 if it raises.
+      4. write the transactional audit (success-only); echo audit_id.
+    """
+    rows = await targets_repo.list_docker_containers(include_hidden=False)
+    match = next((r for r in rows if r.name == name), None)
+    if match is None or match.container_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"container not found: {name}",
+        )
+    container_id = match.container_id
+
+    # before-state for the audit (a failed inspect is fatal -> 502).
+    try:
+        inspected = await client.inspect_container(container_id)
+        state_obj = inspected.get("State", {})
+        before_state = state_obj.get("Status", "unknown")  # type: ignore[union-attr]
+    except DockerSocketError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"docker inspect failed for {name}: {exc}",
+        ) from exc
+
+    # perform the action (502 on failure; NO audit written on failure).
+    try:
+        if action == "restart":
+            await client.restart_container(container_id)
+        elif action == "start":
+            await client.start_container(container_id)
+        else:  # "stop"
+            await client.stop_container(container_id)
+    except DockerSocketError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"docker {action} failed for {name}: {exc}",
+        ) from exc
+
+    audit_id = uuid7()
+    async with repo.transaction() as conn:
+        await insert_audit(
+            conn,
+            audit_id=audit_id,
+            who=_who(principal),
+            what=f"docker.container.{action}",
+            before={"state": before_state},
+            after={"action": action},
+            ip=_client_ip(request),
+        )
+    return ContainerLifecycleResponse(
+        action=action,
+        container_name=name,
+        container_id=container_id,
+        audit_id=audit_id,
+    )
+
+
+@router.post("/containers/{name}/restart", response_model=ContainerLifecycleResponse)
+async def restart_container_endpoint(  # noqa: PLR0913 -- FastAPI route with injected deps
+    name: str,
+    body: Annotated[
+        ContainerLifecycleRequest,
+        Depends(_make_lifecycle_confirm_validator("restart")),
+    ],
+    request: Request,
+    principal: Annotated[User | ApiToken, Depends(require_user_or_token({Scope.DOCKER_WRITE}))],
+    client: Annotated[DockerSocketClient, Depends(_get_docker_socket_client_required)],
+    targets_repo: Annotated[TargetsRepository, Depends(_get_targets_repo)],
+    repo: Annotated[SqliteRepository, Depends(get_repo)],
+) -> ContainerLifecycleResponse:
+    """Restart container `name`. confirm_phrase must equal 'restart'."""
+    return await _lifecycle_action(
+        action="restart",
+        name=name,
+        request=request,
+        principal=principal,
+        client=client,
+        targets_repo=targets_repo,
+        repo=repo,
+    )
+
+
+@router.post("/containers/{name}/start", response_model=ContainerLifecycleResponse)
+async def start_container_endpoint(  # noqa: PLR0913 -- FastAPI route with injected deps
+    name: str,
+    body: Annotated[
+        ContainerLifecycleRequest,
+        Depends(_make_lifecycle_confirm_validator("start")),
+    ],
+    request: Request,
+    principal: Annotated[User | ApiToken, Depends(require_user_or_token({Scope.DOCKER_WRITE}))],
+    client: Annotated[DockerSocketClient, Depends(_get_docker_socket_client_required)],
+    targets_repo: Annotated[TargetsRepository, Depends(_get_targets_repo)],
+    repo: Annotated[SqliteRepository, Depends(get_repo)],
+) -> ContainerLifecycleResponse:
+    """Start container `name`. confirm_phrase must equal 'start'."""
+    return await _lifecycle_action(
+        action="start",
+        name=name,
+        request=request,
+        principal=principal,
+        client=client,
+        targets_repo=targets_repo,
+        repo=repo,
+    )
+
+
+@router.post("/containers/{name}/stop", response_model=ContainerLifecycleResponse)
+async def stop_container_endpoint(  # noqa: PLR0913 -- FastAPI route with injected deps
+    name: str,
+    body: Annotated[
+        ContainerLifecycleRequest,
+        Depends(_make_lifecycle_confirm_validator("stop")),
+    ],
+    request: Request,
+    principal: Annotated[User | ApiToken, Depends(require_user_or_token({Scope.DOCKER_WRITE}))],
+    client: Annotated[DockerSocketClient, Depends(_get_docker_socket_client_required)],
+    targets_repo: Annotated[TargetsRepository, Depends(_get_targets_repo)],
+    repo: Annotated[SqliteRepository, Depends(get_repo)],
+) -> ContainerLifecycleResponse:
+    """Stop container `name`. confirm_phrase must equal 'stop'."""
+    return await _lifecycle_action(
+        action="stop",
+        name=name,
+        request=request,
+        principal=principal,
+        client=client,
+        targets_repo=targets_repo,
+        repo=repo,
+    )
 
 
 @router.get(

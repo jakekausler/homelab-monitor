@@ -32,6 +32,10 @@ _DEFAULT_SOCKET_PATH: Final[str] = "/var/run/docker.sock"
 _BASE_URL: Final[str] = "http://localhost"
 # Timeouts kept tight: list/inspect should each complete in <2s on a healthy host.
 _REQUEST_TIMEOUT_SECONDS: Final[float] = 5.0
+# Lifecycle writes (restart/stop) can take longer than the 5s read default:
+# Docker's default stop-grace is 10s before SIGKILL, so a restart can take
+# ~10s+ before the API responds. Override the per-call timeout for writes.
+_WRITE_TIMEOUT_SECONDS: Final[float] = 30.0
 
 
 class DockerSocketError(Exception):
@@ -571,3 +575,95 @@ class DockerSocketClient:
         exit_code_raw = typed_idata.get("ExitCode")
         exit_code = 1 if exit_code_raw is None else int(cast(int, exit_code_raw))
         return ExecResult(exit_code=exit_code, stdout=stdout, stderr=stderr)
+
+    async def restart_container(
+        self, container_id: str, *, timeout_seconds: int | None = None
+    ) -> None:
+        """POST /containers/{id}/restart. Returns None on success (204 or 304).
+
+        304 == container already in the target state == idempotent success.
+        The per-call timeout is widened to ``_WRITE_TIMEOUT_SECONDS`` because a
+        restart waits out Docker's stop-grace (~10s) before responding.
+
+        Raises:
+            DockerSocketConnectionError: socket unreachable / transport error.
+            DockerSocketProtocolError: unexpected (non-204/304) status.
+        """
+        params: dict[str, str] = {}
+        if timeout_seconds is not None:
+            params["t"] = str(timeout_seconds)
+        try:
+            resp = await self._client.post(
+                f"/containers/{container_id}/restart",
+                params=params,
+                timeout=httpx.Timeout(_WRITE_TIMEOUT_SECONDS, connect=_REQUEST_TIMEOUT_SECONDS),
+            )
+        except httpx.ConnectError as exc:
+            raise DockerSocketConnectionError(
+                f"docker socket unreachable at {self._socket_path}: {exc}"
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise DockerSocketConnectionError(f"docker socket transport error: {exc}") from exc
+        if resp.status_code not in (204, 304):
+            raise DockerSocketProtocolError(
+                f"unexpected status {resp.status_code} from "
+                f"/containers/{container_id}/restart: {resp.text[:200]}"
+            )
+
+    async def start_container(self, container_id: str) -> None:
+        """POST /containers/{id}/start. Returns None on success (204 or 304).
+
+        304 == already running == idempotent success.
+
+        Raises:
+            DockerSocketConnectionError: socket unreachable / transport error.
+            DockerSocketProtocolError: unexpected (non-204/304) status.
+        """
+        try:
+            resp = await self._client.post(
+                f"/containers/{container_id}/start",
+                timeout=httpx.Timeout(_WRITE_TIMEOUT_SECONDS, connect=_REQUEST_TIMEOUT_SECONDS),
+            )
+        except httpx.ConnectError as exc:
+            raise DockerSocketConnectionError(
+                f"docker socket unreachable at {self._socket_path}: {exc}"
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise DockerSocketConnectionError(f"docker socket transport error: {exc}") from exc
+        if resp.status_code not in (204, 304):
+            raise DockerSocketProtocolError(
+                f"unexpected status {resp.status_code} from "
+                f"/containers/{container_id}/start: {resp.text[:200]}"
+            )
+
+    async def stop_container(
+        self, container_id: str, *, timeout_seconds: int | None = None
+    ) -> None:
+        """POST /containers/{id}/stop. Returns None on success (204 or 304).
+
+        304 == already stopped == idempotent success.
+
+        Raises:
+            DockerSocketConnectionError: socket unreachable / transport error.
+            DockerSocketProtocolError: unexpected (non-204/304) status.
+        """
+        params: dict[str, str] = {}
+        if timeout_seconds is not None:
+            params["t"] = str(timeout_seconds)
+        try:
+            resp = await self._client.post(
+                f"/containers/{container_id}/stop",
+                params=params,
+                timeout=httpx.Timeout(_WRITE_TIMEOUT_SECONDS, connect=_REQUEST_TIMEOUT_SECONDS),
+            )
+        except httpx.ConnectError as exc:
+            raise DockerSocketConnectionError(
+                f"docker socket unreachable at {self._socket_path}: {exc}"
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise DockerSocketConnectionError(f"docker socket transport error: {exc}") from exc
+        if resp.status_code not in (204, 304):
+            raise DockerSocketProtocolError(
+                f"unexpected status {resp.status_code} from "
+                f"/containers/{container_id}/stop: {resp.text[:200]}"
+            )
