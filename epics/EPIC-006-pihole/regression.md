@@ -204,3 +204,14 @@
 - [ ] Auth + validation: unauthenticated GET on any panel endpoint → 401; `/clients?count=999` → 422 (le=100); `/clients?count=0` → 422 (ge=1).
 - [ ] All 7 panel paths appear in the served `/openapi.json` after a monitor image rebuild.
 - [ ] VM-down behavior: VM-sourced endpoints (`/overview`,`/adlists`,`/upstreams`,`/unbound`) return 502 `upstream_unavailable` when VictoriaMetrics is unreachable; live endpoints return 502 on `PiholeError`, 503 when the RO Pi-hole client is uninitialized.
+
+## STAGE-006-021 — Pi-hole panel shell + header status strip
+
+- [ ] Navigating to Integrations → Pi-hole (sidebar entry, route `/integrations/pihole`) renders the panel shell with the header status strip + Overview/Logs tab nav.
+- [ ] The header status strip shows live data from `GET /api/integrations/pihole/overview`: up/down badge, blocking state badge (on/off/—), block % (rounded to 1 decimal, e.g. "47.3% blocked"), queries/sec (rounded to 1 decimal), FTL-messages indicator (red badge "N messages" when count>0, else "No messages").
+- [ ] When blocking is temporarily disabled (`blocking_enabled=false`, `blocking_timer_seconds>0`), the strip shows a live "re-enables in M:SS" countdown that ticks down each second and re-syncs to the server value on each 30s refetch (`useReenableCountdown` hook).
+- [ ] `up=false` renders a critical "Pi-hole down" badge with other indicators as "—" (data state, not an error); a 502 from the endpoint shows the yellow "temporarily unavailable" banner; nullable fields render as "—".
+- [ ] The Logs tab stays IN-PANEL: clicking it goes to `/integrations/pihole/logs` (Pi-hole sidebar entry stays active), rendering the "Coming soon (STAGE-006-024)" placeholder — it does NOT navigate to the global `/logs` page.
+- [ ] The Overview tab shows placeholder sections for the future widgets (Blocking control / Gravity & adlists / Messages → 022; Upstreams & Unbound / Clients / Recent blocked / Version & container → 023).
+- [ ] Desktop (1280×720) and Mobile (375×667): the status strip wraps cleanly on narrow viewports (flex-wrap); placeholder cards are full-width and readable with no overflow.
+- [ ] The header auto-refreshes on the 30s TanStack Query `refetchInterval` (values update without a manual reload).
