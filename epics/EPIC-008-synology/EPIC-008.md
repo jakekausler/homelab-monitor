@@ -1,6 +1,6 @@
 # EPIC-008: Synology integration
 
-## Status: In Progress (current: STAGE-008-009 Complete — Wave B closed; next: STAGE-008-010)
+## Status: In Progress (current: STAGE-008-010 Complete; next: STAGE-008-011)
 
 ## Build order + framework dependencies (LOCKED — 2026-06-22 brainstorm)
 
@@ -376,7 +376,7 @@ rules; mount-health + Docker-suppression before the rules/UI/dashboards that sur
 ### Wave C — Protect / maintain collectors (4)
 | # | Stage | Theme |
 |---|---|---|
-| STAGE-008-010 | Hyper Backup collector (`Backup.Task`/`Repository`): per-job last-run/result/size/next-run; graceful-empty + `SynologyNoBackupConfigured` |
+| STAGE-008-010 | Hyper Backup collector (`Backup.Task`/`Repository`): per-job last-run/result/size/next-run; graceful-empty + `SynologyNoBackupConfigured` — ✅ Complete |
 | STAGE-008-011 | Snapshot Replication collector (`Share.Snapshot`/`Btrfs.Replica.Core`): per-share snapshot age/count + replication lag; graceful-empty (nail down `Btrfs.Replica.Core` read method at Design) |
 | STAGE-008-012 | Updates & packages collector (`Upgrade.Server check`, `Package`, `Package.Server`) |
 | STAGE-008-013 | Security Advisor status + active-connections collector (`SecurityScan.Status system_get`, `CurrentConnection`) |
