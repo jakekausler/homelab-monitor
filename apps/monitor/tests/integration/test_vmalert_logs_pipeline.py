@@ -147,7 +147,7 @@ def test_kernel_oom_log_alert_fires(test_webhook: None) -> None:
     alert = _wait_for_alert_with_label("host", "testhost-oom", "KernelOOM", WAIT_FOR_ALERT_S)
     assert alert is not None, f"KernelOOM never reached webhook within {WAIT_FOR_ALERT_S}s"
     assert alert["labels"]["source_tool"] == "vmalert-logs"
-    assert alert["labels"]["severity"] == "error"
+    assert alert["labels"]["severity"] == "critical"
     assert alert["labels"]["target_kind"] == "host"
 
 

@@ -1,0 +1,75 @@
+# Test-window counterpart of deploy/vmalert/logs/pihole.yaml.
+# Used ONLY by docker-compose.test.yml (vmalert-logs-test service, glob-mounted).
+#
+# Differences vs production:
+#   - _time:30s vs _time:5m (faster firing for integration tests)
+#   - interval: 5s vs interval: 30s
+#   - PiholeFtlRateLimit / PiholeFtlError: for: 2m -> for: 0m (fire on 1 line)
+#   - All thresholds remain :>0 (fire on 1 planted line)
+#   - Description text reflects the 30s window.
+#   - Same group/alert names, same labels, same annotations structure.
+#
+# Production rules at deploy/vmalert/logs/pihole.yaml — keep BOTH files in sync
+# for label/annotation changes; only _time:, filter thresholds, interval:, and
+# for: may diverge.
+
+groups:
+  - name: pihole_logs
+    type: vlogs
+    # interval: 5s gives ~6 evaluations per 30s window — sufficient resolution
+    # for the integration test to observe firing transitions.
+    # DO NOT raise to match production's 30s; the test would only get 1 eval
+    # per window.
+    interval: 5s
+    rules:
+      - alert: PiholeFtlRateLimit
+        expr: '_time:30s service:="pihole-unbound" "Rate-limiting" | stats by (host) count() as ratelimit_count | filter ratelimit_count:>0'
+        for: 0m
+        labels:
+          severity: warning
+          source_tool: vmalert-logs
+          target_kind: container
+          integration: pihole
+        annotations:
+          summary: "Pi-hole FTL rate-limiting on {{ $labels.host }}"
+          description: '{{ $value }} FTL rate-limiting log line(s) in 30s on {{ $labels.host }} (a client exceeded the per-client query rate limit)'
+          explorer: '/logs?logsql=service:"pihole-unbound" AND "Rate-limiting"'
+
+      - alert: PiholeFtlError
+        expr: '_time:30s service:="pihole-unbound" "ERROR:" | stats by (host) count() as error_count | filter error_count:>0'
+        for: 0m
+        labels:
+          severity: warning
+          source_tool: vmalert-logs
+          target_kind: container
+          integration: pihole
+        annotations:
+          summary: "Pi-hole FTL error on {{ $labels.host }}"
+          description: '{{ $value }} FTL ERROR log line(s) in 30s on {{ $labels.host }}'
+          explorer: '/logs?logsql=service:"pihole-unbound" AND "ERROR:"'
+
+      - alert: PiholeGravityUpdateFailedLog
+        expr: '_time:30s service:="pihole-unbound" ("Unable to update gravity" OR "Error: Unable to update gravity database" OR "gravity failed") | stats by (host) count() as gravity_fail_count | filter gravity_fail_count:>0'
+        for: 0m
+        labels:
+          severity: warning
+          source_tool: vmalert-logs
+          target_kind: container
+          integration: pihole
+        annotations:
+          summary: "Pi-hole gravity update failed on {{ $labels.host }}"
+          description: '{{ $value }} gravity-update failure log line(s) in 30s on {{ $labels.host }} (does NOT match the steady-state "inaccessible during last gravity run" baseline)'
+          explorer: '/logs?logsql=service:"pihole-unbound" AND ("Unable to update gravity" OR "Error: Unable to update gravity database" OR "gravity failed")'
+
+      - alert: PiholeDbMaintenanceAnomaly
+        expr: '_time:30s service:="pihole-unbound" ("database is locked" OR "disk I/O error" OR "unable to open database" OR "Failed to optimize" OR "SQLITE_") | stats by (host) count() as db_anomaly_count | filter db_anomaly_count:>0'
+        for: 0m
+        labels:
+          severity: info
+          source_tool: vmalert-logs
+          target_kind: container
+          integration: pihole
+        annotations:
+          summary: "Pi-hole DB maintenance anomaly on {{ $labels.host }}"
+          description: '{{ $value }} FTL DB-anomaly log line(s) in 30s on {{ $labels.host }} (lock / I/O / open / optimize / SQLITE errors; does NOT match the routine "Optimized database in X seconds" success line)'
+          explorer: '/logs?logsql=service:"pihole-unbound" AND ("database is locked" OR "disk I/O error" OR "unable to open database" OR "Failed to optimize" OR "SQLITE_")'
