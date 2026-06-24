@@ -95,6 +95,19 @@
 - [ ] Malformed-payload resilience: payload not a dict, or "messages" key missing/not-a-list → run reports ok=False with an error (api_took still counted); does NOT falsely emit messages_count=0.
 - [ ] Metric name is PLURAL `homelab_pihole_messages{type}` (corrected from the card's singular `homelab_pihole_message` during Design — per-type count semantics).
 
+## STAGE-006-022 — Pi-hole panel write widgets (blocking / gravity / messages / privacy banner)
+
+- [ ] Integrations → Pi-hole Overview tab renders the three real widgets (Blocking control, Gravity & adlists, FTL messages) in place of the prior placeholders.
+- [ ] Blocking control: shows live blocking state (on/off + countdown when a timer is active); "Disable" / "Enable" buttons open a confirm dialog requiring the typed phrase ("disable"/"enable"); the confirm button is disabled until the phrase matches.
+- [ ] After a successful Disable/Enable, the widget AND the header status-strip badge flip to the new state IMMEDIATELY and STAY (no flicker back to the old state) — the mutation patches the overview cache from the authoritative POST response and invalidates with `refetchType: 'none'` so the stale VM metric doesn't clobber it; reconciles on the 30s refetch.
+- [ ] Disable with a timer preset (30s/5m/1h) sends `timer`; "Indefinite" omits `timer`; the live re-enable countdown shows after a timed disable.
+- [ ] Gravity & adlists widget: shows gravity domain count + last-update age + a per-adlist health table; failing adlists (e.g. the 2 NRD `parse_failed` lists) are visually distinct (critical badge + row treatment); responsive (table on desktop, stacked on mobile).
+- [ ] "Update gravity now" button: confirm phrase "update"; the button shows a pending spinner during the (~120s) gravity rebuild; on success a result dialog shows the `log_tail`; a toast appears on non-400 error. (Manual: only exercise the real rebuild deliberately.)
+- [ ] FTL diagnostic-messages widget: lists messages (type badge + text + optional timestamp/url); "No diagnostic messages" empty state when healthy.
+- [ ] Privacy banner: shown above the widgets ONLY when `privacy_level > 0`; hidden when 0 or null.
+- [ ] Write security contract (backend, re-verified live): POST /blocking + /gravity/update require auth + CSRF (403 without `X-CSRF-Token`) + the exact confirm phrase (400 on mismatch); actions are audited.
+- [ ] Desktop (1280×720) + Mobile (375×667): all widgets + the confirm dialogs lay out cleanly, no overflow.
+
 ## STAGE-006-011 — Version/update collector
 
 - [ ] Version collector (`pihole_version`) emits `homelab_pihole_update_available{component}` (1/0) — `1` when local != remote, `0` when equal, emitted ONLY when BOTH versions present (missing either → no series, never a false 0). Verify in VM: components with updates show 1, up-to-date show 0, matching the live Pi-hole `/api/info/version`.
