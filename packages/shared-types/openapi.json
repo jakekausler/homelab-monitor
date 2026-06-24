@@ -5167,6 +5167,506 @@
         "title": "OutcomeView",
         "type": "object"
       },
+      "PiholeAdlistRow": {
+        "properties": {
+          "address": {
+            "title": "Address",
+            "type": "string"
+          },
+          "domains": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Domains"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "list": {
+            "title": "List",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "list",
+          "address",
+          "status",
+          "enabled",
+          "domains"
+        ],
+        "title": "PiholeAdlistRow",
+        "type": "object"
+      },
+      "PiholeAdlistsResponse": {
+        "properties": {
+          "gravity_domains": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gravity Domains"
+          },
+          "gravity_last_update_age_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gravity Last Update Age Seconds"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/PiholeAdlistRow"
+            },
+            "title": "Rows",
+            "type": "array"
+          }
+        },
+        "required": [
+          "rows",
+          "gravity_domains",
+          "gravity_last_update_age_seconds"
+        ],
+        "title": "PiholeAdlistsResponse",
+        "type": "object"
+      },
+      "PiholeClientRow": {
+        "properties": {
+          "client": {
+            "title": "Client",
+            "type": "string"
+          },
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          }
+        },
+        "required": [
+          "client",
+          "name",
+          "count"
+        ],
+        "title": "PiholeClientRow",
+        "type": "object"
+      },
+      "PiholeClientsResponse": {
+        "properties": {
+          "returned": {
+            "title": "Returned",
+            "type": "integer"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/PiholeClientRow"
+            },
+            "title": "Rows",
+            "type": "array"
+          }
+        },
+        "required": [
+          "rows",
+          "returned"
+        ],
+        "title": "PiholeClientsResponse",
+        "type": "object"
+      },
+      "PiholeMessageRow": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "timestamp": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timestamp"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          }
+        },
+        "required": [
+          "id",
+          "type",
+          "message",
+          "timestamp",
+          "url"
+        ],
+        "title": "PiholeMessageRow",
+        "type": "object"
+      },
+      "PiholeMessagesResponse": {
+        "properties": {
+          "returned": {
+            "title": "Returned",
+            "type": "integer"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/PiholeMessageRow"
+            },
+            "title": "Rows",
+            "type": "array"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "rows",
+          "total",
+          "returned"
+        ],
+        "title": "PiholeMessagesResponse",
+        "type": "object"
+      },
+      "PiholeOverviewResponse": {
+        "properties": {
+          "blocking_enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Blocking Enabled"
+          },
+          "blocking_timer_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Blocking Timer Seconds"
+          },
+          "gravity_domains": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gravity Domains"
+          },
+          "messages_count": {
+            "title": "Messages Count",
+            "type": "integer"
+          },
+          "percent_blocked": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Percent Blocked"
+          },
+          "privacy_level": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Privacy Level"
+          },
+          "query_frequency": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Query Frequency"
+          },
+          "query_logging_enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Query Logging Enabled"
+          },
+          "up": {
+            "title": "Up",
+            "type": "boolean"
+          },
+          "updates_available": {
+            "items": {
+              "$ref": "#/components/schemas/PiholeUpdateInfo"
+            },
+            "title": "Updates Available",
+            "type": "array"
+          },
+          "versions": {
+            "items": {
+              "$ref": "#/components/schemas/PiholeVersionInfo"
+            },
+            "title": "Versions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "up",
+          "blocking_enabled",
+          "blocking_timer_seconds",
+          "percent_blocked",
+          "query_frequency",
+          "messages_count",
+          "privacy_level",
+          "query_logging_enabled",
+          "gravity_domains",
+          "versions",
+          "updates_available"
+        ],
+        "title": "PiholeOverviewResponse",
+        "type": "object"
+      },
+      "PiholeRecentBlockedResponse": {
+        "properties": {
+          "returned": {
+            "title": "Returned",
+            "type": "integer"
+          },
+          "rows": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Rows",
+            "type": "array"
+          }
+        },
+        "required": [
+          "rows",
+          "returned"
+        ],
+        "title": "PiholeRecentBlockedResponse",
+        "type": "object"
+      },
+      "PiholeUnboundResponse": {
+        "properties": {
+          "cache_hit_ratio": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cache Hit Ratio"
+          },
+          "cache_hits_total": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cache Hits Total"
+          },
+          "cache_misses_total": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cache Misses Total"
+          },
+          "extended_stats_enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Extended Stats Enabled"
+          },
+          "prefetch_total": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prefetch Total"
+          },
+          "queries_total": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Queries Total"
+          },
+          "requestlist_current": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requestlist Current"
+          }
+        },
+        "required": [
+          "cache_hit_ratio",
+          "queries_total",
+          "cache_hits_total",
+          "cache_misses_total",
+          "prefetch_total",
+          "requestlist_current",
+          "extended_stats_enabled"
+        ],
+        "title": "PiholeUnboundResponse",
+        "type": "object"
+      },
+      "PiholeUpdateInfo": {
+        "properties": {
+          "component": {
+            "title": "Component",
+            "type": "string"
+          }
+        },
+        "required": [
+          "component"
+        ],
+        "title": "PiholeUpdateInfo",
+        "type": "object"
+      },
+      "PiholeUpstreamRow": {
+        "properties": {
+          "queries": {
+            "title": "Queries",
+            "type": "number"
+          },
+          "upstream": {
+            "title": "Upstream",
+            "type": "string"
+          }
+        },
+        "required": [
+          "upstream",
+          "queries"
+        ],
+        "title": "PiholeUpstreamRow",
+        "type": "object"
+      },
+      "PiholeUpstreamsResponse": {
+        "properties": {
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/PiholeUpstreamRow"
+            },
+            "title": "Rows",
+            "type": "array"
+          }
+        },
+        "required": [
+          "rows"
+        ],
+        "title": "PiholeUpstreamsResponse",
+        "type": "object"
+      },
+      "PiholeVersionInfo": {
+        "properties": {
+          "component": {
+            "title": "Component",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "component",
+          "version"
+        ],
+        "title": "PiholeVersionInfo",
+        "type": "object"
+      },
       "PreviewRunsResponse": {
         "additionalProperties": false,
         "description": "Response for both preview-runs endpoints.",
@@ -11279,6 +11779,27 @@
         ]
       }
     },
+    "/api/integrations/pihole/adlists": {
+      "get": {
+        "operationId": "get_pihole_adlists_api_integrations_pihole_adlists_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PiholeAdlistsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Pihole Adlists",
+        "tags": [
+          "integrations-pihole"
+        ]
+      }
+    },
     "/api/integrations/pihole/blocking": {
       "post": {
         "description": "Enable/disable Pi-hole DNS blocking. confirm_phrase must equal the action.",
@@ -11321,6 +11842,61 @@
         ]
       }
     },
+    "/api/integrations/pihole/clients": {
+      "get": {
+        "operationId": "get_pihole_clients_api_integrations_pihole_clients_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "blocked",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Blocked",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "count",
+            "required": false,
+            "schema": {
+              "default": 10,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Count",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PiholeClientsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Pihole Clients",
+        "tags": [
+          "integrations-pihole"
+        ]
+      }
+    },
     "/api/integrations/pihole/gravity/update": {
       "post": {
         "description": "Trigger a Pi-hole gravity rebuild. confirm_phrase must equal 'update'.",
@@ -11358,6 +11934,135 @@
           }
         },
         "summary": "Gravity Update",
+        "tags": [
+          "integrations-pihole"
+        ]
+      }
+    },
+    "/api/integrations/pihole/messages": {
+      "get": {
+        "operationId": "get_pihole_messages_api_integrations_pihole_messages_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PiholeMessagesResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Pihole Messages",
+        "tags": [
+          "integrations-pihole"
+        ]
+      }
+    },
+    "/api/integrations/pihole/overview": {
+      "get": {
+        "operationId": "get_pihole_overview_api_integrations_pihole_overview_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PiholeOverviewResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Pihole Overview",
+        "tags": [
+          "integrations-pihole"
+        ]
+      }
+    },
+    "/api/integrations/pihole/recent-blocked": {
+      "get": {
+        "operationId": "get_pihole_recent_blocked_api_integrations_pihole_recent_blocked_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "count",
+            "required": false,
+            "schema": {
+              "default": 10,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Count",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PiholeRecentBlockedResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Pihole Recent Blocked",
+        "tags": [
+          "integrations-pihole"
+        ]
+      }
+    },
+    "/api/integrations/pihole/unbound": {
+      "get": {
+        "operationId": "get_pihole_unbound_api_integrations_pihole_unbound_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PiholeUnboundResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Pihole Unbound",
+        "tags": [
+          "integrations-pihole"
+        ]
+      }
+    },
+    "/api/integrations/pihole/upstreams": {
+      "get": {
+        "operationId": "get_pihole_upstreams_api_integrations_pihole_upstreams_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PiholeUpstreamsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Pihole Upstreams",
         "tags": [
           "integrations-pihole"
         ]

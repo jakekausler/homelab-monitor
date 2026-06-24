@@ -1421,6 +1421,23 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
                 error=str(exc),
             )
 
+    # TODO: if a 3rd collector needs startup-run, promote to a generic
+    # run_on_startup: ClassVar[bool] opt-in on BaseCollector
+    # (Decision 3B, STAGE-006-020 Design).
+    if "pihole_version" not in degraded:  # pragma: no branch -- always registered
+        try:
+            await scheduler.await_immediate_run(
+                "pihole_version",
+                trigger=TriggerContext(kind="manual", request_id=None),
+                timeout=30.0,
+            )
+            log.info("lifespan.pihole_version_startup_run_completed")
+        except Exception as exc:  # pragma: no cover -- defensive
+            log.warning(
+                "lifespan.pihole_version_startup_run_failed",
+                error=str(exc),
+            )
+
     app.state.master_key = master_key
     app.state.auth_repo = auth_repo
     app.state.secrets_repo = secrets_repo

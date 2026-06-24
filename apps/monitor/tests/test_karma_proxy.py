@@ -45,6 +45,27 @@ def _suppress_lifespan_tick_requests(httpx_mock: HTTPXMock) -> None:  # pyright:
         is_reusable=True,
     )
     httpx_mock.add_response(
+        method="POST",
+        url=re.compile(r".*localhost/containers/[^/]+/exec.*"),
+        json={"Id": "test-exec-id"},
+        is_optional=True,
+        is_reusable=True,
+    )
+    httpx_mock.add_response(
+        method="POST",
+        url=re.compile(r".*localhost/exec/[^/]+/start.*"),
+        content=b"",
+        is_optional=True,
+        is_reusable=True,
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(r".*localhost/exec/[^/]+/json.*"),
+        json={"ExitCode": 0},
+        is_optional=True,
+        is_reusable=True,
+    )
+    httpx_mock.add_response(
         method="GET",
         url=re.compile(r"http://victorialogs:9428/.*"),
         json={},
