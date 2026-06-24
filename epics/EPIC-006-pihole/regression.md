@@ -168,3 +168,14 @@
 - [ ] All 4 rules carry labels `severity` (info/warning per rule) + `source_tool: vmalert-logs` + `target_kind: container` + `integration: pihole`.
 - [ ] The 4 fire tests + the rules-load test pass in the integration rig: `bash scripts/run-integration.sh` includes `test_vmalert_pihole_logs_pipeline.py` green.
 - [ ] FOLLOW-UP (inferred FTL phrasing): the `PiholeGravityUpdateFailedLog` whole-run-failure phrase set (`Unable to update gravity` / `Error: Unable to update gravity database` / `gravity failed`) and the `PiholeFtlRateLimit` `Rate-limiting` token are INFERRED from FTL v6 format, not observed in the live corpus (no real failures/rate-limits in the window). If a real gravity-run failure or rate-limit event ever lands, confirm FTL's actual wording matches the rule phrases and tighten if needed.
+
+## STAGE-006-018 — Pi-hole write endpoints (blocking / gravity) + query-logging metric
+
+- [ ] `POST /api/integrations/pihole/blocking` toggles blocking on the live Pi-hole: `{"action":"disable","confirm_phrase":"disable","timer":30}` → 200 `{"blocking":"disabled",...}`; `{"action":"enable","confirm_phrase":"enable"}` → 200 `{"blocking":"enabled",...}`. Each requires session+CSRF and writes an `audit_log` row (who/what=`pihole.blocking.{action}`/before/after). ALWAYS re-enable blocking after testing.
+- [ ] `POST /api/integrations/pihole/gravity/update` `{"confirm_phrase":"update"}` → 200 `{"success":true,"log_tail":[...real pihole -g output...],"audit_id":...}`; the tail-parse correctly identifies success via the `[✓] Done.` marker; writes an audit row.
+- [ ] Wrong `confirm_phrase` → HTTP 400 (`confirm_phrase must equal '<phrase>'`) BEFORE any client call (the body-only Depends validator runs before the RW-client dependency — must NOT return 503).
+- [ ] Unauthenticated write → 401; valid session without `X-CSRF-Token` → 403 (csrf_mismatch). Both write endpoints are `Scope.PIHOLE_WRITE`-gated.
+- [ ] `homelab_pihole_query_logging_enabled` (bare 1/0 gauge) emitted by the `pihole_config` collector from live `GET /api/config` `config.dns.queryLogging`; trigger via `POST /api/collectors/pihole_config/retry`, confirm in VictoriaMetrics. Fail-closed to 0.0 on error/missing field.
+- [ ] `PiholeRestClient._get()` maps a 200-response carrying an `{"error":{"key":"unauthorized"}}` body to a re-auth+retry (same guard as HTTP 401); a non-unauthorized error key → `bad_response`. All 11 collectors still pass at 100% branch coverage.
+- [ ] The RW client (`pihole_api_password_rw`) is used ONLY by the write router, never by collectors; constructed + aclose'd in lifespan.
+- [ ] Live-3b confirmed (STAGE-006-018 Refinement): RW password authenticates against live Pi-hole v6; CSRF IS required on writes; real gravity run ~completes with the success markers; the blocking round-trip leaves the Pi-hole in its original state.
