@@ -191,3 +191,16 @@
 - [ ] A pre-action `inspect_container` failure → 502 (the action is NOT attempted; audit not written).
 - [ ] No audit row is written on the 400/401/403/404/502 paths (audit-on-success-only).
 - [ ] EPIC-003.md carries a back-fill cross-reference note pointing to STAGE-006-019.
+
+## STAGE-006-020 — Pi-hole panel data endpoints
+
+- [ ] `GET /api/integrations/pihole/overview` (authed) returns 200 with real data: `up=true`, non-null `percent_blocked`, `query_frequency`, `messages_count`, `privacy_level`, `gravity_domains`, and a NON-EMPTY `versions[]` list (component/version pairs).
+- [ ] `versions[]` in `/overview` is populated within ~1 minute of a monitor restart (the `pihole_version` startup-run hook in lifespan.py — Decision 3A; it does NOT wait for the 3600s interval).
+- [ ] `GET /api/integrations/pihole/adlists` returns per-adlist rows with `status`/`enabled`/`domains` plus `gravity_domains` and `gravity_last_update_age_seconds`.
+- [ ] `GET /api/integrations/pihole/upstreams` returns upstream rows (e.g. `127.0.0.1#5335`, `cache`, `blocklist`) with query counts.
+- [ ] `GET /api/integrations/pihole/unbound` returns unbound cache stats (`cache_hit_ratio`, `queries_total`, etc.) or honest nulls when extended stats are disabled; `extended_stats_enabled` reflects reality.
+- [ ] `GET /api/integrations/pihole/clients?count=5` (live RO Pi-hole call) returns real top clients with `returned` == row count; `?blocked=true` returns the blocked-query leaders (differs from the default).
+- [ ] `GET /api/integrations/pihole/recent-blocked?count=5` and `/messages` (live RO calls) return real data; empty lists are valid/healthy states (no recent blocks / no FTL messages).
+- [ ] Auth + validation: unauthenticated GET on any panel endpoint → 401; `/clients?count=999` → 422 (le=100); `/clients?count=0` → 422 (ge=1).
+- [ ] All 7 panel paths appear in the served `/openapi.json` after a monitor image rebuild.
+- [ ] VM-down behavior: VM-sourced endpoints (`/overview`,`/adlists`,`/upstreams`,`/unbound`) return 502 `upstream_unavailable` when VictoriaMetrics is unreachable; live endpoints return 502 on `PiholeError`, 503 when the RO Pi-hole client is uninitialized.
