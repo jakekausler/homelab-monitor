@@ -755,6 +755,21 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
     )
     app.state.pihole_client = pihole_client
 
+    # 7a-pihole-rw. Pi-hole v6 RW REST client (STAGE-006-018).
+    #
+    # A SECOND long-lived client resolving the write-scoped app password
+    # ("pihole_api_password_rw") for the Wave-E write endpoints (set blocking, gravity
+    # update). It is the RW credential mirror of the RO client above: same shared
+    # http_client, same per-login TTL-resolver password lookup, never stored/logged.
+    # It is injected ONLY into the pihole WRITE router (via app.state) — it MUST NOT
+    # leak into the RO collector path (ctx_factory wires the RO client only).
+    pihole_rw_client = PiholeRestClient(
+        base_url=pihole_config.base_url,
+        http=http_client,  # reuse the shared pool (plain HTTP, no TLS)
+        password_provider=lambda: ttl_resolver.current().get("pihole_api_password_rw"),
+    )
+    app.state.pihole_rw_client = pihole_rw_client
+
     in_memory_metrics_writer = MemoryRetainingMetricsWriter()
     prom_registry = CollectorRegistry()
     prom_writer = PrometheusRegistryWriter(prom_registry)
@@ -1597,6 +1612,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
         pihole_client = getattr(app.state, "pihole_client", None)
         if pihole_client is not None:
             await pihole_client.aclose()
+        # Best-effort Pi-hole RW logout (STAGE-006-018) — same ordering constraint: must
+        # run before the shared http_client closes. aclose() swallows all errors.
+        pihole_rw_client = getattr(app.state, "pihole_rw_client", None)
+        if pihole_rw_client is not None:
+            await pihole_rw_client.aclose()
         await http_client.aclose()
         await unifi_http_client.aclose()
         docker_client = getattr(app.state, "docker_socket_client", None)

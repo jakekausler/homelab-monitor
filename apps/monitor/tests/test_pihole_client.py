@@ -12,6 +12,8 @@ env override / trailing-slash strip.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator
+from typing import cast
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
@@ -34,6 +36,8 @@ _HTTP_OK = 200
 _HTTP_UNAUTHORIZED = 401
 _HTTP_TOO_MANY = 429
 _HTTP_SERVER_ERROR = 503
+_GRAVITY_LOG_TAIL_MAX = 20
+_REAUTH_REQUEST_COUNT = 4
 
 
 def _resp(
@@ -592,3 +596,439 @@ async def test_stats_top_domains_count_only() -> None:
     assert result.endpoint == "stats/top_domains"
     last = mock_http.request.call_args_list[-1]
     assert last.kwargs["params"] == {"count": "25"}
+
+
+# ---- 200-with-error-envelope re-auth ----
+
+
+@pytest.mark.asyncio
+async def test_get_200_unauthorized_envelope_reauths_then_succeeds() -> None:
+    """200 with unauthorized-key envelope triggers re-auth + retry (like 401)."""
+    client, mock_http = _client()
+    mock_http.request.side_effect = [
+        _auth_ok(_SID),  # initial login
+        _resp(
+            json_value={"error": {"key": "unauthorized", "message": "expired"}}
+        ),  # 200 with envelope
+        _auth_ok(_SID_2),  # re-auth
+        _resp(json_value={"ok": True, "took": 0.01}),  # retry -> success
+    ]
+    result = await client.info_version()
+    assert isinstance(result, PiholeResponse)
+    assert result.payload == {"ok": True, "took": 0.01}
+    assert mock_http.request.call_count == _REAUTH_REQUEST_COUNT  # login + get + re-auth + get
+
+
+@pytest.mark.asyncio
+async def test_get_200_unauthorized_envelope_still_unauthorized_after_reauth() -> None:
+    """200 unauthorized-envelope persists after re-auth -> auth error."""
+    client, mock_http = _client()
+    mock_http.request.side_effect = [
+        _auth_ok(_SID),
+        _resp(json_value={"error": {"key": "unauthorized", "message": "expired"}}),
+        _auth_ok(_SID_2),
+        _resp(json_value={"error": {"key": "unauthorized", "message": "expired"}}),
+    ]
+    result = await client.info_version()
+    assert isinstance(result, PiholeError)
+    assert result.reason == "auth"
+    assert result.status == _HTTP_UNAUTHORIZED
+
+
+@pytest.mark.asyncio
+async def test_get_200_other_error_key_is_bad_response() -> None:
+    """200 with a non-unauthorized error key -> bad_response."""
+    client, mock_http = _client()
+    mock_http.request.side_effect = [
+        _auth_ok(),
+        _resp(json_value={"error": {"key": "bad_request", "message": "nope"}}),
+    ]
+    result = await client.info_version()
+    assert isinstance(result, PiholeError)
+    assert result.reason == "bad_response"
+    assert "bad_request" in result.message
+    assert result.status == _HTTP_OK
+
+
+@pytest.mark.asyncio
+async def test_get_200_non_json_body_is_bad_response() -> None:
+    """200 response that's not JSON -> bad_response (classifier says ok, _get parse fails)."""
+    client, mock_http = _client()
+    bad = _resp()
+    bad.json = MagicMock(side_effect=ValueError("not json"))
+    mock_http.request.side_effect = [_auth_ok(), bad]
+    result = await client.info_version()
+    assert isinstance(result, PiholeError)
+    assert result.reason == "bad_response"
+    assert "response is not JSON" in result.message
+
+
+@pytest.mark.asyncio
+async def test_get_200_non_dict_body_ok() -> None:
+    """200 with JSON array (non-dict) -> ok (classifier allows, caller parses)."""
+    client, mock_http = _client()
+    mock_http.request.side_effect = [_auth_ok(), _resp(json_value=[1, 2])]
+    result = await client.info_version()
+    assert isinstance(result, PiholeResponse)
+    assert result.payload == [1, 2]
+
+
+@pytest.mark.asyncio
+async def test_get_200_dict_without_error_key_ok() -> None:
+    """200 dict without error key -> ok."""
+    client, mock_http = _client()
+    mock_http.request.side_effect = [_auth_ok(), _resp(json_value={"foo": 1, "took": 0.02})]
+    result = await client.info_version()
+    assert isinstance(result, PiholeResponse)
+
+
+@pytest.mark.asyncio
+async def test_get_429_without_retry_after() -> None:
+    """429 without Retry-After header -> rate_limited with no suffix."""
+    client, mock_http = _client()
+    mock_http.request.side_effect = [_auth_ok(), _resp(status=_HTTP_TOO_MANY)]
+    result = await client.info_version()
+    assert isinstance(result, PiholeError)
+    assert result.reason == "rate_limited"
+    assert "Retry-After" not in result.message
+
+
+# ---- config() ----
+
+
+@pytest.mark.asyncio
+async def test_config_success() -> None:
+    """config() returns config response with endpoint label."""
+    client, mock_http = _client()
+    mock_http.request.side_effect = [
+        _auth_ok(),
+        _resp(json_value={"config": {"dns": {"queryLogging": True}}, "took": 0.03}),
+    ]
+    result = await client.config()
+    assert isinstance(result, PiholeResponse)
+    assert result.endpoint == "config"
+    assert result.took_seconds == 0.03  # noqa: PLR2004
+
+
+@pytest.mark.asyncio
+async def test_config_propagates_pihole_error() -> None:
+    """config() on HTTP 500 -> http_error."""
+    client, mock_http = _client()
+    mock_http.request.side_effect = [_auth_ok(), _resp(status=500)]
+    result = await client.config()
+    assert isinstance(result, PiholeError)
+    assert result.reason == "http_error"
+
+
+# ---- set_blocking() ----
+
+
+@pytest.mark.asyncio
+async def test_set_blocking_disable_success() -> None:
+    """set_blocking(blocking=False, timer=300) -> 200 with new state."""
+    client, mock_http = _client()
+    mock_http.request.side_effect = [
+        _auth_ok(),
+        _resp(json_value={"blocking": "disabled", "timer": 300, "took": 0.01}),
+    ]
+    result = await client.set_blocking(blocking=False, timer=300)
+    assert isinstance(result, PiholeResponse)
+    assert result.endpoint == "dns/blocking"
+    assert result.payload == {"blocking": "disabled", "timer": 300, "took": 0.01}
+    # Verify POST body
+    post_call = mock_http.request.call_args_list[1]
+    assert post_call.kwargs["json"] == {"blocking": False, "timer": 300}
+
+
+@pytest.mark.asyncio
+async def test_set_blocking_enable_no_timer_success() -> None:
+    """set_blocking(blocking=True, timer=None) -> success."""
+    client, mock_http = _client()
+    mock_http.request.side_effect = [
+        _auth_ok(),
+        _resp(json_value={"blocking": "enabled", "timer": None, "took": 0.0}),
+    ]
+    result = await client.set_blocking(blocking=True, timer=None)
+    assert isinstance(result, PiholeResponse)
+    post_call = mock_http.request.call_args_list[1]
+    assert post_call.kwargs["json"] == {"blocking": True, "timer": None}
+
+
+@pytest.mark.asyncio
+async def test_set_blocking_pihole_error_auth() -> None:
+    """set_blocking -> 200 unauthorized-envelope, re-auth, still unauthorized -> auth error."""
+    client, mock_http = _client()
+    mock_http.request.side_effect = [
+        _auth_ok(),
+        _resp(json_value={"error": {"key": "unauthorized", "message": "expired"}}),
+        _auth_ok(_SID_2),
+        _resp(json_value={"error": {"key": "unauthorized", "message": "expired"}}),
+    ]
+    result = await client.set_blocking(blocking=False, timer=None)
+    assert isinstance(result, PiholeError)
+    assert result.reason == "auth"
+
+
+@pytest.mark.asyncio
+async def test_set_blocking_non_json_body_bad_response() -> None:
+    """set_blocking response is not JSON -> bad_response."""
+    client, mock_http = _client()
+    bad = _resp()
+    bad.json = MagicMock(side_effect=ValueError("not json"))
+    mock_http.request.side_effect = [_auth_ok(), bad]
+    result = await client.set_blocking(blocking=False, timer=None)
+    assert isinstance(result, PiholeError)
+    assert result.reason == "bad_response"
+    assert "response is not JSON" in result.message
+
+
+# ---- gravity_update() (streaming) ----
+
+
+class _FakeStreamResp:
+    """Stand-in for httpx response in streaming context."""
+
+    def __init__(self, status: int, lines: list[str]) -> None:
+        self.status_code = status
+        self._lines = lines
+
+    async def __aenter__(self) -> _FakeStreamResp:
+        return self
+
+    async def __aexit__(self, *_exc: object) -> None:
+        return None
+
+    async def aiter_lines(self) -> AsyncIterator[str]:
+        for line in self._lines:
+            yield line
+
+
+def _stream(status: int, lines: list[str]) -> _FakeStreamResp:
+    return _FakeStreamResp(status, lines)
+
+
+@pytest.mark.asyncio
+async def test_gravity_success_no_failure_marker() -> None:
+    """gravity_update with 200 stream containing the [✓] Done success marker -> success=True."""
+    client, mock_http = _client()
+    mock_http.request.side_effect = [_auth_ok()]
+    mock_http.stream = MagicMock(side_effect=[_stream(200, ["[i] Building gravity", "[✓] Done."])])
+    result = await client.gravity_update()
+    assert isinstance(result, PiholeResponse)
+    assert result.endpoint == "action/gravity"
+    payload = cast("dict[str, object]", result.payload)
+    assert payload["success"] is True
+    assert payload["log_tail"] == ["[i] Building gravity", "[✓] Done."]
+    assert result.took_seconds >= 0
+
+
+@pytest.mark.asyncio
+async def test_gravity_success_fallback_no_markers() -> None:
+    """gravity_update with 200 stream, no markers -> success=True (fallback).
+
+    No success or failure markers in stream output; heuristic returns True.
+    """
+    client, mock_http = _client()
+    mock_http.request.side_effect = [_auth_ok()]
+    mock_http.stream = MagicMock(
+        side_effect=[_stream(200, ["[i] Building gravity", "[i] Reloading"])]
+    )
+    result = await client.gravity_update()
+    assert isinstance(result, PiholeResponse)
+    assert result.endpoint == "action/gravity"
+    payload = cast("dict[str, object]", result.payload)
+    assert payload["success"] is True
+    assert payload["log_tail"] == ["[i] Building gravity", "[i] Reloading"]
+    assert result.took_seconds >= 0
+
+
+@pytest.mark.asyncio
+async def test_gravity_failure_marker() -> None:
+    """gravity_update stream with 'error' substring -> success=False."""
+    client, mock_http = _client()
+    mock_http.request.side_effect = [_auth_ok()]
+    mock_http.stream = MagicMock(
+        side_effect=[_stream(200, ["[i] Building", "[✗] DNS resolution error"])]
+    )
+    result = await client.gravity_update()
+    assert isinstance(result, PiholeResponse)
+    payload = cast("dict[str, object]", result.payload)
+    assert payload["success"] is False
+
+
+@pytest.mark.asyncio
+async def test_gravity_log_tail_truncates_to_20() -> None:
+    """gravity_update with 30 lines -> tail keeps last 20."""
+    client, mock_http = _client()
+    mock_http.request.side_effect = [_auth_ok()]
+    lines = [f"line {i}" for i in range(30)]
+    mock_http.stream = MagicMock(side_effect=[_stream(200, lines)])
+    result = await client.gravity_update()
+    assert isinstance(result, PiholeResponse)
+    payload = cast("dict[str, object]", result.payload)
+    tail = cast("list[object]", payload["log_tail"])
+    assert len(tail) == _GRAVITY_LOG_TAIL_MAX
+    assert tail[0] == "line 10"  # first of last 20
+    assert tail[-1] == "line 29"  # last
+
+
+@pytest.mark.asyncio
+async def test_gravity_401_then_reauth_success() -> None:
+    """gravity_update: 401 on first stream, re-auth, 200 on retry -> success."""
+    client, mock_http = _client()
+    mock_http.request.side_effect = [_auth_ok(), _auth_ok(_SID_2)]
+    mock_http.stream = MagicMock(side_effect=[_stream(401, []), _stream(200, ["[i] done"])])
+    result = await client.gravity_update()
+    assert isinstance(result, PiholeResponse)
+    payload = cast("dict[str, object]", result.payload)
+    assert payload["success"] is True
+
+
+@pytest.mark.asyncio
+async def test_gravity_401_twice_auth_error() -> None:
+    """gravity_update: 401, re-auth, 401 again -> auth error."""
+    client, mock_http = _client()
+    mock_http.request.side_effect = [_auth_ok(), _auth_ok(_SID_2)]
+    mock_http.stream = MagicMock(side_effect=[_stream(401, []), _stream(401, [])])
+    result = await client.gravity_update()
+    assert isinstance(result, PiholeError)
+    assert result.reason == "auth"
+    assert result.status == _HTTP_UNAUTHORIZED
+
+
+@pytest.mark.asyncio
+async def test_gravity_429_rate_limited() -> None:
+    """gravity_update stream 429 -> rate_limited."""
+    client, mock_http = _client()
+    mock_http.request.side_effect = [_auth_ok()]
+    mock_http.stream = MagicMock(side_effect=[_stream(429, [])])
+    result = await client.gravity_update()
+    assert isinstance(result, PiholeError)
+    assert result.reason == "rate_limited"
+    assert result.status == _HTTP_TOO_MANY
+
+
+@pytest.mark.asyncio
+async def test_gravity_5xx_http_error() -> None:
+    """gravity_update stream 503 -> http_error."""
+    client, mock_http = _client()
+    mock_http.request.side_effect = [_auth_ok()]
+    mock_http.stream = MagicMock(side_effect=[_stream(503, [])])
+    result = await client.gravity_update()
+    assert isinstance(result, PiholeError)
+    assert result.reason == "http_error"
+    assert result.status == _HTTP_SERVER_ERROR
+
+
+@pytest.mark.asyncio
+async def test_gravity_connect_error_unreachable() -> None:
+    """gravity_update stream raises ConnectError -> unreachable."""
+    client, mock_http = _client()
+    mock_http.request.side_effect = [_auth_ok()]
+    mock_http.stream = MagicMock(side_effect=httpx.ConnectError("boom"))
+    result = await client.gravity_update()
+    assert isinstance(result, PiholeError)
+    assert result.reason == "unreachable"
+
+
+@pytest.mark.asyncio
+async def test_gravity_read_timeout() -> None:
+    """gravity_update stream raises ReadTimeout -> timeout."""
+    client, mock_http = _client()
+    mock_http.request.side_effect = [_auth_ok()]
+    mock_http.stream = MagicMock(side_effect=httpx.ReadTimeout("slow"))
+    result = await client.gravity_update()
+    assert isinstance(result, PiholeError)
+    assert result.reason == "timeout"
+
+
+@pytest.mark.asyncio
+async def test_gravity_login_fails_before_stream_returns_auth_error() -> None:
+    """gravity_update login fails with ConnectError -> unreachable."""
+    client, mock_http = _client()
+    mock_http.request.side_effect = httpx.ConnectError("refused")
+    result = await client.gravity_update()
+    assert isinstance(result, PiholeError)
+    assert result.reason == "unreachable"
+
+
+@pytest.mark.asyncio
+async def test_gravity_401_stream_then_reauth_fails_returns_auth_error() -> None:
+    """gravity_update: 401 on stream, re-auth fails with 401 -> auth error."""
+    client, mock_http = _client()
+    mock_http.request.side_effect = [_auth_ok(_SID), _resp(status=_HTTP_UNAUTHORIZED)]
+    mock_http.stream = MagicMock(side_effect=[_stream(401, [])])
+    result = await client.gravity_update()
+    assert isinstance(result, PiholeError)
+    assert result.reason == "auth"
+
+
+@pytest.mark.asyncio
+async def test_gravity_401_reauth_success_then_retry_stream_timeout() -> None:
+    """gravity_update: 401 on stream, re-auth succeeds, retry stream times out."""
+    client, mock_http = _client()
+    mock_http.request.side_effect = [_auth_ok(_SID), _auth_ok(_SID_2)]
+    mock_http.stream = MagicMock(side_effect=[_stream(401, []), httpx.ReadTimeout("slow")])
+    result = await client.gravity_update()
+    assert isinstance(result, PiholeError)
+    assert result.reason == "timeout"
+
+
+@pytest.mark.asyncio
+async def test_reauth_retry_returns_http_error_on_post_reauth_5xx() -> None:
+    """Non-streaming endpoint: re-auth succeeds, but retry GET returns 5xx."""
+    client, mock_http = _client()
+    mock_http.request.side_effect = [
+        _auth_ok(_SID),
+        _resp(json_value={"error": {"key": "unauthorized", "message": "expired"}}),
+        _auth_ok(_SID_2),
+        _resp(status=_HTTP_SERVER_ERROR),
+    ]
+    result = await client.info_version()
+    assert isinstance(result, PiholeError)
+    assert result.reason == "http_error"
+    assert result.status == _HTTP_SERVER_ERROR
+
+
+# ---- gravity_update skip-login when _sid already set (line 263) ----
+
+
+@pytest.mark.asyncio
+async def test_gravity_update_skips_login_when_sid_already_set() -> None:
+    """gravity_update with _sid already set -> skips login, calls stream directly.
+
+    Covers client.py:263->267 (skip-login when _sid already set).
+    When _sid is already populated, _ensure_session is not called on gravity_update.
+    """
+    client, mock_http = _client()
+    # Pre-set _sid so the login is skipped.
+    client._sid = _SID  # pyright: ignore[reportPrivateUsage]
+    # No auth call expected — only stream call.
+    mock_http.stream = MagicMock(side_effect=[_stream(200, ["[i] Done"])])
+    result = await client.gravity_update()
+    assert isinstance(result, PiholeResponse)
+    payload = cast("dict[str, object]", result.payload)
+    assert payload["success"] is True
+    # Verify that request (login) was NOT called.
+    mock_http.request.assert_not_called()
+
+
+# ---- gravity_update stream empty lines are skipped (line 320-322) ----
+
+
+@pytest.mark.asyncio
+async def test_gravity_stream_empty_lines_are_skipped() -> None:
+    """gravity_update stream with blank/whitespace lines -> skipped in log_tail.
+
+    Covers client.py:320->323 (empty/whitespace stream lines skipped).
+    Empty and whitespace-only lines are stripped and discarded.
+    """
+    client, mock_http = _client()
+    mock_http.request.side_effect = [_auth_ok()]
+    mock_http.stream = MagicMock(side_effect=[_stream(200, ["[i] Building", "", "  ", "[i] Done"])])
+    result = await client.gravity_update()
+    assert isinstance(result, PiholeResponse)
+    payload = cast("dict[str, object]", result.payload)
+    assert payload["success"] is True
+    tail = cast("list[object]", payload["log_tail"])
+    assert tail == ["[i] Building", "[i] Done"]

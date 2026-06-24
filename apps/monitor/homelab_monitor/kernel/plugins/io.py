@@ -312,6 +312,10 @@ class PiholeClient(Protocol):
         """GET /api/dns/blocking — blocking enabled state, or a typed PiholeError."""
         ...
 
+    async def config(self) -> PiholeResponse | PiholeError:
+        """GET /api/config — full Pi-hole config, or a typed PiholeError."""
+        ...
+
     async def lists(self) -> PiholeResponse | PiholeError:
         """GET /api/lists — adlists, or a typed PiholeError."""
         ...

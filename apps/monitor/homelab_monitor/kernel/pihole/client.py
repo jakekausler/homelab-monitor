@@ -35,9 +35,10 @@ contains the password).
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Final, cast
+from typing import Final, Literal, cast
 
 import httpx
 
@@ -47,6 +48,16 @@ _HTTP_UNAUTHORIZED: Final[int] = 401
 _HTTP_TOO_MANY_REQUESTS: Final[int] = 429
 _HTTP_OK_FLOOR: Final[int] = 200
 _HTTP_OK_CEIL: Final[int] = 300  # exclusive upper bound for the 2xx success band
+
+# Pi-hole returns 200 with an {"error": {"key": ..., "message": ...}} envelope for
+# some auth/validation failures instead of an HTTP status. We classify those
+# envelopes so an in-body "unauthorized" key shares the SAME re-auth-retry guard as
+# a real HTTP 401 (Cross-stage deliverable 2). The literal key Pi-hole uses for an
+# expired/invalid session is "unauthorized".
+_PIHOLE_UNAUTHORIZED_KEY: Final[str] = "unauthorized"
+
+_GRAVITY_TIMEOUT_SECONDS: Final[float] = 120.0  # gravity rebuilds can run a minute+
+_GRAVITY_LOG_TAIL: Final[int] = 20  # last N non-empty lines retained for the audit/UI
 
 
 @dataclass(frozen=True, slots=True)
@@ -174,6 +185,10 @@ class PiholeRestClient:
         # SCAFFOLDING: consumed in Wave B/C (STAGE-006-005..015)
         return await self._get("/api/dns/blocking", "dns/blocking")
 
+    async def config(self) -> PiholeResponse | PiholeError:
+        """GET /api/config — full Pi-hole config (consumed by pihole_config collector)."""
+        return await self._get("/api/config", "config")
+
     async def lists(self) -> PiholeResponse | PiholeError:
         # SCAFFOLDING: consumed in Wave B/C (STAGE-006-005..015)
         return await self._get("/api/lists", "lists")
@@ -207,6 +222,112 @@ class PiholeRestClient:
             pass
         finally:
             self._sid = None
+
+    async def set_blocking(
+        self, *, blocking: bool, timer: int | None
+    ) -> PiholeResponse | PiholeError:
+        """POST /api/dns/blocking — set blocking on/off (RW). Body {"blocking", "timer"}.
+
+        Returns a PiholeResponse whose payload is Pi-hole's echoed new state (it
+        returns the same shape as GET /api/dns/blocking: {"blocking": "<state>",
+        "timer": <float|null>, "took": ...}).
+        """
+        resp = await self._request(
+            "POST", "/api/dns/blocking", json_body={"blocking": blocking, "timer": timer}
+        )
+        if isinstance(resp, PiholeError):
+            return resp
+        try:
+            payload: object = resp.json()
+        except ValueError:
+            return PiholeError(
+                reason="bad_response", message="POST /api/dns/blocking: response is not JSON"
+            )
+        took = _extract_took(payload)
+        return PiholeResponse(payload=payload, took_seconds=took, endpoint="dns/blocking")
+
+    async def gravity_update(self) -> PiholeResponse | PiholeError:  # noqa: PLR0911 -- return-not-raise: each branch is a distinct auth/stream/status error path
+        """POST /api/action/gravity — rebuild gravity (RW, STREAMING text/plain).
+
+        Drains the chunked text stream to completion, then tail-parses the last
+        lines for a success/failure marker. Uses a generous timeout (gravity can run
+        a minute+). Returns PiholeResponse(payload={"success": bool, "log_tail":
+        [last N non-empty lines]}, took_seconds=<wall time>, endpoint="action/gravity").
+
+        SUCCESS HEURISTIC (defensive — tune in Refinement 3b once live markers are
+        confirmed): a stream that completes WITHOUT an explicit failure/error marker
+        in its tail is treated as SUCCESS. The exact Pi-hole marker lines are not yet
+        confirmed, so this is a single well-commented function the Refinement pass can
+        adjust. A 401 on stream-open triggers ONE re-auth + re-open (mirrors _request).
+        """
+        if self._sid is None:
+            login_err = await self._ensure_session(None)
+            if login_err is not None:
+                return login_err
+        result = await self._gravity_stream_once()
+        if isinstance(result, PiholeError):
+            return result
+        status, lines, elapsed = result
+        if status == _HTTP_UNAUTHORIZED:
+            reauth_err = await self._ensure_session(self._sid)
+            if reauth_err is not None:
+                return reauth_err
+            result = await self._gravity_stream_once()
+            if isinstance(result, PiholeError):
+                return result
+            status, lines, elapsed = result
+            if status == _HTTP_UNAUTHORIZED:
+                return PiholeError(
+                    reason="auth",
+                    message="POST /api/action/gravity: unauthorized after re-auth",
+                    status=_HTTP_UNAUTHORIZED,
+                )
+        if status == _HTTP_TOO_MANY_REQUESTS:
+            return PiholeError(
+                reason="rate_limited", message="POST /api/action/gravity: HTTP 429", status=status
+            )
+        if not (_HTTP_OK_FLOOR <= status < _HTTP_OK_CEIL):
+            return PiholeError(
+                reason="http_error",
+                message=f"POST /api/action/gravity: HTTP {status}",
+                status=status,
+            )
+        tail = lines[-_GRAVITY_LOG_TAIL:]
+        success = _gravity_succeeded(tail)
+        return PiholeResponse(
+            payload={"success": success, "log_tail": tail},
+            took_seconds=elapsed,
+            endpoint="action/gravity",
+        )
+
+    async def _gravity_stream_once(
+        self,
+    ) -> tuple[int, list[str], float] | PiholeError:
+        """Open the gravity stream once, drain it, return (status, non_empty_lines, elapsed).
+
+        Returns a transport PiholeError on connect/timeout. Does NOT classify status
+        (caller maps 401/429/5xx). Lines are stripped; empty lines are dropped.
+        """
+        url = f"{self._base_url}/api/action/gravity"
+        headers = {"X-FTL-SID": self._sid} if self._sid else {}
+        start = time.monotonic()
+        lines: list[str] = []
+        try:
+            async with self._http.stream(
+                "POST", url, headers=headers, timeout=_GRAVITY_TIMEOUT_SECONDS
+            ) as resp:
+                status = resp.status_code
+                async for chunk in resp.aiter_lines():
+                    stripped = chunk.strip()
+                    if stripped:
+                        lines.append(stripped)
+        except (httpx.ConnectError, httpx.ConnectTimeout):
+            return PiholeError(
+                reason="unreachable", message="POST /api/action/gravity: connection failed"
+            )
+        except (httpx.ReadTimeout, httpx.TimeoutException):
+            return PiholeError(reason="timeout", message="POST /api/action/gravity: timed out")
+        return (status, lines, time.monotonic() - start)
 
     # ---- internals ----
 
@@ -264,47 +385,20 @@ class PiholeRestClient:
                 return None
             return await self._login()
 
-    async def _get(  # noqa: PLR0911 -- return-not-raise: one branch per httpx error + HTTP status (timeout/unreachable/401/429/5xx/bad-json)
+    async def _get(
         self, path: str, endpoint: str, params: dict[str, str] | None = None
     ) -> PiholeResponse | PiholeError:
         """Perform an authenticated GET, mapping every failure to a PiholeError.
 
-        Centralizes ALL branching: session establishment, X-FTL-SID attachment,
-        transport-error mapping, status mapping (401 -> single re-auth+retry, 429,
-        5xx/other), JSON parse, and ``took`` extraction. Keeping the branches here
-        keeps the public helpers branchless and the coverage surface in one place.
+        Uses ``_classify_response`` so an HTTP 401 AND a 200-response carrying an
+        ``{"error": {"key": "unauthorized"}}`` envelope share the SAME single
+        re-auth-retry guard (Cross-stage deliverable 2). After one re-auth, a still-
+        unauthorized result (either signal) becomes ``PiholeError(reason="auth")``.
         """
-        if self._sid is None:
-            login_err = await self._ensure_session(None)
-            if login_err is not None:
-                return login_err
-        resp = await self._do_get(path, params)
+        resp = await self._request("GET", path, params=params)
         if isinstance(resp, PiholeError):
             return resp
-        if resp.status_code == _HTTP_UNAUTHORIZED:
-            reauth_err = await self._ensure_session(self._sid)
-            if reauth_err is not None:
-                return reauth_err
-            resp = await self._do_get(path, params)
-            if isinstance(resp, PiholeError):
-                return resp
-            if resp.status_code == _HTTP_UNAUTHORIZED:
-                return PiholeError(
-                    reason="auth",
-                    message=f"GET {path}: HTTP 401 after re-auth",
-                    status=_HTTP_UNAUTHORIZED,
-                )
-        status = resp.status_code
-        if status == _HTTP_TOO_MANY_REQUESTS:
-            retry_after = resp.headers.get("Retry-After")
-            suffix = f" (Retry-After: {retry_after})" if retry_after else ""
-            return PiholeError(
-                reason="rate_limited", message=f"GET {path}: HTTP 429{suffix}", status=status
-            )
-        if not (_HTTP_OK_FLOOR <= status < _HTTP_OK_CEIL):
-            return PiholeError(
-                reason="http_error", message=f"GET {path}: HTTP {status}", status=status
-            )
+        # resp is a verified-ok httpx.Response (2xx, no error envelope).
         try:
             payload: object = resp.json()
         except ValueError:
@@ -312,22 +406,77 @@ class PiholeRestClient:
         took = _extract_took(payload)
         return PiholeResponse(payload=payload, took_seconds=took, endpoint=endpoint)
 
-    async def _do_get(
-        self, path: str, params: dict[str, str] | None
+    async def _request(  # noqa: PLR0911 -- return-not-raise: one branch per transport/auth/classify outcome on each of two attempts
+        self,
+        method: str,
+        path: str,
+        *,
+        params: dict[str, str] | None = None,
+        json_body: object | None = None,
     ) -> httpx.Response | PiholeError:
-        """Issue one GET with the current SID header, mapping transport errors to PiholeError.
+        """Authenticated request with single re-auth-retry; returns a verified-ok Response.
+
+        Establishes a session, issues the request, classifies the response. On
+        ``needs_reauth`` (HTTP 401 OR 200 ``unauthorized`` envelope) it re-auths ONCE
+        and retries; a second ``needs_reauth`` becomes ``PiholeError(reason="auth")``.
+        On ``ok`` it returns the raw ``httpx.Response`` for the caller to parse
+        (the caller owns body parsing: JSON for reads, stream-drain for gravity).
+        """
+        if self._sid is None:
+            login_err = await self._ensure_session(None)
+            if login_err is not None:
+                return login_err
+        resp = await self._do_request(method, path, params=params, json_body=json_body)
+        if isinstance(resp, PiholeError):
+            return resp
+        outcome, err = _classify_response(resp, f"{method} {path}")
+        if outcome == "error":
+            assert err is not None
+            return err
+        if outcome == "ok":
+            return resp
+        # outcome == "needs_reauth": re-auth ONCE and retry.
+        reauth_err = await self._ensure_session(self._sid)
+        if reauth_err is not None:
+            return reauth_err
+        resp = await self._do_request(method, path, params=params, json_body=json_body)
+        if isinstance(resp, PiholeError):
+            return resp
+        outcome, err = _classify_response(resp, f"{method} {path}")
+        if outcome == "error":
+            assert err is not None
+            return err
+        if outcome == "needs_reauth":
+            return PiholeError(
+                reason="auth",
+                message=f"{method} {path}: unauthorized after re-auth",
+                status=_HTTP_UNAUTHORIZED,
+            )
+        return resp
+
+    async def _do_request(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: dict[str, str] | None = None,
+        json_body: object | None = None,
+    ) -> httpx.Response | PiholeError:
+        """Issue one request with the current SID header; map transport errors to PiholeError.
 
         Returns the raw ``httpx.Response`` (any status) or a transport PiholeError.
-        Status mapping happens in ``_get``.
+        Status / envelope classification happens in ``_request`` / ``_get``.
         """
         url = f"{self._base_url}{path}"
         headers = {"X-FTL-SID": self._sid} if self._sid else {}
         try:
-            return await self._http.request("GET", url, headers=headers, params=params)
+            return await self._http.request(
+                method, url, headers=headers, params=params, json=json_body
+            )
         except (httpx.ConnectError, httpx.ConnectTimeout):
-            return PiholeError(reason="unreachable", message=f"GET {path}: connection failed")
+            return PiholeError(reason="unreachable", message=f"{method} {path}: connection failed")
         except (httpx.ReadTimeout, httpx.TimeoutException):
-            return PiholeError(reason="timeout", message=f"GET {path}: timed out")
+            return PiholeError(reason="timeout", message=f"{method} {path}: timed out")
 
 
 def _parse_session(body: dict[str, object]) -> PiholeSession:
@@ -357,3 +506,87 @@ def _extract_took(payload: object) -> float:
         if isinstance(took, (int, float)) and not isinstance(took, bool):
             return float(took)
     return 0.0
+
+
+def _classify_response(  # noqa: PLR0911 -- classifier: each branch maps a distinct HTTP/body-envelope outcome to a typed tuple
+    resp: httpx.Response, path: str
+) -> tuple[Literal["ok", "needs_reauth", "error"], PiholeError | None]:
+    """Classify a raw Pi-hole response into ok / needs_reauth / error.
+
+    Unifies HTTP-status and in-body error-envelope handling so a 200-response
+    carrying ``{"error": {"key": "unauthorized", ...}}`` is treated IDENTICALLY to
+    an HTTP 401 (both -> needs_reauth, one re-auth + retry). Any other error key
+    becomes a ``bad_response`` PiholeError.
+
+    Returns ``(outcome, err)``:
+      - ("ok", None)            -> 2xx status with NO error envelope; caller parses.
+      - ("needs_reauth", None)  -> HTTP 401, OR 200 with error key "unauthorized".
+      - ("error", PiholeError)  -> any mapped failure (rate_limited / http_error /
+                                   bad_response / 200-with-other-error-key).
+
+    The 401-after-reauth -> auth decision stays in ``_get`` / the write helpers
+    (this function does not know whether it is the first or the retried attempt).
+    """
+    status = resp.status_code
+    if status == _HTTP_UNAUTHORIZED:
+        return ("needs_reauth", None)
+    if status == _HTTP_TOO_MANY_REQUESTS:
+        retry_after = resp.headers.get("Retry-After")
+        suffix = f" (Retry-After: {retry_after})" if retry_after else ""
+        return (
+            "error",
+            PiholeError(reason="rate_limited", message=f"{path}: HTTP 429{suffix}", status=status),
+        )
+    if not (_HTTP_OK_FLOOR <= status < _HTTP_OK_CEIL):
+        return (
+            "error",
+            PiholeError(reason="http_error", message=f"{path}: HTTP {status}", status=status),
+        )
+    # 2xx: inspect for an in-body error envelope. A parse failure here is NOT fatal
+    # (some endpoints stream text, not JSON); only an explicit {"error": {...}}
+    # object is classified. JSON-parse failures are left to the caller's own parse.
+    try:
+        body: object = resp.json()
+    except ValueError:
+        return ("ok", None)
+    if isinstance(body, dict):
+        error_obj = cast("dict[str, object]", body).get("error")
+        if isinstance(error_obj, dict):
+            err = cast("dict[str, object]", error_obj)
+            key_obj = err.get("key")
+            key = key_obj if isinstance(key_obj, str) else ""
+            msg_obj = err.get("message")
+            msg = msg_obj if isinstance(msg_obj, str) else ""
+            if key == _PIHOLE_UNAUTHORIZED_KEY:
+                return ("needs_reauth", None)
+            return (
+                "error",
+                PiholeError(
+                    reason="bad_response",
+                    message=f"{path}: error key={key or '?'} message={msg}",
+                    status=status,
+                ),
+            )
+    return ("ok", None)
+
+
+def _gravity_succeeded(tail: list[str]) -> bool:
+    """Heuristic success check on the tail of the gravity stream.
+
+    POSITIVE check (Refinement 3b confirmed the live `pihole -g` output ends with a
+    "[✓] Done" completion marker): a tail containing that marker is a success. This
+    avoids false-negatives from benign lines that merely contain "error" (e.g.
+    "0 errors", an adlist URL with "error" in it). If no success marker is present,
+    fall back to the failure-marker scan: an explicit failure marker → failed; an
+    otherwise-clean completed stream → success (defensive). Matched case-insensitively.
+    """
+    success_marker = "[✓] done"
+    failure_markers = ("error", "failed", "failure", "fatal", "abort")
+    for line in tail:
+        if success_marker in line.lower():
+            return True
+    for line in tail:
+        lower = line.lower()
+        if any(marker in lower for marker in failure_markers):
+            return False
+    return True

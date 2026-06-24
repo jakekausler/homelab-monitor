@@ -233,6 +233,55 @@ async def test_lifespan_pihole_client_none_at_shutdown_skips_aclose(
 
 
 @pytest.mark.asyncio
+async def test_lifespan_pihole_rw_client_aclose_called_at_shutdown(
+    db_url: str, master_key: bytes, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """pihole_rw_client is not None at shutdown → aclose() is called.
+
+    Covers lifespan.py branch: ``if pihole_rw_client is not None`` true-branch
+    (lines 1618-1619). When the client exists, aclose is invoked.
+    """
+    from unittest.mock import AsyncMock  # noqa: PLC0415
+
+    monkeypatch.setenv("HOMELAB_MONITOR_DB_URL", db_url)
+    monkeypatch.setenv("HOMELAB_MONITOR_MASTER_KEY", base64.b64encode(master_key).decode())
+
+    app = create_app(lifespan_enabled=True)
+
+    async with app.router.lifespan_context(app):
+        scheduler = app.state.scheduler
+        # Set a mock pihole_rw_client so we can verify aclose is called.
+        mock_client = AsyncMock()
+        app.state.pihole_rw_client = mock_client
+
+    # After shutdown, aclose should have been called exactly once.
+    mock_client.aclose.assert_called_once()
+    # Scheduler is stopped.
+    assert not scheduler.running
+
+
+@pytest.mark.asyncio
+async def test_lifespan_pihole_rw_client_none_at_shutdown_skips_aclose(
+    db_url: str, master_key: bytes, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """pihole_rw_client = None at shutdown → aclose() is not called, shutdown completes cleanly.
+
+    Covers lifespan.py branch ``if pihole_rw_client is not None`` false-branch (1618->1620).
+    """
+    monkeypatch.setenv("HOMELAB_MONITOR_DB_URL", db_url)
+    monkeypatch.setenv("HOMELAB_MONITOR_MASTER_KEY", base64.b64encode(master_key).decode())
+
+    app = create_app(lifespan_enabled=True)
+
+    async with app.router.lifespan_context(app):
+        scheduler = app.state.scheduler
+        # Null out the RW client so the shutdown finally-block sees None.
+        app.state.pihole_rw_client = None
+
+    assert not scheduler.running
+
+
+@pytest.mark.asyncio
 async def test_app_state_accessible_after_lifespan_startup(
     db_url: str, master_key: bytes, monkeypatch: pytest.MonkeyPatch
 ) -> None:

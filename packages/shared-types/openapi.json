@@ -462,6 +462,69 @@
         "title": "BackupResponse",
         "type": "object"
       },
+      "BlockingRequest": {
+        "properties": {
+          "action": {
+            "enum": [
+              "enable",
+              "disable"
+            ],
+            "title": "Action",
+            "type": "string"
+          },
+          "confirm_phrase": {
+            "title": "Confirm Phrase",
+            "type": "string"
+          },
+          "timer": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timer"
+          }
+        },
+        "required": [
+          "action",
+          "confirm_phrase"
+        ],
+        "title": "BlockingRequest",
+        "type": "object"
+      },
+      "BlockingResponse": {
+        "properties": {
+          "audit_id": {
+            "title": "Audit Id",
+            "type": "string"
+          },
+          "blocking": {
+            "title": "Blocking",
+            "type": "string"
+          },
+          "timer": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timer"
+          }
+        },
+        "required": [
+          "blocking",
+          "timer",
+          "audit_id"
+        ],
+        "title": "BlockingResponse",
+        "type": "object"
+      },
       "ChangePasswordRequest": {
         "additionalProperties": false,
         "properties": {
@@ -2546,6 +2609,45 @@
           "type_hint"
         ],
         "title": "FieldDescriptor",
+        "type": "object"
+      },
+      "GravityUpdateRequest": {
+        "properties": {
+          "confirm_phrase": {
+            "title": "Confirm Phrase",
+            "type": "string"
+          }
+        },
+        "required": [
+          "confirm_phrase"
+        ],
+        "title": "GravityUpdateRequest",
+        "type": "object"
+      },
+      "GravityUpdateResponse": {
+        "properties": {
+          "audit_id": {
+            "title": "Audit Id",
+            "type": "string"
+          },
+          "log_tail": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Log Tail",
+            "type": "array"
+          },
+          "success": {
+            "title": "Success",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "success",
+          "log_tail",
+          "audit_id"
+        ],
+        "title": "GravityUpdateResponse",
         "type": "object"
       },
       "HAEventPayload": {
@@ -10969,6 +11071,90 @@
         "summary": "Get Ha Updates",
         "tags": [
           "integrations"
+        ]
+      }
+    },
+    "/api/integrations/pihole/blocking": {
+      "post": {
+        "description": "Enable/disable Pi-hole DNS blocking. confirm_phrase must equal the action.",
+        "operationId": "set_blocking_api_integrations_pihole_blocking_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BlockingRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlockingResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Blocking",
+        "tags": [
+          "integrations-pihole"
+        ]
+      }
+    },
+    "/api/integrations/pihole/gravity/update": {
+      "post": {
+        "description": "Trigger a Pi-hole gravity rebuild. confirm_phrase must equal 'update'.",
+        "operationId": "gravity_update_api_integrations_pihole_gravity_update_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GravityUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GravityUpdateResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Gravity Update",
+        "tags": [
+          "integrations-pihole"
         ]
       }
     },
