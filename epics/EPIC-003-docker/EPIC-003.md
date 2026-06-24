@@ -126,6 +126,10 @@ The "Pull & Restart" action (STAGE-003-010) introduces the FIRST kernel-driven D
 - The confirm-on-destructive UX from STAGE-003-010 SHOULD be the same component used for runbook real-runs.
 - The docker socket RW widening from STAGE-003-010 is a prerequisite for any EPIC-009 runbook that needs to invoke `docker` commands.
 
+## Cross-References
+
+- STAGE-006-019 (EPIC-006) back-fills the generic container lifecycle write actions (restart/start/stop) originally scoped to this epic's container-management surface. See `epics/EPIC-006-pihole/STAGE-006-019.md`.
+
 ## Cross-epic back-fill ← EPIC-006 (added 2026-06-16)
 
 A **generic container lifecycle action** — `POST /api/docker/containers/{id}/{restart|start|stop}`,

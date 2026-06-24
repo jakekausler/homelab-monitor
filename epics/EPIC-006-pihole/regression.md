@@ -179,3 +179,15 @@
 - [ ] `PiholeRestClient._get()` maps a 200-response carrying an `{"error":{"key":"unauthorized"}}` body to a re-auth+retry (same guard as HTTP 401); a non-unauthorized error key → `bad_response`. All 11 collectors still pass at 100% branch coverage.
 - [ ] The RW client (`pihole_api_password_rw`) is used ONLY by the write router, never by collectors; constructed + aclose'd in lifespan.
 - [ ] Live-3b confirmed (STAGE-006-018 Refinement): RW password authenticates against live Pi-hole v6; CSRF IS required on writes; real gravity run ~completes with the success markers; the blocking round-trip leaves the Pi-hole in its original state.
+
+## STAGE-006-019 — generic container lifecycle actions (restart/start/stop)
+
+- [ ] `POST /api/integrations/docker/containers/{name}/restart` restarts a live container: with `{"confirm_phrase":"restart"}` + session + CSRF → 200 `{action:"restart", container_name, container_id, audit_id}`; the container returns to RUNNING within the 30s write-timeout. (Validated live on `homelab-kthxbye`.) Equivalent `/start` + `/stop` endpoints exist. ALWAYS leave the container RUNNING after testing.
+- [ ] Each lifecycle action writes an `audit_log` row: who, `what="docker.container.<action>"`, `before={"state":<pre-inspect status>}`, `after={"action":<action>}`, ip; the response `audit_id` matches the DB row.
+- [ ] Wrong `confirm_phrase` → HTTP 400 (`confirm_phrase must equal '<action>'`) BEFORE the socket-client dependency (the body-only confirm validator runs first; must NOT 503/502).
+- [ ] Unauthenticated → 401; valid session without `X-CSRF-Token` → 403 (csrf_mismatch); a token lacking `Scope.DOCKER_WRITE` → 403 (unit-tested). All three endpoints are `DOCKER_WRITE`-gated.
+- [ ] Unknown container name → 404 (`container not found: <name>`); the socket method is never called.
+- [ ] DockerSocketClient `restart_container`/`start_container`/`stop_container` raise `DockerSocketError` on failure (→ 502 at the router); success = HTTP 204 OR 304 (304 = already-in-state idempotent); the write methods use a 30s per-call timeout (longer than the 5s read default, for restart's stop-grace). `t` included only when `timeout_seconds` is passed.
+- [ ] A pre-action `inspect_container` failure → 502 (the action is NOT attempted; audit not written).
+- [ ] No audit row is written on the 400/401/403/404/502 paths (audit-on-success-only).
+- [ ] EPIC-003.md carries a back-fill cross-reference note pointing to STAGE-006-019.
