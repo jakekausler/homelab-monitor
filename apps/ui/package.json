@@ -34,7 +34,7 @@
     "@tanstack/react-router": "^1.95",
     "class-variance-authority": "^0.7",
     "clsx": "^2.1",
-    "lucide-react": "^0.469",
+    "lucide-react": "^1.14",
     "openapi-fetch": "^0.13",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
