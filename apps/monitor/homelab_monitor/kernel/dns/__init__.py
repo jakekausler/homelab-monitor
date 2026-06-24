@@ -8,6 +8,17 @@ dnspython, no docker socket, no ProbeSupervisor. The UDP analogue of
 
 from __future__ import annotations
 
+from homelab_monitor.kernel.dns.outcomes import (
+    OUTCOME_BY_ERROR,
+    PROBE_QNAME,
+    RESPONSE_OUTCOMES,
+)
 from homelab_monitor.kernel.dns.resolver import DnsProbeResult, resolve_a
 
-__all__ = ["DnsProbeResult", "resolve_a"]
+__all__ = [
+    "OUTCOME_BY_ERROR",
+    "PROBE_QNAME",
+    "RESPONSE_OUTCOMES",
+    "DnsProbeResult",
+    "resolve_a",
+]

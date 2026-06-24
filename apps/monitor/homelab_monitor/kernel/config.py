@@ -644,14 +644,18 @@ class PiholeConfig:
 
     ``dns_host`` (STAGE-006-014) is the resolver IP for the INDEPENDENT direct
     UDP :53 DNS health probe. Empty (the default) means "derive from base_url's
-    hostname" in the loader. ``dns_port`` defaults to 53. A future stage
-    (STAGE-006-015) adds a second resolver for split-check vs WAN upstream.
+    hostname" in the loader. ``dns_port`` defaults to 53.
+    (STAGE-006-015) adds ``direct_dns_host`` / ``direct_dns_port`` — a WAN-bypass
+    resolver (default ``1.1.1.1:53``) probed alongside Pi-hole each cycle for the
+    DNS split-check.
     """
 
     base_url: str = "http://192.168.2.148:8080"  # host LAN IP (container cannot reach localhost)
     host_lan_ip: str = ""
     dns_host: str = ""  # resolver IP for the direct :53 DNS probe; empty -> derive from base_url
     dns_port: int = 53
+    direct_dns_host: str = "1.1.1.1"  # WAN-bypass resolver for split-check (STAGE-006-015)
+    direct_dns_port: int = 53
 
 
 def load_pihole_config() -> PiholeConfig:
@@ -667,6 +671,9 @@ def load_pihole_config() -> PiholeConfig:
     ``HOMELAB_MONITOR_PIHOLE_DNS_HOST`` -> ``dns_host`` (raw IP; empty default means
     derive from base_url's hostname). ``HOMELAB_MONITOR_PIHOLE_DNS_PORT`` -> ``dns_port``
     (int; default 53).
+    ``HOMELAB_MONITOR_PIHOLE_DIRECT_DNS_HOST`` -> ``direct_dns_host`` (raw IP; empty
+    default falls back to literal ``1.1.1.1`` — NOT derived from base_url).
+    ``HOMELAB_MONITOR_PIHOLE_DIRECT_DNS_PORT`` -> ``direct_dns_port`` (int; default 53).
     """
     raw = os.environ.get("HOMELAB_MONITOR_PIHOLE_URL")
     base_url = PiholeConfig().base_url if raw is None else raw.rstrip("/")
@@ -679,11 +686,22 @@ def load_pihole_config() -> PiholeConfig:
     raw_port = os.environ.get("HOMELAB_MONITOR_PIHOLE_DNS_PORT")
     dns_port = PiholeConfig().dns_port if raw_port is None else int(raw_port)
 
+    direct_dns_host = os.environ.get("HOMELAB_MONITOR_PIHOLE_DIRECT_DNS_HOST", "")
+    if not direct_dns_host:
+        direct_dns_host = PiholeConfig().direct_dns_host
+
+    raw_direct_port = os.environ.get("HOMELAB_MONITOR_PIHOLE_DIRECT_DNS_PORT")
+    direct_dns_port = (
+        PiholeConfig().direct_dns_port if raw_direct_port is None else int(raw_direct_port)
+    )
+
     return PiholeConfig(
         base_url=base_url,
         host_lan_ip=host_lan_ip,
         dns_host=dns_host,
         dns_port=dns_port,
+        direct_dns_host=direct_dns_host,
+        direct_dns_port=direct_dns_port,
     )
 
 

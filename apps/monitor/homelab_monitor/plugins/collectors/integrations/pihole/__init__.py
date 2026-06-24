@@ -21,6 +21,9 @@ from homelab_monitor.plugins.collectors.integrations.pihole.blocking import (
 from homelab_monitor.plugins.collectors.integrations.pihole.dns_health import (
     PiholeDnsHealthCollector,
 )
+from homelab_monitor.plugins.collectors.integrations.pihole.dns_split import (
+    PiholeDnsSplitCollector,
+)
 from homelab_monitor.plugins.collectors.integrations.pihole.ftl_health import (
     PiholeFtlHealthCollector,
 )
@@ -60,6 +63,7 @@ _PIHOLE_COLLECTORS: list[type[BaseCollector]] = [
     PiholeClientsCollector,
     UnboundStatsCollector,
     PiholeDnsHealthCollector,
+    PiholeDnsSplitCollector,
 ]
 
 

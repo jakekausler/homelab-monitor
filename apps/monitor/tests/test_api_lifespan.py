@@ -1167,3 +1167,63 @@ async def test_lifespan_wires_pihole_dns_health_collector(
         assert dns_collector is not None, "PiholeDnsHealthCollector should be registered"
         assert dns_collector._dns_host == "192.168.2.149"  # pyright: ignore[reportPrivateUsage]
         assert dns_collector._dns_port == 53  # pyright: ignore[reportPrivateUsage]  # noqa: PLR2004
+
+
+@pytest.mark.asyncio
+async def test_lifespan_wires_pihole_dns_split_collector(
+    db_url: str,
+    master_key: bytes,
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_mock: HTTPXMock,  # type: ignore[name-defined]
+) -> None:
+    """After startup, the PiholeDnsSplitCollector isinstance branch is covered.
+
+    Verifies the lifespan wiring loop injects _pihole_host / _pihole_port /
+    _direct_host / _direct_port onto the collector (mirrors
+    test_lifespan_wires_pihole_dns_health_collector).
+    """
+    import re  # noqa: PLC0415
+
+    from homelab_monitor.plugins.collectors.integrations.pihole.dns_split import (  # noqa: PLC0415
+        PiholeDnsSplitCollector,
+    )
+
+    monkeypatch.setenv("HOMELAB_MONITOR_DB_URL", db_url)
+    monkeypatch.setenv("HOMELAB_MONITOR_MASTER_KEY", base64.b64encode(master_key).decode())
+    monkeypatch.setenv("HOMELAB_MONITOR_PIHOLE_DNS_HOST", "192.168.2.149")
+    monkeypatch.setenv("HOMELAB_MONITOR_PIHOLE_DNS_PORT", "53")
+    monkeypatch.setenv("HOMELAB_MONITOR_PIHOLE_DIRECT_DNS_HOST", "1.0.0.1")
+    monkeypatch.setenv("HOMELAB_MONITOR_PIHOLE_DIRECT_DNS_PORT", "5300")
+
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(r".*localhost/events.*"),
+        content=b"",
+        is_optional=True,
+        is_reusable=True,
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(r".*localhost/containers/json.*"),
+        json=[],
+        is_optional=True,
+        is_reusable=True,
+    )
+
+    app = create_app(lifespan_enabled=True)
+
+    async with app.router.lifespan_context(app):
+        assert app.state.scheduler is not None
+        assert app.state.scheduler.running
+
+        split_collector = None
+        for lc in app.state.scheduler._loaded:  # pyright: ignore[reportPrivateUsage]
+            if isinstance(lc.collector, PiholeDnsSplitCollector):
+                split_collector = lc.collector
+                break
+
+        assert split_collector is not None, "PiholeDnsSplitCollector should be registered"
+        assert split_collector._pihole_host == "192.168.2.149"  # pyright: ignore[reportPrivateUsage]
+        assert split_collector._pihole_port == 53  # pyright: ignore[reportPrivateUsage]  # noqa: PLR2004
+        assert split_collector._direct_host == "1.0.0.1"  # pyright: ignore[reportPrivateUsage]
+        assert split_collector._direct_port == 5300  # pyright: ignore[reportPrivateUsage]  # noqa: PLR2004

@@ -19,40 +19,22 @@ from __future__ import annotations
 
 import time
 from datetime import timedelta
-from typing import ClassVar, Final
+from typing import ClassVar
 
-from homelab_monitor.kernel.dns import DnsProbeResult, resolve_a
+from homelab_monitor.kernel.dns import (
+    OUTCOME_BY_ERROR,
+    PROBE_QNAME,
+    RESPONSE_OUTCOMES,
+    DnsProbeResult,
+    resolve_a,
+)
 from homelab_monitor.kernel.plugins.base import BaseCollector
 from homelab_monitor.kernel.plugins.context import CollectorContext
 from homelab_monitor.kernel.plugins.types import CollectorResult
 
-# Probe target: a stable public A record. Module-level constant per locked design.
-_PROBE_QNAME: Final[str] = "dns.google.com"
-
 M_UP = "homelab_pihole_up"
 M_DNS_PROBE_SECONDS = "homelab_pihole_dns_probe_seconds"
 M_DNS_PROBE_RESULT = "homelab_pihole_dns_probe_result"
-
-# DnsProbeResult.error token (None == ok) -> outcome label value. One-hot precedent:
-# gravity.py's _STATUS_NAMES. Exactly one outcome series emitted per run.
-_OUTCOME_BY_ERROR: Final[dict[str | None, str]] = {
-    None: "ok",
-    "timeout": "timeout",
-    "servfail": "servfail",
-    "nxdomain": "nxdomain",
-    "refused": "refused",
-    "malformed": "malformed",
-    "socket_error": "socket_error",
-    "id_mismatch": "id_mismatch",
-    "truncated": "truncated",
-    "no_answer": "no_answer",
-}
-
-# Outcomes that represent a REAL round-trip (a response was received) -> emit latency.
-# Everything else (timeout / socket_error / malformed / id_mismatch) -> OMIT latency.
-_RESPONSE_OUTCOMES: Final[frozenset[str]] = frozenset(
-    {"ok", "servfail", "nxdomain", "refused", "no_answer", "truncated"}
-)
 
 
 class PiholeDnsHealthCollector(BaseCollector):
@@ -90,7 +72,7 @@ class PiholeDnsHealthCollector(BaseCollector):
 
         # Probe timeout: stay comfortably under the collector timeout (15s).
         result: DnsProbeResult = await resolve_a(
-            self._dns_host, _PROBE_QNAME, port=self._dns_port, timeout_seconds=5.0
+            self._dns_host, PROBE_QNAME, port=self._dns_port, timeout_seconds=5.0
         )
 
         emitted: list[int] = [0]
@@ -100,12 +82,12 @@ class PiholeDnsHealthCollector(BaseCollector):
         emitted[0] += 1
 
         # --- outcome one-hot (ALWAYS exactly one series) ---
-        outcome = _OUTCOME_BY_ERROR[result.error]
+        outcome = OUTCOME_BY_ERROR[result.error]
         ctx.vm.write_gauge(M_DNS_PROBE_RESULT, 1.0, {"outcome": outcome})
         emitted[0] += 1
 
         # --- latency gauge (ONLY on a real round-trip) ---
-        if outcome in _RESPONSE_OUTCOMES:
+        if outcome in RESPONSE_OUTCOMES:
             ctx.vm.write_gauge(M_DNS_PROBE_SECONDS, result.latency_seconds, {})
             emitted[0] += 1
 

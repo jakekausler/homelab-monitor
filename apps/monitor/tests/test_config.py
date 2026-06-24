@@ -1619,3 +1619,48 @@ def test_load_pihole_config_non_numeric_dns_port_raises(
     monkeypatch.setenv("HOMELAB_MONITOR_PIHOLE_DNS_PORT", "abc")
     with pytest.raises(ValueError):
         load_pihole_config()
+
+
+def test_load_pihole_config_direct_dns_host_explicit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """direct_dns_host from env takes precedence (env-set branch)."""
+    monkeypatch.setenv("HOMELAB_MONITOR_PIHOLE_DIRECT_DNS_HOST", "9.9.9.9")
+    cfg = load_pihole_config()
+    assert cfg.direct_dns_host == "9.9.9.9"
+
+
+def test_load_pihole_config_direct_dns_host_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Empty/unset direct_dns_host falls back to literal 1.1.1.1 (env-empty branch)."""
+    monkeypatch.delenv("HOMELAB_MONITOR_PIHOLE_DIRECT_DNS_HOST", raising=False)
+    cfg = load_pihole_config()
+    assert cfg.direct_dns_host == "1.1.1.1"
+
+
+def test_load_pihole_config_direct_dns_port_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """direct_dns_port defaults to 53 when env unset."""
+    monkeypatch.delenv("HOMELAB_MONITOR_PIHOLE_DIRECT_DNS_PORT", raising=False)
+    cfg = load_pihole_config()
+    assert cfg.direct_dns_port == 53  # noqa: PLR2004
+
+
+def test_load_pihole_config_direct_dns_port_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """direct_dns_port from env overrides default."""
+    monkeypatch.setenv("HOMELAB_MONITOR_PIHOLE_DIRECT_DNS_PORT", "5354")
+    cfg = load_pihole_config()
+    assert cfg.direct_dns_port == 5354  # noqa: PLR2004
+
+
+def test_load_pihole_config_non_numeric_direct_dns_port_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Non-numeric HOMELAB_MONITOR_PIHOLE_DIRECT_DNS_PORT raises ValueError."""
+    monkeypatch.setenv("HOMELAB_MONITOR_PIHOLE_DIRECT_DNS_PORT", "abc")
+    with pytest.raises(ValueError):
+        load_pihole_config()
