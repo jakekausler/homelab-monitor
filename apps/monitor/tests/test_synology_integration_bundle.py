@@ -22,6 +22,9 @@ from homelab_monitor.plugins.collectors.integrations.synology.storage import (
 from homelab_monitor.plugins.collectors.integrations.synology.system import (
     SynologySystemCollector,
 )
+from homelab_monitor.plugins.collectors.integrations.synology.updates import (
+    SynologyUpdatesCollector,
+)
 from homelab_monitor.plugins.collectors.integrations.synology.ups import (
     SynologyUPSCollector,
 )
@@ -36,6 +39,7 @@ _EXPECTED_UTILIZATION_INTERVAL = 60
 _EXPECTED_UPS_INTERVAL = 60
 _EXPECTED_BACKUP_INTERVAL = 300
 _EXPECTED_REPLICATION_INTERVAL = 300
+_EXPECTED_UPDATES_INTERVAL = 3600
 
 
 def test_register_all_registers_storage() -> None:
@@ -133,6 +137,20 @@ def test_register_all_registers_replication() -> None:
     assert isinstance(record, LoadedCollector)
     assert record.config.name == "synology_replication"
     assert record.config.interval_seconds == _EXPECTED_REPLICATION_INTERVAL
+    assert record.config.timeout_seconds == _EXPECTED_TIMEOUT
+
+
+def test_register_all_registers_updates() -> None:
+    """register_all registers SynologyUpdatesCollector with the derived config."""
+    loader = PluginLoader()
+    register_all(loader)
+    loaded = loader.load_all()
+    records = [r for r in loaded if isinstance(r.collector, SynologyUpdatesCollector)]
+    assert len(records) == 1
+    record = records[0]
+    assert isinstance(record, LoadedCollector)
+    assert record.config.name == "synology_updates"
+    assert record.config.interval_seconds == _EXPECTED_UPDATES_INTERVAL
     assert record.config.timeout_seconds == _EXPECTED_TIMEOUT
 
 

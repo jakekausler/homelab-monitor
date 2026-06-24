@@ -593,6 +593,8 @@ async def test_second_call_skips_login() -> None:
         ("backup_task_list", "SYNO.Backup.Task", "1", "list", {}),
         ("backup_repository_list", "SYNO.Backup.Repository", "1", "list", {}),
         ("share_snapshot_list", "SYNO.Core.Share.Snapshot", "2", "list", {"name": "photo"}),
+        ("share_list", "SYNO.Core.Share", "1", "list", {}),
+        ("replica_core_list", "SYNO.Btrfs.Replica.Core", "1", "list", {}),
         ("security_scan_status", "SYNO.Core.SecurityScan.Status", "1", "system_get", {}),
         ("current_connection_list", "SYNO.Core.CurrentConnection", "1", "list", {}),
         ("ss_info", "SYNO.SurveillanceStation.Info", "1", "GetInfo", {}),

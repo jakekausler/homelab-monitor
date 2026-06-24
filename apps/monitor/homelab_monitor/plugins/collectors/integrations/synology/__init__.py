@@ -30,6 +30,9 @@ from homelab_monitor.plugins.collectors.integrations.synology.storage import (
 from homelab_monitor.plugins.collectors.integrations.synology.system import (
     SynologySystemCollector,
 )
+from homelab_monitor.plugins.collectors.integrations.synology.updates import (
+    SynologyUpdatesCollector,
+)
 from homelab_monitor.plugins.collectors.integrations.synology.ups import (
     SynologyUPSCollector,
 )
@@ -47,6 +50,7 @@ _SYNOLOGY_COLLECTORS: list[type[BaseCollector]] = [
     SynologyUPSCollector,
     SynologyBackupCollector,
     SynologyReplicationCollector,
+    SynologyUpdatesCollector,
 ]
 
 
