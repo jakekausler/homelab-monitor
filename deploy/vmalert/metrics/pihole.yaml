@@ -1,0 +1,397 @@
+# vmalert METRICS rules for the Pi-hole / unbound DNS integration (STAGE-006-016 / EPIC-006).
+# Picked up by the vmalert-metrics sidecar (-rule=/etc/vmalert/metrics/*.yaml).
+# Severity vocabulary locked: info / warning / critical ONLY (spec §8.2; no 'error').
+#
+# Label convention (integration style, mirrors unifi.yaml / container_crash.yaml):
+#   severity / source_tool: vmalert-metrics / category: dns / integration: pihole
+# (No target_kind — this is an integration rule file, not a host-platform one.)
+#
+# Metric families consumed:
+#   homelab_pihole_*          — Pi-hole FTL stats, gravity, adlists, messages, upstreams, clients,
+#                               blocking state/timer, DB size, API timing, update availability,
+#                               composite up probe, direct :53 dns_probe_result.
+#   homelab_unbound_*         — unbound recursive-resolver extended-stats (rcode, bogus, recursion
+#                               time quantiles, cache hit ratio). Extended-stats ARE active on this
+#                               host (confirmed at 3b). The 4 unbound rules are LIVE. At baseline:
+#                               SERVFAIL and bogus totals are near-zero so rules 17/18 are correctly
+#                               inactive; p95 recursion is ~0.18s so rule 19 is correctly inactive;
+#                               rule 20 (cache hit ratio) threshold tuned to 0.01 at 3b (a Pi-hole->
+#                               unbound topology has a structurally-low unbound cache hit ratio since
+#                               Pi-hole's own cache absorbs the easy hits). Their promtool tests plant
+#                               synthetic series to prove the firing path; the NO-FIRE tests OMIT the
+#                               series to prove honest-empty.
+#   homelab_dns_resolution_*  — CROSS-EPIC SHARED with EPIC-016 (ISP/WAN). EPIC-016 owns the rules that
+#                               key on path="direct" failing (WAN/ISP outage). PiholeDnsSplitDivergence
+#                               (rule 22) lives HERE, not in EPIC-016, because its SUBJECT is Pi-hole:
+#                               it fires only when direct resolves (WAN ok) but the Pi-hole path fails
+#                               — a Pi-hole-specific outage.
+#
+# Annotations: summary is a static single line; description is a `>-` block that names the
+# upstream/list/client/etc. via {{ $labels.X }} and the value via {{ $value }}.
+#
+# Threshold-tuning markers: several thresholds are first-pass and explicitly tuned in Refinement 3b
+# (marked "tuned at 3b" inline). PiholeClientFlooding (rule 13) carries the highest false-fire risk.
+#
+# Unit tests: deploy/vmalert/metrics/__tests__/pihole.tests.yaml. All 22 rules are
+# promtool-validatable (no subquery/live-replay-only rules). Run with promtool:
+#   docker run --rm --entrypoint promtool \
+#     -v $(pwd)/deploy/vmalert/metrics:/rules \
+#     prom/prometheus:v2.47.0 \
+#     test rules /rules/__tests__/pihole.tests.yaml
+
+groups:
+  - name: pihole
+    interval: 30s
+    rules:
+      # 1 — Composite DNS health probe failing.
+      - alert: PiholeDown
+        expr: homelab_pihole_up == 0
+        for: 0m
+        labels:
+          severity: critical
+          source_tool: vmalert-metrics
+          category: dns
+          integration: pihole
+        annotations:
+          summary: "Pi-hole is down (composite DNS health probe failing)"
+          description: >-
+            The Pi-hole composite health probe returned down (homelab_pihole_up=0).
+            Pi-hole is unreachable or unhealthy; DNS resolution through it is at risk.
+
+      # 2 — pihole-unbound container not running. absent(running) OR a dead/exited/restarting state.
+      - alert: PiholeContainerDown
+        expr: >-
+          absent(homelab_container_status{name="pihole-unbound",state="running"})
+          or homelab_container_status{name="pihole-unbound",state=~"exited|dead|restarting"} == 1
+        for: 2m
+        labels:
+          severity: critical
+          source_tool: vmalert-metrics
+          category: dns
+          integration: pihole
+        annotations:
+          summary: "pihole-unbound container is not running"
+          description: >-
+            The pihole-unbound container is not in a running state (no running series, or state
+            {{ $labels.state }}). DNS + ad-blocking is down until the container recovers.
+
+      # 3 — Block rate collapsed to ~0% while still serving queries (config/gravity broke).
+      # threshold tuned at 3b.
+      - alert: PiholeBlockRateCollapsed
+        expr: homelab_pihole_percent_blocked < 1 and homelab_pihole_query_frequency > 0
+        for: 15m
+        labels:
+          severity: critical
+          source_tool: vmalert-metrics
+          category: dns
+          integration: pihole
+        annotations:
+          summary: "Pi-hole block rate collapsed to ~0% while still serving queries"
+          description: >-
+            Pi-hole percent-blocked dropped to {{ $value }}% while still serving queries
+            (query_frequency > 0). Blocking has effectively stopped — gravity or blocklists likely broke.
+
+      # 4 — All real upstreams have zero traffic. NOTE: absent() of the filtered >0 expr, NOT
+      # count()==0 (count of an empty vector is itself empty and would never fire). cache/blocklist
+      # are pseudo-upstreams and are excluded.
+      - alert: PiholeUpstreamAllDown
+        expr: absent(homelab_pihole_upstream_queries{upstream!~"cache|blocklist"} > 0)
+        for: 10m
+        labels:
+          severity: critical
+          source_tool: vmalert-metrics
+          category: dns
+          integration: pihole
+        annotations:
+          summary: "All real Pi-hole upstreams have zero traffic"
+          description: >-
+            No real Pi-hole upstream resolver is receiving queries (every non-cache, non-blocklist
+            upstream is at zero). Recursive resolution is broken.
+
+      # 5 — Blocking disabled (manually toggled off).
+      - alert: PiholeBlockingDisabled
+        expr: homelab_pihole_blocking_enabled == 0
+        for: 5m
+        labels:
+          severity: warning
+          source_tool: vmalert-metrics
+          category: dns
+          integration: pihole
+        annotations:
+          summary: "Pi-hole DNS blocking is disabled"
+          description: >-
+            Pi-hole DNS blocking is disabled (homelab_pihole_blocking_enabled=0). Ads/trackers are
+            not being filtered.
+
+      # 6 — Blocking disabled with NO auto-re-enable timer (won't come back on its own).
+      - alert: PiholeBlockingDisabledIndefinitely
+        expr: homelab_pihole_blocking_enabled == 0 and absent(homelab_pihole_blocking_timer_seconds)
+        for: 15m
+        labels:
+          severity: warning
+          source_tool: vmalert-metrics
+          category: dns
+          integration: pihole
+        annotations:
+          summary: "Pi-hole blocking disabled with no auto-re-enable timer"
+          description: >-
+            Pi-hole blocking is disabled and no auto-re-enable timer is set
+            (homelab_pihole_blocking_timer_seconds is absent). Blocking will stay off indefinitely.
+
+      # 7 — A single upstream resolver has zero queries (one of several is down). tuned at 3b.
+      - alert: PiholeUpstreamDown
+        expr: homelab_pihole_upstream_queries{upstream!~"cache|blocklist"} == 0
+        for: 15m
+        labels:
+          severity: warning
+          source_tool: vmalert-metrics
+          category: dns
+          integration: pihole
+        annotations:
+          summary: "A Pi-hole upstream resolver has zero queries"
+          description: >-
+            Pi-hole upstream {{ $labels.upstream }} has zero queries (homelab_pihole_upstream_queries=0)
+            for 15m. That upstream may be unreachable.
+
+      # 8 — Gravity blocklists not updated in >8 days (691200s). Age metric — no TZ math.
+      - alert: PiholeGravityStale
+        expr: homelab_pihole_gravity_last_update_age_seconds > 691200
+        for: 0m
+        labels:
+          severity: warning
+          source_tool: vmalert-metrics
+          category: dns
+          integration: pihole
+        annotations:
+          summary: "Pi-hole gravity blocklists not updated in >8 days"
+          description: >-
+            Pi-hole gravity was last updated {{ $value }}s ago (>8 days / 691200s). Run a gravity
+            update so blocklists stay current.
+
+      # 9 — Gravity domain count dropped below a sanity floor. floor tuned at 3b.
+      - alert: PiholeGravityDomainsDropped
+        expr: homelab_pihole_gravity_domains < 1000
+        for: 5m
+        labels:
+          severity: warning
+          source_tool: vmalert-metrics
+          category: dns
+          integration: pihole
+        annotations:
+          summary: "Pi-hole gravity domain count dropped below floor"
+          description: >-
+            Pi-hole gravity domain count is {{ $value }} (below the 1000-domain floor). A blocklist
+            likely failed to load or was cleared.
+
+      # 10 — An adlist failed to download or parse (status != ok).
+      - alert: PiholeAdlistFailing
+        expr: homelab_pihole_adlist_status{status!="ok"} == 1
+        for: 5m
+        labels:
+          severity: warning
+          source_tool: vmalert-metrics
+          category: dns
+          integration: pihole
+        annotations:
+          summary: "A Pi-hole adlist failed to download or parse"
+          description: >-
+            Pi-hole adlist {{ $labels.address }} is in status {{ $labels.status }}
+            (not ok). It failed to download or parse on the last gravity run.
+
+      # 11 — Pi-hole FTL has diagnostic messages queued.
+      - alert: PiholeMessagesPresent
+        expr: homelab_pihole_messages_count > 0
+        for: 5m
+        labels:
+          severity: warning
+          source_tool: vmalert-metrics
+          category: dns
+          integration: pihole
+        annotations:
+          summary: "Pi-hole FTL has diagnostic messages"
+          description: >-
+            Pi-hole FTL has {{ $value }} diagnostic message(s) queued
+            (homelab_pihole_messages_count). Check the Pi-hole admin "Messages" page.
+
+      # 12 — FTL database exceeds 5 GB (5368709120 bytes). tuned at 3b.
+      - alert: PiholeDbTooLarge
+        expr: homelab_pihole_db_size_bytes > 5368709120
+        for: 10m
+        labels:
+          severity: warning
+          source_tool: vmalert-metrics
+          category: dns
+          integration: pihole
+        annotations:
+          summary: "Pi-hole FTL database exceeds 5 GB"
+          description: >-
+            The Pi-hole FTL database is {{ $value | humanize }}B (>5 GB). Consider trimming
+            DBINTERVAL / MAXDBDAYS to bound growth.
+
+      # 13 — A client is sending an anomalously high query volume. HIGHEST false-fire risk —
+      # tuned at 3b (300000; top real client ~77k/24h). The client_* labels name the offender.
+      - alert: PiholeClientFlooding
+        expr: homelab_pihole_client_queries > 300000
+        for: 15m
+        labels:
+          severity: warning
+          source_tool: vmalert-metrics
+          category: dns
+          integration: pihole
+        annotations:
+          summary: "A client is sending an anomalously high query volume"
+          description: >-
+            Pi-hole client {{ $labels.client_name }} ({{ $labels.client_ip }}) sent {{ $value }}
+            queries (>300000). It may be misbehaving or flooding DNS.
+
+      # 14 — A Pi-hole component update is available (informational).
+      - alert: PiholeUpdateAvailable
+        expr: homelab_pihole_update_available == 1
+        for: 0m
+        labels:
+          severity: info
+          source_tool: vmalert-metrics
+          category: dns
+          integration: pihole
+        annotations:
+          summary: "A Pi-hole component update is available"
+          description: >-
+            A Pi-hole {{ $labels.component }} update is available
+            (homelab_pihole_update_available=1).
+
+      # 15 — Block rate unusually high (possible misconfiguration / false positives). tuned at 3b.
+      - alert: PiholeBlockRateSpike
+        expr: homelab_pihole_percent_blocked > 60 and homelab_pihole_query_frequency > 0
+        for: 15m
+        labels:
+          severity: info
+          source_tool: vmalert-metrics
+          category: dns
+          integration: pihole
+        annotations:
+          summary: "Pi-hole block rate unusually high"
+          description: >-
+            Pi-hole is blocking {{ $value }}% of queries (>60%) while serving traffic. A new
+            blocklist may be over-blocking legitimate domains.
+
+      # 16 — FTL API response time elevated. max() drops all labels. tuned at 3b.
+      - alert: PiholeApiSlow
+        expr: max(homelab_pihole_api_took_seconds) > 2
+        for: 10m
+        labels:
+          severity: info
+          source_tool: vmalert-metrics
+          category: dns
+          integration: pihole
+        annotations:
+          summary: "Pi-hole FTL API response time elevated"
+          description: >-
+            Pi-hole FTL API response time is {{ $value }}s (>2s). The FTL API is slow to respond,
+            which may delay stats collection.
+
+  - name: unbound
+    interval: 30s
+    rules:
+      # Extended-stats ARE active (confirmed at 3b). Rules 17/18/19 are correctly inactive at
+      # baseline (SERVFAIL~0, bogus=0, p95~0.18s). Rule 20 threshold tuned to 0.01 at 3b.
+
+      # 17 — SERVFAIL rate high (resolution broadly failing). Real counter — rate() is safe.
+      # tuned at 3b. rate(metric{rcode="SERVFAIL"}[5m]) KEEPS the rcode label.
+      - alert: UnboundServfailSpike
+        expr: rate(homelab_unbound_answer_rcode{rcode="SERVFAIL"}[5m]) > 1
+        for: 10m
+        labels:
+          severity: critical
+          source_tool: vmalert-metrics
+          category: dns
+          integration: pihole
+        annotations:
+          summary: "Unbound SERVFAIL rate high (resolution broadly failing)"
+          description: >-
+            Unbound is returning {{ $value }} SERVFAIL answers/sec (>1/sec). Recursive resolution
+            is broadly failing.
+
+      # 18 — DNSSEC-bogus answers detected (validation failures). tuned at 3b.
+      - alert: UnboundDnssecBogusSpike
+        expr: rate(homelab_unbound_answer_bogus_total[5m]) > 0.1
+        for: 10m
+        labels:
+          severity: critical
+          source_tool: vmalert-metrics
+          category: dns
+          integration: pihole
+        annotations:
+          summary: "Unbound DNSSEC-bogus answers detected (validation failures)"
+          description: >-
+            Unbound is returning {{ $value }} DNSSEC-bogus answers/sec (>0.1/sec). DNSSEC validation
+            is failing for some zones.
+
+      # 19 — p95 recursion time elevated. quantile is a LABEL — plain threshold, NOT
+      # histogram_quantile. tuned at 3b.
+      - alert: UnboundRecursionSlow
+        expr: homelab_unbound_recursion_time_seconds{quantile="0.95"} > 1
+        for: 15m
+        labels:
+          severity: warning
+          source_tool: vmalert-metrics
+          category: dns
+          integration: pihole
+        annotations:
+          summary: "Unbound p95 recursion time elevated"
+          description: >-
+            Unbound p95 recursion time is {{ $value }}s (>1s). Recursive lookups are slow, adding
+            latency to cache-miss DNS queries.
+
+      # 20 — Cache hit ratio low. The `> 0` guards a freshly-restarted unbound (ratio 0 = no data
+      # yet, not a real miss-storm). tuned at 3b.
+      - alert: UnboundCacheHitLow
+        expr: homelab_unbound_cache_hit_ratio < 0.01 and homelab_unbound_cache_hit_ratio > 0
+        for: 30m
+        labels:
+          severity: info
+          source_tool: vmalert-metrics
+          category: dns
+          integration: pihole
+        annotations:
+          summary: "Unbound cache hit ratio low"
+          description: >-
+            Unbound cache hit ratio is {{ $value }} (<0.01). More queries than usual are missing
+            the cache and hitting recursion.
+
+  - name: dns
+    interval: 30s
+    rules:
+      # 21 — Direct :53 DNS probe failing. Distinct from PiholeDown — keys on the probe-outcome series.
+      - alert: PiholeDnsProbeFailing
+        expr: homelab_pihole_dns_probe_result{outcome!="ok"} == 1
+        for: 2m
+        labels:
+          severity: critical
+          source_tool: vmalert-metrics
+          category: dns
+          integration: pihole
+        annotations:
+          summary: "Pi-hole direct :53 DNS probe is failing"
+          description: >-
+            The direct Pi-hole :53 DNS probe reported outcome {{ $labels.outcome }} (not ok). A real
+            DNS query against Pi-hole is failing.
+
+      # 22 — DNS resolves direct but fails via Pi-hole (Pi-hole-specific outage). `and on()` is
+      # load-bearing: a naive `and` matches on identical label sets, but the two sides have differing
+      # path="pihole"/path="direct" selectors, so plain `and` yields an empty vector. `and on()`
+      # matches on the EMPTY label set, keeping the LEFT (path="pihole") side's labels.
+      - alert: PiholeDnsSplitDivergence
+        expr: >-
+          homelab_dns_resolution_up{path="pihole"} == 0
+          and on() homelab_dns_resolution_up{path="direct"} == 1
+        for: 5m
+        labels:
+          severity: critical
+          source_tool: vmalert-metrics
+          category: dns
+          integration: pihole
+        annotations:
+          summary: "DNS resolves direct but fails via Pi-hole (Pi-hole-specific outage)"
+          description: >-
+            DNS resolves directly (path=direct up=1) but fails via Pi-hole (path=pihole up=0). This
+            is a Pi-hole-specific outage, not a WAN/ISP problem.
