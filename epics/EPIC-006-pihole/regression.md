@@ -239,3 +239,12 @@
 - [ ] "Version & container" section renders the versions/updates table (core/ftl/web/docker + update-available flags) and Restart/Start/Stop buttons for `pihole-unbound`
 - [ ] Container-control buttons open a typed-confirm dialog (phrase = action word) and POST to `/api/integrations/docker/containers/pihole-unbound/{restart|start|stop}` with CSRF; wrong phrase → 400, missing CSRF → 403
 - [ ] Clients table + all widgets responsive: real tables on sm+, stacked cards on mobile; no overflow/console errors (Desktop + Mobile)
+
+## STAGE-006-024 — Embedded LogViewer (docker-stdout scoped) + Tier-3 query-feed view toggle (toggle deferred to 025)
+
+- [ ] Pi-hole panel "Logs" tab renders the embedded `<LogViewer>` scoped to `docker:pihole-unbound` (FTL docker-stdout lines: gravity runs, rate-limits, API warnings, errors)
+- [ ] The "Errors only" toggle defaults ON (LogsQL `WARNING OR ERROR OR CRITICAL`) and toggling OFF shows all lines (`*`); the errors-only result is a strict subset of all-lines (filter genuinely filters)
+- [ ] LogViewer controls work: timezone toggle, line-wrap toggle, refresh, Open-in-Explorer deep-link (scoped to the pihole-unbound service), load-older pagination
+- [ ] Honest empty/unavailable states (no_lines empty state; 502 → unavailable banner; generic error → no crash)
+- [ ] Logs tab responsive: viewer + header controls usable on Desktop AND Mobile (no overflow, controls reachable)
+- [ ] No Tier-3 per-query-feed toggle present yet (correctly deferred to STAGE-006-025; FTL docker-stdout view only)
