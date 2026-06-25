@@ -10,6 +10,7 @@ const TABS = [
   { path: '/metrics/home-assistant', label: 'Home Assistant' },
   { path: '/metrics/unifi', label: 'Unifi' },
   { path: '/metrics/network', label: 'Network' },
+  { path: '/metrics/pihole', label: 'Pi-hole' },
 ] as const
 
 export function MetricsLayout(): JSX.Element {
