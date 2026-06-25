@@ -26,6 +26,7 @@ from homelab_monitor.kernel.config import (
     load_cardinality_caps_config,
     load_pihole_config,
 )
+from homelab_monitor.kernel.db.repositories.unifi_clients_repository import UnifiClientRepo
 from homelab_monitor.kernel.metrics.cardinality import M_FAMILY_DROPPED_SERIES
 from homelab_monitor.kernel.pihole.clients import RawClient, cap_domains, classify_clients
 from homelab_monitor.kernel.pihole.errors import PiholeError
@@ -266,6 +267,23 @@ class PiholeClientsCollector(BaseCollector):
                 RawClient(ip, name, value, mac=ip_mac.get(ip)) for (ip, name, value) in temp_clients
             ]
             classification = classify_clients(raw_clients, host_lan_ip=host_lan_ip, cap=client_cap)
+            # EPIC-006: once-per-run Unifi-name snapshot, keyed by client IP.
+            # Label is the UNIFI name only (name > hostname), empty string when
+            # no Unifi client owns that IP. A registry hiccup must NOT fail the
+            # pihole collector -> fall back to an empty map.
+            ip_to_unifi_name: dict[str, str] = {}
+            try:
+                unifi_rows = await UnifiClientRepo(ctx.db).list_clients()
+            except Exception as exc:  # pylint: disable=broad-except
+                ctx.log.warning("unifi_name_snapshot_failed", error=str(exc))
+                unifi_rows = []
+            for urow in unifi_rows:
+                if not urow.ip:
+                    continue
+                name = urow.name or urow.hostname or ""
+                # Deterministic: prefer a non-empty name; otherwise keep first.
+                if name or urow.ip not in ip_to_unifi_name:
+                    ip_to_unifi_name[urow.ip] = name
             for cc in classification.kept:
                 labels = {
                     "client_ip": cc.client_ip,
@@ -273,6 +291,7 @@ class PiholeClientsCollector(BaseCollector):
                     "client_kind": cc.client_kind,
                     "host_lan_ip": cc.host_lan_ip or "",
                     "client_mac": cc.client_mac or "",
+                    "unifi_name": ip_to_unifi_name.get(cc.client_ip, ""),
                 }
                 ctx.vm.write_gauge(M_CLIENT_QUERIES, value_by_ip.get(cc.client_ip, 0.0), labels)
                 emitted[0] += 1

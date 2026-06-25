@@ -20,8 +20,9 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
-from datetime import UTC, datetime
-from typing import Annotated
+import json
+from datetime import UTC, datetime, timedelta
+from typing import Annotated, cast
 
 import httpx
 from fastapi import APIRouter, Depends, Query
@@ -30,6 +31,7 @@ from pydantic import BaseModel, ConfigDict
 from homelab_monitor.kernel.api.dependencies import (
     get_http_client,
     get_repo,
+    get_vl_url,
     get_vm_url,
     require_session,
 )
@@ -40,9 +42,17 @@ from homelab_monitor.kernel.api.vm_query import (
     vm_instant_query,
 )
 from homelab_monitor.kernel.auth.models import User
-from homelab_monitor.kernel.config import load_unifi_config
-from homelab_monitor.kernel.db.repositories.unifi_clients_repository import UnifiClientRepo
+from homelab_monitor.kernel.config import load_unifi_config, load_vl_query_limits
+from homelab_monitor.kernel.db.repositories.unifi_clients_repository import (
+    UnifiClientRepo,
+    UnifiIpSpan,
+)
 from homelab_monitor.kernel.db.repository import SqliteRepository
+from homelab_monitor.kernel.logs.victorialogs_client import (
+    VictoriaLogsClient,
+    VictoriaLogsClientError,
+    logsql_quote_phrase,
+)
 
 router = APIRouter(prefix="/integrations/unifi", tags=["integrations"])
 
@@ -136,6 +146,34 @@ _Q_CLIENT_TX_RATE = "homelab_unifi_client_tx_rate_bps"
 _Q_CLIENT_RX_RATE = "homelab_unifi_client_rx_rate_bps"
 _Q_CLIENT_DPI = "homelab_unifi_client_dpi_bytes"
 
+# EPIC-006 per-client DNS enrichment ---------------------------------------
+# Lookback window for the pihole-queries feed (honest recent-window semantics).
+_DNS_WINDOW = timedelta(hours=24)
+
+# Max distinct domains returned in DnsEnrichment.top_domains.
+_DNS_TOP_DOMAINS_CAP = 10
+
+# Pi-hole FTL v6 status tokens that mean the query was BLOCKED. The shipper
+# ships the raw status string verbatim; this consumer owns the blocked/allowed
+# split. (Allowed examples NOT in this set: FORWARDED, CACHE, RETRIED, ...)
+_PIHOLE_BLOCKED_STATUS: frozenset[str] = frozenset(
+    {
+        # FTL v6 blocked-status tokens (get_query_status_str). The shipper ships
+        # status verbatim; these are the exact strings FTL emits for a block.
+        "GRAVITY",
+        "REGEX",
+        "DENYLIST",
+        "EXTERNAL_BLOCKED_IP",
+        "EXTERNAL_BLOCKED_NULL",
+        "EXTERNAL_BLOCKED_NXRA",
+        "EXTERNAL_BLOCKED_EDE15",
+        "GRAVITY_CNAME",
+        "REGEX_CNAME",
+        "DENYLIST_CNAME",
+        "SPECIAL_DOMAIN",
+    }
+)
+
 
 # ── Helper functions ──────────────────────────────────────────────────────────
 
@@ -185,6 +223,109 @@ class _DeviceAccum:
     temp: float | None = None
     uptime: float | None = None
     update: float | None = None
+
+
+def _pihole_queries_expr(ip: str) -> str:
+    """LogsQL expr selecting pihole-queries records that phrase-match an IP.
+
+    Mirrors the proxy's services=pihole:pihole-queries -> stream selector
+    (kernel/api/routers/logs.py::_compose_services_expr), which produces bare
+    quoted field filters `service:"..." AND source_type:"..."`. We AND a phrase
+    match on the IP (client_ip is NOT an indexed field, so we phrase-match the
+    raw _msg here and POST-FILTER on the parsed JSON client_ip below).
+    """
+    return f'service:"pihole-queries" AND source_type:"pihole" AND {logsql_quote_phrase(ip)}'
+
+
+async def _enrich_client_dns(  # noqa: PLR0913, PLR0912
+    *,
+    is_host: bool,
+    current_ip: str | None,
+    ip_spans: list[UnifiIpSpan],
+    host_lan_ip: str | None,
+    since: str,
+    now: str,
+    vl_client: VictoriaLogsClient,
+) -> DnsEnrichment | None:
+    """Build DnsEnrichment from the pihole-queries feed for a client's IPs.
+
+    Returns None when there is no DNS data (honest empty -> frontend shows the
+    placeholder). A VictoriaLogs outage degrades DNS to None; it never breaks
+    the client-detail response (DNS is supplementary).
+
+    Aggregation across all of the client's in-window IPs:
+      - top_domains: most-frequent domains (cap _DNS_TOP_DOMAINS_CAP).
+      - blocked_count: count of records whose status is in _PIHOLE_BLOCKED_STATUS.
+      - last_query_at: max record `time` (epoch) -> ISO-8601 UTC.
+    """
+    # Collect the distinct (ip, start, end) windows to query.
+    windows: dict[str, tuple[str, str]] = {}
+    for span in ip_spans:
+        windows[span.ip] = (span.first_seen, span.last_seen)
+    # The registry observation may lag the live lease: always cover the current
+    # IP over the full lookback window.
+    if current_ip:
+        windows.setdefault(current_ip, (since, now))
+    # Loopback-attributed pihole traffic is keyed to the host LAN IP.
+    if is_host and host_lan_ip:
+        windows.setdefault(host_lan_ip, (since, now))
+
+    if not windows:
+        return None
+
+    domain_counts: dict[str, int] = {}
+    blocked_count = 0
+    last_epoch: float | None = None
+    saw_any = False
+
+    for ip, (start, end) in windows.items():
+        try:
+            # Counts/top-domains are over the bounded VL result window (result.truncated
+            # may be True for very chatty clients): "recent" DNS behavior, not lifetime.
+            result = await vl_client.query(expr=_pihole_queries_expr(ip), start=start, end=end)
+        except VictoriaLogsClientError:
+            # VL outage/timeout: degrade this IP to no-data, keep going.
+            continue
+        for line in result.lines:
+            try:
+                record_raw: object = json.loads(line.message)
+            except (ValueError, TypeError):
+                continue
+            if not isinstance(record_raw, dict):
+                continue
+            record = cast(dict[str, object], record_raw)
+            if record.get("client_ip") != ip:
+                # Phrase-match false positive (IP appeared in a domain/cname).
+                continue
+            saw_any = True
+            domain = record.get("domain")
+            if isinstance(domain, str) and domain:
+                domain_counts[domain] = domain_counts.get(domain, 0) + 1
+            status = record.get("status")
+            if isinstance(status, str) and status in _PIHOLE_BLOCKED_STATUS:
+                blocked_count += 1
+            ts = record.get("time")
+            if isinstance(ts, (int, float)) and (last_epoch is None or ts > last_epoch):
+                last_epoch = float(ts)
+
+    if not saw_any:
+        return None
+
+    top_domains = [
+        domain for domain, _count in sorted(domain_counts.items(), key=lambda kv: (-kv[1], kv[0]))
+    ][:_DNS_TOP_DOMAINS_CAP]
+
+    last_query_at: str | None = None
+    if last_epoch is not None:
+        last_query_at = (
+            datetime.fromtimestamp(last_epoch, tz=UTC).isoformat().replace("+00:00", "Z")
+        )
+
+    return DnsEnrichment(
+        top_domains=top_domains,
+        blocked_count=blocked_count,
+        last_query_at=last_query_at,
+    )
 
 
 # ── Pydantic models ───────────────────────────────────────────────────────────
@@ -1320,6 +1461,7 @@ async def get_unifi_client(
     unifi_repo: Annotated[UnifiClientRepo, Depends(_get_repo_dep)],
     vm_url: Annotated[str, Depends(get_vm_url)],
     http_client: Annotated[httpx.AsyncClient, Depends(get_http_client)],
+    vl_url: Annotated[str, Depends(get_vl_url)],
 ) -> UnifiClientDetail:
     """Return detailed view of a single Unifi client with series + DPI.
 
@@ -1330,7 +1472,9 @@ async def get_unifi_client(
     VM transport/query error -> 502 upstream_unavailable (after checking registry).
 
     dpi: RAW cumulative bytes; rate is frontend-computed.
-    dns: always None (EPIC-006 slot).
+    dns: per-client DNS enrichment from the pihole-queries feed, or None when
+    there is no DNS data (or VictoriaLogs is unavailable — DNS is supplementary
+    and never fails the response).
     """
     row = await unifi_repo.get_client(mac)
     if row is None:
@@ -1366,6 +1510,25 @@ async def get_unifi_client(
             )
         )
 
+    now = datetime.now(tz=UTC).isoformat().replace("+00:00", "Z")
+    since = (datetime.now(tz=UTC) - _DNS_WINDOW).isoformat().replace("+00:00", "Z")
+    ip_spans = await unifi_repo.find_ips_for_mac(row.mac, since)
+    host_lan_ip = load_unifi_config().host_lan_ip
+    vl_client = VictoriaLogsClient(
+        vl_url=vl_url,
+        http_client=http_client,
+        limits=load_vl_query_limits(),
+    )
+    dns = await _enrich_client_dns(
+        is_host=row.is_host,
+        current_ip=row.ip,
+        ip_spans=ip_spans,
+        host_lan_ip=host_lan_ip,
+        since=since,
+        now=now,
+        vl_client=vl_client,
+    )
+
     return UnifiClientDetail(
         mac=row.mac,
         ip=row.ip,
@@ -1385,5 +1548,5 @@ async def get_unifi_client(
         lease_expiry=row.lease_expiry,
         series=series,
         dpi=dpi,
-        dns=None,
+        dns=dns,
     )

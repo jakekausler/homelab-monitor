@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 import pytest
 import structlog
+from sqlalchemy.engine import Row
 
+from homelab_monitor.kernel.db.repositories.unifi_clients_repository import UnifiClientRepo
+from homelab_monitor.kernel.db.repository import SqliteRepository
 from homelab_monitor.kernel.metrics.cardinality import M_FAMILY_DROPPED_SERIES
 from homelab_monitor.kernel.pihole.client import PiholeResponse
 from homelab_monitor.kernel.pihole.errors import PiholeError
@@ -150,7 +155,9 @@ class _FakeClients(_FakePiholeBase):
         )
 
 
-def _ctx(writer: InMemoryMetricsWriter, pihole: object | None) -> CollectorContext:
+def _ctx(
+    writer: InMemoryMetricsWriter, pihole: object | None, db: object | None = None
+) -> CollectorContext:
     """Build a CollectorContext wired to the given writer and pihole client."""
     return CollectorContext(
         config=CollectorConfig(
@@ -158,7 +165,7 @@ def _ctx(writer: InMemoryMetricsWriter, pihole: object | None) -> CollectorConte
             interval_seconds=60,
             timeout_seconds=15,
         ),
-        db=None,  # type: ignore[arg-type]
+        db=db,  # type: ignore[arg-type]
         vm=writer,
         vl=InMemoryLogsWriter(),
         http=None,  # pyright: ignore[reportArgumentType]
@@ -305,6 +312,7 @@ async def test_happy_path_all_endpoints(monkeypatch: pytest.MonkeyPatch) -> None
         "client_kind": "resolver_self",
         "host_lan_ip": "192.168.2.148",
         "client_mac": "",
+        "unifi_name": "",
     }
     assert _gauge_value(writer, M_CLIENT_QUERIES, loopback_labels) == 100.0  # noqa: PLR2004
     assert _gauge_value(writer, M_CLIENT_BLOCKED, loopback_labels) == 3.0  # noqa: PLR2004
@@ -316,6 +324,7 @@ async def test_happy_path_all_endpoints(monkeypatch: pytest.MonkeyPatch) -> None
         "client_kind": "lan",
         "client_mac": "aa:bb:cc:dd:ee:ff",
         "host_lan_ip": "",
+        "unifi_name": "",
     }
     assert _gauge_value(writer, M_CLIENT_QUERIES, lan_mac_labels) == 50.0  # noqa: PLR2004
     assert _gauge_value(writer, M_CLIENT_BLOCKED, lan_mac_labels) == 7.0  # noqa: PLR2004
@@ -327,6 +336,7 @@ async def test_happy_path_all_endpoints(monkeypatch: pytest.MonkeyPatch) -> None
         "client_kind": "lan",
         "host_lan_ip": "",
         "client_mac": "",
+        "unifi_name": "",
     }
     assert _gauge_value(writer, M_CLIENT_QUERIES, lan_nomac_labels) == 25.0  # noqa: PLR2004
     assert _gauge_value(writer, M_CLIENT_BLOCKED, lan_nomac_labels) == 0.0
@@ -359,6 +369,7 @@ async def test_happy_path_all_endpoints(monkeypatch: pytest.MonkeyPatch) -> None
         "client_kind",
         "host_lan_ip",
         "client_mac",
+        "unifi_name",
     }
     for metric_name in (M_CLIENT_QUERIES, M_CLIENT_BLOCKED):
         series_labels = _entries_for(writer, metric_name)
@@ -388,6 +399,7 @@ async def test_loopback_unattributed_when_host_lan_ip_empty(
         "client_kind": "unattributed",
         "host_lan_ip": "",
         "client_mac": "",
+        "unifi_name": "",
     }
     assert _gauge_value(writer, M_CLIENT_QUERIES, labels) == 9.0  # noqa: PLR2004
     # host_lan_ip label present with value "".
@@ -495,6 +507,7 @@ async def test_blocked_clients_error() -> None:
         "client_kind": "lan",
         "host_lan_ip": "",
         "client_mac": "",
+        "unifi_name": "",
     }
     assert _gauge_value(writer, M_CLIENT_BLOCKED, labels) == 0.0
 
@@ -596,6 +609,7 @@ async def test_blocked_clients_payload_not_dict() -> None:
         "client_kind": "lan",
         "host_lan_ip": "",
         "client_mac": "",
+        "unifi_name": "",
     }
     assert _gauge_value(writer, M_CLIENT_BLOCKED, labels) == 0.0
 
@@ -663,6 +677,7 @@ async def test_blocked_clients_key_not_a_list() -> None:
         "client_kind": "lan",
         "host_lan_ip": "",
         "client_mac": "",
+        "unifi_name": "",
     }
     assert _gauge_value(writer, M_CLIENT_BLOCKED, labels) == 0.0
 
@@ -712,6 +727,7 @@ async def test_malformed_client_entries_skipped() -> None:
         "client_kind": "lan",
         "host_lan_ip": "",
         "client_mac": "",
+        "unifi_name": "",
     }
     assert _gauge_value(writer, M_CLIENT_QUERIES, labels) == 0.0
     assert _count(writer, M_CLIENT_QUERIES) == 1
@@ -741,6 +757,7 @@ async def test_malformed_blocked_client_entries_skipped() -> None:
         "client_kind": "lan",
         "host_lan_ip": "",
         "client_mac": "",
+        "unifi_name": "",
     }
     assert _gauge_value(writer, M_CLIENT_BLOCKED, labels) == 3.0  # noqa: PLR2004
 
@@ -810,6 +827,7 @@ async def test_flatten_devices_all_branches() -> None:
         "client_kind": "lan",
         "client_mac": "bb:22",
         "host_lan_ip": "",
+        "unifi_name": "",
     }
     assert _gauge_value(writer, M_CLIENT_QUERIES, labels_1) == 1.0
     labels_2 = {
@@ -818,6 +836,7 @@ async def test_flatten_devices_all_branches() -> None:
         "client_kind": "lan",
         "client_mac": "bb:22",
         "host_lan_ip": "",
+        "unifi_name": "",
     }
     assert _gauge_value(writer, M_CLIENT_QUERIES, labels_2) == 1.0
     labels_9 = {
@@ -826,6 +845,7 @@ async def test_flatten_devices_all_branches() -> None:
         "client_kind": "lan",
         "host_lan_ip": "",
         "client_mac": "",
+        "unifi_name": "",
     }
     assert _gauge_value(writer, M_CLIENT_QUERIES, labels_9) == 1.0
     assert labels_9["client_mac"] == ""  # sanity (empty mac for 10.0.0.9)
@@ -859,3 +879,253 @@ def test_collector_registered_via_register_all() -> None:
     loaded = loader.load_all()
     names = {record.config.name for record in loaded}
     assert "pihole_clients" in names
+
+
+# ── unifi_name label tests (STAGE-006-027) ─────────────────────────────────
+
+
+def _minimal_clients_payload(ip: str = "192.168.2.50") -> dict[str, object]:
+    """Minimal pihole top_clients payload for one LAN client."""
+    return {
+        "clients": [{"name": "test-client", "ip": ip, "count": 5}],
+        "total_queries": 5,
+        "blocked_queries": 0,
+        "took": 0.001,
+    }
+
+
+@pytest.mark.asyncio
+async def test_unifi_name_label_from_registry(repo: SqliteRepository) -> None:
+    """When a Unifi registry row exists for the client IP, unifi_name is populated."""
+    from homelab_monitor.kernel.db.time import utc_now_iso  # noqa: PLC0415
+
+    client_ip = "192.168.2.50"
+    expected_name = "MyLaptop"
+    now = utc_now_iso()
+
+    # Seed a Unifi client row with ip -> name.
+    async with repo.transaction() as conn:
+        await UnifiClientRepo.upsert_client_conn(
+            conn,
+            mac="aa:bb:cc:dd:ee:01",
+            ip=client_ip,
+            hostname="laptop-host",
+            name=expected_name,
+            oui=None,
+            network="LAN",
+            ap_mac=None,
+            sw_mac=None,
+            sw_port=None,
+            use_fixedip=False,
+            fixed_ip=None,
+            online=True,
+            first_seen=now,
+            last_seen=now,
+        )
+
+    fake = _FakeClients(
+        clients_payload=_minimal_clients_payload(client_ip),
+        devices_payload={"devices": [], "took": 0.001},
+        blocked_clients_payload={"clients": [], "took": 0.001},
+        domains_payload={"domains": [], "took": 0.001},
+        blocked_domains_payload={"domains": [], "took": 0.001},
+    )
+    writer = InMemoryMetricsWriter()
+    result = await PiholeClientsCollector().run(_ctx(writer, fake, db=repo))
+
+    assert result.ok is True
+    # Find the label set for M_CLIENT_QUERIES for this client IP.
+    matching = [
+        labels
+        for labels in _entries_for(writer, M_CLIENT_QUERIES)
+        if labels.get("client_ip") == client_ip
+    ]
+    assert matching, "Expected at least one M_CLIENT_QUERIES gauge for the client IP"
+    assert matching[0]["unifi_name"] == expected_name
+
+
+@pytest.mark.asyncio
+async def test_unifi_name_label_skips_null_ip_row(repo: SqliteRepository) -> None:
+    """A Unifi row with ip=None is skipped (urow.ip falsy branch); client gets unifi_name=''."""
+    from homelab_monitor.kernel.db.time import utc_now_iso  # noqa: PLC0415
+
+    client_ip = "192.168.2.55"
+    now = utc_now_iso()
+
+    # Seed a row with ip=None (no IP assigned).
+    async with repo.transaction() as conn:
+        await UnifiClientRepo.upsert_client_conn(
+            conn,
+            mac="aa:bb:cc:dd:ee:02",
+            ip=None,
+            hostname=None,
+            name="NullIpClient",
+            oui=None,
+            network=None,
+            ap_mac=None,
+            sw_mac=None,
+            sw_port=None,
+            use_fixedip=False,
+            fixed_ip=None,
+            online=False,
+            first_seen=now,
+            last_seen=now,
+        )
+
+    fake = _FakeClients(
+        clients_payload=_minimal_clients_payload(client_ip),
+        devices_payload={"devices": [], "took": 0.001},
+        blocked_clients_payload={"clients": [], "took": 0.001},
+        domains_payload={"domains": [], "took": 0.001},
+        blocked_domains_payload={"domains": [], "took": 0.001},
+    )
+    writer = InMemoryMetricsWriter()
+    result = await PiholeClientsCollector().run(_ctx(writer, fake, db=repo))
+
+    assert result.ok is True
+    matching = [
+        labels
+        for labels in _entries_for(writer, M_CLIENT_QUERIES)
+        if labels.get("client_ip") == client_ip
+    ]
+    assert matching
+    # The null-IP row was skipped; client_ip not found in map → unifi_name="".
+    assert matching[0]["unifi_name"] == ""
+
+
+@pytest.mark.asyncio
+async def test_unifi_name_prefers_name_over_duplicate_empty(repo: SqliteRepository) -> None:
+    """When two rows share an IP: one with empty name, one with a real name,
+    the real name wins (deterministic: prefer non-empty, keeps first seen)."""
+    from homelab_monitor.kernel.db.time import utc_now_iso  # noqa: PLC0415
+
+    client_ip = "192.168.2.56"
+    now_ts = utc_now_iso()
+
+    # Seed first row (empty name) then second (real name).
+    # list_clients() returns last_seen DESC; second inserted = more recent.
+    async with repo.transaction() as conn:
+        # Older row: empty name → will appear second in list_clients() result.
+        await UnifiClientRepo.upsert_client_conn(
+            conn,
+            mac="aa:bb:cc:00:01:01",
+            ip=client_ip,
+            hostname=None,
+            name=None,  # empty name
+            oui=None,
+            network=None,
+            ap_mac=None,
+            sw_mac=None,
+            sw_port=None,
+            use_fixedip=False,
+            fixed_ip=None,
+            online=False,
+            first_seen="2024-01-01T00:00:00Z",
+            last_seen="2024-01-01T00:00:00Z",
+        )
+        # Newer row: real name → will appear first in list_clients() result.
+        await UnifiClientRepo.upsert_client_conn(
+            conn,
+            mac="aa:bb:cc:00:01:02",
+            ip=client_ip,
+            hostname=None,
+            name="RealName",
+            oui=None,
+            network=None,
+            ap_mac=None,
+            sw_mac=None,
+            sw_port=None,
+            use_fixedip=False,
+            fixed_ip=None,
+            online=True,
+            first_seen=now_ts,
+            last_seen=now_ts,
+        )
+
+    fake = _FakeClients(
+        clients_payload=_minimal_clients_payload(client_ip),
+        devices_payload={"devices": [], "took": 0.001},
+        blocked_clients_payload={"clients": [], "took": 0.001},
+        domains_payload={"domains": [], "took": 0.001},
+        blocked_domains_payload={"domains": [], "took": 0.001},
+    )
+    writer = InMemoryMetricsWriter()
+    result = await PiholeClientsCollector().run(_ctx(writer, fake, db=repo))
+
+    assert result.ok is True
+    matching = [
+        labels
+        for labels in _entries_for(writer, M_CLIENT_QUERIES)
+        if labels.get("client_ip") == client_ip
+    ]
+    assert matching
+    # The first row (newer/non-empty) wins.
+    assert matching[0]["unifi_name"] == "RealName"
+
+
+@pytest.mark.asyncio
+async def test_unifi_name_label_empty_when_no_registry_match(repo: SqliteRepository) -> None:
+    """When no Unifi row matches the client IP, unifi_name is empty string."""
+    client_ip = "192.168.2.77"
+
+    # No Unifi rows seeded for this IP.
+    fake = _FakeClients(
+        clients_payload=_minimal_clients_payload(client_ip),
+        devices_payload={"devices": [], "took": 0.001},
+        blocked_clients_payload={"clients": [], "took": 0.001},
+        domains_payload={"domains": [], "took": 0.001},
+        blocked_domains_payload={"domains": [], "took": 0.001},
+    )
+    writer = InMemoryMetricsWriter()
+    result = await PiholeClientsCollector().run(_ctx(writer, fake, db=repo))
+
+    assert result.ok is True
+    matching = [
+        labels
+        for labels in _entries_for(writer, M_CLIENT_QUERIES)
+        if labels.get("client_ip") == client_ip
+    ]
+    assert matching
+    assert matching[0]["unifi_name"] == ""
+
+
+@pytest.mark.asyncio
+async def test_unifi_name_snapshot_failure_falls_back_empty(repo: SqliteRepository) -> None:
+    """When fetch_all raises, collector still succeeds with unifi_name='' everywhere."""
+    client_ip = "192.168.2.50"
+
+    class _BrokenRepo:
+        """Stub SqliteRepository whose fetch_all always raises."""
+
+        async def fetch_all(self, stmt: object, params: object = None) -> Sequence[Row[Any]]:
+            raise RuntimeError("registry fetch failed")
+
+        async def fetch_one(self, stmt: object, params: object = None) -> Row[Any] | None:
+            raise RuntimeError("registry fetch failed")
+
+        async def execute(self, stmt: object, params: object = None) -> None:
+            raise RuntimeError("registry execute failed")
+
+        def transaction(self) -> object:
+            raise RuntimeError("no transaction in broken repo")
+
+    fake = _FakeClients(
+        clients_payload=_minimal_clients_payload(client_ip),
+        devices_payload={"devices": [], "took": 0.001},
+        blocked_clients_payload={"clients": [], "took": 0.001},
+        domains_payload={"domains": [], "took": 0.001},
+        blocked_domains_payload={"domains": [], "took": 0.001},
+    )
+    writer = InMemoryMetricsWriter()
+    broken_db = _BrokenRepo()
+    # Pass the broken db — collector must not raise, just fall back to empty names.
+    result = await PiholeClientsCollector().run(_ctx(writer, fake, db=broken_db))  # type: ignore[arg-type]
+
+    assert result.ok is True
+    matching = [
+        labels
+        for labels in _entries_for(writer, M_CLIENT_QUERIES)
+        if labels.get("client_ip") == client_ip
+    ]
+    assert matching
+    assert matching[0]["unifi_name"] == ""

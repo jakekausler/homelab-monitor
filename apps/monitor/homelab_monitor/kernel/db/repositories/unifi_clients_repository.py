@@ -45,6 +45,15 @@ class UnifiClientRow:
     lease_expiry: str | None
 
 
+@dataclass(frozen=True, slots=True)
+class UnifiIpSpan:
+    """One unifi_client_observations span (mac, ip, first_seen, last_seen)."""
+
+    ip: str
+    first_seen: str
+    last_seen: str
+
+
 # Column list reused by all SELECT * reads (explicit order → stable Row mapping).
 _CLIENT_COLUMNS = (
     "mac, ip, hostname, name, oui, network, ap_mac, sw_mac, sw_port, "
@@ -75,6 +84,15 @@ def _map_client_row(r: Row[Any]) -> UnifiClientRow:
         first_seen=str(r.first_seen),
         last_seen=str(r.last_seen),
         lease_expiry=None if r.lease_expiry is None else str(r.lease_expiry),
+    )
+
+
+def _map_ip_span_row(r: Row[Any]) -> UnifiIpSpan:
+    """Map a SELECT(ip, first_seen, last_seen) Row to a UnifiIpSpan."""
+    return UnifiIpSpan(
+        ip=str(r.ip),
+        first_seen=str(r.first_seen),
+        last_seen=str(r.last_seen),
     )
 
 
@@ -268,6 +286,23 @@ class UnifiClientRepo:
         if row is None:
             return None
         return str(row.mac)
+
+    async def find_ips_for_mac(self, mac: str, since: str) -> list[UnifiIpSpan]:
+        """Return IP spans for a MAC whose last_seen >= since (most recent first).
+
+        Used by the per-client DNS enrichment (EPIC-006): a MAC's queries are
+        keyed in the pihole-queries feed by the client IP that was live at query
+        time, so we need the IP spans the MAC held within the lookback window.
+        """
+        rows = await self._repo.fetch_all(
+            text(
+                "SELECT ip, first_seen, last_seen FROM unifi_client_observations "
+                "WHERE mac = :mac AND last_seen >= :since "
+                "ORDER BY last_seen DESC"
+            ),
+            {"mac": mac, "since": since},
+        )
+        return [_map_ip_span_row(r) for r in rows]
 
     async def get_client(self, mac: str) -> UnifiClientRow | None:
         """Fetch one client by MAC, or None."""

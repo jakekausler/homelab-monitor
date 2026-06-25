@@ -623,7 +623,7 @@
           },
           "options": { "showHeader": true, "cellHeight": "sm", "footer": { "show": false, "reducer": ["sum"], "countRows": false, "fields": "" } },
           "targets": [
-            { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "topk(15, sum by (client_ip) (homelab_pihole_client_queries))", "legendFormat": "", "instant": true, "format": "table" }
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "topk(15, sum by (client_ip, unifi_name) (homelab_pihole_client_queries))", "legendFormat": "", "instant": true, "format": "table" }
           ],
           "transformations": [
             {
@@ -631,7 +631,7 @@
               "options": {
                 "excludeByName": { "Time": true, "__name__": true, "job": true, "instance": true, "service": true, "client_kind": true, "client_mac": true, "client_name": true, "host_lan_ip": true },
                 "indexByName": {},
-                "renameByName": { "client_ip": "Client", "Value": "Queries" }
+                "renameByName": { "unifi_name": "Name", "client_ip": "Client", "Value": "Queries" }
               }
             }
           ]
@@ -654,7 +654,7 @@
           },
           "options": { "showHeader": true, "cellHeight": "sm", "footer": { "show": false, "reducer": ["sum"], "countRows": false, "fields": "" } },
           "targets": [
-            { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "topk(15, sum by (client_ip) (homelab_pihole_client_blocked))", "legendFormat": "", "instant": true, "format": "table" }
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "topk(15, sum by (client_ip, unifi_name) (homelab_pihole_client_blocked))", "legendFormat": "", "instant": true, "format": "table" }
           ],
           "transformations": [
             {
@@ -662,7 +662,7 @@
               "options": {
                 "excludeByName": { "Time": true, "__name__": true, "job": true, "instance": true, "service": true, "client_kind": true, "client_mac": true, "client_name": true, "host_lan_ip": true },
                 "indexByName": {},
-                "renameByName": { "client_ip": "Client", "Value": "Blocked" }
+                "renameByName": { "unifi_name": "Name", "client_ip": "Client", "Value": "Blocked" }
               }
             }
           ]

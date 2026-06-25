@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json as _json
 import re
 from collections.abc import Callable
 from typing import cast
@@ -15,8 +16,13 @@ from pytest_httpx import HTTPXMock
 
 from homelab_monitor.kernel.db.repositories.unifi_clients_repository import UnifiClientRepo
 from homelab_monitor.kernel.db.repository import SqliteRepository
+from homelab_monitor.kernel.db.time import utc_now_iso
 
 _VM_URL = "http://vm-test:8428"
+
+# Named constants to avoid PLR2004 in DNS enrichment tests.
+_DNS_BLOCKED_COUNT = 2
+_SIGNAL_DBM_DNS = -70.0
 
 # Named constants to avoid PLR2004 in asserts.
 _HTTP_OK = 200
@@ -358,7 +364,9 @@ async def test_client_detail_found_with_vm_series(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Found client + VM series populated -> full detail."""
+    _VL_URL = "http://vl-test:9428"
     monkeypatch.setenv("HOMELAB_MONITOR_VM_URL", _VM_URL)
+    monkeypatch.setenv("HOMELAB_MONITOR_VL_URL", _VL_URL)
 
     # Seed client
     async with repo.transaction() as conn:
@@ -397,6 +405,13 @@ async def test_client_detail_found_with_vm_series(
         method="GET",
         is_reusable=True,
     )
+    # VL mock for DNS enrichment - empty response (no DNS data)
+    httpx_mock.add_response(
+        url=re.compile(r"http://vl-test:9428/select/logsql/query\b.*"),
+        method="GET",
+        text="",
+        is_reusable=True,
+    )
 
     resp = await authenticated_client.get("/api/integrations/unifi/clients/aa:00:00:00:00:01")
     assert resp.status_code == _HTTP_OK
@@ -427,7 +442,9 @@ async def test_client_detail_found_no_vm_series(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Found client + empty VM series -> series all None, dpi=[]."""
+    _VL_URL = "http://vl-test:9428"
     monkeypatch.setenv("HOMELAB_MONITOR_VM_URL", _VM_URL)
+    monkeypatch.setenv("HOMELAB_MONITOR_VL_URL", _VL_URL)
 
     # Seed client
     async with repo.transaction() as conn:
@@ -454,6 +471,13 @@ async def test_client_detail_found_no_vm_series(
         _make_callback(queries),
         url=re.compile(r"http://vm-test:8428/api/v1/query\b.*"),
         method="GET",
+        is_reusable=True,
+    )
+    # VL mock for DNS enrichment - empty response (no DNS data)
+    httpx_mock.add_response(
+        url=re.compile(r"http://vl-test:9428/select/logsql/query\b.*"),
+        method="GET",
+        text="",
         is_reusable=True,
     )
 
@@ -508,6 +532,240 @@ async def test_client_detail_vm_failure_502(
 
     resp = await authenticated_client.get("/api/integrations/unifi/clients/aa:00:00:00:00:03")
     assert resp.status_code == _HTTP_BAD_GATEWAY
+
+
+_VL_URL = "http://vl-test:9428"
+
+_MAC_DNS = "bb:00:00:00:00:01"
+_MAC_DNS_IP = "192.168.2.60"
+
+
+def _seed_mac_queries(
+    queries: dict[str, dict[str, object]] | None = None,
+) -> dict[str, dict[str, object]]:
+    """Return the 4 per-client VM instant query responses for _MAC_DNS."""
+    result: dict[str, dict[str, object]] = {
+        f'homelab_unifi_client_signal_dbm{{mac="{_MAC_DNS}"}}': _vector_response("-70"),
+        f'homelab_unifi_client_tx_rate_bps{{mac="{_MAC_DNS}"}}': _empty_vector_response(),
+        f'homelab_unifi_client_rx_rate_bps{{mac="{_MAC_DNS}"}}': _empty_vector_response(),
+        f'homelab_unifi_client_dpi_bytes{{client="{_MAC_DNS}"}}': _empty_vector_response(),
+    }
+    if queries:
+        result.update(queries)
+    return result
+
+
+def _pihole_ndjson(records: list[dict[str, object]]) -> str:
+    """Encode a list of pihole-queries records as VictoriaLogs NDJSON body.
+
+    Each NDJSON line has _msg = JSON-encoded pihole record, _time, _stream_id.
+    VlLogLine.message = str(obj.get("_msg", "")) per _parse_one().
+    """
+    lines: list[str] = []
+    for i, rec in enumerate(records):
+        vl_line = _json.dumps(
+            {
+                "_time": f"2024-05-05T00:00:{i:02d}Z",
+                "_msg": _json.dumps(rec),
+                "_stream_id": "{}",
+            }
+        )
+        lines.append(vl_line)
+    return "\n".join(lines)
+
+
+async def _seed_dns_client(repo: SqliteRepository) -> None:
+    """Seed the client row + a recent observation for _MAC_DNS / _MAC_DNS_IP."""
+    now = utc_now_iso()
+    async with repo.transaction() as conn:
+        await UnifiClientRepo.upsert_client_conn(
+            conn,
+            mac=_MAC_DNS,
+            ip=_MAC_DNS_IP,
+            hostname="dns-test",
+            name="DNS Test",
+            oui=None,
+            network="LAN",
+            ap_mac=None,
+            sw_mac=None,
+            sw_port=None,
+            use_fixedip=False,
+            fixed_ip=None,
+            online=True,
+            first_seen=now,
+            last_seen=now,
+        )
+
+
+@pytest.mark.asyncio
+async def test_client_detail_dns_populated(
+    authenticated_client: AsyncClient,
+    repo: SqliteRepository,
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """VL returns pihole-queries records → dns fields populated."""
+    monkeypatch.setenv("HOMELAB_MONITOR_VM_URL", _VM_URL)
+    monkeypatch.setenv("HOMELAB_MONITOR_VL_URL", _VL_URL)
+
+    await _seed_dns_client(repo)
+
+    # Two GRAVITY records on ads.example, one FORWARDED on cdn.example.
+    vl_body = _pihole_ndjson(
+        [
+            {
+                "client_ip": _MAC_DNS_IP,
+                "domain": "ads.example",
+                "status": "GRAVITY",
+                "time": 1714867200.0,
+            },
+            {
+                "client_ip": _MAC_DNS_IP,
+                "domain": "ads.example",
+                "status": "GRAVITY",
+                "time": 1714867210.0,
+            },
+            {
+                "client_ip": _MAC_DNS_IP,
+                "domain": "cdn.example",
+                "status": "FORWARDED",
+                "time": 1714867220.0,
+            },
+        ]
+    )
+    httpx_mock.add_callback(
+        _make_callback(_seed_mac_queries()),
+        url=re.compile(r"http://vm-test:8428/api/v1/query\b.*"),
+        method="GET",
+        is_reusable=True,
+    )
+    httpx_mock.add_response(
+        url=re.compile(r"http://vl-test:9428/select/logsql/query\b.*"),
+        method="GET",
+        text=vl_body,
+        is_reusable=True,
+    )
+
+    resp = await authenticated_client.get(f"/api/integrations/unifi/clients/{_MAC_DNS}")
+    assert resp.status_code == _HTTP_OK
+    body = resp.json()
+    assert body["dns"] is not None
+    assert body["dns"]["blocked_count"] == _DNS_BLOCKED_COUNT
+    assert body["dns"]["top_domains"][0] == "ads.example"
+    assert "cdn.example" in body["dns"]["top_domains"]
+    assert body["dns"]["last_query_at"] is not None
+    assert body["dns"]["last_query_at"].endswith("Z")
+
+
+@pytest.mark.asyncio
+async def test_client_detail_dns_postfilter_drops_false_positive(
+    authenticated_client: AsyncClient,
+    repo: SqliteRepository,
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A VL record whose parsed client_ip != queried IP is excluded (false positive)."""
+    monkeypatch.setenv("HOMELAB_MONITOR_VM_URL", _VM_URL)
+    monkeypatch.setenv("HOMELAB_MONITOR_VL_URL", _VL_URL)
+
+    await _seed_dns_client(repo)
+
+    # The record phrase-matched the IP string but belongs to a different client.
+    vl_body = _pihole_ndjson(
+        [
+            {
+                "client_ip": "192.168.2.99",
+                "domain": "false.pos",
+                "status": "FORWARDED",
+                "time": 1714867200.0,
+            },
+        ]
+    )
+    httpx_mock.add_callback(
+        _make_callback(_seed_mac_queries()),
+        url=re.compile(r"http://vm-test:8428/api/v1/query\b.*"),
+        method="GET",
+        is_reusable=True,
+    )
+    httpx_mock.add_response(
+        url=re.compile(r"http://vl-test:9428/select/logsql/query\b.*"),
+        method="GET",
+        text=vl_body,
+        is_reusable=True,
+    )
+
+    resp = await authenticated_client.get(f"/api/integrations/unifi/clients/{_MAC_DNS}")
+    assert resp.status_code == _HTTP_OK
+    body = resp.json()
+    assert body["dns"] is None
+
+
+@pytest.mark.asyncio
+async def test_client_detail_dns_empty_when_no_records(
+    authenticated_client: AsyncClient,
+    repo: SqliteRepository,
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """VL returns empty body → no records → dns is None."""
+    monkeypatch.setenv("HOMELAB_MONITOR_VM_URL", _VM_URL)
+    monkeypatch.setenv("HOMELAB_MONITOR_VL_URL", _VL_URL)
+
+    await _seed_dns_client(repo)
+
+    httpx_mock.add_callback(
+        _make_callback(_seed_mac_queries()),
+        url=re.compile(r"http://vm-test:8428/api/v1/query\b.*"),
+        method="GET",
+        is_reusable=True,
+    )
+    httpx_mock.add_response(
+        url=re.compile(r"http://vl-test:9428/select/logsql/query\b.*"),
+        method="GET",
+        text="",
+        is_reusable=True,
+    )
+
+    resp = await authenticated_client.get(f"/api/integrations/unifi/clients/{_MAC_DNS}")
+    assert resp.status_code == _HTTP_OK
+    body = resp.json()
+    assert body["dns"] is None
+
+
+@pytest.mark.asyncio
+async def test_client_detail_dns_vl_error_degrades_to_none(
+    authenticated_client: AsyncClient,
+    repo: SqliteRepository,
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """VL transport error → dns=None; endpoint returns 200 (DNS is supplementary)."""
+    monkeypatch.setenv("HOMELAB_MONITOR_VM_URL", _VM_URL)
+    monkeypatch.setenv("HOMELAB_MONITOR_VL_URL", _VL_URL)
+
+    await _seed_dns_client(repo)
+
+    httpx_mock.add_callback(
+        _make_callback(_seed_mac_queries()),
+        url=re.compile(r"http://vm-test:8428/api/v1/query\b.*"),
+        method="GET",
+        is_reusable=True,
+    )
+    httpx_mock.add_exception(
+        httpx.ConnectError("vl unreachable"),
+        url=re.compile(r"http://vl-test:9428/select/logsql/query\b.*"),
+        method="GET",
+        is_reusable=True,
+    )
+
+    resp = await authenticated_client.get(f"/api/integrations/unifi/clients/{_MAC_DNS}")
+    # Must be 200, not 502 — VL outage must NOT break the page.
+    assert resp.status_code == _HTTP_OK
+    body = resp.json()
+    assert body["dns"] is None
+    # Rest of detail is intact.
+    assert body["mac"] == _MAC_DNS
+    assert body["series"]["signal_dbm"] == _SIGNAL_DBM_DNS
 
 
 @pytest.mark.asyncio

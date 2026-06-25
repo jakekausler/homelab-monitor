@@ -17,6 +17,7 @@ from sqlalchemy import text
 from homelab_monitor.kernel.db.repositories.unifi_clients_repository import (
     UnifiClientRepo,
     UnifiClientRow,
+    UnifiIpSpan,
 )
 from homelab_monitor.kernel.db.repository import SqliteRepository
 from homelab_monitor.kernel.db.time import utc_now_iso
@@ -491,6 +492,85 @@ async def test_set_lease_expiry_conn_case_insensitive_match(repo: SqliteReposito
     row = await client_repo.get_client(upper_mac)
     assert row is not None
     assert row.lease_expiry == "2026-06-19T08:00:00+00:00"
+
+
+# ---- find_ips_for_mac ----
+
+
+@pytest.mark.asyncio
+async def test_find_ips_for_mac_returns_spans_in_window(repo: SqliteRepository) -> None:
+    """Two IP spans for a MAC, both within the window, returned newest first."""
+    client_repo = UnifiClientRepo(repo)
+    cutoff = _iso(_now() - timedelta(days=90))
+    ip1 = "192.168.2.51"
+    ip2 = "192.168.2.52"
+    t1 = _iso(_now() - timedelta(hours=2))
+    t2 = _iso(_now() - timedelta(hours=1))
+
+    # Seed two observations for distinct IPs (different (mac, ip) pairs).
+    async with repo.transaction() as conn:
+        await client_repo.append_observation_conn(
+            conn, mac=_MAC, ip=ip1, observed_at=t1, cutoff=cutoff
+        )
+        await client_repo.append_observation_conn(
+            conn, mac=_MAC, ip=ip2, observed_at=t2, cutoff=cutoff
+        )
+
+    since = _iso(_now() - timedelta(hours=24))
+    spans = await client_repo.find_ips_for_mac(_MAC, since=since)
+
+    _TWO_SPANS = 2
+    assert len(spans) == _TWO_SPANS
+    assert all(isinstance(s, UnifiIpSpan) for s in spans)
+    # Ordered last_seen DESC: ip2 (t2, more recent) first.
+    assert spans[0].ip == ip2
+    assert spans[1].ip == ip1
+    # Check mapper populated fields correctly.
+    assert spans[0].first_seen == t2
+    assert spans[0].last_seen == t2
+    assert spans[1].first_seen == t1
+    assert spans[1].last_seen == t1
+
+
+@pytest.mark.asyncio
+async def test_find_ips_for_mac_filters_by_since(repo: SqliteRepository) -> None:
+    """The since filter excludes spans whose last_seen is before it."""
+    client_repo = UnifiClientRepo(repo)
+    cutoff = _iso(_now() - timedelta(days=90))
+    recent_ip = "192.168.2.51"
+    old_ip = "192.168.2.52"
+    recent_ts = _iso(_now() - timedelta(hours=1))
+    old_ts = _iso(_now() - timedelta(days=2))
+
+    # Seed the old span directly (append_observation_conn would prune it via cutoff,
+    # so insert directly to bypass the prune).
+    await repo.execute(
+        text(
+            "INSERT INTO unifi_client_observations (mac, ip, first_seen, last_seen) "
+            "VALUES (:mac, :ip, :ts, :ts)"
+        ),
+        {"mac": _MAC, "ip": old_ip, "ts": old_ts},
+    )
+    async with repo.transaction() as conn:
+        await client_repo.append_observation_conn(
+            conn, mac=_MAC, ip=recent_ip, observed_at=recent_ts, cutoff=cutoff
+        )
+
+    # since is between old_ts and recent_ts → only recent span passes.
+    since = _iso(_now() - timedelta(hours=12))
+    spans = await client_repo.find_ips_for_mac(_MAC, since=since)
+
+    assert len(spans) == 1
+    assert spans[0].ip == recent_ip
+
+
+@pytest.mark.asyncio
+async def test_find_ips_for_mac_empty_when_no_observations(repo: SqliteRepository) -> None:
+    """Unknown MAC → empty list (no rows match)."""
+    client_repo = UnifiClientRepo(repo)
+    since = _iso(_now() - timedelta(hours=24))
+    spans = await client_repo.find_ips_for_mac("zz:zz:zz:zz:zz:zz", since=since)
+    assert spans == []
 
 
 @pytest.mark.asyncio

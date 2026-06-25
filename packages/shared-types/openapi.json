@@ -12192,7 +12192,7 @@
     },
     "/api/integrations/unifi/clients/{mac}": {
       "get": {
-        "description": "Return detailed view of a single Unifi client with series + DPI.\n\nAuth: cookie session required. CSRF NOT enforced on GET.\n\nmac not found in registry -> 404 not_found.\n\nVM transport/query error -> 502 upstream_unavailable (after checking registry).\n\ndpi: RAW cumulative bytes; rate is frontend-computed.\ndns: always None (EPIC-006 slot).",
+        "description": "Return detailed view of a single Unifi client with series + DPI.\n\nAuth: cookie session required. CSRF NOT enforced on GET.\n\nmac not found in registry -> 404 not_found.\n\nVM transport/query error -> 502 upstream_unavailable (after checking registry).\n\ndpi: RAW cumulative bytes; rate is frontend-computed.\ndns: per-client DNS enrichment from the pihole-queries feed, or None when\nthere is no DNS data (or VictoriaLogs is unavailable \u2014 DNS is supplementary\nand never fails the response).",
         "operationId": "get_unifi_client_api_integrations_unifi_clients__mac__get",
         "parameters": [
           {
