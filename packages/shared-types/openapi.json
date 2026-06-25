@@ -5545,6 +5545,28 @@
             ],
             "title": "Cache Misses Total"
           },
+          "dnssec_bogus_total": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dnssec Bogus Total"
+          },
+          "dnssec_secure_total": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dnssec Secure Total"
+          },
           "extended_stats_enabled": {
             "anyOf": [
               {
@@ -5578,6 +5600,28 @@
             ],
             "title": "Queries Total"
           },
+          "recursion_p50_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recursion P50 Seconds"
+          },
+          "recursion_p95_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recursion P95 Seconds"
+          },
           "requestlist_current": {
             "anyOf": [
               {
@@ -5588,6 +5632,17 @@
               }
             ],
             "title": "Requestlist Current"
+          },
+          "servfail_total": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Servfail Total"
           }
         },
         "required": [
@@ -5597,6 +5652,11 @@
           "cache_misses_total",
           "prefetch_total",
           "requestlist_current",
+          "recursion_p50_seconds",
+          "recursion_p95_seconds",
+          "dnssec_secure_total",
+          "dnssec_bogus_total",
+          "servfail_total",
           "extended_stats_enabled"
         ],
         "title": "PiholeUnboundResponse",

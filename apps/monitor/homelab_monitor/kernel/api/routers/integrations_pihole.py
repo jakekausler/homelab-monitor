@@ -40,7 +40,12 @@ from homelab_monitor.kernel.auth.models import ApiToken, User
 from homelab_monitor.kernel.auth.scopes import Scope
 from homelab_monitor.kernel.db.audit import insert_audit
 from homelab_monitor.kernel.db.ids import uuid7
+from homelab_monitor.kernel.db.repositories.unifi_clients_repository import (
+    UnifiClientRepo,
+    UnifiClientRow,
+)
 from homelab_monitor.kernel.db.repository import SqliteRepository
+from homelab_monitor.kernel.db.time import utc_now_iso
 from homelab_monitor.kernel.pihole.client import PiholeRestClient
 from homelab_monitor.kernel.pihole.errors import PiholeError
 
@@ -89,6 +94,32 @@ _Q_UNBOUND_CACHE_MISSES_TOTAL = "homelab_unbound_cache_misses_total"
 _Q_UNBOUND_PREFETCH_TOTAL = "homelab_unbound_prefetch_total"
 _Q_UNBOUND_REQUESTLIST_CURRENT = "homelab_unbound_requestlist_current"
 _Q_UNBOUND_EXTENDED_STATS_ENABLED = "homelab_pihole_unbound_extended_stats_enabled"
+
+# STAGE-006-023 — extended-stats fields (recursion percentiles, DNSSEC, SERVFAIL)
+_Q_UNBOUND_RECURSION_P50 = 'homelab_unbound_recursion_time_seconds{quantile="0.5"}'
+_Q_UNBOUND_RECURSION_P95 = 'homelab_unbound_recursion_time_seconds{quantile="0.95"}'
+_Q_UNBOUND_DNSSEC_SECURE_TOTAL = "homelab_unbound_answer_secure_total"
+_Q_UNBOUND_DNSSEC_BOGUS_TOTAL = "homelab_unbound_answer_bogus_total"
+_Q_UNBOUND_SERVFAIL_TOTAL = 'homelab_unbound_answer_rcode{rcode="SERVFAIL"}'
+
+
+def _resolve_client_name(
+    pihole_name: str | None,
+    unifi: UnifiClientRow | None,
+) -> str | None:
+    """Return the best display name for a Pi-hole client.
+
+    Precedence (first non-empty wins):
+    1. Unifi name   — authoritative device identity
+    2. Unifi hostname
+    3. Pi-hole name — often null/manual, used as last resort
+    """
+    if unifi is not None:
+        if unifi.name:
+            return unifi.name
+        if unifi.hostname:
+            return unifi.hostname
+    return pihole_name
 
 
 def _scalar_float(samples: list[VmInstantSample]) -> float | None:
@@ -242,6 +273,14 @@ class PiholeUnboundResponse(BaseModel):
     cache_misses_total: float | None
     prefetch_total: float | None
     requestlist_current: float | None
+    # STAGE-006-023 — extended-stats-only fields. Null when extended stats are
+    # disabled (the underlying VM series are absent in that case). Recursion times
+    # are in SECONDS here; the frontend converts to ms for display.
+    recursion_p50_seconds: float | None
+    recursion_p95_seconds: float | None
+    dnssec_secure_total: float | None
+    dnssec_bogus_total: float | None
+    servfail_total: float | None
     extended_stats_enabled: bool | None
 
 
@@ -547,6 +586,11 @@ async def get_pihole_unbound(
     requestlist_current = await vm_instant_query(
         http_client, vm_url, _Q_UNBOUND_REQUESTLIST_CURRENT
     )
+    recursion_p50 = await vm_instant_query(http_client, vm_url, _Q_UNBOUND_RECURSION_P50)
+    recursion_p95 = await vm_instant_query(http_client, vm_url, _Q_UNBOUND_RECURSION_P95)
+    dnssec_secure = await vm_instant_query(http_client, vm_url, _Q_UNBOUND_DNSSEC_SECURE_TOTAL)
+    dnssec_bogus = await vm_instant_query(http_client, vm_url, _Q_UNBOUND_DNSSEC_BOGUS_TOTAL)
+    servfail = await vm_instant_query(http_client, vm_url, _Q_UNBOUND_SERVFAIL_TOTAL)
     extended_stats = await vm_instant_query(http_client, vm_url, _Q_UNBOUND_EXTENDED_STATS_ENABLED)
 
     return PiholeUnboundResponse(
@@ -556,6 +600,11 @@ async def get_pihole_unbound(
         cache_misses_total=_scalar_float(cache_misses_total),
         prefetch_total=_scalar_float(prefetch_total),
         requestlist_current=_scalar_float(requestlist_current),
+        recursion_p50_seconds=_scalar_float(recursion_p50),
+        recursion_p95_seconds=_scalar_float(recursion_p95),
+        dnssec_secure_total=_scalar_float(dnssec_secure),
+        dnssec_bogus_total=_scalar_float(dnssec_bogus),
+        servfail_total=_scalar_float(servfail),
         extended_stats_enabled=_scalar_bool(extended_stats),
     )
 
@@ -564,6 +613,7 @@ async def get_pihole_unbound(
 async def get_pihole_clients(
     _user: Annotated[User, Depends(require_session())],
     client: Annotated[PiholeRestClient, Depends(_get_pihole_ro_client)],
+    repo: Annotated[SqliteRepository, Depends(get_repo)],
     blocked: Annotated[bool, Query()] = False,
     count: Annotated[int, Query(ge=_MIN_TOP_COUNT, le=_MAX_TOP_COUNT)] = _DEFAULT_TOP_COUNT,
 ) -> PiholeClientsResponse:
@@ -574,6 +624,10 @@ async def get_pihole_clients(
             code="upstream_unavailable",
             message="pihole top clients query failed",
         )
+
+    unifi_repo = UnifiClientRepo(repo)
+    # Capture one consistent timestamp for all IP→MAC lookups in this request.
+    now = utc_now_iso()
 
     rows: list[PiholeClientRow] = []
     payload = result.payload
@@ -588,13 +642,22 @@ async def get_pihole_clients(
                 if not isinstance(ip_obj, str) or not ip_obj:
                     continue
                 name_obj = entry_dict.get("name")
-                name = name_obj if isinstance(name_obj, str) and name_obj else None
+                pihole_name = name_obj if isinstance(name_obj, str) and name_obj else None
                 count_obj = entry_dict.get("count")
                 count_val = (
                     int(count_obj)
                     if isinstance(count_obj, (int, float)) and not isinstance(count_obj, bool)
                     else 0
                 )
+
+                # Unifi join: IP → MAC → client row.
+                # N+1 pattern bounded by the count cap (≤100 rows); could be batched later
+                # if query latency becomes measurable. TODO(perf): batch find_mac_by_ip_at +
+                # get_client into single queries when needed.
+                mac = await unifi_repo.find_mac_by_ip_at(ip_obj, now)
+                unifi_row = await unifi_repo.get_client(mac) if mac is not None else None
+                name = _resolve_client_name(pihole_name=pihole_name, unifi=unifi_row)
+
                 rows.append(PiholeClientRow(client=ip_obj, name=name, count=count_val))
 
     return PiholeClientsResponse(rows=rows, returned=len(rows))

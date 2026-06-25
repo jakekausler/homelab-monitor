@@ -50,6 +50,27 @@ def _mock_vm_lifespan_tick(httpx_mock: HTTPXMock) -> None:  # pyright: ignore[re
         is_reusable=True,
     )
     httpx_mock.add_response(
+        method="POST",
+        url=re.compile(r"http://localhost/containers/.*/exec"),
+        json={"Id": "exec-mock-id"},
+        is_optional=True,
+        is_reusable=True,
+    )
+    httpx_mock.add_response(
+        method="POST",
+        url=re.compile(r"http://localhost/exec/.*/start"),
+        content=b"",
+        is_optional=True,
+        is_reusable=True,
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(r"http://localhost/exec/.*/json"),
+        json={"ExitCode": 0},
+        is_optional=True,
+        is_reusable=True,
+    )
+    httpx_mock.add_response(
         method="GET",
         url=re.compile(r"http://victorialogs:9428/.*"),
         json={},

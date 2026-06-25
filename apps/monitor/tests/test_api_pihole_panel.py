@@ -27,6 +27,14 @@ from httpx import AsyncClient
 from pytest_httpx import HTTPXMock
 
 from homelab_monitor.kernel.api.app import create_app
+from homelab_monitor.kernel.api.routers.integrations_pihole import (
+    _resolve_client_name,  # type: ignore[attr-defined]
+)
+from homelab_monitor.kernel.db.repositories.unifi_clients_repository import (
+    UnifiClientRepo,
+    UnifiClientRow,
+)
+from homelab_monitor.kernel.db.repository import SqliteRepository
 from homelab_monitor.kernel.pihole.client import PiholeResponse
 from homelab_monitor.kernel.pihole.errors import PiholeError
 
@@ -58,6 +66,11 @@ def _empty_vector() -> dict[str, object]:
 def _query_of(request: httpx.Request) -> str:
     qs = parse_qs(urlparse(str(request.url)).query)
     return qs["query"][0]
+
+
+def _make_clients_payload(entries: list[dict[str, object]]) -> dict[str, object]:
+    """Build a Pi-hole clients payload from a list of entry dicts."""
+    return {"clients": entries}
 
 
 class _FakeRoClient:
@@ -1029,6 +1042,16 @@ class TestGetPiholeUnbound:
                 return httpx.Response(200, json=_vector([({}, "1000")]))
             elif query == "homelab_unbound_requestlist_current":
                 return httpx.Response(200, json=_vector([({}, "50")]))
+            elif query == 'homelab_unbound_recursion_time_seconds{quantile="0.5"}':
+                return httpx.Response(200, json=_vector([({"quantile": "0.5"}, "0.012")]))
+            elif query == 'homelab_unbound_recursion_time_seconds{quantile="0.95"}':
+                return httpx.Response(200, json=_vector([({"quantile": "0.95"}, "0.085")]))
+            elif query == "homelab_unbound_answer_secure_total":
+                return httpx.Response(200, json=_vector([({}, "4200")]))
+            elif query == "homelab_unbound_answer_bogus_total":
+                return httpx.Response(200, json=_vector([({}, "3")]))
+            elif query == 'homelab_unbound_answer_rcode{rcode="SERVFAIL"}':
+                return httpx.Response(200, json=_vector([({"rcode": "SERVFAIL"}, "17")]))
             elif query == "homelab_pihole_unbound_extended_stats_enabled":
                 return httpx.Response(200, json=_vector([({}, "1")]))
             return httpx.Response(200, json=_empty_vector())
@@ -1048,6 +1071,11 @@ class TestGetPiholeUnbound:
         assert body["cache_misses_total"] == 2500.0  # noqa: PLR2004
         assert body["prefetch_total"] == 1000.0  # noqa: PLR2004
         assert body["requestlist_current"] == 50.0  # noqa: PLR2004
+        assert body["recursion_p50_seconds"] == 0.012  # noqa: PLR2004
+        assert body["recursion_p95_seconds"] == 0.085  # noqa: PLR2004
+        assert body["dnssec_secure_total"] == 4200.0  # noqa: PLR2004
+        assert body["dnssec_bogus_total"] == 3.0  # noqa: PLR2004
+        assert body["servfail_total"] == 17.0  # noqa: PLR2004
         assert body["extended_stats_enabled"] is True
 
     async def test_all_absent(
@@ -1077,6 +1105,11 @@ class TestGetPiholeUnbound:
         assert body["cache_misses_total"] is None
         assert body["prefetch_total"] is None
         assert body["requestlist_current"] is None
+        assert body["recursion_p50_seconds"] is None
+        assert body["recursion_p95_seconds"] is None
+        assert body["dnssec_secure_total"] is None
+        assert body["dnssec_bogus_total"] is None
+        assert body["servfail_total"] is None
         assert body["extended_stats_enabled"] is None
 
     async def test_extended_stats_false(
@@ -1312,6 +1345,243 @@ class TestGetPiholeClients:
         assert response.status_code == _HTTP_OK
         body = response.json()
         assert body["rows"][0]["count"] == 0
+
+    async def test_get_clients_unifi_name_wins(
+        self, authenticated_client: AsyncClient, repo: SqliteRepository
+    ) -> None:
+        """Unifi name wins even when Pi-hole name is also set."""
+        app = cast(FastAPI, authenticated_client._transport.app)  # pyright: ignore[reportAttributeAccessIssue, reportPrivateUsage, reportUnknownMemberType]
+        async with repo.transaction() as conn:
+            await UnifiClientRepo.upsert_client_conn(
+                conn,
+                mac="aa:bb:cc:11:11:11",
+                ip=None,
+                hostname="mydevice",
+                name="My Device",
+                oui=None,
+                network=None,
+                ap_mac=None,
+                sw_mac=None,
+                sw_port=None,
+                use_fixedip=False,
+                fixed_ip=None,
+                online=True,
+                first_seen="2026-01-01T00:00:00Z",
+                last_seen="2026-01-01T00:00:00Z",
+            )
+            await UnifiClientRepo.append_observation_conn(
+                conn,
+                mac="aa:bb:cc:11:11:11",
+                ip="10.0.0.1",
+                observed_at="2026-01-01T00:00:00Z",
+                cutoff="2025-01-01T00:00:00Z",
+            )
+        app.state.pihole_client = _FakeRoClient(
+            clients_result=_make_clients_payload(
+                [{"ip": "10.0.0.1", "name": "pihole-name", "count": 5}]
+            )
+        )
+        response = await authenticated_client.get("/api/integrations/pihole/clients")
+        assert response.status_code == _HTTP_OK
+        assert response.json()["rows"][0]["name"] == "My Device"
+
+    async def test_get_clients_unifi_hostname_fallback(
+        self, authenticated_client: AsyncClient, repo: SqliteRepository
+    ) -> None:
+        """Unifi hostname used when name is None."""
+        app = cast(FastAPI, authenticated_client._transport.app)  # pyright: ignore[reportAttributeAccessIssue, reportPrivateUsage, reportUnknownMemberType]
+        async with repo.transaction() as conn:
+            await UnifiClientRepo.upsert_client_conn(
+                conn,
+                mac="aa:bb:cc:22:22:22",
+                ip=None,
+                hostname="router",
+                name=None,
+                oui=None,
+                network=None,
+                ap_mac=None,
+                sw_mac=None,
+                sw_port=None,
+                use_fixedip=False,
+                fixed_ip=None,
+                online=True,
+                first_seen="2026-01-01T00:00:00Z",
+                last_seen="2026-01-01T00:00:00Z",
+            )
+            await UnifiClientRepo.append_observation_conn(
+                conn,
+                mac="aa:bb:cc:22:22:22",
+                ip="10.0.0.2",
+                observed_at="2026-01-01T00:00:00Z",
+                cutoff="2025-01-01T00:00:00Z",
+            )
+        app.state.pihole_client = _FakeRoClient(
+            clients_result=_make_clients_payload([{"ip": "10.0.0.2", "name": None, "count": 3}])
+        )
+        response = await authenticated_client.get("/api/integrations/pihole/clients")
+        assert response.status_code == _HTTP_OK
+        assert response.json()["rows"][0]["name"] == "router"
+
+    async def test_get_clients_no_mac_pihole_name_fallback(
+        self, authenticated_client: AsyncClient, repo: SqliteRepository
+    ) -> None:
+        """No Unifi observation for IP; falls back to Pi-hole name."""
+        app = cast(FastAPI, authenticated_client._transport.app)  # pyright: ignore[reportAttributeAccessIssue, reportPrivateUsage, reportUnknownMemberType]
+        app.state.pihole_client = _FakeRoClient(
+            clients_result=_make_clients_payload(
+                [{"ip": "10.0.0.3", "name": "pihole-label", "count": 7}]
+            )
+        )
+        response = await authenticated_client.get("/api/integrations/pihole/clients")
+        assert response.status_code == _HTTP_OK
+        assert response.json()["rows"][0]["name"] == "pihole-label"
+
+    async def test_get_clients_no_mac_pihole_name_null(
+        self, authenticated_client: AsyncClient, repo: SqliteRepository
+    ) -> None:
+        """No Unifi observation AND no Pi-hole name -> None."""
+        app = cast(FastAPI, authenticated_client._transport.app)  # pyright: ignore[reportAttributeAccessIssue, reportPrivateUsage, reportUnknownMemberType]
+        app.state.pihole_client = _FakeRoClient(
+            clients_result=_make_clients_payload([{"ip": "10.0.0.4", "name": None, "count": 2}])
+        )
+        response = await authenticated_client.get("/api/integrations/pihole/clients")
+        assert response.status_code == _HTTP_OK
+        assert response.json()["rows"][0]["name"] is None
+
+    async def test_get_clients_unifi_empty_name_and_hostname(
+        self, authenticated_client: AsyncClient, repo: SqliteRepository
+    ) -> None:
+        """Unifi row found but both name and hostname empty -> falls back to Pi-hole name."""
+        app = cast(FastAPI, authenticated_client._transport.app)  # pyright: ignore[reportAttributeAccessIssue, reportPrivateUsage, reportUnknownMemberType]
+        async with repo.transaction() as conn:
+            await UnifiClientRepo.upsert_client_conn(
+                conn,
+                mac="aa:bb:cc:44:44:44",
+                ip=None,
+                hostname=None,
+                name=None,
+                oui=None,
+                network=None,
+                ap_mac=None,
+                sw_mac=None,
+                sw_port=None,
+                use_fixedip=False,
+                fixed_ip=None,
+                online=True,
+                first_seen="2026-01-01T00:00:00Z",
+                last_seen="2026-01-01T00:00:00Z",
+            )
+            await UnifiClientRepo.append_observation_conn(
+                conn,
+                mac="aa:bb:cc:44:44:44",
+                ip="10.0.0.5",
+                observed_at="2026-01-01T00:00:00Z",
+                cutoff="2025-01-01T00:00:00Z",
+            )
+        app.state.pihole_client = _FakeRoClient(
+            clients_result=_make_clients_payload(
+                [{"ip": "10.0.0.5", "name": "pihole-fallback", "count": 1}]
+            )
+        )
+        response = await authenticated_client.get("/api/integrations/pihole/clients")
+        assert response.status_code == _HTTP_OK
+        assert response.json()["rows"][0]["name"] == "pihole-fallback"
+
+    async def test_get_clients_mac_found_no_client_row(
+        self,
+        authenticated_client: AsyncClient,
+        repo: SqliteRepository,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """MAC found but get_client returns None (orphaned observation)."""
+        app = cast(FastAPI, authenticated_client._transport.app)  # pyright: ignore[reportAttributeAccessIssue, reportPrivateUsage, reportUnknownMemberType]
+        async with repo.transaction() as conn:
+            await UnifiClientRepo.append_observation_conn(
+                conn,
+                mac="aa:bb:cc:55:55:55",
+                ip="10.0.0.6",
+                observed_at="2026-01-01T00:00:00Z",
+                cutoff="2025-01-01T00:00:00Z",
+            )
+        app.state.pihole_client = _FakeRoClient(
+            clients_result=_make_clients_payload(
+                [{"ip": "10.0.0.6", "name": "ph-name", "count": 9}]
+            )
+        )
+        response = await authenticated_client.get("/api/integrations/pihole/clients")
+        assert response.status_code == _HTTP_OK
+        assert response.json()["rows"][0]["name"] == "ph-name"
+
+
+class TestResolvePiholeClientName:
+    def test_unifi_name_wins(self) -> None:
+        row = UnifiClientRow(
+            mac="a",
+            ip=None,
+            hostname="h",
+            name="N",
+            oui=None,
+            network=None,
+            ap_mac=None,
+            sw_mac=None,
+            sw_port=None,
+            use_fixedip=False,
+            fixed_ip=None,
+            online=True,
+            is_host=False,
+            first_seen="2026-01-01T00:00:00Z",
+            last_seen="2026-01-01T00:00:00Z",
+            lease_expiry=None,
+        )
+        assert _resolve_client_name(pihole_name="p", unifi=row) == "N"
+
+    def test_unifi_hostname_when_name_empty(self) -> None:
+        row = UnifiClientRow(
+            mac="a",
+            ip=None,
+            hostname="h",
+            name=None,
+            oui=None,
+            network=None,
+            ap_mac=None,
+            sw_mac=None,
+            sw_port=None,
+            use_fixedip=False,
+            fixed_ip=None,
+            online=True,
+            is_host=False,
+            first_seen="2026-01-01T00:00:00Z",
+            last_seen="2026-01-01T00:00:00Z",
+            lease_expiry=None,
+        )
+        assert _resolve_client_name(pihole_name="p", unifi=row) == "h"
+
+    def test_pihole_fallback_no_unifi(self) -> None:
+        assert _resolve_client_name(pihole_name="p", unifi=None) == "p"
+
+    def test_pihole_null_no_unifi(self) -> None:
+        assert _resolve_client_name(pihole_name=None, unifi=None) is None
+
+    def test_pihole_fallback_when_unifi_both_empty(self) -> None:
+        row = UnifiClientRow(
+            mac="a",
+            ip=None,
+            hostname=None,
+            name=None,
+            oui=None,
+            network=None,
+            ap_mac=None,
+            sw_mac=None,
+            sw_port=None,
+            use_fixedip=False,
+            fixed_ip=None,
+            online=True,
+            is_host=False,
+            first_seen="2026-01-01T00:00:00Z",
+            last_seen="2026-01-01T00:00:00Z",
+            lease_expiry=None,
+        )
+        assert _resolve_client_name(pihole_name="p", unifi=row) == "p"
 
 
 class TestGetPiholeRecentBlocked:

@@ -12,6 +12,10 @@ import type { Schema } from './types'
 type PiholeOverviewResponse = Schema<'PiholeOverviewResponse'>
 type PiholeAdlistsResponse = Schema<'PiholeAdlistsResponse'>
 type PiholeMessagesResponse = Schema<'PiholeMessagesResponse'>
+type PiholeUpstreamsResponse = Schema<'PiholeUpstreamsResponse'>
+type PiholeUnboundResponse = Schema<'PiholeUnboundResponse'>
+type PiholeClientsResponse = Schema<'PiholeClientsResponse'>
+type PiholeRecentBlockedResponse = Schema<'PiholeRecentBlockedResponse'>
 type BlockingRequest = Schema<'BlockingRequest'>
 type BlockingResponse = Schema<'BlockingResponse'>
 type GravityUpdateRequest = Schema<'GravityUpdateRequest'>
@@ -21,6 +25,11 @@ export const piholeQueryKeys = {
   overview: ['integrations', 'pihole', 'overview'] as const,
   adlists: ['integrations', 'pihole', 'adlists'] as const,
   messages: ['integrations', 'pihole', 'messages'] as const,
+  upstreams: ['integrations', 'pihole', 'upstreams'] as const,
+  unbound: ['integrations', 'pihole', 'unbound'] as const,
+  clients: (blocked: boolean, count: number) =>
+    ['integrations', 'pihole', 'clients', blocked, count] as const,
+  recentBlocked: (count: number) => ['integrations', 'pihole', 'recent-blocked', count] as const,
 }
 
 const REFETCH_INTERVAL_MS = 30_000
@@ -53,6 +62,61 @@ export function useMessages(): UseQueryResult<PiholeMessagesResponse, ApiError> 
     queryFn: async () => {
       const result = await apiClient.GET('/api/integrations/pihole/messages', {})
       return unwrap<PiholeMessagesResponse>(result)
+    },
+    refetchInterval: REFETCH_INTERVAL_MS,
+  })
+}
+
+export function useUpstreams(): UseQueryResult<PiholeUpstreamsResponse, ApiError> {
+  return useQuery({
+    queryKey: piholeQueryKeys.upstreams,
+    queryFn: async () => {
+      const result = await apiClient.GET('/api/integrations/pihole/upstreams', {})
+      return unwrap<PiholeUpstreamsResponse>(result)
+    },
+    refetchInterval: REFETCH_INTERVAL_MS,
+  })
+}
+
+export function useUnbound(): UseQueryResult<PiholeUnboundResponse, ApiError> {
+  return useQuery({
+    queryKey: piholeQueryKeys.unbound,
+    queryFn: async () => {
+      const result = await apiClient.GET('/api/integrations/pihole/unbound', {})
+      return unwrap<PiholeUnboundResponse>(result)
+    },
+    refetchInterval: REFETCH_INTERVAL_MS,
+  })
+}
+
+const DEFAULT_TOP_COUNT = 10
+
+export function useClients(
+  blocked: boolean,
+  count: number = DEFAULT_TOP_COUNT,
+): UseQueryResult<PiholeClientsResponse, ApiError> {
+  return useQuery({
+    queryKey: piholeQueryKeys.clients(blocked, count),
+    queryFn: async () => {
+      const result = await apiClient.GET('/api/integrations/pihole/clients', {
+        params: { query: { blocked, count } },
+      })
+      return unwrap<PiholeClientsResponse>(result)
+    },
+    refetchInterval: REFETCH_INTERVAL_MS,
+  })
+}
+
+export function useRecentBlocked(
+  count: number = DEFAULT_TOP_COUNT,
+): UseQueryResult<PiholeRecentBlockedResponse, ApiError> {
+  return useQuery({
+    queryKey: piholeQueryKeys.recentBlocked(count),
+    queryFn: async () => {
+      const result = await apiClient.GET('/api/integrations/pihole/recent-blocked', {
+        params: { query: { count } },
+      })
+      return unwrap<PiholeRecentBlockedResponse>(result)
     },
     refetchInterval: REFETCH_INTERVAL_MS,
   })

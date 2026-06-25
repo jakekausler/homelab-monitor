@@ -15,6 +15,10 @@ import {
 import { PiholeOverviewTab } from './PiholeOverviewTab'
 
 vi.mock('@/api/pihole')
+vi.mock('@/routes/integrations/PiholeUpstreamsUnboundWidget')
+vi.mock('@/routes/integrations/PiholeClientsWidget')
+vi.mock('@/routes/integrations/PiholeRecentBlockedWidget')
+vi.mock('@/routes/integrations/PiholeVersionContainerWidget')
 
 type Overview = Schema<'PiholeOverviewResponse'>
 
@@ -96,13 +100,12 @@ describe('PiholeOverviewTab', () => {
     expect(screen.getByText('Messages')).toBeInTheDocument()
   })
 
-  it('renders STAGE-006-023 coming-soon sections', () => {
+  it('renders STAGE-006-023 sections (mocked widgets)', () => {
     render(<PiholeOverviewTab />)
     expect(screen.getByText('Upstreams & Unbound')).toBeInTheDocument()
     expect(screen.getByText('Clients')).toBeInTheDocument()
     expect(screen.getByText('Recent blocked')).toBeInTheDocument()
     expect(screen.getByText('Version & container')).toBeInTheDocument()
-    expect(screen.getAllByText(/Coming soon \(STAGE-006-023\)/)).toHaveLength(4)
   })
 
   it('does not show 022 "Coming soon" messages', () => {

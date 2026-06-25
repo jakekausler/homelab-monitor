@@ -6,17 +6,16 @@ import { PanelSection } from './PanelSection'
 import { PiholeBlockingWidget } from './PiholeBlockingWidget'
 import { PiholeGravityWidget } from './PiholeGravityWidget'
 import { PiholeMessagesWidget } from './PiholeMessagesWidget'
+import { PiholeUpstreamsUnboundWidget } from './PiholeUpstreamsUnboundWidget'
+import { PiholeClientsWidget } from './PiholeClientsWidget'
+import { PiholeRecentBlockedWidget } from './PiholeRecentBlockedWidget'
+import { PiholeVersionContainerWidget } from './PiholeVersionContainerWidget'
 
 /**
  * STAGE-006-021 — Pi-hole Overview tab shell.
  * STAGE-006-022 — Blocking control, Gravity & adlists, Messages widgets + privacy banner.
- *
- * Remaining placeholders are owned by STAGE-006-023:
- *   Upstreams & Unbound, Clients, Recent blocked, Version & container.
+ * STAGE-006-023 — Upstreams & Unbound, Clients, Recent blocked, Version & container widgets.
  */
-function ComingSoon({ stage }: { stage: string }): JSX.Element {
-  return <p className="text-sm text-muted-foreground">Coming soon ({stage})</p>
-}
 
 export function PiholeOverviewTab(): JSX.Element {
   const overview = usePiholeOverview()
@@ -53,22 +52,22 @@ export function PiholeOverviewTab(): JSX.Element {
 
       {/* STAGE-006-023 */}
       <PanelSection title="Upstreams & Unbound">
-        <ComingSoon stage="STAGE-006-023" />
+        <PiholeUpstreamsUnboundWidget />
       </PanelSection>
 
       {/* STAGE-006-023 */}
       <PanelSection title="Clients">
-        <ComingSoon stage="STAGE-006-023" />
+        <PiholeClientsWidget />
       </PanelSection>
 
       {/* STAGE-006-023 */}
       <PanelSection title="Recent blocked">
-        <ComingSoon stage="STAGE-006-023" />
+        <PiholeRecentBlockedWidget />
       </PanelSection>
 
       {/* STAGE-006-023 */}
       <PanelSection title="Version & container">
-        <ComingSoon stage="STAGE-006-023" />
+        <PiholeVersionContainerWidget />
       </PanelSection>
     </div>
   )

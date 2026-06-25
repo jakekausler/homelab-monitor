@@ -17,6 +17,8 @@ type SuggestionAcceptResponse = Schema<'SuggestionAcceptResponse'>
 type SuggestionCustomizeRequest = Schema<'SuggestionCustomizeRequest'>
 type SuggestionCustomizeResponse = Schema<'SuggestionCustomizeResponse'>
 type SuggestionIgnoreResponse = Schema<'SuggestionIgnoreResponse'>
+type ContainerLifecycleRequest = Schema<'ContainerLifecycleRequest'>
+type ContainerLifecycleResponse = Schema<'ContainerLifecycleResponse'>
 
 export const dockerQueryKeys = {
   containers: ['integrations', 'docker', 'containers'] as const,
@@ -386,6 +388,45 @@ export function useStartPullAndRestart(containerName: string) {
       // regardless of which `limit` they were instantiated with.
       void queryClient.invalidateQueries({
         queryKey: dockerComposeActionQueryKeys.listAllForContainer(containerName),
+      })
+    },
+  })
+}
+
+export type ContainerLifecycleAction = 'restart' | 'start' | 'stop'
+
+/**
+ * STAGE-006-023 — generic container lifecycle (restart/start/stop) mutation.
+ * POSTs the typed-phrase confirm to /api/integrations/docker/containers/{name}/{action}.
+ * On success: mark the containers list stale WITHOUT an immediate refetch (the
+ * lifecycle response carries no running/exited state, so refetching now would
+ * re-read the pre-action collector metric). The 30s refetchInterval reconciles.
+ * The caller owns the transient "Restarting…/Starting…/Stopping…" label.
+ */
+export function useContainerLifecycleMutation() {
+  const queryClient = useQueryClient()
+  return useMutation<
+    ContainerLifecycleResponse,
+    ApiError,
+    { name: string; action: ContainerLifecycleAction; confirm_phrase: string }
+  >({
+    mutationFn: async (variables) => {
+      const path =
+        variables.action === 'restart'
+          ? '/api/integrations/docker/containers/{name}/restart'
+          : variables.action === 'start'
+            ? '/api/integrations/docker/containers/{name}/start'
+            : '/api/integrations/docker/containers/{name}/stop'
+      const result = await apiClient.POST(path, {
+        params: { path: { name: variables.name } },
+        body: { confirm_phrase: variables.confirm_phrase } satisfies ContainerLifecycleRequest,
+      })
+      return unwrap<ContainerLifecycleResponse>(result)
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: dockerQueryKeys.containers,
+        refetchType: 'none',
       })
     },
   })
