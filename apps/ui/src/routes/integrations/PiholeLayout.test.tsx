@@ -46,6 +46,7 @@ const OVERVIEW: Overview = {
   up: true,
   updates_available: [],
   versions: [],
+  query_feed_streaming: false,
 }
 
 function ok<T>(data: T): UseQueryResult<T, ApiError> {

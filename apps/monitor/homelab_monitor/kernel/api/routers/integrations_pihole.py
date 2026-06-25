@@ -38,6 +38,7 @@ from homelab_monitor.kernel.api.vm_query import (
 )
 from homelab_monitor.kernel.auth.models import ApiToken, User
 from homelab_monitor.kernel.auth.scopes import Scope
+from homelab_monitor.kernel.config import PiholeConfig, load_pihole_config
 from homelab_monitor.kernel.db.audit import insert_audit
 from homelab_monitor.kernel.db.ids import uuid7
 from homelab_monitor.kernel.db.repositories.unifi_clients_repository import (
@@ -169,6 +170,10 @@ def _get_pihole_rw_client(request: Request) -> PiholeRestClient:
     return client
 
 
+def _get_pihole_config() -> PiholeConfig:
+    return load_pihole_config()
+
+
 def _who(principal: User | ApiToken) -> str:
     """Mirror docker.py: User -> username, ApiToken -> 'token:<name>'."""
     return principal.username if isinstance(principal, User) else f"token:{principal.name}"
@@ -231,6 +236,10 @@ class PiholeOverviewResponse(BaseModel):
     gravity_domains: int | None
     versions: list[PiholeVersionInfo]
     updates_available: list[PiholeUpdateInfo]
+    # STAGE-006-025: config-derived (NOT a VM query). True iff the query-feed
+    # shipper is enabled (PiholeConfig.stream_query_feed_enabled). Drives the
+    # frontend stream selector in PiholeLogsTab.
+    query_feed_streaming: bool
 
 
 class PiholeAdlistRow(BaseModel):
@@ -452,6 +461,7 @@ async def get_pihole_overview(
     _user: Annotated[User, Depends(require_session())],
     vm_url: Annotated[str, Depends(get_vm_url)],
     http_client: Annotated[httpx.AsyncClient, Depends(get_http_client)],
+    pihole_cfg: Annotated[PiholeConfig, Depends(_get_pihole_config)],
 ) -> PiholeOverviewResponse:
     # Scalars (vm_count defaults absent->0; we want None for "absent" on most fields,
     # so use vm_instant_query + _scalar_* for the nullable ones, vm_count only for messages_count).
@@ -499,6 +509,7 @@ async def get_pihole_overview(
         gravity_domains=_scalar_int(gravity_domains_samples),
         versions=versions,
         updates_available=updates_available,
+        query_feed_streaming=pihole_cfg.stream_query_feed_enabled,
     )
 
 

@@ -95,7 +95,16 @@ class _NoopLogsWriter:
     def __init__(self) -> None:
         self.entries: list[tuple[str, str]] = []
 
-    def ingest(self, stream: str, line: str, ts: str | None = None) -> None:
+    def ingest(
+        self,
+        stream: str,
+        line: str,
+        ts: str | None = None,
+        *,
+        service: str | None = None,
+        source_type: str | None = None,
+    ) -> None:
+        del ts, service, source_type
         self.entries.append((stream, line))
 
 

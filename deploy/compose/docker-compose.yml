@@ -55,6 +55,9 @@ services:
       HOMELAB_MONITOR_BUILD_HASH_MAX_DEPTH: ${HOMELAB_MONITOR_BUILD_HASH_MAX_DEPTH:-30}
       # STAGE-003-010: compose action runner.
       HOMELAB_MONITOR_COMPOSE_ACTION_TIMEOUT_SECONDS: ${HOMELAB_MONITOR_COMPOSE_ACTION_TIMEOUT_SECONDS:-300}
+      # STAGE-006-025: Pi-hole query-feed shipper.
+      HOMELAB_MONITOR_PIHOLE_STREAM_QUERY_FEED: ${HOMELAB_MONITOR_PIHOLE_STREAM_QUERY_FEED:-false}
+      HOMELAB_MONITOR_PIHOLE_QUERY_FEED_MAX_BYTES_PER_DAY: ${HOMELAB_MONITOR_PIHOLE_QUERY_FEED_MAX_BYTES_PER_DAY:-524288000}
       # Docker CLI needs a writable HOME for its config dir (~/.docker). Container's
       # default HOME is / which is root-owned; redirect to /tmp.
       HOME: /tmp

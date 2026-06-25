@@ -69,6 +69,8 @@ class LogEntry:
     stream: str
     line: str
     ts: str
+    service: str | None = None
+    source_type: str | None = None
 
 
 @runtime_checkable
@@ -105,9 +107,23 @@ class MetricsWriter(Protocol):
 
 @runtime_checkable
 class LogsWriter(Protocol):
-    """Minimal log-ingest surface. ``ts`` defaults to "now" (UTC ISO)."""
+    """Minimal log-ingest surface. ``ts`` defaults to "now" (UTC ISO).
 
-    def ingest(self, stream: str, line: str, ts: str | None = None) -> None:
+    ``service`` / ``source_type`` are OPTIONAL queryable identity fields. When
+    provided they are written into the VL event dict as top-level fields so the
+    logs query filter (``service:"X" AND source_type:"Y"``) can scope to the
+    stream. When omitted the event carries only the builtins (backward-compatible).
+    """
+
+    def ingest(
+        self,
+        stream: str,
+        line: str,
+        ts: str | None = None,
+        *,
+        service: str | None = None,
+        source_type: str | None = None,
+    ) -> None:
         """Record a single log line on ``stream``."""
         ...
 
@@ -510,6 +526,22 @@ class InMemoryLogsWriter:
         """Return all entries written since construction (insertion order)."""
         return list(self._entries)
 
-    def ingest(self, stream: str, line: str, ts: str | None = None) -> None:
+    def ingest(
+        self,
+        stream: str,
+        line: str,
+        ts: str | None = None,
+        *,
+        service: str | None = None,
+        source_type: str | None = None,
+    ) -> None:
         """Record a single log line on ``stream``; defaults ``ts`` to current UTC."""
-        self._entries.append(LogEntry(stream=stream, line=line, ts=ts or utc_now_iso()))
+        self._entries.append(
+            LogEntry(
+                stream=stream,
+                line=line,
+                ts=ts or utc_now_iso(),
+                service=service,
+                source_type=source_type,
+            )
+        )

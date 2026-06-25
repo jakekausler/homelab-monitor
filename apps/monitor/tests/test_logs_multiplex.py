@@ -35,8 +35,16 @@ def test_multiplex_preserves_registration_order() -> None:
         def __init__(self, tag: str) -> None:
             self._tag = tag
 
-        def ingest(self, stream: str, line: str, ts: str | None = None) -> None:
-            del stream, line, ts
+        def ingest(
+            self,
+            stream: str,
+            line: str,
+            ts: str | None = None,
+            *,
+            service: str | None = None,
+            source_type: str | None = None,
+        ) -> None:
+            del stream, line, ts, service, source_type
             seen.append(self._tag)
 
     mux = MultiplexLogsWriter([_Recorder("first"), _Recorder("second")])

@@ -24,6 +24,7 @@ const BASE: Overview = {
   up: true,
   updates_available: [],
   versions: [],
+  query_feed_streaming: false,
 }
 
 function overview(overrides: Partial<Overview> = {}): Overview {

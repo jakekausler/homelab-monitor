@@ -656,6 +656,13 @@ class PiholeConfig:
     dns_port: int = 53
     direct_dns_host: str = "1.1.1.1"  # WAN-bypass resolver for split-check (STAGE-006-015)
     direct_dns_port: int = 53
+    # STAGE-006-025: default-OFF query-feed log shipper. Ships PII (DNS history)
+    # to VictoriaLogs stream "pihole-queries"; gated behind this flag.
+    stream_query_feed_enabled: bool = False
+    # STAGE-006-025: per-UTC-day byte cap for the query feed. Defaults to the
+    # standard per-stream log budget (500 MiB). On cap-hit the shipper stops
+    # ingesting for the day but still advances the cursor (drop, don't backlog).
+    query_feed_max_bytes_per_day: int = 500 * 1024 * 1024
 
 
 def load_pihole_config() -> PiholeConfig:
@@ -695,6 +702,14 @@ def load_pihole_config() -> PiholeConfig:
         PiholeConfig().direct_dns_port if raw_direct_port is None else int(raw_direct_port)
     )
 
+    raw_qf = os.environ.get("HOMELAB_MONITOR_PIHOLE_STREAM_QUERY_FEED", "")
+    stream_query_feed_enabled = raw_qf.strip().lower() in ("1", "true", "yes")
+
+    raw_qf_bytes = os.environ.get("HOMELAB_MONITOR_PIHOLE_QUERY_FEED_MAX_BYTES_PER_DAY")
+    query_feed_max_bytes_per_day = (
+        PiholeConfig().query_feed_max_bytes_per_day if raw_qf_bytes is None else int(raw_qf_bytes)
+    )
+
     return PiholeConfig(
         base_url=base_url,
         host_lan_ip=host_lan_ip,
@@ -702,6 +717,8 @@ def load_pihole_config() -> PiholeConfig:
         dns_port=dns_port,
         direct_dns_host=direct_dns_host,
         direct_dns_port=direct_dns_port,
+        stream_query_feed_enabled=stream_query_feed_enabled,
+        query_feed_max_bytes_per_day=query_feed_max_bytes_per_day,
     )
 
 

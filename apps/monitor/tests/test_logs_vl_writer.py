@@ -283,3 +283,78 @@ async def test_post_batch_empty_is_noop() -> None:
         # pytest-httpx will raise if any unexpected request is made.
         await writer._post_batch([])  # pyright: ignore[reportPrivateUsage]
     assert writer.error_count == 0
+
+
+@pytest.mark.asyncio
+async def test_ingest_with_service_and_source_type() -> None:
+    """Branch: service + source_type provided -> both added to event."""
+    async with httpx.AsyncClient() as client:
+        writer = VictoriaLogsWriter(
+            vl_url=_VL_URL,
+            http_client=client,
+            queue_size=10,
+        )
+        writer.ingest(
+            stream="pihole-queries",
+            line='{"query_id": 1}',
+            ts="2026-01-01T00:00:00Z",
+            service="pihole-queries",
+            source_type="pihole",
+        )
+        assert writer._queue.qsize() == 1  # pyright: ignore[reportPrivateUsage]
+        item = writer._queue.get_nowait()  # pyright: ignore[reportPrivateUsage]
+        assert item["_msg"] == '{"query_id": 1}'
+        assert item["_stream_id"] == "pihole-queries"
+        assert item["_time"] == "2026-01-01T00:00:00Z"
+        assert item["service"] == "pihole-queries"
+        assert item["source_type"] == "pihole"
+
+
+@pytest.mark.asyncio
+async def test_ingest_omits_service_and_source_type_when_not_provided() -> None:
+    """Branch: both omitted -> event carries only builtins (backward compat)."""
+    async with httpx.AsyncClient() as client:
+        writer = VictoriaLogsWriter(
+            vl_url=_VL_URL,
+            http_client=client,
+            queue_size=10,
+        )
+        writer.ingest(stream="svc.host", line="hello")
+        assert writer._queue.qsize() == 1  # pyright: ignore[reportPrivateUsage]
+        item = writer._queue.get_nowait()  # pyright: ignore[reportPrivateUsage]
+        assert "service" not in item
+        assert "source_type" not in item
+        assert item["_msg"] == "hello"
+        assert "_time" in item
+
+
+@pytest.mark.asyncio
+async def test_ingest_with_service_only() -> None:
+    """Branch: only service provided -> service present, source_type absent."""
+    async with httpx.AsyncClient() as client:
+        writer = VictoriaLogsWriter(
+            vl_url=_VL_URL,
+            http_client=client,
+            queue_size=10,
+        )
+        writer.ingest(stream="s", line="m", service="svc-name")
+        assert writer._queue.qsize() == 1  # pyright: ignore[reportPrivateUsage]
+        item = writer._queue.get_nowait()  # pyright: ignore[reportPrivateUsage]
+        assert item["service"] == "svc-name"
+        assert "source_type" not in item
+
+
+@pytest.mark.asyncio
+async def test_ingest_with_source_type_only() -> None:
+    """Branch: only source_type provided -> source_type present, service absent."""
+    async with httpx.AsyncClient() as client:
+        writer = VictoriaLogsWriter(
+            vl_url=_VL_URL,
+            http_client=client,
+            queue_size=10,
+        )
+        writer.ingest(stream="s", line="m", source_type="pihole")
+        assert writer._queue.qsize() == 1  # pyright: ignore[reportPrivateUsage]
+        item = writer._queue.get_nowait()  # pyright: ignore[reportPrivateUsage]
+        assert item["source_type"] == "pihole"
+        assert "service" not in item

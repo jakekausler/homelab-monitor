@@ -41,6 +41,7 @@ const BASE_OVERVIEW: PiholeOverviewResponse = {
   up: true,
   updates_available: [],
   versions: [],
+  query_feed_streaming: false,
 }
 
 describe('useBlockingMutation', () => {

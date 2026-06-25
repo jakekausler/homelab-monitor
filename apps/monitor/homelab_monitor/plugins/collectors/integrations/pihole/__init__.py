@@ -36,6 +36,9 @@ from homelab_monitor.plugins.collectors.integrations.pihole.ftl_messages import 
 from homelab_monitor.plugins.collectors.integrations.pihole.gravity import (
     PiholeGravityCollector,
 )
+from homelab_monitor.plugins.collectors.integrations.pihole.query_feed import (
+    PiholeQueryFeedCollector,
+)
 from homelab_monitor.plugins.collectors.integrations.pihole.stats_summary import (
     PiholeStatsSummaryCollector,
 )
@@ -68,6 +71,7 @@ _PIHOLE_COLLECTORS: list[type[BaseCollector]] = [
     UnboundStatsCollector,
     PiholeDnsHealthCollector,
     PiholeDnsSplitCollector,
+    PiholeQueryFeedCollector,
 ]
 
 

@@ -21,7 +21,12 @@ vi.mock('@/api/logs', async () => {
   return { ...actual, useLogsQuery: vi.fn() }
 })
 
+vi.mock('@/api/pihole', () => ({
+  usePiholeOverview: vi.fn(),
+}))
+
 import { useLogsQuery } from '@/api/logs'
+import { usePiholeOverview } from '@/api/pihole'
 import { PiholeLogsTab } from './PiholeLogsTab'
 
 afterEach(() => {
@@ -118,6 +123,7 @@ function renderTab() {
 describe('PiholeLogsTab', () => {
   beforeEach(() => {
     vi.mocked(useLogsQuery).mockReturnValue(makeQueryResult() as never)
+    vi.mocked(usePiholeOverview).mockReturnValue({ data: undefined } as never)
   })
 
   it('renders FTL log lines in the available state', async () => {
@@ -208,5 +214,69 @@ describe('PiholeLogsTab', () => {
     expect(params.get('logsql')).toBe('WARNING OR ERROR OR CRITICAL')
     // default 1h preset → since=1h.
     expect(params.get('since')).toBe('1h')
+  })
+
+  it('when query_feed_streaming is false, no selector appears (regression guard)', async () => {
+    vi.mocked(usePiholeOverview).mockReturnValue({
+      data: { query_feed_streaming: false },
+    } as never)
+    renderTab()
+    await screen.findByTestId('logs-body')
+    expect(screen.queryByTestId('pihole-stream-selector')).toBeNull()
+    expect(screen.getByTestId('pihole-logs-errors-toggle')).toBeInTheDocument()
+  })
+
+  it('when query_feed_streaming is undefined, no selector appears', async () => {
+    vi.mocked(usePiholeOverview).mockReturnValue({ data: undefined } as never)
+    renderTab()
+    await screen.findByTestId('logs-body')
+    expect(screen.queryByTestId('pihole-stream-selector')).toBeNull()
+    expect(screen.getByTestId('pihole-logs-errors-toggle')).toBeInTheDocument()
+  })
+
+  it('when query_feed_streaming is true, selector appears and defaults to Service log', async () => {
+    vi.mocked(usePiholeOverview).mockReturnValue({
+      data: { query_feed_streaming: true },
+    } as never)
+    renderTab()
+    await screen.findByTestId('logs-body')
+    expect(screen.getByTestId('pihole-stream-selector')).toBeInTheDocument()
+    expect(screen.getByTestId('pihole-stream-service')).toHaveAttribute('aria-pressed', 'true')
+    // Service mode uses docker:pihole-unbound service
+    const calls = vi.mocked(useLogsQuery).mock.calls
+    const lastCall = calls[calls.length - 1]!
+    expect(lastCall[3]).toBe('docker:pihole-unbound')
+    // Errors toggle still present in service mode
+    expect(screen.getByTestId('pihole-logs-errors-toggle')).toBeInTheDocument()
+  })
+
+  it('clicking Query feed swaps to pihole-queries stream and hides errors toggle', async () => {
+    vi.mocked(usePiholeOverview).mockReturnValue({
+      data: { query_feed_streaming: true },
+    } as never)
+    renderTab()
+    await screen.findByTestId('logs-body')
+    fireEvent.click(screen.getByTestId('pihole-stream-query'))
+    // Query mode uses pihole:pihole-queries service
+    const calls = vi.mocked(useLogsQuery).mock.calls
+    const lastCall = calls[calls.length - 1]!
+    expect(lastCall[3]).toBe('pihole:pihole-queries')
+    // Query mode uses match-all '*', no errors toggle
+    expect(lastCall[0]).toBe('*')
+    expect(screen.queryByTestId('pihole-logs-errors-toggle')).toBeNull()
+  })
+
+  it('switching back to Service log restores docker CSV and errors toggle', async () => {
+    vi.mocked(usePiholeOverview).mockReturnValue({
+      data: { query_feed_streaming: true },
+    } as never)
+    renderTab()
+    await screen.findByTestId('logs-body')
+    fireEvent.click(screen.getByTestId('pihole-stream-query'))
+    fireEvent.click(screen.getByTestId('pihole-stream-service'))
+    const calls = vi.mocked(useLogsQuery).mock.calls
+    const lastCall = calls[calls.length - 1]!
+    expect(lastCall[3]).toBe('docker:pihole-unbound')
+    expect(screen.getByTestId('pihole-logs-errors-toggle')).toBeInTheDocument()
   })
 })

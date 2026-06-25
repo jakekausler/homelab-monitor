@@ -18,6 +18,7 @@ import { RefreshCw } from 'lucide-react'
 
 import { ApiError } from '@/api/client'
 import { identitiesToServicesCsv, useLogsQuery } from '@/api/logs'
+import { usePiholeOverview } from '@/api/pihole'
 import { Button } from '@/components/ui/button'
 import { LogViewer } from '@/components/logs/LogViewer'
 import { TimeRangeControl } from '@/components/logs/TimeRangeControl'
@@ -34,9 +35,12 @@ import {
 } from '@/lib/timeRange'
 import type { LogViewerStatus, UseLogsResult } from '@/components/logs/types'
 
-// D-PIHOLELOGS-SELECTOR: scope to the pihole-unbound container only.
-const PIHOLE_SERVICES_CSV = identitiesToServicesCsv([
+// D-PIHOLELOGS-SELECTOR: the two selectable streams (STAGE-006-025).
+const SERVICE_LOG_CSV = identitiesToServicesCsv([
   { source_type: 'docker', service: 'pihole-unbound' },
+])
+const QUERY_FEED_CSV = identitiesToServicesCsv([
+  { source_type: 'pihole', service: 'pihole-queries' },
 ])
 
 // D-PIHOLELOGS-DEFAULT-QUERY: text-match — FTL stdout lines do NOT have
@@ -64,7 +68,15 @@ export function PiholeLogsTab(): JSX.Element {
   // Default 1h window; the TimeRangeControl can change it (preset or custom).
   const [range, setRange] = useState<TimeRangeValue>({ kind: 'preset', token: '1h' })
 
-  const expr = errorsOnly ? ERRORS_EXPR : ALL_EXPR
+  const overview = usePiholeOverview()
+  const queryFeedStreaming = overview.data?.query_feed_streaming ?? false
+
+  const [streamMode, setStreamMode] = useState<'service' | 'query'>('service')
+
+  // In query-feed mode the errors-only toggle is hidden and expr defaults to '*'.
+  const inQueryMode = queryFeedStreaming && streamMode === 'query'
+  const servicesCsv = inQueryMode ? QUERY_FEED_CSV : SERVICE_LOG_CSV
+  const expr = inQueryMode ? ALL_EXPR : errorsOnly ? ERRORS_EXPR : ALL_EXPR
 
   // Resolve the committed range to absolute [startIso, endIso]. `now` must stay
   // STABLE across renders (else an open end re-reads new Date() each render →
@@ -92,7 +104,7 @@ export function PiholeLogsTab(): JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps, @eslint-react/exhaustive-deps -- intentional: refreshNonce re-resolves the window (fresh `now`) on explicit refresh
   }, [rangeKind, rangeToken, rangeStartTime, rangeEndTime, refreshNonce])
 
-  const logs = useLogsQuery(expr, startIso, endIso, PIHOLE_SERVICES_CSV)
+  const logs = useLogsQuery(expr, startIso, endIso, servicesCsv)
 
   const handleRefresh = (): void => {
     setRefreshNonce((n) => n + 1)
@@ -115,11 +127,11 @@ export function PiholeLogsTab(): JSX.Element {
   )
   const hasData = logs.data !== undefined
 
-  // Open-in-Explorer deep-link: scope to the pihole-unbound service + carry the
-  // current range. For errors-only we deep-link with the text-match expr; for
+  // Open-in-Explorer deep-link: carry the current service/stream + range.
+  // For errors-only we deep-link with the text-match expr; for query mode or
   // All lines we omit logsQl so the Explorer opens unfiltered.
-  const explorerLogsQl = errorsOnly ? ERRORS_EXPR : undefined
-  const explorerServiceCsv = PIHOLE_SERVICES_CSV
+  const explorerLogsQl = inQueryMode ? undefined : errorsOnly ? ERRORS_EXPR : undefined
+  const explorerServiceCsv = servicesCsv
   const explorerRange =
     range.kind === 'preset'
       ? { sincePreset: range.token }
@@ -134,15 +146,39 @@ export function PiholeLogsTab(): JSX.Element {
         <span className="font-medium">Pi-hole (FTL) logs</span>
       </div>
       <div className="flex flex-wrap items-center gap-2">
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={() => setErrorsOnly((v) => !v)}
-          data-testid="pihole-logs-errors-toggle"
-          aria-pressed={errorsOnly}
-        >
-          {errorsOnly ? 'Errors only' : 'All lines'}
-        </Button>
+        {queryFeedStreaming ? (
+          <div className="flex items-center gap-1" data-testid="pihole-stream-selector">
+            <Button
+              size="sm"
+              variant={streamMode === 'service' ? 'default' : 'outline'}
+              onClick={() => setStreamMode('service')}
+              aria-pressed={streamMode === 'service'}
+              data-testid="pihole-stream-service"
+            >
+              Service log
+            </Button>
+            <Button
+              size="sm"
+              variant={streamMode === 'query' ? 'default' : 'outline'}
+              onClick={() => setStreamMode('query')}
+              aria-pressed={streamMode === 'query'}
+              data-testid="pihole-stream-query"
+            >
+              Query feed
+            </Button>
+          </div>
+        ) : null}
+        {!inQueryMode ? (
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => setErrorsOnly((v) => !v)}
+            data-testid="pihole-logs-errors-toggle"
+            aria-pressed={errorsOnly}
+          >
+            {errorsOnly ? 'Errors only' : 'All lines'}
+          </Button>
+        ) : null}
         <OpenInExplorerButton
           {...(explorerLogsQl !== undefined ? { logsQl: explorerLogsQl } : {})}
           selectedServices={[explorerServiceCsv]}

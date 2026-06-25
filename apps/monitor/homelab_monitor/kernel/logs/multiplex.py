@@ -32,6 +32,14 @@ class MultiplexLogsWriter:
         for w in self._writers:
             op(w)
 
-    def ingest(self, stream: str, line: str, ts: str | None = None) -> None:
+    def ingest(
+        self,
+        stream: str,
+        line: str,
+        ts: str | None = None,
+        *,
+        service: str | None = None,
+        source_type: str | None = None,
+    ) -> None:
         """Fan-out a log ingest to every inner writer."""
-        self._fanout(lambda w: w.ingest(stream, line, ts))
+        self._fanout(lambda w: w.ingest(stream, line, ts, service=service, source_type=source_type))

@@ -57,17 +57,34 @@ class VictoriaLogsWriter:
             structlog.get_logger().bind(component="vl_writer"),
         )
 
-    def ingest(self, stream: str, line: str, ts: str | None = None) -> None:
+    def ingest(
+        self,
+        stream: str,
+        line: str,
+        ts: str | None = None,
+        *,
+        service: str | None = None,
+        source_type: str | None = None,
+    ) -> None:
         """Enqueue a log line for async POST to VictoriaLogs.
 
         Sync API per the :class:`LogsWriter` Protocol. Non-blocking: on a full
         queue the line is dropped + :attr:`dropped_count` incremented.
+
+        ``service`` / ``source_type``, when provided, are written as top-level
+        queryable fields (they survive ``json.dumps`` in :meth:`_post_batch` and
+        are NOT in ``_EXCLUDED_FIELDS``), enabling the logs query filter to scope
+        to this stream. Omitted -> event carries only the three builtins.
         """
         event: dict[str, str] = {
             "_msg": line,
             "_stream_id": stream,
             "_time": ts or utc_now_iso(),
         }
+        if service is not None:
+            event["service"] = service
+        if source_type is not None:
+            event["source_type"] = source_type
         try:
             self._queue.put_nowait(event)
         except asyncio.QueueFull:

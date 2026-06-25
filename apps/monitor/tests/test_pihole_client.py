@@ -38,6 +38,7 @@ _HTTP_TOO_MANY = 429
 _HTTP_SERVER_ERROR = 503
 _GRAVITY_LOG_TAIL_MAX = 20
 _REAUTH_REQUEST_COUNT = 4
+_QUERY_FEED_MAX_BYTES_OVERRIDE = 1024
 
 
 def _resp(
@@ -442,6 +443,65 @@ def test_load_pihole_config_strips_trailing_slash(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setenv("HOMELAB_MONITOR_PIHOLE_URL", "http://192.168.2.5:8081/")
     cfg = load_pihole_config()
     assert cfg.base_url == "http://192.168.2.5:8081"
+
+
+def test_load_pihole_config_stream_query_feed_flag_truthy(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Flag=1 -> stream_query_feed_enabled=True."""
+    monkeypatch.setenv("HOMELAB_MONITOR_PIHOLE_STREAM_QUERY_FEED", "1")
+    cfg = load_pihole_config()
+    assert cfg.stream_query_feed_enabled is True
+
+
+def test_load_pihole_config_stream_query_feed_flag_true(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Flag='true' -> stream_query_feed_enabled=True."""
+    monkeypatch.setenv("HOMELAB_MONITOR_PIHOLE_STREAM_QUERY_FEED", "true")
+    cfg = load_pihole_config()
+    assert cfg.stream_query_feed_enabled is True
+
+
+def test_load_pihole_config_stream_query_feed_flag_yes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Flag='yes' -> stream_query_feed_enabled=True."""
+    monkeypatch.setenv("HOMELAB_MONITOR_PIHOLE_STREAM_QUERY_FEED", "yes")
+    cfg = load_pihole_config()
+    assert cfg.stream_query_feed_enabled is True
+
+
+def test_load_pihole_config_stream_query_feed_flag_falsy(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Flag=0 -> stream_query_feed_enabled=False."""
+    monkeypatch.setenv("HOMELAB_MONITOR_PIHOLE_STREAM_QUERY_FEED", "0")
+    cfg = load_pihole_config()
+    assert cfg.stream_query_feed_enabled is False
+
+
+def test_load_pihole_config_stream_query_feed_flag_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Flag='off' -> stream_query_feed_enabled=False."""
+    monkeypatch.setenv("HOMELAB_MONITOR_PIHOLE_STREAM_QUERY_FEED", "off")
+    cfg = load_pihole_config()
+    assert cfg.stream_query_feed_enabled is False
+
+
+def test_load_pihole_config_stream_query_feed_flag_absent(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Flag absent -> stream_query_feed_enabled=False (default)."""
+    monkeypatch.delenv("HOMELAB_MONITOR_PIHOLE_STREAM_QUERY_FEED", raising=False)
+    cfg = load_pihole_config()
+    assert cfg.stream_query_feed_enabled is False
+
+
+def test_load_pihole_config_query_feed_max_bytes_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """query_feed_max_bytes env absent -> uses default 500 MiB."""
+    monkeypatch.delenv("HOMELAB_MONITOR_PIHOLE_QUERY_FEED_MAX_BYTES_PER_DAY", raising=False)
+    cfg = load_pihole_config()
+    assert cfg.query_feed_max_bytes_per_day == 500 * 1024 * 1024
+
+
+def test_load_pihole_config_query_feed_max_bytes_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    """query_feed_max_bytes env override -> uses env value."""
+    monkeypatch.setenv(
+        "HOMELAB_MONITOR_PIHOLE_QUERY_FEED_MAX_BYTES_PER_DAY",
+        str(_QUERY_FEED_MAX_BYTES_OVERRIDE),
+    )
+    cfg = load_pihole_config()
+    assert cfg.query_feed_max_bytes_per_day == _QUERY_FEED_MAX_BYTES_OVERRIDE
 
 
 # ---- scaffolding helpers ----

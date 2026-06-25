@@ -5432,6 +5432,10 @@
             ],
             "title": "Privacy Level"
           },
+          "query_feed_streaming": {
+            "title": "Query Feed Streaming",
+            "type": "boolean"
+          },
           "query_frequency": {
             "anyOf": [
               {
@@ -5484,7 +5488,8 @@
           "query_logging_enabled",
           "gravity_domains",
           "versions",
-          "updates_available"
+          "updates_available",
+          "query_feed_streaming"
         ],
         "title": "PiholeOverviewResponse",
         "type": "object"

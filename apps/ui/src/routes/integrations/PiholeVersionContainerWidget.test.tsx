@@ -120,6 +120,7 @@ describe('PiholeVersionContainerWidget', () => {
         { component: 'ftl', version: 'v6.0' },
       ],
       updates_available: [],
+      query_feed_streaming: false,
     }
     vi.mocked(usePiholeOverview).mockReturnValue(ok(overview))
     vi.mocked(useListContainers).mockReturnValue(ok({ containers: [] }))
@@ -147,6 +148,7 @@ describe('PiholeVersionContainerWidget', () => {
         { component: 'ftl', version: 'v6.0' },
       ],
       updates_available: [{ component: 'core' }],
+      query_feed_streaming: false,
     }
     vi.mocked(usePiholeOverview).mockReturnValue(ok(overview))
     vi.mocked(useListContainers).mockReturnValue(ok({ containers: [] }))
@@ -170,6 +172,7 @@ describe('PiholeVersionContainerWidget', () => {
       gravity_domains: 100000,
       versions: [],
       updates_available: [],
+      query_feed_streaming: false,
     }
     vi.mocked(usePiholeOverview).mockReturnValue(ok(overview))
     vi.mocked(useListContainers).mockReturnValue(ok({ containers: [] }))
@@ -192,6 +195,7 @@ describe('PiholeVersionContainerWidget', () => {
       gravity_domains: 100000,
       versions: [],
       updates_available: [],
+      query_feed_streaming: false,
     }
     const containerList: ContainerListResponse = {
       containers: [
@@ -225,6 +229,7 @@ describe('PiholeVersionContainerWidget', () => {
       gravity_domains: 100000,
       versions: [],
       updates_available: [],
+      query_feed_streaming: false,
     }
     const containerList: ContainerListResponse = {
       containers: [
@@ -258,6 +263,7 @@ describe('PiholeVersionContainerWidget', () => {
       gravity_domains: 100000,
       versions: [],
       updates_available: [],
+      query_feed_streaming: false,
     }
     vi.mocked(usePiholeOverview).mockReturnValue(ok(overview))
     vi.mocked(useListContainers).mockReturnValue(ok({ containers: [] }))
@@ -280,6 +286,7 @@ describe('PiholeVersionContainerWidget', () => {
       gravity_domains: 100000,
       versions: [],
       updates_available: [],
+      query_feed_streaming: false,
     }
     vi.mocked(usePiholeOverview).mockReturnValue(ok(overview))
     vi.mocked(useListContainers).mockReturnValue(err(500))
@@ -302,6 +309,7 @@ describe('PiholeVersionContainerWidget', () => {
       gravity_domains: 100000,
       versions: [],
       updates_available: [],
+      query_feed_streaming: false,
     }
     const mockMutate = vi.fn()
     vi.mocked(usePiholeOverview).mockReturnValue(ok(overview))
@@ -329,6 +337,7 @@ describe('PiholeVersionContainerWidget', () => {
       gravity_domains: 100000,
       versions: [],
       updates_available: [],
+      query_feed_streaming: false,
     }
     const containerList: ContainerListResponse = {
       containers: [
@@ -398,6 +407,7 @@ describe('PiholeVersionContainerWidget', () => {
       gravity_domains: 100000,
       versions: [],
       updates_available: [],
+      query_feed_streaming: false,
     }
     vi.mocked(usePiholeOverview).mockReturnValue(ok(overview))
     vi.mocked(useListContainers).mockReturnValue(ok({ containers: [] }))
@@ -420,6 +430,7 @@ describe('PiholeVersionContainerWidget', () => {
       gravity_domains: 100000,
       versions: [],
       updates_available: [],
+      query_feed_streaming: false,
     }
     vi.mocked(usePiholeOverview).mockReturnValue(ok(overview))
     vi.mocked(useListContainers).mockReturnValue(ok({ containers: [] }))
