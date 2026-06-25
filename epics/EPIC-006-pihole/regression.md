@@ -240,6 +240,18 @@
 - [ ] Container-control buttons open a typed-confirm dialog (phrase = action word) and POST to `/api/integrations/docker/containers/pihole-unbound/{restart|start|stop}` with CSRF; wrong phrase → 400, missing CSRF → 403
 - [ ] Clients table + all widgets responsive: real tables on sm+, stacked cards on mobile; no overflow/console errors (Desktop + Mobile)
 
+## STAGE-006-027 — Enhance EPIC-007 Client page + Clients-tab with Pi-hole DNS behavior (uncounted cross-epic)
+
+- [ ] `GET /api/integrations/unifi/clients/{mac}` populates `dns` (top_domains, blocked_count, last_query_at) for a chatty client whose IP has recent pihole-queries records — non-null, real domains.
+- [ ] `dns` is `null` (honest empty → frontend placeholder) for a client with no recent DNS in the ~24h window; the Client page shows the "available in a future update" placeholder, not fake zeros.
+- [ ] The host (is_host, 192.168.2.148) Client page's `dns` populates from loopback-attributed traffic (keyed to the host LAN IP).
+- [ ] `/clients/{mac}` returns HTTP 200 even when the VictoriaLogs query fails or returns nothing — DNS enrichment degrades to `dns=null`, never 502s the client detail.
+- [ ] DNS aggregation post-filters on the PARSED `client_ip` (phrase-match is a pre-filter only) — a record whose IP appears only in a domain/cname is NOT counted for that client.
+- [ ] `homelab_pihole_client_queries` / `_client_blocked` series carry a `unifi_name` label resolved from the once-per-run unifi-registry snapshot (Unifi name>hostname); empty for IPs with no Unifi match (127.0.0.1, docker bridge, ::).
+- [ ] The pihole collector still succeeds (never fails) if the unifi-registry snapshot read errors — `unifi_name` falls back to empty.
+- [ ] Grafana `pihole.json` panels 26/27 use `topk(15, sum by (client_ip, unifi_name) (...))` and surface a "Name" column (device name when available, blank for unmatched IPs going-forward).
+- [ ] `find_ips_for_mac(mac, since)` returns the MAC's IP spans from `unifi_client_observations` filtered by `last_seen >= since`, ordered.
+
 ## STAGE-006-025 — Tier-3 query-feed shipper (/api/queries → VictoriaLogs) + query_feed_streaming overview field + Logs-tab stream selector
 
 - [ ] `GET /api/integrations/pihole/overview` includes `query_feed_streaming: bool` (config-derived from `pihole_stream_query_feed`; false in the public default)
