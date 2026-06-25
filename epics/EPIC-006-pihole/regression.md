@@ -240,6 +240,17 @@
 - [ ] Container-control buttons open a typed-confirm dialog (phrase = action word) and POST to `/api/integrations/docker/containers/pihole-unbound/{restart|start|stop}` with CSRF; wrong phrase → 400, missing CSRF → 403
 - [ ] Clients table + all widgets responsive: real tables on sm+, stacked cards on mobile; no overflow/console errors (Desktop + Mobile)
 
+## STAGE-006-025 — Tier-3 query-feed shipper (/api/queries → VictoriaLogs) + query_feed_streaming overview field + Logs-tab stream selector
+
+- [ ] `GET /api/integrations/pihole/overview` includes `query_feed_streaming: bool` (config-derived from `pihole_stream_query_feed`; false in the public default)
+- [ ] When `pihole_stream_query_feed` is OFF: the `pihole_query_feed` collector no-ops (ships nothing to VictoriaLogs); no `pihole-queries` stream data is produced
+- [ ] When `pihole_stream_query_feed` is ON: the shipper pages `/api/queries` and writes structured JSON per-query lines to the `pihole-queries` VL stream (fields: query_id, domain, client_ip/name/kind, status, query_type, dnssec, reply_type/time, ede_code, upstream, cname, list_id; service=pihole-queries, source_type=pihole)
+- [ ] Cursor dedup: subsequent ticks ship only id>last_id (durable high-water in app_settings `pihole.query_feed.last_id`); first run records a baseline and ships nothing; no duplicate re-ship across ticks
+- [ ] Daily byte cap enforced (default 500 MiB, env `HOMELAB_MONITOR_PIHOLE_QUERY_FEED_MAX_BYTES_PER_DAY`); cap-hit drops + advances the cursor
+- [ ] The query-feed stream is queryable via `/api/logs/query?services=pihole:pihole-queries` (monitor-written VL stream carries service/source_type fields so the existing services filter matches)
+- [ ] `deploy/compose/docker-compose.yml` passes `HOMELAB_MONITOR_PIHOLE_STREAM_QUERY_FEED` through to the monitor container (default false) — the flag actually reaches the prod container
+- [ ] Pi-hole Logs tab: when `query_feed_streaming` is true a segmented stream selector (Service log ↔ Query feed) appears; selecting Query feed swaps servicesCsv to `pihole:pihole-queries`, hides the errors-only toggle, defaults expr `*`; when false the selector is hidden (FTL-only). Desktop + Mobile.
+
 ## STAGE-006-024 — Embedded LogViewer (docker-stdout scoped) + Tier-3 query-feed view toggle (toggle deferred to 025)
 
 - [ ] Pi-hole panel "Logs" tab renders the embedded `<LogViewer>` scoped to `docker:pihole-unbound` (FTL docker-stdout lines: gravity runs, rate-limits, API warnings, errors)
