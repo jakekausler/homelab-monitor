@@ -259,3 +259,15 @@
 - [ ] Honest empty/unavailable states (no_lines empty state; 502 → unavailable banner; generic error → no crash)
 - [ ] Logs tab responsive: viewer + header controls usable on Desktop AND Mobile (no overflow, controls reachable)
 - [ ] No Tier-3 per-query-feed toggle present yet (correctly deferred to STAGE-006-025; FTL docker-stdout view only)
+
+## STAGE-006-026 — Grafana pihole.json dashboard + Metrics-tab embed + readability review pass
+
+- [ ] `jq -e . deploy/grafana/dashboards/pihole.json` exits 0 (valid JSON).
+- [ ] `deploy/grafana/dashboards/pihole.json` has `uid: "pihole"`, `title: "Pi-hole"`, `schemaVersion: 40`.
+- [ ] All 49 dashboard panel ids are unique (`jq '[.. | objects | select(.id and .type) | .id]` has no dups).
+- [ ] Every dashboard panel + target references the `victoriametrics` datasource (no other datasource uid).
+- [ ] Dashboard provisions in Grafana within ~30s of a JSON change (file provider, no rebuild) — `/api/grafana/d/pihole/pihole?kiosk` returns 200.
+- [ ] Pi-hole tab appears in the Metrics screen tab bar (`MetricsLayout.tsx` TABS includes `{ path:'/metrics/pihole', label:'Pi-hole' }`) and the route `/metrics/pihole` renders `MetricsPiholeTab` (the embedded Grafana iframe + "Open in Grafana ↗" link).
+- [ ] `MetricsPiholeTab` embeds `src="/api/grafana/d/pihole/pihole?kiosk"` (vitest `MetricsPiholeTab.test.tsx` asserts this).
+- [ ] All 7 dashboard rows present + collapsible: Health & blocking, Query volume over time, Query composition, Gravity/blocklists, Clients (Tier-2), Unbound, FTL/process & API (rows 1–3 expanded, 4–7 collapsed by default).
+- [ ] Dashboard panels render live data (no empty panels) — pihole/unbound aggregate metrics; composition/top-N/adlist/RCODE/API are tables (no barcharts); unbound recursion filters `quantile=~"0.5|0.95|0.99"`; client tables use `topk(15, sum by (client_ip) (...))`.
