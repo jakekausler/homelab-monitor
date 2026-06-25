@@ -228,3 +228,14 @@
 - [ ] The Overview tab shows placeholder sections for the future widgets (Blocking control / Gravity & adlists / Messages → 022; Upstreams & Unbound / Clients / Recent blocked / Version & container → 023).
 - [ ] Desktop (1280×720) and Mobile (375×667): the status strip wraps cleanly on narrow viewports (flex-wrap); placeholder cards are full-width and readable with no overflow.
 - [ ] The header auto-refreshes on the 30s TanStack Query `refetchInterval` (values update without a manual reload).
+
+## STAGE-006-023 — Upstreams/unbound + clients (Tier 2) + recent-blocked + version widgets + container-control buttons
+
+- [ ] Pi-hole panel Overview tab: "Upstreams & Unbound" section renders the upstreams table (upstream + queries) and an Unbound sub-card (cache-hit %, recursion p50/p95 in ms, DNSSEC secure/bogus, SERVFAIL, extended-stats badge); when extended stats disabled the 3 extended metrics hide with an "Extended stats off" note
+- [ ] Backend `GET /api/integrations/pihole/unbound` returns the 5 extended fields (recursion_p50_seconds, recursion_p95_seconds, dnssec_secure_total, dnssec_bogus_total, servfail_total) populated from VM when extended_stats_enabled, null otherwise
+- [ ] "Clients" section renders a merged top-talkers table (client, total queries, blocked, block%) joining the blocked=false and blocked=true /clients calls; block% guards divide-by-zero
+- [ ] Clients table shows friendly Unifi device names: `GET /api/integrations/pihole/clients` enriches each row's `name` via time-windowed IP→MAC→Unifi-name join (Unifi name → hostname → Pi-hole name → null); IPs with no Unifi observation (e.g. container-internal IPs) correctly show the bare IP
+- [ ] "Recent blocked" section renders the blocked-domain feed (honest empty state when none)
+- [ ] "Version & container" section renders the versions/updates table (core/ftl/web/docker + update-available flags) and Restart/Start/Stop buttons for `pihole-unbound`
+- [ ] Container-control buttons open a typed-confirm dialog (phrase = action word) and POST to `/api/integrations/docker/containers/pihole-unbound/{restart|start|stop}` with CSRF; wrong phrase → 400, missing CSRF → 403
+- [ ] Clients table + all widgets responsive: real tables on sm+, stacked cards on mobile; no overflow/console errors (Desktop + Mobile)
