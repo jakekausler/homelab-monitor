@@ -1,6 +1,6 @@
 # EPIC-008: Synology integration
 
-## Status: In Progress (current: STAGE-008-013 Complete; next: STAGE-008-014)
+## Status: In Progress (current: STAGE-008-014 Complete; next: STAGE-008-015)
 
 ## Build order + framework dependencies (LOCKED — 2026-06-22 brainstorm)
 
@@ -384,7 +384,7 @@ rules; mount-health + Docker-suppression before the rules/UI/dashboards that sur
 ### Wave D — SSH probe (1)
 | # | Stage | Theme |
 |---|---|---|
-| STAGE-008-014 | Combined `homelab-probe` SSH probe (one forced-command script, one 5m run): liveness (`uptime`/`df`) + full per-attribute SMART (`synodisk --smart_info_get` ×8) + raw `/proc/mdstat` rebuild progress + raw `upsc` NUT vars; emits `homelab_ssh_*` + `homelab_synology_smart_attr{disk,attribute}` + mdstat/upsc metrics |
+| STAGE-008-014 | Combined `homelab-probe` SSH probe (one forced-command script, one 5m run): liveness (`uptime`/`df`) + full per-attribute SMART (`synodisk --smart_info_get` ×8) + raw `/proc/mdstat` rebuild progress + raw `upsc` NUT vars; emits `homelab_ssh_*` + `homelab_synology_smart_attr{disk,attribute}` + mdstat/upsc metrics — ✅ Complete |
 
 ### Wave E — Surveillance collectors (3)
 | # | Stage | Theme |
