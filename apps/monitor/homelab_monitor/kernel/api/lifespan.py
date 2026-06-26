@@ -237,6 +237,27 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
         degraded.append("watched_dir_size")
 
     try:
+        from homelab_monitor.plugins.collectors.builtin.synology_mount_health import (  # noqa: PLC0415
+            SynologyMountHealthCollector,
+        )
+
+        loader.register(
+            SynologyMountHealthCollector,
+            {
+                "name": "synology_mount_health",
+                "interval_seconds": int(SynologyMountHealthCollector.interval.total_seconds()),
+                "timeout_seconds": int(SynologyMountHealthCollector.timeout.total_seconds()),
+            },
+        )
+    except Exception as exc:  # pragma: no cover -- defensive
+        log.warning(
+            "lifespan.collector_register_failed",
+            name="synology_mount_health",
+            error=str(exc),
+        )
+        degraded.append("synology_mount_health")
+
+    try:
         loader.register(
             LogStreamBudgetCollector,
             {

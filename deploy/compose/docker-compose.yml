@@ -138,6 +138,13 @@ services:
       # (harmless, never matched). For more complex layouts use a custom
       # docker-compose.override.yml in your host-specific overrides repo.
       - ${HOMELAB_MONITOR_BUILD_CONTEXTS_DIR:-/dev/null}:/host-build-contexts:ro
+      # STAGE-008-018: optional host NFS mount-health probing. When set to the
+      # host path that holds the Synology NFS mounts (e.g. /rackstation), the
+      # synology_mount_health collector probes the configured `synology_mounts`
+      # via statvfs. Mounted ro with rslave so the container sees mount/unmount
+      # events on the host's NFS exports (mount propagation). Unset = /dev/null
+      # (harmless no-op: synology_mounts defaults empty, so nothing is probed).
+      - ${HM_RACKSTATION_SRC:-/dev/null}:/rackstation:ro,rslave
     depends_on:
       victoriametrics:
         condition: service_healthy
