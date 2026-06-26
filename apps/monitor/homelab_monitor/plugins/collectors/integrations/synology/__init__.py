@@ -18,6 +18,9 @@ from homelab_monitor.kernel.plugins.loader import PluginLoader, config_from_clas
 from homelab_monitor.plugins.collectors.integrations.synology.backup import (
     SynologyBackupCollector,
 )
+from homelab_monitor.plugins.collectors.integrations.synology.cameras import (
+    SynologyCameraCollector,
+)
 from homelab_monitor.plugins.collectors.integrations.synology.pool import (
     SynologyPoolCollector,
 )
@@ -55,6 +58,7 @@ _SYNOLOGY_COLLECTORS: list[type[BaseCollector]] = [
     SynologyReplicationCollector,
     SynologyUpdatesCollector,
     SynologySecurityCollector,
+    SynologyCameraCollector,
 ]
 
 

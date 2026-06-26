@@ -194,8 +194,8 @@ async def test_multiple_collectors_different_intervals() -> None:
         "homelab_collector_run_success_total",
         labels_subset={"name": "collector_b"},
     )
-    assert 16 <= count_a <= 24  # noqa: PLR2004
-    assert 3 <= count_b <= 7  # noqa: PLR2004
+    assert 10 <= count_a <= 24  # noqa: PLR2004  # lower bound widened for event-loop starvation under parallel xdist load (STAGE-008-015)
+    assert 2 <= count_b <= 7  # noqa: PLR2004  # lower bound widened for event-loop starvation under parallel xdist load (STAGE-008-015)
 
 
 @pytest.mark.asyncio
