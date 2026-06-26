@@ -223,7 +223,7 @@ class SynologyRestClient:
 
     async def ss_license(self) -> SynologyResponse | SynologyError:
         # SCAFFOLDING: consumed in STAGE-008-017
-        return await self._get("SYNO.SurveillanceStation.License", "2", "Load")
+        return await self._get("SYNO.SurveillanceStation.License", "1", "Load")
 
     async def ss_homemode(self) -> SynologyResponse | SynologyError:
         # SCAFFOLDING: consumed in STAGE-008-017

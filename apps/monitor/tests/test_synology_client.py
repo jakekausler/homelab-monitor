@@ -607,7 +607,7 @@ async def test_second_call_skips_login() -> None:
             {},
         ),
         ("ss_recording_list", "SYNO.SurveillanceStation.Recording", "6", "List", {}),
-        ("ss_license", "SYNO.SurveillanceStation.License", "2", "Load", {}),
+        ("ss_license", "SYNO.SurveillanceStation.License", "1", "Load", {}),
         ("ss_homemode", "SYNO.SurveillanceStation.HomeMode", "1", "GetInfo", {}),
         ("ss_log_list", "SYNO.SurveillanceStation.Log", "3", "List", {}),
     ],

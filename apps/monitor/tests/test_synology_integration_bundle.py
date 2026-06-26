@@ -25,6 +25,9 @@ from homelab_monitor.plugins.collectors.integrations.synology.replication import
 from homelab_monitor.plugins.collectors.integrations.synology.security import (
     SynologySecurityCollector,
 )
+from homelab_monitor.plugins.collectors.integrations.synology.ss_license_homemode import (
+    SynologyLicenseCollector,
+)
 from homelab_monitor.plugins.collectors.integrations.synology.storage import (
     SynologyStorageCollector,
 )
@@ -52,6 +55,7 @@ _EXPECTED_UPDATES_INTERVAL = 3600
 _EXPECTED_SECURITY_INTERVAL = 3600
 _EXPECTED_CAMERA_INTERVAL = 60
 _EXPECTED_EVENTS_INTERVAL = 300
+_EXPECTED_LICENSE_INTERVAL = 300
 
 
 def test_register_all_registers_storage() -> None:
@@ -205,6 +209,20 @@ def test_register_all_registers_events() -> None:
     assert isinstance(record, LoadedCollector)
     assert record.config.name == "synology_events"
     assert record.config.interval_seconds == _EXPECTED_EVENTS_INTERVAL
+    assert record.config.timeout_seconds == _EXPECTED_TIMEOUT
+
+
+def test_register_all_registers_license() -> None:
+    """register_all registers SynologyLicenseCollector with the derived config."""
+    loader = PluginLoader()
+    register_all(loader)
+    loaded = loader.load_all()
+    records = [r for r in loaded if isinstance(r.collector, SynologyLicenseCollector)]
+    assert len(records) == 1
+    record = records[0]
+    assert isinstance(record, LoadedCollector)
+    assert record.config.name == "synology_license"
+    assert record.config.interval_seconds == _EXPECTED_LICENSE_INTERVAL
     assert record.config.timeout_seconds == _EXPECTED_TIMEOUT
 
 

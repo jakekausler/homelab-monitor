@@ -33,6 +33,9 @@ from homelab_monitor.plugins.collectors.integrations.synology.replication import
 from homelab_monitor.plugins.collectors.integrations.synology.security import (
     SynologySecurityCollector,
 )
+from homelab_monitor.plugins.collectors.integrations.synology.ss_license_homemode import (
+    SynologyLicenseCollector,
+)
 from homelab_monitor.plugins.collectors.integrations.synology.storage import (
     SynologyStorageCollector,
 )
@@ -63,6 +66,7 @@ _SYNOLOGY_COLLECTORS: list[type[BaseCollector]] = [
     SynologySecurityCollector,
     SynologyCameraCollector,
     SynologyEventsCollector,
+    SynologyLicenseCollector,
 ]
 
 
