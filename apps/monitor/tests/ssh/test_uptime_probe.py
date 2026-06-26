@@ -187,6 +187,21 @@ def test_register_all_isolates_probe_failure(monkeypatch: pytest.MonkeyPatch) ->
     assert calls == ["t1", "t2"]
 
 
+def test_register_all_synology_gets_combined_probe(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The synology target registers SynologyProbe, not uptime-synology; udm keeps uptime."""
+    monkeypatch.setattr(
+        "homelab_monitor.plugins.collectors.ssh.load_ssh_target_configs",
+        lambda: {"synology": object(), "udm": object()},
+    )
+    loader = PluginLoader(log=structlog.get_logger())  # pyright: ignore[reportArgumentType]
+    register_all(loader)
+
+    names = {lc.config.name for lc in loader.load_all()}
+    assert "synology-probe" in names
+    assert "uptime-synology" not in names
+    assert "uptime-udm" in names
+
+
 # ---------------------------------------------------------------------------
 # Lifecycle: loopback with forced-command server (graceful degradation)
 # ---------------------------------------------------------------------------
