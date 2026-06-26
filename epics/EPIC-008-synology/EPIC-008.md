@@ -1,6 +1,6 @@
 # EPIC-008: Synology integration
 
-## Status: In Progress (current: STAGE-008-016 Complete; next: STAGE-008-017)
+## Status: In Progress (current: STAGE-008-017 Complete; next: STAGE-008-018)
 
 ## Build order + framework dependencies (LOCKED — 2026-06-22 brainstorm)
 
@@ -391,7 +391,7 @@ rules; mount-health + Docker-suppression before the rules/UI/dashboards that sur
 |---|---|---|
 | STAGE-008-015 | Camera collector (`SS.Camera List` + `SS.Info`): per-camera status/model/ip/resolution/recording-config; cameras vs license — ✅ Complete |
 | STAGE-008-016 | Events & recordings collector (`SS.Event CountByCategory`, `Recording.List`): per-camera events/day + events-today + total recordings/size (aggregate counters) — ✅ Complete |
-| STAGE-008-017 | License & HomeMode collector (`SS.License`, `SS.HomeMode`): licenses used/total/max; armed/disarmed boolean + schedule flags |
+| STAGE-008-017 | License & HomeMode collector (`SS.License`, `SS.HomeMode`): licenses used/total/max; armed/disarmed boolean + schedule flags — ✅ Complete |
 
 ### Wave F — Mount health + Docker suppression (2) — instance-A validation
 | # | Stage | Theme |
