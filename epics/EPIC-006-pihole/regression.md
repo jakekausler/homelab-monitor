@@ -283,3 +283,15 @@
 - [ ] `MetricsPiholeTab` embeds `src="/api/grafana/d/pihole/pihole?kiosk"` (vitest `MetricsPiholeTab.test.tsx` asserts this).
 - [ ] All 7 dashboard rows present + collapsible: Health & blocking, Query volume over time, Query composition, Gravity/blocklists, Clients (Tier-2), Unbound, FTL/process & API (rows 1–3 expanded, 4–7 collapsed by default).
 - [ ] Dashboard panels render live data (no empty panels) — pihole/unbound aggregate metrics; composition/top-N/adlist/RCODE/API are tables (no barcharts); unbound recursion filters `quantile=~"0.5|0.95|0.99"`; client tables use `topk(15, sum by (client_ip) (...))`.
+
+## STAGE-006-028 — Per-client DNS enrichment depth + VL client_ip forensic indexing (uncounted cross-epic; backfill #3 re-deferred to STAGE-006-029)
+
+- [ ] `GET /api/integrations/unifi/clients/{mac}` `dns` includes the RICH fields for a chatty client: `query_volume` (int>0), `block_rate` (float 0..1), `top_permitted[]`, `top_blocked[]`, `recent_blocks[{domain,at}]`, `servfail_count` (int), `dnssec_bogus_count` (int) — plus the original top_domains/blocked_count/last_query_at.
+- [ ] `block_rate` is always between 0 and 1 (blocked_count / query_volume; query_volume>=1 guaranteed when dns is non-null).
+- [ ] `dns` is `null` (honest empty) for a client with no DNS in the ~24h window — the rich fields are NOT fabricated as all-zeros; boundary is query-volume-based, not online-status.
+- [ ] `servfail_count` / `dnssec_bogus_count` are present as integers (0 on a healthy host) so the frontend SERVFAIL / DNSSEC-bogus badges render ONLY WHEN > 0 (hidden at 0).
+- [ ] The `ClientDnsSection` populated branch renders the rich fields: Query volume + Block rate rows, a Top blocked / Top allowed split (distinctive `font-semibold` labels, `<hr>` above each, stacks on mobile via `grid-cols-1 sm:grid-cols-2`, `break-all` long domains), and a Recent blocks list.
+- [ ] The null `dns` still renders the honest "available in a future update" placeholder.
+- [ ] `homelab-monitor`'s `LogsWriter.ingest` (Protocol + VictoriaLogsWriter + InMemoryLogsWriter + MultiplexLogsWriter + test doubles) carries the `client_ip` kw param; the pihole query_feed shipper passes `client_ip=parsed.client_ip`.
+- [ ] `client_ip` is an INDEXED VictoriaLogs field on `pihole-queries` records shipped after STAGE-006-028: `expr=client_ip:"<ip>"` (field filter) works server-side via `/api/logs/query` (old records pre-028 remain phrase-match-only + age out in ~30d).
+- [ ] `_enrich_client_dns` still KEEPS its phrase-match-and-post-filter (decoupled from #2 — the indexed field is for future forensic search, not the Client-page aggregation).

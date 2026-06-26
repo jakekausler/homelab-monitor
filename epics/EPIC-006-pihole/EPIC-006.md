@@ -323,6 +323,7 @@ Each stage lands a single small slice and ships independently usable, mirroring 
 |---|---|---|
 | STAGE-006-027 | **Enhance EPIC-007's Client page + Clients-tab with Pi-hole DNS behavior** (finalized 2026-06-17). EPIC-007 OWNS and BUILDS the client view (registry + Network→Clients tab + per-client Client page + a documented DNS-enrichment extension point). This stage does NOT build a separate merged view — it ENHANCES EPIC-007's existing Client page in place, plugging DNS behavior (query volume / block rate / top domains / recent blocks / DNSSEC) into EPIC-007's extension point, joined time-windowed by IP→MAC; loopback→host. Built AFTER EPIC-007 lands (hard dependency). See the rewritten STAGE-006-027.md. |
 | STAGE-006-028 | Per-client DNS enrichment DEPTH + VL forensic indexing + unifi_name metric backfill — UNCOUNTED follow-up owning the enhancements deferred from STAGE-006-027 (rich DnsEnrichment fields, indexed client_ip LogsQL, ~30-day backfill). Built only if/when wanted; none blocking. |
+| STAGE-006-029 | unifi_name metric backfill (~30 days) — UNCOUNTED, optional; re-deferred from STAGE-006-028. User declined in 027; verifiably lossy (observation pruning loses historical IP→name; VM immutability coexists old unlabeled series). Build ONLY on explicit request. |
 
 ## Cross-stage acceptance criteria
 
