@@ -323,12 +323,19 @@ class PiholeQueryFeedCollector(BaseCollector):
             if self._cap_bytes_used + line_bytes > cap:
                 cap_hit = True
                 break
+            # STAGE-006-028: client_ip is now an INDEXED VL field going forward.
+            # Old records (pre-028) carry client_ip only inside the _msg JSON and age
+            # out in ~30d; exact `client_ip:"X"` LogsQL filtering covers only records
+            # shipped after this stage. _enrich_client_dns KEEPS its phrase-match
+            # (decoupled). TODO(STAGE-006-029-or-later): swap phrase-match for the
+            # indexed filter once all in-window records are indexed.
             ctx.vl.ingest(
                 stream=PIHOLE_QUERY_FEED_STREAM,
                 line=line,
                 ts=iso_ts,
                 service=PIHOLE_QUERY_FEED_STREAM,
                 source_type=PIHOLE_QUERY_FEED_SOURCE_TYPE,
+                client_ip=parsed.client_ip,
             )
             self._cap_bytes_used += line_bytes
             shipped += 1

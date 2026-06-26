@@ -153,6 +153,9 @@ _DNS_WINDOW = timedelta(hours=24)
 # Max distinct domains returned in DnsEnrichment.top_domains.
 _DNS_TOP_DOMAINS_CAP = 10
 
+# Max recent blocked records returned in DnsEnrichment.recent_blocks (newest first).
+_DNS_RECENT_BLOCKS_CAP = 10
+
 # Pi-hole FTL v6 status tokens that mean the query was BLOCKED. The shipper
 # ships the raw status string verbatim; this consumer owns the blocked/allowed
 # split. (Allowed examples NOT in this set: FORWARDED, CACHE, RETRIED, ...)
@@ -237,7 +240,7 @@ def _pihole_queries_expr(ip: str) -> str:
     return f'service:"pihole-queries" AND source_type:"pihole" AND {logsql_quote_phrase(ip)}'
 
 
-async def _enrich_client_dns(  # noqa: PLR0913, PLR0912
+async def _enrich_client_dns(  # noqa: PLR0913, PLR0912, PLR0915
     *,
     is_host: bool,
     current_ip: str | None,
@@ -257,6 +260,17 @@ async def _enrich_client_dns(  # noqa: PLR0913, PLR0912
       - top_domains: most-frequent domains (cap _DNS_TOP_DOMAINS_CAP).
       - blocked_count: count of records whose status is in _PIHOLE_BLOCKED_STATUS.
       - last_query_at: max record `time` (epoch) -> ISO-8601 UTC.
+      - query_volume: total post-filtered record count in the window.
+      - block_rate: blocked_count / query_volume (0..1), None if query_volume == 0.
+      - top_permitted / top_blocked: most-frequent domains split by allowed vs blocked.
+      - recent_blocks: the _DNS_RECENT_BLOCKS_CAP most-recent blocked records, newest first.
+      - servfail_count: records whose reply_type == "SERVFAIL".
+      - dnssec_bogus_count: records whose dnssec == "BOGUS".
+
+    client_ip is matched here by phrase-match-then-post-filter (decoupled from the
+    STAGE-006-028 indexed-field promotion — old records pre-028 have client_ip only in
+    the _msg JSON). TODO(STAGE-006-029-or-later): swap phrase-match for an indexed
+    client_ip:"X" LogsQL filter once all in-window records are indexed.
     """
     # Collect the distinct (ip, start, end) windows to query.
     windows: dict[str, tuple[str, str]] = {}
@@ -274,7 +288,14 @@ async def _enrich_client_dns(  # noqa: PLR0913, PLR0912
         return None
 
     domain_counts: dict[str, int] = {}
+    permitted_counts: dict[str, int] = {}
+    blocked_domain_counts: dict[str, int] = {}
     blocked_count = 0
+    query_volume = 0
+    servfail_count = 0
+    dnssec_bogus_count = 0
+    # (epoch, domain) for blocked records; sorted desc + capped at the end.
+    recent_blocked_raw: list[tuple[float, str]] = []
     last_epoch: float | None = None
     saw_any = False
 
@@ -298,15 +319,33 @@ async def _enrich_client_dns(  # noqa: PLR0913, PLR0912
                 # Phrase-match false positive (IP appeared in a domain/cname).
                 continue
             saw_any = True
+            query_volume += 1
             domain = record.get("domain")
-            if isinstance(domain, str) and domain:
-                domain_counts[domain] = domain_counts.get(domain, 0) + 1
+            domain_str = domain if isinstance(domain, str) and domain else None
+            if domain_str is not None:
+                domain_counts[domain_str] = domain_counts.get(domain_str, 0) + 1
             status = record.get("status")
-            if isinstance(status, str) and status in _PIHOLE_BLOCKED_STATUS:
+            is_blocked = isinstance(status, str) and status in _PIHOLE_BLOCKED_STATUS
+            if is_blocked:
                 blocked_count += 1
+            if domain_str is not None:
+                if is_blocked:
+                    blocked_domain_counts[domain_str] = blocked_domain_counts.get(domain_str, 0) + 1
+                else:
+                    permitted_counts[domain_str] = permitted_counts.get(domain_str, 0) + 1
+            reply_type = record.get("reply_type")
+            if reply_type == "SERVFAIL":
+                servfail_count += 1
+            dnssec = record.get("dnssec")
+            if dnssec == "BOGUS":
+                dnssec_bogus_count += 1
             ts = record.get("time")
-            if isinstance(ts, (int, float)) and (last_epoch is None or ts > last_epoch):
-                last_epoch = float(ts)
+            if isinstance(ts, (int, float)):
+                ts_f = float(ts)
+                if last_epoch is None or ts_f > last_epoch:
+                    last_epoch = ts_f
+                if is_blocked and domain_str is not None:
+                    recent_blocked_raw.append((ts_f, domain_str))
 
     if not saw_any:
         return None
@@ -321,14 +360,50 @@ async def _enrich_client_dns(  # noqa: PLR0913, PLR0912
             datetime.fromtimestamp(last_epoch, tz=UTC).isoformat().replace("+00:00", "Z")
         )
 
+    top_permitted = [
+        d for d, _c in sorted(permitted_counts.items(), key=lambda kv: (-kv[1], kv[0]))
+    ][:_DNS_TOP_DOMAINS_CAP]
+    top_blocked = [
+        d for d, _c in sorted(blocked_domain_counts.items(), key=lambda kv: (-kv[1], kv[0]))
+    ][:_DNS_TOP_DOMAINS_CAP]
+
+    # saw_any is True here (we did not early-return at the `if not saw_any` guard),
+    # which means at least one record incremented query_volume -> query_volume >= 1.
+    block_rate = blocked_count / query_volume
+
+    recent_blocked_raw.sort(key=lambda pair: pair[0], reverse=True)
+    recent_blocks = [
+        RecentBlock(
+            domain=domain,
+            at=datetime.fromtimestamp(epoch, tz=UTC).isoformat().replace("+00:00", "Z"),
+        )
+        for epoch, domain in recent_blocked_raw[:_DNS_RECENT_BLOCKS_CAP]
+    ]
+
     return DnsEnrichment(
         top_domains=top_domains,
         blocked_count=blocked_count,
         last_query_at=last_query_at,
+        query_volume=query_volume,
+        block_rate=block_rate,
+        top_permitted=top_permitted,
+        top_blocked=top_blocked,
+        recent_blocks=recent_blocks,
+        servfail_count=servfail_count,
+        dnssec_bogus_count=dnssec_bogus_count,
     )
 
 
 # ── Pydantic models ───────────────────────────────────────────────────────────
+
+
+class RecentBlock(BaseModel):
+    """A single recent blocked DNS query (domain + ISO-8601 UTC timestamp)."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    domain: str
+    at: str
 
 
 class DnsEnrichment(BaseModel):
@@ -337,6 +412,14 @@ class DnsEnrichment(BaseModel):
     top_domains: list[str] = []
     blocked_count: int | None = None
     last_query_at: str | None = None
+    # STAGE-006-028 richer aggregation (all additive/optional; old responses still validate).
+    query_volume: int | None = None
+    block_rate: float | None = None
+    top_permitted: list[str] = []
+    top_blocked: list[str] = []
+    recent_blocks: list[RecentBlock] = []
+    servfail_count: int = 0
+    dnssec_bogus_count: int = 0
 
 
 class UnifiSummary(BaseModel):

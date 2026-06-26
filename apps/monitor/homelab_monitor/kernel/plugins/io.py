@@ -71,6 +71,7 @@ class LogEntry:
     ts: str
     service: str | None = None
     source_type: str | None = None
+    client_ip: str | None = None
 
 
 @runtime_checkable
@@ -109,13 +110,14 @@ class MetricsWriter(Protocol):
 class LogsWriter(Protocol):
     """Minimal log-ingest surface. ``ts`` defaults to "now" (UTC ISO).
 
-    ``service`` / ``source_type`` are OPTIONAL queryable identity fields. When
-    provided they are written into the VL event dict as top-level fields so the
-    logs query filter (``service:"X" AND source_type:"Y"``) can scope to the
-    stream. When omitted the event carries only the builtins (backward-compatible).
+    ``service`` / ``source_type`` / ``client_ip`` are OPTIONAL queryable identity
+    fields. When provided they are written into the VL event dict as top-level
+    fields so the logs query filter (``service:"X" AND source_type:"Y"`` or an exact
+    ``client_ip:"1.2.3.4"`` forensic filter) can scope to the stream. When omitted the
+    event carries only the builtins (backward-compatible).
     """
 
-    def ingest(
+    def ingest(  # noqa: PLR0913 -- queryable VL identity fields (service/source_type/client_ip), kw-only
         self,
         stream: str,
         line: str,
@@ -123,6 +125,7 @@ class LogsWriter(Protocol):
         *,
         service: str | None = None,
         source_type: str | None = None,
+        client_ip: str | None = None,
     ) -> None:
         """Record a single log line on ``stream``."""
         ...
@@ -526,7 +529,7 @@ class InMemoryLogsWriter:
         """Return all entries written since construction (insertion order)."""
         return list(self._entries)
 
-    def ingest(
+    def ingest(  # noqa: PLR0913 -- queryable VL identity fields (service/source_type/client_ip), kw-only
         self,
         stream: str,
         line: str,
@@ -534,6 +537,7 @@ class InMemoryLogsWriter:
         *,
         service: str | None = None,
         source_type: str | None = None,
+        client_ip: str | None = None,
     ) -> None:
         """Record a single log line on ``stream``; defaults ``ts`` to current UTC."""
         self._entries.append(
@@ -543,5 +547,6 @@ class InMemoryLogsWriter:
                 ts=ts or utc_now_iso(),
                 service=service,
                 source_type=source_type,
+                client_ip=client_ip,
             )
         )

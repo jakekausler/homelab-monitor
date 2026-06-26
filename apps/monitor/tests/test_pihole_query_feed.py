@@ -222,6 +222,10 @@ async def test_subsequent_run_ships_records(repo: SqliteRepository) -> None:
     stored = await settings.get(QUERY_FEED_LAST_ID_KEY)
     assert stored == "10"
 
+    # STAGE-006-028: client_ip is recorded as an indexed field on each ingest.
+    assert logs[0].client_ip == "192.168.2.6"  # id 9 (client-pc absent)
+    assert logs[1].client_ip == "192.168.2.5"  # id 10
+
 
 async def test_cap_hit_drops_and_advances_cursor(repo: SqliteRepository) -> None:
     """Branch 5: cap-hit drops records but still advances cursor."""

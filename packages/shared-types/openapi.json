@@ -2401,6 +2401,17 @@
       },
       "DnsEnrichment": {
         "properties": {
+          "block_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Block Rate"
+          },
           "blocked_count": {
             "anyOf": [
               {
@@ -2411,6 +2422,11 @@
               }
             ],
             "title": "Blocked Count"
+          },
+          "dnssec_bogus_count": {
+            "default": 0,
+            "title": "Dnssec Bogus Count",
+            "type": "integer"
           },
           "last_query_at": {
             "anyOf": [
@@ -2423,12 +2439,52 @@
             ],
             "title": "Last Query At"
           },
+          "query_volume": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Query Volume"
+          },
+          "recent_blocks": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/RecentBlock"
+            },
+            "title": "Recent Blocks",
+            "type": "array"
+          },
+          "servfail_count": {
+            "default": 0,
+            "title": "Servfail Count",
+            "type": "integer"
+          },
+          "top_blocked": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Top Blocked",
+            "type": "array"
+          },
           "top_domains": {
             "default": [],
             "items": {
               "type": "string"
             },
             "title": "Top Domains",
+            "type": "array"
+          },
+          "top_permitted": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Top Permitted",
             "type": "array"
           }
         },
@@ -6005,6 +6061,25 @@
           "confirm_phrase"
         ],
         "title": "PullAndRestartRequest",
+        "type": "object"
+      },
+      "RecentBlock": {
+        "description": "A single recent blocked DNS query (domain + ISO-8601 UTC timestamp).",
+        "properties": {
+          "at": {
+            "title": "At",
+            "type": "string"
+          },
+          "domain": {
+            "title": "Domain",
+            "type": "string"
+          }
+        },
+        "required": [
+          "domain",
+          "at"
+        ],
+        "title": "RecentBlock",
         "type": "object"
       },
       "RefreshCycleResponse": {

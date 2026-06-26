@@ -358,3 +358,40 @@ async def test_ingest_with_source_type_only() -> None:
         item = writer._queue.get_nowait()  # pyright: ignore[reportPrivateUsage]
         assert item["source_type"] == "pihole"
         assert "service" not in item
+
+
+# ── STAGE-006-028: client_ip indexed field ──────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_ingest_with_client_ip() -> None:
+    """Branch: client_ip provided -> added to event."""
+    async with httpx.AsyncClient() as client:
+        writer = VictoriaLogsWriter(
+            vl_url=_VL_URL,
+            http_client=client,
+            queue_size=10,
+        )
+        writer.ingest(
+            stream="pihole-queries",
+            line='{"query_id": 1}',
+            client_ip="1.2.3.4",
+        )
+        assert writer._queue.qsize() == 1  # pyright: ignore[reportPrivateUsage]
+        item = writer._queue.get_nowait()  # pyright: ignore[reportPrivateUsage]
+        assert item["client_ip"] == "1.2.3.4"
+
+
+@pytest.mark.asyncio
+async def test_ingest_omits_client_ip_when_not_provided() -> None:
+    """Branch: client_ip omitted -> event carries no client_ip key (backward compat)."""
+    async with httpx.AsyncClient() as client:
+        writer = VictoriaLogsWriter(
+            vl_url=_VL_URL,
+            http_client=client,
+            queue_size=10,
+        )
+        writer.ingest(stream="svc.host", line="hello")
+        assert writer._queue.qsize() == 1  # pyright: ignore[reportPrivateUsage]
+        item = writer._queue.get_nowait()  # pyright: ignore[reportPrivateUsage]
+        assert "client_ip" not in item

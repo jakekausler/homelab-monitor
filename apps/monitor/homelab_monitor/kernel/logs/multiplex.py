@@ -32,7 +32,7 @@ class MultiplexLogsWriter:
         for w in self._writers:
             op(w)
 
-    def ingest(
+    def ingest(  # noqa: PLR0913 -- queryable VL identity fields (service/source_type/client_ip), kw-only
         self,
         stream: str,
         line: str,
@@ -40,6 +40,11 @@ class MultiplexLogsWriter:
         *,
         service: str | None = None,
         source_type: str | None = None,
+        client_ip: str | None = None,
     ) -> None:
         """Fan-out a log ingest to every inner writer."""
-        self._fanout(lambda w: w.ingest(stream, line, ts, service=service, source_type=source_type))
+        self._fanout(
+            lambda w: w.ingest(
+                stream, line, ts, service=service, source_type=source_type, client_ip=client_ip
+            )
+        )

@@ -57,7 +57,7 @@ class VictoriaLogsWriter:
             structlog.get_logger().bind(component="vl_writer"),
         )
 
-    def ingest(
+    def ingest(  # noqa: PLR0913 -- queryable VL identity fields (service/source_type/client_ip), kw-only
         self,
         stream: str,
         line: str,
@@ -65,16 +65,18 @@ class VictoriaLogsWriter:
         *,
         service: str | None = None,
         source_type: str | None = None,
+        client_ip: str | None = None,
     ) -> None:
         """Enqueue a log line for async POST to VictoriaLogs.
 
         Sync API per the :class:`LogsWriter` Protocol. Non-blocking: on a full
         queue the line is dropped + :attr:`dropped_count` incremented.
 
-        ``service`` / ``source_type``, when provided, are written as top-level
-        queryable fields (they survive ``json.dumps`` in :meth:`_post_batch` and
-        are NOT in ``_EXCLUDED_FIELDS``), enabling the logs query filter to scope
-        to this stream. Omitted -> event carries only the three builtins.
+        ``service`` / ``source_type`` / ``client_ip``, when provided, are written as
+        top-level queryable fields (they survive ``json.dumps`` in :meth:`_post_batch`
+        and are NOT in ``_EXCLUDED_FIELDS``), enabling the logs query filter to scope to
+        this stream and exact-match a client IP for forensic LogsQL. Omitted -> event
+        carries only the three builtins.
         """
         event: dict[str, str] = {
             "_msg": line,
@@ -85,6 +87,8 @@ class VictoriaLogsWriter:
             event["service"] = service
         if source_type is not None:
             event["source_type"] = source_type
+        if client_ip is not None:
+            event["client_ip"] = client_ip
         try:
             self._queue.put_nowait(event)
         except asyncio.QueueFull:

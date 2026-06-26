@@ -95,7 +95,7 @@ class _NoopLogsWriter:
     def __init__(self) -> None:
         self.entries: list[tuple[str, str]] = []
 
-    def ingest(
+    def ingest(  # noqa: PLR0913 -- mirrors LogsWriter protocol (service/source_type/client_ip)
         self,
         stream: str,
         line: str,
@@ -103,8 +103,9 @@ class _NoopLogsWriter:
         *,
         service: str | None = None,
         source_type: str | None = None,
+        client_ip: str | None = None,
     ) -> None:
-        del ts, service, source_type
+        del ts, service, source_type, client_ip
         self.entries.append((stream, line))
 
 

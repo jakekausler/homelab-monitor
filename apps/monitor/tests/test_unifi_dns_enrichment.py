@@ -15,6 +15,7 @@ from datetime import UTC, datetime
 import pytest
 
 from homelab_monitor.kernel.api.routers.integrations_unifi import (
+    _DNS_RECENT_BLOCKS_CAP,
     _DNS_TOP_DOMAINS_CAP,
     _enrich_client_dns,
     _pihole_queries_expr,
@@ -34,6 +35,10 @@ _SINCE = "2024-05-04T00:00:00Z"
 _NOW = "2024-05-05T00:00:00Z"
 _BLOCKED_COUNT_2 = 2
 _TOP_DOMAINS_GENERATE = 15
+_QUERY_VOLUME_3 = 3
+_BLOCK_RATE_0_5 = 0.5
+_SERVFAIL_COUNT_2 = 2
+_DNSSEC_BOGUS_COUNT_2 = 2
 
 
 # ── fake VL client ────────────────────────────────────────────────────────────
@@ -57,9 +62,28 @@ class _FakeVl:
         return VlQueryResult(lines=lines, truncated=False)
 
 
-def _msg(client_ip: str, domain: str, status: str, time: float) -> str:
+def _msg(  # noqa: PLR0913
+    client_ip: str,
+    domain: str,
+    status: str,
+    time: float,
+    *,
+    reply_type: str = "",
+    dnssec: str = "",
+    query_id: int | None = None,
+) -> str:
     """JSON-encoded pihole-queries record."""
-    return json.dumps({"client_ip": client_ip, "domain": domain, "status": status, "time": time})
+    record: dict[str, object] = {
+        "client_ip": client_ip,
+        "domain": domain,
+        "status": status,
+        "time": time,
+        "reply_type": reply_type,
+        "dnssec": dnssec,
+    }
+    if query_id is not None:
+        record["query_id"] = query_id
+    return json.dumps(record)
 
 
 def _span(ip: str, first_seen: str = _SINCE, last_seen: str = _NOW) -> UnifiIpSpan:
@@ -548,3 +572,283 @@ async def test_enrich_record_with_no_time_field() -> None:
     assert "x.com" in result.top_domains
     # last_epoch never set (no 'time' field) → last_query_at is None.
     assert result.last_query_at is None
+
+
+# ── STAGE-006-028 rich aggregation tests ─────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_enrich_query_volume_counts_all_postfiltered() -> None:
+    """N records for the client IP + 1 record whose JSON client_ip differs → query_volume == N."""
+    expr = _pihole_queries_expr(_IP)
+    other_ip = "192.168.2.99"
+    vl = _FakeVl(
+        {
+            expr: [
+                _msg(_IP, "a.com", "FORWARDED", 1714867200.0),
+                _msg(_IP, "b.com", "GRAVITY", 1714867201.0),
+                _msg(_IP, "c.com", "FORWARDED", 1714867202.0),
+                # False positive: client_ip is other_ip, not _IP.
+                json.dumps(
+                    {
+                        "client_ip": other_ip,
+                        "domain": "d.com",
+                        "status": "FORWARDED",
+                        "time": 1714867203.0,
+                    }
+                ),
+            ]
+        }
+    )
+
+    result = await _enrich_client_dns(
+        is_host=False,
+        current_ip=_IP,
+        ip_spans=[],
+        host_lan_ip=None,
+        since=_SINCE,
+        now=_NOW,
+        vl_client=vl,
+    )
+    assert result is not None
+    assert result.query_volume == _QUERY_VOLUME_3  # only the matching records
+
+
+@pytest.mark.asyncio
+async def test_enrich_block_rate_computed() -> None:
+    """Mix of blocked + allowed → block_rate == blocked_count / query_volume."""
+    expr = _pihole_queries_expr(_IP)
+    vl = _FakeVl(
+        {
+            expr: [
+                _msg(_IP, "blocked1.com", "GRAVITY", 1714867200.0),
+                _msg(_IP, "blocked2.com", "GRAVITY", 1714867201.0),
+                _msg(_IP, "allowed1.com", "FORWARDED", 1714867202.0),
+                _msg(_IP, "allowed2.com", "FORWARDED", 1714867203.0),
+            ]
+        }
+    )
+
+    result = await _enrich_client_dns(
+        is_host=False,
+        current_ip=_IP,
+        ip_spans=[],
+        host_lan_ip=None,
+        since=_SINCE,
+        now=_NOW,
+        vl_client=vl,
+    )
+    assert result is not None
+    assert result.block_rate == _BLOCK_RATE_0_5  # 2 blocked of 4 total
+
+
+@pytest.mark.asyncio
+async def test_enrich_block_rate_none_when_no_volume() -> None:
+    """query_volume == 0 → block_rate is None (honest empty)."""
+    expr = _pihole_queries_expr(_IP)
+    vl = _FakeVl({expr: []})
+
+    result = await _enrich_client_dns(
+        is_host=False,
+        current_ip=_IP,
+        ip_spans=[],
+        host_lan_ip=None,
+        since=_SINCE,
+        now=_NOW,
+        vl_client=vl,
+    )
+    # No records → saw_any False → None (not a zero-filled object).
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_enrich_block_rate_zero_when_no_blocks() -> None:
+    """query_volume > 0 but no blocked records → block_rate == 0.0."""
+    expr = _pihole_queries_expr(_IP)
+    vl = _FakeVl(
+        {
+            expr: [
+                _msg(_IP, "a.com", "FORWARDED", 1714867200.0),
+                _msg(_IP, "b.com", "FORWARDED", 1714867201.0),
+            ]
+        }
+    )
+
+    result = await _enrich_client_dns(
+        is_host=False,
+        current_ip=_IP,
+        ip_spans=[],
+        host_lan_ip=None,
+        since=_SINCE,
+        now=_NOW,
+        vl_client=vl,
+    )
+    assert result is not None
+    assert result.block_rate == 0.0
+
+
+@pytest.mark.asyncio
+async def test_enrich_top_permitted_blocked_split() -> None:
+    """Domains split by status into top_permitted/top_blocked; each list independently ranked."""
+    expr = _pihole_queries_expr(_IP)
+    vl = _FakeVl(
+        {
+            expr: [
+                _msg(_IP, "tracker.com", "GRAVITY", 1714867200.0),
+                _msg(_IP, "tracker.com", "GRAVITY", 1714867201.0),
+                _msg(_IP, "ads.com", "GRAVITY", 1714867202.0),
+                _msg(_IP, "cdn.com", "FORWARDED", 1714867203.0),
+                _msg(_IP, "cdn.com", "FORWARDED", 1714867204.0),
+                _msg(_IP, "cdn.com", "FORWARDED", 1714867205.0),
+                _msg(_IP, "safe.com", "FORWARDED", 1714867206.0),
+            ]
+        }
+    )
+
+    result = await _enrich_client_dns(
+        is_host=False,
+        current_ip=_IP,
+        ip_spans=[],
+        host_lan_ip=None,
+        since=_SINCE,
+        now=_NOW,
+        vl_client=vl,
+    )
+    assert result is not None
+    # top_blocked: tracker.com (2x), ads.com (1x) → ranked by count, alphabetically.
+    assert result.top_blocked[0] == "tracker.com"
+    assert result.top_blocked[1] == "ads.com"
+    # top_permitted: cdn.com (3x), safe.com (1x).
+    assert result.top_permitted[0] == "cdn.com"
+    assert result.top_permitted[1] == "safe.com"
+
+
+@pytest.mark.asyncio
+async def test_enrich_recent_blocks_newest_first_and_capped() -> None:
+    """Build > _DNS_RECENT_BLOCKS_CAP (10) blocked records; assert capped and newest-first."""
+    expr = _pihole_queries_expr(_IP)
+    # Create 15 blocked records with ascending times.
+    msgs = [_msg(_IP, f"blocked{i:02d}.com", "GRAVITY", float(1714867200 + i)) for i in range(15)]
+    vl = _FakeVl({expr: msgs})
+
+    result = await _enrich_client_dns(
+        is_host=False,
+        current_ip=_IP,
+        ip_spans=[],
+        host_lan_ip=None,
+        since=_SINCE,
+        now=_NOW,
+        vl_client=vl,
+    )
+    assert result is not None
+    assert len(result.recent_blocks) == _DNS_RECENT_BLOCKS_CAP  # exactly 10
+    # Newest-first: the last record (time=1714867214) should be first.
+    assert result.recent_blocks[0].domain == "blocked14.com"
+    assert result.recent_blocks[-1].domain == "blocked05.com"
+    # Each has an ISO timestamp ending with Z.
+    for block in result.recent_blocks:
+        assert block.at.endswith("Z")
+
+
+@pytest.mark.asyncio
+async def test_enrich_servfail_count() -> None:
+    """Records with reply_type='SERVFAIL' are counted; non-SERVFAIL are not."""
+    expr = _pihole_queries_expr(_IP)
+    vl = _FakeVl(
+        {
+            expr: [
+                _msg(_IP, "bad1.com", "GRAVITY", 1714867200.0, reply_type="SERVFAIL"),
+                _msg(_IP, "bad2.com", "GRAVITY", 1714867201.0, reply_type="SERVFAIL"),
+                _msg(_IP, "ok.com", "FORWARDED", 1714867202.0, reply_type="NODATA"),
+            ]
+        }
+    )
+
+    result = await _enrich_client_dns(
+        is_host=False,
+        current_ip=_IP,
+        ip_spans=[],
+        host_lan_ip=None,
+        since=_SINCE,
+        now=_NOW,
+        vl_client=vl,
+    )
+    assert result is not None
+    assert result.servfail_count == _SERVFAIL_COUNT_2
+
+
+@pytest.mark.asyncio
+async def test_enrich_dnssec_bogus_count() -> None:
+    """Records with dnssec='BOGUS' are counted; others are not."""
+    expr = _pihole_queries_expr(_IP)
+    vl = _FakeVl(
+        {
+            expr: [
+                _msg(_IP, "bad1.com", "GRAVITY", 1714867200.0, dnssec="BOGUS"),
+                _msg(_IP, "bad2.com", "GRAVITY", 1714867201.0, dnssec="BOGUS"),
+                _msg(_IP, "ok.com", "FORWARDED", 1714867202.0, dnssec="SECURE"),
+            ]
+        }
+    )
+
+    result = await _enrich_client_dns(
+        is_host=False,
+        current_ip=_IP,
+        ip_spans=[],
+        host_lan_ip=None,
+        since=_SINCE,
+        now=_NOW,
+        vl_client=vl,
+    )
+    assert result is not None
+    assert result.dnssec_bogus_count == _DNSSEC_BOGUS_COUNT_2
+
+
+@pytest.mark.asyncio
+async def test_enrich_honest_empty_still_none() -> None:
+    """When saw_any is False (no matching records), returns None (not a zero-filled object)."""
+    expr = _pihole_queries_expr(_IP)
+    vl = _FakeVl({expr: []})
+
+    result = await _enrich_client_dns(
+        is_host=False,
+        current_ip=_IP,
+        ip_spans=[],
+        host_lan_ip=None,
+        since=_SINCE,
+        now=_NOW,
+        vl_client=vl,
+    )
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_enrich_top_domains_unchanged() -> None:
+    """top_domains still contains combined (blocked+allowed) ranking (backward-compat)."""
+    expr = _pihole_queries_expr(_IP)
+    vl = _FakeVl(
+        {
+            expr: [
+                _msg(_IP, "tracker.com", "GRAVITY", 1714867200.0),
+                _msg(_IP, "tracker.com", "GRAVITY", 1714867201.0),
+                _msg(_IP, "cdn.com", "FORWARDED", 1714867202.0),
+                _msg(_IP, "cdn.com", "FORWARDED", 1714867203.0),
+                _msg(_IP, "cdn.com", "FORWARDED", 1714867204.0),
+            ]
+        }
+    )
+
+    result = await _enrich_client_dns(
+        is_host=False,
+        current_ip=_IP,
+        ip_spans=[],
+        host_lan_ip=None,
+        since=_SINCE,
+        now=_NOW,
+        vl_client=vl,
+    )
+    assert result is not None
+    # top_domains: combined ranking by count, then alphabetically.
+    # cdn.com (3x) is first, tracker.com (2x) is second.
+    assert result.top_domains[0] == "cdn.com"
+    assert result.top_domains[1] == "tracker.com"
