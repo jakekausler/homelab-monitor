@@ -1,6 +1,6 @@
 # EPIC-008: Synology integration
 
-## Status: In Progress (current: STAGE-008-017 Complete; next: STAGE-008-018)
+## Status: In Progress (current: STAGE-008-018 Complete; next: STAGE-008-019)
 
 ## Build order + framework dependencies (LOCKED — 2026-06-22 brainstorm)
 
@@ -396,7 +396,7 @@ rules; mount-health + Docker-suppression before the rules/UI/dashboards that sur
 ### Wave F — Mount health + Docker suppression (2) — instance-A validation
 | # | Stage | Theme |
 |---|---|---|
-| STAGE-008-018 | NFS/`/rackstation` mount-health collector: per-mount non-hanging `statfs`; `homelab_synology_mount_up{mount}` + probe-latency; configurable mount list (instance-A: reads host mount table) |
+| STAGE-008-018 | NFS/`/rackstation` mount-health collector: per-mount non-hanging `statfs`; `homelab_synology_mount_up{mount}` + probe-latency; configurable mount list (instance-A: reads host mount table) — ✅ Complete |
 | STAGE-008-019 | Alertmanager inhibit-rules: `mount_up==0` inhibits dependent `ContainerDown` alerts (EPIC-003 cross-cut; built + validated in instance A) |
 
 ### Wave G — Syslog pipeline (1)
