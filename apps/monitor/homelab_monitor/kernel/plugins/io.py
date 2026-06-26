@@ -28,6 +28,8 @@ from homelab_monitor.kernel.ha.errors import HaError
 from homelab_monitor.kernel.pihole.client import PiholeResponse
 from homelab_monitor.kernel.pihole.errors import PiholeError
 from homelab_monitor.kernel.ssh.result import SshCommandResult
+from homelab_monitor.kernel.synology.client import SynologyResponse
+from homelab_monitor.kernel.synology.errors import SynologyError
 from homelab_monitor.kernel.unifi.client import UnifiResponse
 from homelab_monitor.kernel.unifi.errors import UnifiError
 
@@ -349,6 +351,120 @@ class PiholeClient(Protocol):
 
     async def aclose(self) -> None:
         """Best-effort logout (DELETE /api/auth); never raises."""
+        ...
+
+
+@runtime_checkable
+class SynologyClient(Protocol):
+    """Read surface for reaching a Synology DSM v7 NAS (STAGE-008-001).
+
+    Every method is return-not-raise: it returns a :class:`SynologyResponse` OR a
+    :class:`SynologyError`, so a DSM 5xx / timeout / auth / DSM application-error
+    never propagates as our own 5xx. The concrete implementation is
+    :class:`homelab_monitor.kernel.synology.client.SynologyRestClient`.
+
+    SCAFFOLDING: collectors consuming these helpers land in Wave B/C/E
+    (STAGE-008-005..017); only ``system_info`` is exercised in STAGE-008-001.
+    """
+
+    async def system_info(self) -> SynologyResponse | SynologyError:
+        """SYNO.Core.System v3 info — model/serial/firmware/uptime/sys_temp."""
+        ...
+
+    async def system_utilization(self) -> SynologyResponse | SynologyError:
+        """SYNO.Core.System.Utilization get — CPU/mem/swap/IO/NIC/NFS."""
+        ...
+
+    async def system_health(self) -> SynologyResponse | SynologyError:
+        """SYNO.Core.System.SystemHealth get — overall-health rule."""
+        ...
+
+    async def hardware_fanspeed(self) -> SynologyResponse | SynologyError:
+        """SYNO.Core.Hardware.FanSpeed get — fan status strings."""
+        ...
+
+    async def need_reboot(self) -> SynologyResponse | SynologyError:
+        """SYNO.Core.Hardware.NeedReboot get — reboot-required bool."""
+        ...
+
+    async def storage_load_info(self) -> SynologyResponse | SynologyError:
+        """SYNO.Storage.CGI.Storage load_info — volumes+pools+disks+caches."""
+        ...
+
+    async def ups_get(self) -> SynologyResponse | SynologyError:
+        """SYNO.Core.ExternalDevice.UPS get — UPS charge/runtime/status."""
+        ...
+
+    async def upgrade_check(self) -> SynologyResponse | SynologyError:
+        """SYNO.Core.Upgrade.Server v4 check — DSM update availability."""
+        ...
+
+    async def package_list(self) -> SynologyResponse | SynologyError:
+        """SYNO.Core.Package list — installed packages + status."""
+        ...
+
+    async def package_server_list(self) -> SynologyResponse | SynologyError:
+        """SYNO.Core.Package.Server v2 list — available package updates."""
+        ...
+
+    async def backup_task_list(self) -> SynologyResponse | SynologyError:
+        """SYNO.Backup.Task list — Hyper Backup tasks."""
+        ...
+
+    async def backup_repository_list(self) -> SynologyResponse | SynologyError:
+        """SYNO.Backup.Repository list — Hyper Backup repositories."""
+        ...
+
+    async def share_snapshot_list(self, name: str) -> SynologyResponse | SynologyError:
+        """SYNO.Core.Share.Snapshot v2 list — snapshots for share ``name``."""
+        ...
+
+    async def share_list(self) -> SynologyResponse | SynologyError:
+        """SYNO.Core.Share v1 list — shares on the NAS."""
+        ...
+
+    async def replica_core_list(self) -> SynologyResponse | SynologyError:
+        """SYNO.Btrfs.Replica.Core v1 list — Btrfs replication availability."""
+        ...
+
+    async def security_scan_status(self) -> SynologyResponse | SynologyError:
+        """SYNO.Core.SecurityScan.Status system_get — Security Advisor status."""
+        ...
+
+    async def current_connection_list(self) -> SynologyResponse | SynologyError:
+        """SYNO.Core.CurrentConnection list — active sessions."""
+        ...
+
+    async def ss_info(self) -> SynologyResponse | SynologyError:
+        """SYNO.SurveillanceStation.Info GetInfo — SS system info."""
+        ...
+
+    async def ss_camera_list(self) -> SynologyResponse | SynologyError:
+        """SYNO.SurveillanceStation.Camera v9 List — cameras."""
+        ...
+
+    async def ss_event_count_by_category(self) -> SynologyResponse | SynologyError:
+        """SYNO.SurveillanceStation.Event v5 CountByCategory — event counts."""
+        ...
+
+    async def ss_recording_list(self) -> SynologyResponse | SynologyError:
+        """SYNO.SurveillanceStation.Recording v6 List — recordings."""
+        ...
+
+    async def ss_license(self) -> SynologyResponse | SynologyError:
+        """SYNO.SurveillanceStation.License v2 Load — camera licenses."""
+        ...
+
+    async def ss_homemode(self) -> SynologyResponse | SynologyError:
+        """SYNO.SurveillanceStation.HomeMode GetInfo — armed/disarmed."""
+        ...
+
+    async def ss_log_list(self) -> SynologyResponse | SynologyError:
+        """SYNO.SurveillanceStation.Log v3 List — SS event log."""
+        ...
+
+    async def aclose(self) -> None:
+        """Best-effort logout (SYNO.API.Auth logout); never raises."""
         ...
 
 

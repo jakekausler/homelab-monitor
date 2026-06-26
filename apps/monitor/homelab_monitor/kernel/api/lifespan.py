@@ -25,6 +25,7 @@ from homelab_monitor.kernel.config import (
     load_ha_registry_config,
     load_pihole_config,
     load_pihole_unbound_config,
+    load_synology_config,
     load_tail_config,
     load_unifi_config,
 )
@@ -69,6 +70,7 @@ from homelab_monitor.kernel.secrets.repository import AsyncSecretsRepository
 from homelab_monitor.kernel.secrets.ttl_resolver import TtlCachingSecretsResolver
 from homelab_monitor.kernel.ssh.client import AsyncSshClientFactory
 from homelab_monitor.kernel.ssh.config import load_ssh_targets
+from homelab_monitor.kernel.synology.client import SynologyRestClient
 from homelab_monitor.kernel.unifi.client import UnifiRestClient
 from homelab_monitor.plugins.collectors.builtin.log_error_rate import (
     LogErrorRateCollector,
@@ -638,6 +640,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
 
     register_pihole_collectors(loader)
 
+    # ------------------------------------------------------------------
+    # STAGE-008-002: Synology integration bundle (integrations/synology/).
+    # The bundle owns per-collector failure isolation internally. Wave-B
+    # Synology collectors are added inside the bundle, not here. The placeholder
+    # collector is throwaway scaffolding (removed by STAGE-008-005).
+    # ------------------------------------------------------------------
+    from homelab_monitor.plugins.collectors.integrations.synology import (  # noqa: PLC0415
+        register_all as register_synology_collectors,
+    )
+
+    register_synology_collectors(loader)
+
     plugins_env = os.environ.get("HOMELAB_MONITOR_PLUGINS_DIR")
     if plugins_env is not None:
         plugins_dir: Path | None = Path(plugins_env)
@@ -770,6 +784,34 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
     )
     app.state.pihole_rw_client = pihole_rw_client
 
+    # 7a-synology. Synology DSM v7 REST client (STAGE-008-001).
+    #
+    # A SECOND, DEDICATED httpx client with verify=False (the DSM serves a
+    # self-signed cert CN=synology). Blast radius of verify=False is exactly the one
+    # DSM target; the vanilla http_client above keeps full verification for
+    # everything else. Lifespan owns this client's construction + teardown (closed in
+    # the finally block alongside unifi_http_client); SynologyRestClient borrows it.
+    #
+    # The synology_dsm_password is read per-login via the TTL resolver (mirrors HA's
+    # token_provider) and is never stored on the client nor logged. The account name
+    # is not a secret and comes from config. The client is ALWAYS constructed (never
+    # None); a missing password surfaces as SynologyError(auth) inside the client
+    # without a network call. Logout (method=logout) runs best-effort in the finally
+    # block BEFORE the dedicated client is closed.
+    synology_http_client = httpx.AsyncClient(
+        verify=False,  # self-signed DSM cert; blast radius is one LAN target (STAGE-008-001)
+        limits=httpx.Limits(max_connections=50, max_keepalive_connections=20),
+        timeout=httpx.Timeout(10.0, connect=5.0),
+    )
+    synology_config = load_synology_config()
+    synology_client = SynologyRestClient(
+        base_url=synology_config.base_url,
+        http=synology_http_client,
+        account=synology_config.account,
+        password_provider=lambda: ttl_resolver.current().get("synology_dsm_password"),
+    )
+    app.state.synology_client = synology_client
+
     in_memory_metrics_writer = MemoryRetainingMetricsWriter()
     prom_registry = CollectorRegistry()
     prom_writer = PrometheusRegistryWriter(prom_registry)
@@ -863,6 +905,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
             ha_registry=getattr(app.state, "ha_entity_registry", None),
             unifi=unifi_client,
             pihole=pihole_client,
+            synology=synology_client,
         )
 
     # 7f. BuildSourcesLoader — STAGE-003-009 generic config (scope expansion).
@@ -1640,8 +1683,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
         pihole_rw_client = getattr(app.state, "pihole_rw_client", None)
         if pihole_rw_client is not None:
             await pihole_rw_client.aclose()
+        # Best-effort Synology logout (STAGE-008-001) — uses the dedicated
+        # synology_http_client, so it MUST run before that client is closed. aclose()
+        # swallows all errors.
+        synology_client = getattr(app.state, "synology_client", None)
+        if synology_client is not None:
+            await synology_client.aclose()
         await http_client.aclose()
         await unifi_http_client.aclose()
+        await synology_http_client.aclose()
         docker_client = getattr(app.state, "docker_socket_client", None)
         # B1: docker_socket_client is unset when the Docker plugin is disabled.
         # Otherwise this guard is defensive (degraded DockerSocketCollector path).

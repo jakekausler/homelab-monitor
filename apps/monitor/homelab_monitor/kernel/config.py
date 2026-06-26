@@ -746,6 +746,43 @@ def load_pihole_unbound_config() -> PiholeUnboundConfig:
     return PiholeUnboundConfig(container=container)
 
 
+@dataclass(frozen=True, slots=True)
+class SynologyConfig:
+    """Synology DSM connection config (STAGE-008-001). Env-only.
+
+    ``base_url`` is the DSM HTTPS base URL (no trailing slash; the loader strips it).
+    DSM serves a self-signed cert (``CN=synology``), so the lifespan builds a
+    DEDICATED ``verify=False`` httpx client for it (mirrors Unifi). ``account`` is
+    the DSM service-account NAME (``homelab-monitor`` — an admin account, recon-
+    required; observe-only mitigates the exposure). The account name is NOT a secret
+    so it lives here; the password lives in the secret store under
+    ``synology_dsm_password`` and is resolved at login time via ``SYNO.API.Auth``.
+    """
+
+    base_url: str = "https://192.168.2.4:5001"
+    account: str = "homelab-monitor"
+
+
+def load_synology_config() -> SynologyConfig:
+    """Load Synology DSM connection config from env.
+
+    ``HOMELAB_MONITOR_SYNOLOGY_URL`` -> ``base_url`` (trailing slash stripped so
+    client path concatenation is unambiguous; default ``https://192.168.2.4:5001``
+    — the verified DSM host IP — when unset). ``HOMELAB_MONITOR_SYNOLOGY_ACCOUNT``
+    -> ``account`` (default ``homelab-monitor``; falls back to the default when unset
+    or blank).
+    """
+    raw_url = os.environ.get("HOMELAB_MONITOR_SYNOLOGY_URL")
+    base_url = SynologyConfig().base_url if raw_url is None else raw_url.rstrip("/")
+    raw_account = os.environ.get("HOMELAB_MONITOR_SYNOLOGY_ACCOUNT")
+    account = (
+        SynologyConfig().account
+        if raw_account is None or not raw_account.strip()
+        else raw_account.strip()
+    )
+    return SynologyConfig(base_url=base_url, account=account)
+
+
 # Built-in per-family cardinality caps (STAGE-005-006).
 # A typical large HA deployment emits ~1906 entity-family series; 2500 gives
 # comfortable headroom while still bounding runaway growth.

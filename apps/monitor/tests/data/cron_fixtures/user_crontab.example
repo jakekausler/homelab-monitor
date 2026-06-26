@@ -1,0 +1,4 @@
+# User crontab fixture for alice
+0 9 * * * /opt/backup.sh
+30 14 * * 1-5 /usr/bin/check_mail.sh
+@hourly /usr/local/bin/sync.sh

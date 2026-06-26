@@ -303,6 +303,42 @@ async def test_lifespan_pihole_rw_client_none_at_shutdown_skips_aclose(
 
 
 @pytest.mark.asyncio
+async def test_lifespan_constructs_and_injects_synology_client(
+    db_url: str, master_key: bytes, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Startup constructs the Synology client + stores it on app.state (STAGE-008-001)."""
+    monkeypatch.setenv("HOMELAB_MONITOR_DB_URL", db_url)
+    monkeypatch.setenv("HOMELAB_MONITOR_MASTER_KEY", base64.b64encode(master_key).decode())
+
+    app = create_app(lifespan_enabled=True)
+
+    async with app.router.lifespan_context(app):
+        assert hasattr(app.state, "synology_client")
+        assert app.state.synology_client is not None
+
+
+@pytest.mark.asyncio
+async def test_lifespan_synology_client_none_at_shutdown_skips_aclose(
+    db_url: str, master_key: bytes, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """synology_client = None at shutdown -> aclose() is not called; shutdown is clean.
+
+    Covers lifespan.py branch: ``if synology_client is not None`` false-branch.
+    """
+    monkeypatch.setenv("HOMELAB_MONITOR_DB_URL", db_url)
+    monkeypatch.setenv("HOMELAB_MONITOR_MASTER_KEY", base64.b64encode(master_key).decode())
+
+    app = create_app(lifespan_enabled=True)
+
+    async with app.router.lifespan_context(app):
+        scheduler = app.state.scheduler
+        # Null out the synology_client so the shutdown finally-block sees None.
+        app.state.synology_client = None
+
+    assert not scheduler.running
+
+
+@pytest.mark.asyncio
 async def test_app_state_accessible_after_lifespan_startup(
     db_url: str, master_key: bytes, monkeypatch: pytest.MonkeyPatch
 ) -> None:
