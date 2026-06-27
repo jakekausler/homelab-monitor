@@ -1,6 +1,6 @@
 # EPIC-008: Synology integration
 
-## Status: In Progress (current: STAGE-008-021 Complete; 017/018/019/020/032 Complete; next: STAGE-008-022)
+## Status: In Progress (current: STAGE-008-022 Complete; 017/018/019/020/021/022/032 Complete; next: STAGE-008-023)
 
 ## Build order + framework dependencies (LOCKED — 2026-06-22 brainstorm)
 
@@ -408,7 +408,7 @@ rules; mount-health + Docker-suppression before the rules/UI/dashboards that sur
 | # | Stage | Theme |
 |---|---|---|
 | STAGE-008-021 | vmalert-metrics: Synology core (storage/disk/SMART/RAID/scrub/temp/UPS/system/util/needreboot) — ✅ Complete |
-| STAGE-008-022 | vmalert-metrics: protect/maintain + security + mount + surveillance-integrity (backup, replication, updates, security-status, mount-down, camera-not-recording, recording-storage-low, license-exhausted) — hybrid severity |
+| STAGE-008-022 | vmalert-metrics: protect/maintain + security + mount + surveillance-integrity (backup, replication, updates, security-status, mount-down, camera-not-recording, recording-storage-low, license-exhausted) — hybrid severity — ✅ Complete |
 | STAGE-008-023 | vmalert-logs over `service="synology-*"`: failed-login burst, abnormal/geo-login, SMART-event, package event, general error-rate (VL-derived; validate against real stream) |
 
 ### Wave I — UI (6)
