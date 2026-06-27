@@ -12,7 +12,12 @@ from datetime import timedelta
 from typing import ClassVar, Protocol, runtime_checkable
 
 from homelab_monitor.kernel.plugins.context import CollectorContext
-from homelab_monitor.kernel.plugins.types import CollectorResult, RunKind, TrustLevel
+from homelab_monitor.kernel.plugins.types import (
+    CollectorConfig,
+    CollectorResult,
+    RunKind,
+    TrustLevel,
+)
 
 
 @runtime_checkable
@@ -30,6 +35,10 @@ class Collector(Protocol):
     concurrency_group: ClassVar[str]
     run_kind: ClassVar[RunKind]
     trust_level: ClassVar[TrustLevel]
+    # The CollectorConfig subclass this collector's config is validated against
+    # (STAGE-008-032). Defaults to base CollectorConfig on BaseCollector; plugin
+    # collectors override with their own subclass to surface plugin-specific YAML fields.
+    config_class: ClassVar[type[CollectorConfig]]
 
     async def run(self, ctx: CollectorContext) -> CollectorResult:
         """Execute the collector against ``ctx`` and return a :class:`CollectorResult`."""
@@ -51,6 +60,10 @@ class BaseCollector(ABC):
     concurrency_group: ClassVar[str] = "default"
     run_kind: ClassVar[RunKind] = RunKind.ASYNC
     trust_level: ClassVar[TrustLevel] = TrustLevel.BUILTIN
+    # STAGE-008-032: collector-specific config subclass. Base default = plain
+    # CollectorConfig (no extra fields); plugin collectors override with their subclass
+    # so per-collector YAML overrides validate against the right schema.
+    config_class: ClassVar[type[CollectorConfig]] = CollectorConfig
     # Intermediate-base marker: a subclass that sets ``abstract = True`` in its OWN
     # body is exempt from required-ClassVar enforcement (it's a framework layer, not
     # an instantiable collector). Concrete subclasses do NOT set it (default False),

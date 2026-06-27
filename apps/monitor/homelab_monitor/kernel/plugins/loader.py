@@ -34,6 +34,7 @@ from homelab_monitor.kernel.db.ids import uuid7
 from homelab_monitor.kernel.db.repository import SqliteRepository
 from homelab_monitor.kernel.db.time import utc_now_iso
 from homelab_monitor.kernel.plugins.base import BaseCollector, Collector
+from homelab_monitor.kernel.plugins.collector_config import load_collector_overrides
 from homelab_monitor.kernel.plugins.manifest import SubprocessManifest
 from homelab_monitor.kernel.plugins.subprocess_collector import make_subprocess_collector
 from homelab_monitor.kernel.plugins.types import CollectorConfig
@@ -132,8 +133,18 @@ class PluginLoader:
                 non-zero-arg ``__init__``).
         """
         overrides = dict(config_overrides) if config_overrides else {}
-        # CollectorConfig validates name pattern + interval/timeout bounds + extra="forbid".
-        config = CollectorConfig.model_validate(overrides)
+        # STAGE-008-032: merge per-collector YAML overrides from
+        # /config/plugins/collectors/<name>.yaml. The register-site dict supplies "name"
+        # (and derived interval/timeout); YAML supplies operator-tunable subclass fields.
+        # YAML WINS on key collisions so an operator override beats the baked default.
+        name_obj = overrides.get("name", "")
+        collector_name = name_obj if isinstance(name_obj, str) else str(name_obj)
+        yaml_overrides = load_collector_overrides(collector_name)
+        merged: dict[str, object] = {**overrides, **yaml_overrides}
+        # Validate against the collector's declared config subclass (base CollectorConfig by
+        # default). The subclass declares plugin-specific fields, so YAML keys it knows about
+        # validate; unknown keys still hit extra="forbid" -> ValidationError (catches typos).
+        config = collector_cls.config_class.model_validate(merged)
         # Collector Protocol implies a zero-arg constructor; BaseCollector subclasses
         # inherit ABC's __init__ which is zero-arg.
         instance = collector_cls()

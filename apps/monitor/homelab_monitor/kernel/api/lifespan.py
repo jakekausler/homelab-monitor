@@ -176,8 +176,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
     except Exception as exc:  # pragma: no cover -- NoopCollector always succeeds
         log.warning("lifespan.collector_register_failed", name="noop", error=str(exc))
         degraded.append("noop")
-    # TODO(STAGE-014): load from /config/plugins/collectors/host.yaml when YAML
-    # config-loading lands; until then, defaults are baked into HostCollectorConfig.
     # TODO(STAGE-014): unify interval/timeout — ClassVar timedelta vs config
     # int seconds. Sub-second collectors (e.g., timedelta(milliseconds=500))
     # currently violate CollectorConfig.interval_seconds: int(ge=1) at

@@ -9,7 +9,12 @@ import pytest
 
 from homelab_monitor.kernel.plugins.base import BaseCollector, Collector
 from homelab_monitor.kernel.plugins.context import CollectorContext
-from homelab_monitor.kernel.plugins.types import CollectorResult, RunKind, TrustLevel
+from homelab_monitor.kernel.plugins.types import (
+    CollectorConfig,
+    CollectorResult,
+    RunKind,
+    TrustLevel,
+)
 
 
 class _FreestandingCollector:
@@ -21,6 +26,7 @@ class _FreestandingCollector:
     concurrency_group: ClassVar[str] = "default"
     run_kind: ClassVar[RunKind] = RunKind.ASYNC
     trust_level: ClassVar[TrustLevel] = TrustLevel.TRUSTED
+    config_class: ClassVar[type[CollectorConfig]] = CollectorConfig
 
     async def run(self, ctx: CollectorContext) -> CollectorResult:
         del ctx

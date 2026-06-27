@@ -82,11 +82,12 @@ _EXECUTOR: Final[ThreadPoolExecutor] = ThreadPoolExecutor(
 class SynologyMountHealthCollectorConfig(CollectorConfig):
     """Per-host overrides for the mount-health collector.
 
-    NOTE: like ``HostCollectorConfig``, the loader currently constructs a base
-    ``CollectorConfig`` (see ``kernel/plugins/loader.py``), so the collector reads
-    ``synology_mounts`` from ``ctx.config`` via ``getattr`` with the same default
-    declared here. This subclass documents the field for the YAML-loading work in
-    STAGE-014.
+    STAGE-008-032 wired subclass-aware construction: ``PluginLoader.register()``
+    validates against ``SynologyMountHealthCollector.config_class`` (this subclass)
+    and merges per-collector YAML from
+    ``/config/plugins/collectors/synology_mount_health.yaml`` when present. The
+    collector still reads ``synology_mounts`` via ``getattr(ctx.config, ...)`` with
+    the same default (defensive; a subclass instance always carries it).
     """
 
     # Host mount-point paths to probe. EMPTY = open-source-safe no-op.
@@ -147,6 +148,7 @@ class SynologyMountHealthCollector(BaseCollector):
     concurrency_group: ClassVar[str] = "host"
     run_kind: ClassVar[RunKind] = RunKind.ASYNC
     trust_level: ClassVar[TrustLevel] = TrustLevel.BUILTIN
+    config_class: ClassVar[type[CollectorConfig]] = SynologyMountHealthCollectorConfig
 
     async def run(self, ctx: CollectorContext) -> CollectorResult:
         """Run a single mount-health tick. ``ok`` is always True (see module doc)."""

@@ -55,11 +55,11 @@ def _build_exclude_pattern(devs: list[str]) -> re.Pattern[str] | None:
 class HostCollectorConfig(CollectorConfig):
     """Per-host collector overrides.
 
-    NOTE: PluginLoader.register() currently constructs a base ``CollectorConfig``
-    (not this subclass) — see ``kernel/plugins/loader.py``. The collector reads
-    these extra fields from ``ctx.config`` via ``getattr`` with the same defaults
-    declared here. STAGE-014 will introduce YAML loading and switch to subclass-
-    aware construction.
+    STAGE-008-032 wired subclass-aware construction: ``PluginLoader.register()``
+    validates against ``HostCollector.config_class`` (this subclass) and merges
+    per-collector YAML from ``/config/plugins/collectors/host.yaml`` when present.
+    The collector still reads these fields via ``getattr(ctx.config, ...)`` with the
+    same defaults (defensive; a subclass instance always carries them).
     """
 
     extra_mountpoints: list[str] = Field(default_factory=lambda: ["/rackstation"])
@@ -100,6 +100,7 @@ class HostCollector(BaseCollector):
     concurrency_group: ClassVar[str] = "host"
     run_kind: ClassVar[RunKind] = RunKind.ASYNC
     trust_level: ClassVar[TrustLevel] = TrustLevel.BUILTIN
+    config_class: ClassVar[type[CollectorConfig]] = HostCollectorConfig
 
     async def run(self, ctx: CollectorContext) -> CollectorResult:
         """Run a single host-metric tick. See class docstring for failure semantics."""

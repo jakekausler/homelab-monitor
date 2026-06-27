@@ -17,7 +17,7 @@ This collector runs slower and with longer timeout than HostCollector (60s inter
 with 30s timeout vs HostCollector's 10s interval with 5s timeout) because a recursive
 walk of large trees is expensive. The extended timeout isolation prevents one slow walk
 from timing out the HostCollector's queries. Config is read from ctx.config via getattr
-with the baked default below (STAGE-014 will introduce YAML loading).
+with the baked default below (STAGE-008-032 added per-collector YAML loading via config_class).
 """
 
 from __future__ import annotations
@@ -74,10 +74,11 @@ def _default_watched_directories() -> list[WatchedDirectory]:
 class WatchedDirSizeCollectorConfig(CollectorConfig):
     """Per-host overrides for the watched-directory size collector.
 
-    NOTE: like HostCollectorConfig, PluginLoader currently constructs a base
-    CollectorConfig (not this subclass). The collector reads ``watched_directories``
-    from ctx.config via getattr with the default below. STAGE-014 switches to
-    subclass-aware construction.
+    STAGE-008-032 wired subclass-aware construction: ``PluginLoader.register()``
+    validates against ``WatchedDirSizeCollector.config_class`` (this subclass) and
+    merges per-collector YAML from ``/config/plugins/collectors/watched_dir_size.yaml``
+    when present. The collector still reads ``watched_directories`` via
+    ``getattr(ctx.config, ...)`` with the default below (defensive).
     """
 
     watched_directories: list[WatchedDirectory] = Field(
@@ -179,6 +180,7 @@ class WatchedDirSizeCollector(BaseCollector):
     concurrency_group: ClassVar[str] = "watched_dir_size"
     run_kind: ClassVar[RunKind] = RunKind.ASYNC
     trust_level: ClassVar[TrustLevel] = TrustLevel.BUILTIN
+    config_class: ClassVar[type[CollectorConfig]] = WatchedDirSizeCollectorConfig
 
     async def run(self, ctx: CollectorContext) -> CollectorResult:
         """Walk each configured directory and emit its three gauges."""
