@@ -50,6 +50,14 @@ Same as EPIC-001 plus:
 - The host-overrides repo (the user's private "this is my actual deployment" config) must be genuinely independent. STAGE-019-005's "first-run UX" test is the verification: does the public repo, with no overrides, give a new user a complete usable experience?
 - Documentation is the most under-estimated work in this epic. Plan for it to take the bulk of the effort.
 
+### Deferred follow-up from EPIC-008 (STAGE-008-018): Makefile coverage-gate self-clean
+
+Discovered during STAGE-008-018/032: the backend coverage gate uses `parallel = true` (pyproject `[tool.coverage.run]`), so `coverage`/`pytest-cov` COMBINES every `.coverage.*` shard found under `apps/monitor/`. A leftover shard from a TARGETED `--cov=<single-module>` run (which the Build loop does on every stage) gets merged into the full-gate report and produces a FALSE low-coverage failure on whichever files that partial shard under-covered (hit twice — STAGE-008-018 saw a phantom 99.31% with all misses concentrated in `lifespan.py`; the Opus debugger reproduced a clean 100% twice).
+
+**Proposed fix (a polish/tooling-hardening item for EPIC-019):** make the gate self-cleaning — add `rm -f $(MONITOR_DIR)/.coverage $(MONITOR_DIR)/.coverage.*` to the Makefile `test` target (it runs `pytest --cov=...` with no pre-clean today; only `make clean` removes coverage shards). This guarantees the combined report reflects only the current invocation, eliminating stale-shard false failures. `make test-fast`/`test-nocov` use `--no-cov` and are unaffected.
+
+**Owning file:** `Makefile` (the `test:` target). **Workaround until addressed:** clean shards (`rm -f apps/monitor/.coverage apps/monitor/.coverage.*`) before running the full coverage gate. Tracked here per the no-silent-deferral rule (a polish-epic documentation note, not a stage — to be scheduled when EPIC-019 is decomposed).
+
 ## Cross-epic absorbed scope (from EPIC-002 cron derived-state redesign, 2026-05-11)
 
 Per `docs/superpowers/specs/2026-05-11-cron-derived-state-redesign.md`, this epic absorbs the **standalone `hm cron install-wrapper` binary distribution** for unreachable hosts (Synology, NAS, foreign-network containers):

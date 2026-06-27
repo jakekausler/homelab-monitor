@@ -345,7 +345,7 @@ records which categories forward vs. are covered by metric collectors.
 - **Claude auto-fix runbook CONTENT** — engine + `homelab-fixer` user live in EPIC-009; candidate Synology
   runbooks (none high-value for an observe-only critical box) listed there if ever wanted.
 
-## Stage decomposition (32 stages, sequential within waves)
+## Stage decomposition (33 stages, sequential within waves)
 
 Each stage lands a single small slice and ships independently usable, mirroring the EPIC-005/006/007 wave
 shape. Wave order is sequenced for honest data dependencies (collectors before rules; syslog before log
@@ -431,6 +431,11 @@ rules; mount-health + Docker-suppression before the rules/UI/dashboards that sur
 | # | Stage | Theme |
 |---|---|---|
 | STAGE-008-032 | CollectorConfig YAML-loading mechanism: populate `synology_mounts` (+ general collector config); PREREQUISITE for 018 real probing + 019/022 real-data mount alerting — ✅ Complete |
+
+### Wave L — Host-collector hardening (1)
+| # | Stage | Theme |
+|---|---|---|
+| STAGE-008-033 | Host-collector hardening: timeout-wrap host.py's blocking `psutil.disk_usage` probes (non-hanging on wedged NFS; mirrors 018's bounded-executor pattern) |
 
 ## Cross-stage acceptance criteria
 
