@@ -76,8 +76,13 @@ from homelab_monitor.kernel.logs.drain_engine import (
 WATERMARK_KEY: Final[str] = "drain.cycle_watermark_ms"
 LAST_CYCLE_KEY: Final[str] = "drain.last_cycle_result"
 
-# Match-all LogsQL: every line in the bounded [start, end] window.
-_MATCH_ALL_EXPR: Final[str] = "*"
+# Sort ascending by _time so partial-cycle batches are the OLDEST-N, making
+# max_ts_seen a valid watermark that loses no lines on resume.
+# TRADEOFF: VL `sort` buffers the full match set before applying the HTTP limit
+# (cf. pagination.py / log_window_fetcher OOM note, VL #129/#8127). Safe here
+# because the drain window is bounded to ~one interval_seconds; revisit if a
+# large backlog window (post-outage first cycle) ever OOMs the sort.
+_DRAIN_QUERY_EXPR: Final[str] = "* | sort by (_time)"
 
 
 class CycleInProgressError(Exception):
@@ -321,7 +326,7 @@ class DrainConsumer:
 
         try:
             async for vl_line in self._vl_client.stream_query(
-                expr=_MATCH_ALL_EXPR,
+                expr=_DRAIN_QUERY_EXPR,
                 start=start_iso,
                 end=end_iso,
                 limit=batch_cap,

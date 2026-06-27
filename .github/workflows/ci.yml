@@ -200,6 +200,9 @@ jobs:
           cache-from: type=gha,scope=integration-grafana
           cache-to: type=gha,scope=integration-grafana,mode=max
 
+      - name: Validate vector template (vector validate)
+        run: bash scripts/validate-vector-template.sh
+
       - name: Run integration tests
         run: bash scripts/run-integration.sh
         env:

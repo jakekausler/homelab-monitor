@@ -1,4 +1,4 @@
-.PHONY: setup verify verify-ci lint format format-check typecheck test test-fast test-nocov verify-rules dev dev-clean dev-prod dev-down backend-dev openapi-export clean crg-init ui-verify ui-dev ui-build ui-test _verify-parallel compose-up compose-down compose-build compose-logs integration uv alertmanager-check
+.PHONY: setup verify verify-ci lint format format-check typecheck test test-fast test-nocov verify-rules dev dev-clean dev-prod dev-down backend-dev openapi-export clean crg-init ui-verify ui-dev ui-build ui-test _verify-parallel compose-up compose-down compose-build compose-logs integration uv alertmanager-check validate-vector-template
 
 .DEFAULT_GOAL := verify
 
@@ -174,12 +174,16 @@ crg-init:
 	crg-daemon start 2>/dev/null || true
 	@echo "CRG installed, graph built, and daemon started. Graph auto-updates on file edits and commits."
 
+validate-vector-template:
+	bash scripts/validate-vector-template.sh
+
 verify-ci:
 	@echo "Simulating CI: backend + frontend + crg-build"
 	$(MAKE) verify
 	@command -v code-review-graph >/dev/null 2>&1 || { echo "ERROR: code-review-graph missing — run 'make crg-init'"; exit 1; }
 	uv tool run code-review-graph build
 	docker compose -f deploy/compose/docker-compose.yml -f deploy/compose/docker-compose.override.yml -f deploy/compose/docker-compose.watched-dirs.yml config -q
+	$(MAKE) validate-vector-template
 
 ## generate-build-mounts: Regenerate deploy/compose/docker-compose.override.yml from build-sources.yaml
 generate-build-mounts:

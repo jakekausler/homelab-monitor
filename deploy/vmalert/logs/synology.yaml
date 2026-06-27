@@ -1,0 +1,100 @@
+# vmalert-logs rules for the Synology DSM integration (STAGE-008-023 / EPIC-008).
+# LogsQL alerts over the DSM syslog stream that EPIC-008 established in
+# VictoriaLogs (DSM "Connection" / SMART / package / general logs, ingested via
+# the dedicated vector syslog listener on UDP 5515). Picked up by the vmalert-logs
+# sidecar (-rule=/etc/vmalert/logs/*.yaml).
+#
+# Severity vocabulary locked: info / warning / error / critical (spec §8.2).
+# Group `type: vlogs` is REQUIRED so vmalert dispatches the expression to its
+# LogsQL parser rather than the PromQL parser (otherwise the rule fails to load).
+#
+# Label convention (integration style, matching deploy/vmalert/metrics/synology.yaml
+# and the unifi logs precedent): severity / source_tool: vmalert-logs /
+# category: storage / integration: synology. The DSM NAS is an appliance — neither
+# a host nor a container — so (like the UDM) it uses category + integration, NOT
+# target_kind. The integration label lets Karma group Synology logs + metrics
+# alerts together.
+#
+# LogsQL PHRASE-MATCH SEMANTICS (load-bearing): double-quoted phrases match whole
+# TOKENS, not substrings. `"fail"` does NOT match the token `failed`. Hence
+# SynologyLogErrorRate uses the EXACT token `"failed"` (not `"fail"`) so it counts
+# the real DSM "failed to sign in" lines, plus `"failure"` / `"critical"`.
+#
+# DSM emits virtually everything at PRI=14, so severity-field filtering is useless
+# here — these rules are PHRASE-based on curated tokens (avoids bare-"error" noise).
+#
+# Test counterpart: deploy/vmalert/logs-test/synology.yaml (shorter windows +
+# lower thresholds + interval/for tweaks for the slow integration test).
+# Production windows are 5m/10m; test windows are 30s. Keep BOTH files in sync for
+# label/annotation changes; only `_time:`, `filter` thresholds, `interval:`, and
+# `for:` may diverge.
+
+groups:
+  - name: synology_logs
+    type: vlogs
+    interval: 30s
+    rules:
+      # 1 — DSM "Connection" failed sign-in burst (brute force / credential probe).
+      # `service:="synology-auth"` already scopes to the Connection bucket, so no
+      # redundant "Connection" phrase is needed. "failed to sign in" is the REAL DSM
+      # Connection-failure wording (survives [REDACTED] redaction of user/IP/method).
+      - alert: SynologyFailedLoginBurst
+        expr: '_time:5m service:="synology-auth" "failed to sign in" | stats by (host) count() as fail_count | filter fail_count:>10'
+        for: 5m
+        labels:
+          severity: warning
+          source_tool: vmalert-logs
+          category: storage
+          integration: synology
+        annotations:
+          summary: "Synology failed sign-in burst on {{ $labels.host }}"
+          description: '{{ $value }} failed DSM sign-in attempts in 5m on {{ $labels.host }} (>10 — likely a credential-probing / brute-force burst against the NAS)'
+          explorer: '/logs?logsql=service:"synology-auth" AND "failed to sign in"'
+
+      # 2 — DSM SMART disk event (drive health warning/error).
+      - alert: SynologySmartEventLog
+        expr: '_time:5m service:="synology-smart" "SMART" | stats by (host) count() as smart_count | filter smart_count:>0'
+        for: 0m
+        labels:
+          severity: warning
+          source_tool: vmalert-logs
+          category: storage
+          integration: synology
+        annotations:
+          summary: "Synology SMART disk event on {{ $labels.host }}"
+          description: '{{ $value }} DSM SMART log line(s) in 5m on {{ $labels.host }} (drive health event — inspect the affected disk/pool)'
+          explorer: '/logs?logsql=service:"synology-smart" AND "SMART"'
+
+      # 3 — DSM package manager event (install/update/failure — informational).
+      - alert: SynologyPackageEventLog
+        expr: '_time:5m service:="synology-package" ("updated" OR "installed" OR "failed") | stats by (host) count() as pkg_count | filter pkg_count:>0'
+        for: 0m
+        labels:
+          severity: info
+          source_tool: vmalert-logs
+          category: storage
+          integration: synology
+        annotations:
+          summary: "Synology package event on {{ $labels.host }}"
+          description: '{{ $value }} DSM package-manager event(s) in 5m on {{ $labels.host }} (install / update / failure)'
+          explorer: '/logs?logsql=service:"synology-package" AND ("updated" OR "installed" OR "failed")'
+
+      # 4 — Elevated DSM error-rate across ALL synology-* buckets (informational
+      # canary). Phrase-based curated tokens — DSM emits everything at PRI=14 so a
+      # severity-field filter is useless. TOKEN-MATCH NOTE: `"failed"` (not `"fail"`)
+      # because LogsQL phrase match is token-based, not substring — `"fail"` would
+      # NOT match the real `failed to sign in` lines. Curated tokens avoid the
+      # false-positive flood from a bare "error" token. REFINEMENT: re-confirm token
+      # set against live DSM output (the `fail`→`failed` token choice in particular).
+      - alert: SynologyLogErrorRate
+        expr: '_time:10m service:~"synology-.*" ("failed" OR "failure" OR "critical") | stats by (host) count() as err_count | filter err_count:>20'
+        for: 10m
+        labels:
+          severity: info
+          source_tool: vmalert-logs
+          category: storage
+          integration: synology
+        annotations:
+          summary: "Elevated Synology log error-rate on {{ $labels.host }}"
+          description: '{{ $value }} DSM failure/critical log line(s) in 10m on {{ $labels.host }} (>20 across all synology-* buckets — elevated error canary)'
+          explorer: '/logs?logsql=service:~"synology-.*" AND ("failed" OR "failure" OR "critical")'

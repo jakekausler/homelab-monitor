@@ -1,0 +1,77 @@
+# Test-window counterpart of deploy/vmalert/logs/synology.yaml.
+# Used ONLY by docker-compose.test.yml (vmalert-logs-test service, glob-mounted).
+#
+# Differences vs production:
+#   - _time:30s vs _time:5m / _time:10m (faster firing for the slow integration test)
+#   - interval: 5s vs interval: 30s
+#   - for: 0m on all rules (production: 5m / 0m / 0m / 10m)
+#   - SynologyFailedLoginBurst threshold lowered to >2 (test plants 3 lines)
+#   - SynologyLogErrorRate threshold lowered to >2 (test plants >=3 matching lines)
+#   - The :>0 thresholds (SMART, package) remain :>0 (fire on 1 planted line)
+#   - Description text reflects the 30s window.
+#   - Same group/alert names, same labels, same annotations structure.
+#
+# Production rules at deploy/vmalert/logs/synology.yaml — keep BOTH files in sync
+# for label/annotation changes; only _time:, filter thresholds, interval:, and
+# for: may diverge.
+
+groups:
+  - name: synology_logs
+    type: vlogs
+    # interval: 5s gives ~6 evaluations per 30s window — sufficient resolution
+    # for the integration test to observe firing transitions.
+    # DO NOT raise to match production's 30s; the test would only get 1 eval
+    # per window.
+    interval: 5s
+    rules:
+      - alert: SynologyFailedLoginBurst
+        expr: '_time:30s service:="synology-auth" "failed to sign in" | stats by (host) count() as fail_count | filter fail_count:>2'
+        for: 0m
+        labels:
+          severity: warning
+          source_tool: vmalert-logs
+          category: storage
+          integration: synology
+        annotations:
+          summary: "Synology failed sign-in burst on {{ $labels.host }}"
+          description: '{{ $value }} failed DSM sign-in attempts in 30s on {{ $labels.host }} (>2 — likely a credential-probing / brute-force burst against the NAS)'
+          explorer: '/logs?logsql=service:"synology-auth" AND "failed to sign in"'
+
+      - alert: SynologySmartEventLog
+        expr: '_time:30s service:="synology-smart" "SMART" | stats by (host) count() as smart_count | filter smart_count:>0'
+        for: 0m
+        labels:
+          severity: warning
+          source_tool: vmalert-logs
+          category: storage
+          integration: synology
+        annotations:
+          summary: "Synology SMART disk event on {{ $labels.host }}"
+          description: '{{ $value }} DSM SMART log line(s) in 30s on {{ $labels.host }} (drive health event — inspect the affected disk/pool)'
+          explorer: '/logs?logsql=service:"synology-smart" AND "SMART"'
+
+      - alert: SynologyPackageEventLog
+        expr: '_time:30s service:="synology-package" ("updated" OR "installed" OR "failed") | stats by (host) count() as pkg_count | filter pkg_count:>0'
+        for: 0m
+        labels:
+          severity: info
+          source_tool: vmalert-logs
+          category: storage
+          integration: synology
+        annotations:
+          summary: "Synology package event on {{ $labels.host }}"
+          description: '{{ $value }} DSM package-manager event(s) in 30s on {{ $labels.host }} (install / update / failure)'
+          explorer: '/logs?logsql=service:"synology-package" AND ("updated" OR "installed" OR "failed")'
+
+      - alert: SynologyLogErrorRate
+        expr: '_time:30s service:~"synology-.*" ("failed" OR "failure" OR "critical") | stats by (host) count() as err_count | filter err_count:>2'
+        for: 0m
+        labels:
+          severity: info
+          source_tool: vmalert-logs
+          category: storage
+          integration: synology
+        annotations:
+          summary: "Elevated Synology log error-rate on {{ $labels.host }}"
+          description: '{{ $value }} DSM failure/critical log line(s) in 30s on {{ $labels.host }} (>2 across all synology-* buckets — elevated error canary)'
+          explorer: '/logs?logsql=service:~"synology-.*" AND ("failed" OR "failure" OR "critical")'

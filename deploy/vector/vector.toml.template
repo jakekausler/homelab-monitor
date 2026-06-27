@@ -744,11 +744,12 @@ if p_err != null {
 } else {
   # Envelope fields from parse_syslog (RFC 3164 happy path).
   .source_type = "synology"
-  .host = to_string(parsed.hostname) ?? ""
-  .syslog_facility = to_string(parsed.facility) ?? ""
-  .syslog_severity_name = to_string(parsed.severity) ?? ""
-  .appname = to_string(parsed.appname) ?? ""
-  msg = to_string(parsed.message) ?? ""
+  # NOTE: no `?? ""` here — to_string() is infallible on parse_syslog's typed fields (VRL E651). Do NOT add coalescing (unlike udm_parse, where parse_key_value() lookups are fallible).
+  .host = to_string(parsed.hostname)
+  .syslog_facility = to_string(parsed.facility)
+  .syslog_severity_name = to_string(parsed.severity)
+  .appname = to_string(parsed.appname)
+  msg = to_string(parsed.message)
   .message = msg
 
   # --- Category derivation: colon-OR-space, independent of parse_syslog .appname ---
@@ -762,14 +763,14 @@ if p_err != null {
   category = ""
   # Rule 1: short colon-delimited head (Connection / Storage Manager / Package Center).
   colon_parts = split(head_src, ":", limit: 2)
-  colon_head = strip_whitespace(to_string(colon_parts[0]) ?? "")
+  colon_head = strip_whitespace(to_string(colon_parts[0]))
   colon_word_count = length(split(colon_head, " "))
   if length(colon_parts) > 1 && colon_word_count <= 3 && strlen(colon_head) <= 32 {
     category = colon_head
   } else {
     # Rule 2: first whitespace token (System, etc.).
     space_parts = split(head_src, " ", limit: 2)
-    category = strip_whitespace(to_string(space_parts[0]) ?? "")
+    category = strip_whitespace(to_string(space_parts[0]))
   }
   .syn_category = category
 
