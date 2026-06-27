@@ -1,4 +1,4 @@
-.PHONY: setup verify verify-ci lint format format-check typecheck test test-fast test-nocov verify-rules dev dev-clean dev-prod dev-down backend-dev openapi-export clean crg-init ui-verify ui-dev ui-build ui-test _verify-parallel compose-up compose-down compose-build compose-logs integration uv
+.PHONY: setup verify verify-ci lint format format-check typecheck test test-fast test-nocov verify-rules dev dev-clean dev-prod dev-down backend-dev openapi-export clean crg-init ui-verify ui-dev ui-build ui-test _verify-parallel compose-up compose-down compose-build compose-logs integration uv alertmanager-check
 
 .DEFAULT_GOAL := verify
 
@@ -108,6 +108,17 @@ compose-logs:
 
 integration:
 	bash scripts/run-integration.sh
+
+# alertmanager-check: structurally validate the Alertmanager config template (routing,
+# receivers, and the inhibit_rules block) with amtool. The raw template is checked directly:
+# amtool treats the bearer `${ALERTMANAGER_INGEST_TOKEN}` credential as an opaque string and
+# does not reject the unsubstituted placeholder, so no token substitution is required. Mirrors
+# the promtool docker-run pattern documented in the vmalert __tests__ headers.
+alertmanager-check:
+	docker run --rm --entrypoint amtool \
+		-v $(PWD)/deploy/alertmanager:/cfg:ro \
+		prom/alertmanager:v0.27.0 \
+		check-config /cfg/alertmanager.yml.template
 
 # ---------------------------------------------------------------------------
 # Dev rig (STAGE-001-021 Spec B).

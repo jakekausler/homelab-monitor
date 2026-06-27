@@ -1,0 +1,102 @@
+# vmalert METRICS rules for the Synology / rackstation NAS integration (STAGE-008-019 / EPIC-008).
+# Picked up by the vmalert-metrics sidecar (-rule=/etc/vmalert/metrics/*.yaml).
+# Severity vocabulary locked: info / warning / critical ONLY (spec §8.2; no 'error').
+#
+# This file builds the WHOLE rackstation-mount -> docker-container inhibit chain so it is
+# golden-testable end-to-end:
+#   * SynologyMountDown  — SOURCE alert. Fires when a probed host NFS mount from the Synology
+#                          NAS is unresponsive (homelab_synology_mount_up == 0). Carries the
+#                          per-mount `mount` label (flows through from the metric automatically).
+#   * PlexContainerDown / PodcastFeedContainerDown — TARGET alerts. Both carry
+#                          depends_on_rackstation="true", the label Alertmanager's inhibit_rules
+#                          block keys on to suppress them while SynologyMountDown is firing.
+#
+# Label convention:
+#   SynologyMountDown      — integration style: severity / source_tool: vmalert-metrics /
+#                            category: storage / integration: synology.
+#   *ContainerDown         — integration + host-platform style: adds target_kind: docker_container,
+#                            integration: docker, and the inhibit matcher depends_on_rackstation="true".
+#
+# Metric families consumed:
+#   homelab_synology_mount_up   — 1.0 responsive, 0.0 missing/hung/error. ALWAYS SEEDED to 0.0 first
+#                                 (collector seed-then-overwrite idiom), so the series never goes
+#                                 absent and a plain `== 0` threshold is the correct firing condition.
+#                                 One series per `mount` label.
+#   homelab_container_status    — per-container state series (name/id/state labels), shared with the
+#                                 container_crash / pihole rule families.
+#
+# Annotations: summary is a static single line; description is a `>-` block referencing the relevant
+# label(s) via {{ $labels.X }}.
+#
+# Inhibition: the matching Alertmanager rule lives in deploy/alertmanager/alertmanager.yml.template
+# (source_matchers alertname="SynologyMountDown" -> target_matchers depends_on_rackstation="true",
+# NO equal:). See that file's comment block for why no equal:.
+#
+# Unit tests: deploy/vmalert/metrics/__tests__/synology.tests.yaml. All 3 rules are
+# promtool-validatable. Run with promtool:
+#   docker run --rm --entrypoint promtool \
+#     -v $(pwd)/deploy/vmalert/metrics:/rules \
+#     prom/prometheus:v2.47.0 \
+#     test rules /rules/__tests__/synology.tests.yaml
+
+groups:
+  - name: synology
+    interval: 30s
+    rules:
+      # 1 — A probed host NFS mount from the Synology NAS is unresponsive. SOURCE alert for the
+      # rackstation-mount -> dependent-container inhibition. The `mount` label is preserved from
+      # the metric and names the specific mount point.
+      - alert: SynologyMountDown
+        expr: homelab_synology_mount_up == 0
+        for: 2m
+        labels:
+          severity: critical
+          source_tool: vmalert-metrics
+          category: storage
+          integration: synology
+        annotations:
+          summary: "Synology NAS mount is down"
+          description: >-
+            The Synology NAS mount {{ $labels.mount }} is unresponsive
+            (homelab_synology_mount_up=0). Containers that depend on rackstation storage are at risk.
+
+  - name: synology_dependents
+    interval: 30s
+    rules:
+      # 2 — plex container not running. absent(running) OR a dead/exited/restarting state.
+      # Carries depends_on_rackstation="true" so SynologyMountDown inhibits it (plex mounts many
+      # rackstation shares; a NAS-layer outage realistically takes plex down with it).
+      - alert: PlexContainerDown
+        expr: >-
+          absent(homelab_container_status{name="plex",state="running"})
+          or homelab_container_status{name="plex",state=~"exited|dead|restarting"} == 1
+        for: 2m
+        labels:
+          severity: critical
+          source_tool: vmalert-metrics
+          target_kind: docker_container
+          integration: docker
+          depends_on_rackstation: "true"
+        annotations:
+          summary: "plex container is not running"
+          description: >-
+            The plex container is not in a running state (no running series, or state
+            {{ $labels.state }}). Media streaming is down until the container recovers.
+
+      # 3 — podcast-feed container not running. Same shape as PlexContainerDown.
+      - alert: PodcastFeedContainerDown
+        expr: >-
+          absent(homelab_container_status{name="podcast-feed",state="running"})
+          or homelab_container_status{name="podcast-feed",state=~"exited|dead|restarting"} == 1
+        for: 2m
+        labels:
+          severity: critical
+          source_tool: vmalert-metrics
+          target_kind: docker_container
+          integration: docker
+          depends_on_rackstation: "true"
+        annotations:
+          summary: "podcast-feed container is not running"
+          description: >-
+            The podcast-feed container is not in a running state (no running series, or state
+            {{ $labels.state }}). Podcast feed generation is down until the container recovers.

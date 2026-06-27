@@ -1,0 +1,191 @@
+# Rule unit-test fixtures for deploy/vmalert/metrics/synology.yaml (STAGE-008-019 / EPIC-008).
+# Schema: Prometheus / vmalert rule unit-test format.
+# Run manually (vmalert has NO unit-test mode — use promtool, which understands the same
+# Prometheus rule-test schema):
+#   docker run --rm --entrypoint promtool \
+#     -v $(pwd)/deploy/vmalert/metrics:/rules \
+#     prom/prometheus:v2.47.0 \
+#     test rules /rules/__tests__/synology.tests.yaml
+#
+# All 3 rules are promtool-validatable — this file has NO subquery / live-replay-only rules.
+#
+# ANNOTATION NOTE: under promtool v2.47.0, an OMITTED exp_annotations asserts Annotations:{} (empty),
+#   NOT "skip the check". So every firing stanza below includes exp_annotations with the EXACT rendered
+#   summary + description strings (rendered {{ $labels.X }} included).
+#
+# (No make target wires this yet — forward-compatible static fixture, NOT CI-run. Consistent with
+#  every other __tests__/*.tests.yaml in this directory.)
+
+rule_files:
+  - ../synology.yaml
+
+evaluation_interval: 30s
+
+tests:
+  # ==================== GROUP synology ====================
+
+  # ---- Rule 1: SynologyMountDown (== 0, for: 2m, carries the `mount` label) ----
+  # FIRE: a probed mount is unresponsive. The `mount` label flows through from the metric.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_synology_mount_up{mount="/rackstation/Media/TV"}'
+        values: '0+0x6'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: SynologyMountDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              source_tool: vmalert-metrics
+              category: storage
+              integration: synology
+              mount: /rackstation/Media/TV
+            exp_annotations:
+              summary: "Synology NAS mount is down"
+              description: "The Synology NAS mount /rackstation/Media/TV is unresponsive (homelab_synology_mount_up=0). Containers that depend on rackstation storage are at risk."
+
+  # ---- Rule 1 NO-FIRE: mount responsive (== 1) ----
+  - interval: 30s
+    input_series:
+      - series: 'homelab_synology_mount_up{mount="/rackstation/Media/TV"}'
+        values: '1+0x6'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: SynologyMountDown
+        exp_alerts: []
+
+  # ==================== GROUP synology_dependents ====================
+
+  # ---- Rule 2: PlexContainerDown (absent(running) OR exited|dead|restarting, for: 2m) ----
+  # FIRE via the state=~"exited|dead|restarting" branch: plant ONLY a state="exited" series
+  # (no state="running" series). BOTH branches of the OR fire, so we expect TWO alerts
+  # (the exited match + the absent(running) synthetic). Mirrors pihole rule-2.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_container_status{name="plex",id="abc123",state="exited"}'
+        values: '1+0x6'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: PlexContainerDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              source_tool: vmalert-metrics
+              target_kind: docker_container
+              integration: docker
+              depends_on_rackstation: "true"
+              name: plex
+              id: abc123
+              state: exited
+            exp_annotations:
+              summary: "plex container is not running"
+              description: "The plex container is not in a running state (no running series, or state exited). Media streaming is down until the container recovers."
+          - exp_labels:
+              severity: critical
+              source_tool: vmalert-metrics
+              target_kind: docker_container
+              integration: docker
+              depends_on_rackstation: "true"
+              name: plex
+              state: running
+            exp_annotations:
+              summary: "plex container is not running"
+              description: "The plex container is not in a running state (no running series, or state running). Media streaming is down until the container recovers."
+
+  # ---- Rule 2b: PlexContainerDown absent-running branch only ----
+  # No plex series at all → absent(...) returns 1 only, yielding the matcher's synthetic labels
+  # name="plex",state="running". Declare an UNRELATED container series so the group loads.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_container_status{name="grafana",id="def456",state="running"}'
+        values: '1+0x6'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: PlexContainerDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              source_tool: vmalert-metrics
+              target_kind: docker_container
+              integration: docker
+              depends_on_rackstation: "true"
+              name: plex
+              state: running
+            exp_annotations:
+              summary: "plex container is not running"
+              description: "The plex container is not in a running state (no running series, or state running). Media streaming is down until the container recovers."
+
+  # ---- Rule 2 NO-FIRE: plex container running ----
+  - interval: 30s
+    input_series:
+      - series: 'homelab_container_status{name="plex",id="abc123",state="running"}'
+        values: '1+0x6'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: PlexContainerDown
+        exp_alerts: []
+
+  # ---- Rule 3: PodcastFeedContainerDown (absent(running) OR exited|dead|restarting, for: 2m) ----
+  # FIRE via the exited branch: TWO alerts (exited match + absent(running) synthetic). Mirrors rule 2.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_container_status{name="podcast-feed",id="ghi789",state="exited"}'
+        values: '1+0x6'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: PodcastFeedContainerDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              source_tool: vmalert-metrics
+              target_kind: docker_container
+              integration: docker
+              depends_on_rackstation: "true"
+              name: podcast-feed
+              id: ghi789
+              state: exited
+            exp_annotations:
+              summary: "podcast-feed container is not running"
+              description: "The podcast-feed container is not in a running state (no running series, or state exited). Podcast feed generation is down until the container recovers."
+          - exp_labels:
+              severity: critical
+              source_tool: vmalert-metrics
+              target_kind: docker_container
+              integration: docker
+              depends_on_rackstation: "true"
+              name: podcast-feed
+              state: running
+            exp_annotations:
+              summary: "podcast-feed container is not running"
+              description: "The podcast-feed container is not in a running state (no running series, or state running). Podcast feed generation is down until the container recovers."
+
+  # ---- Rule 3b: PodcastFeedContainerDown absent-running branch only ----
+  - interval: 30s
+    input_series:
+      - series: 'homelab_container_status{name="grafana",id="def456",state="running"}'
+        values: '1+0x6'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: PodcastFeedContainerDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              source_tool: vmalert-metrics
+              target_kind: docker_container
+              integration: docker
+              depends_on_rackstation: "true"
+              name: podcast-feed
+              state: running
+            exp_annotations:
+              summary: "podcast-feed container is not running"
+              description: "The podcast-feed container is not in a running state (no running series, or state running). Podcast feed generation is down until the container recovers."
+
+  # ---- Rule 3 NO-FIRE: podcast-feed container running ----
+  - interval: 30s
+    input_series:
+      - series: 'homelab_container_status{name="podcast-feed",id="ghi789",state="running"}'
+        values: '1+0x6'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: PodcastFeedContainerDown
+        exp_alerts: []

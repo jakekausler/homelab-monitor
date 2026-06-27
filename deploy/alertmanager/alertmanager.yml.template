@@ -25,6 +25,22 @@ route:
         - routing_channel="monitoring-health"
       receiver: 'monitoring-health-channel'
 
+# Inhibition: suppress rackstation-dependent container alerts while the NAS mount is down.
+# When SynologyMountDown fires, the underlying cause is the NAS/mount layer, so the downstream
+# PlexContainerDown / PodcastFeedContainerDown alerts (both labelled depends_on_rackstation="true")
+# are noise — they are a SYMPTOM of the mount being gone, not independent failures.
+#
+# NO `equal:` clause is used, deliberately. A per-mount `equal: ['mount']` is structurally
+# impossible: plex mounts MANY rackstation shares (e.g. /rackstation/Media/TV, /rackstation/Media/Movies),
+# so there is no single `mount` label common to both the source and the dependent alerts to match on.
+# A NAS-layer problem is realistically rackstation-WIDE — any SynologyMountDown is sufficient cause to
+# suppress every rackstation-dependent container alert. So the match is on the dependency label alone.
+inhibit_rules:
+  - source_matchers:
+      - 'alertname="SynologyMountDown"'
+    target_matchers:
+      - 'depends_on_rackstation="true"'
+
 receivers:
   - name: 'monitor-webhook'
     webhook_configs:
