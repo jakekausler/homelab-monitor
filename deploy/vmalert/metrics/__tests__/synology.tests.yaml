@@ -654,3 +654,195 @@ tests:
       - eval_time: 11m
         alertname: SynologyApiSlow
         exp_alerts: []
+
+  # ==================== STAGE-008-022: GROUP synology_protect ====================
+
+  # ---- Rule 20: SynologyBackupFailed (== 0, for: 5m, carries `job`) ----
+  - interval: 30s
+    input_series:
+      - series: 'homelab_synology_backup_last_result_ok{job="hyperbackup-main"}'
+        values: '0+0x16'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: SynologyBackupFailed
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              source_tool: vmalert-metrics
+              category: protect
+              integration: synology
+              job: hyperbackup-main
+            exp_annotations:
+              summary: "Synology backup job failed"
+              description: "Synology backup job hyperbackup-main last completed with a failure (homelab_synology_backup_last_result_ok=0). Check Hyper Backup / the backup task and re-run."
+
+  # ---- Rule 20 NO-FIRE: backup succeeded ----
+  - interval: 30s
+    input_series:
+      - series: 'homelab_synology_backup_last_result_ok{job="hyperbackup-main"}'
+        values: '1+0x16'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: SynologyBackupFailed
+        exp_alerts: []
+
+  # ---- Rule 21: SynologyNoBackupConfigured (== 1, for: 15m, no labels) ----
+  - interval: 30s
+    input_series:
+      - series: 'homelab_synology_no_backup_configured'
+        values: '1+0x40'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: SynologyNoBackupConfigured
+        exp_alerts:
+          - exp_labels:
+              severity: info
+              source_tool: vmalert-metrics
+              category: protect
+              integration: synology
+            exp_annotations:
+              summary: "Synology has no backup task configured"
+              description: "The Synology NAS has no backup task configured (homelab_synology_no_backup_configured=1). Configure Hyper Backup so NAS data is protected."
+
+  # ---- Rule 21 NO-FIRE: a backup task is configured ----
+  - interval: 30s
+    input_series:
+      - series: 'homelab_synology_no_backup_configured'
+        values: '0+0x40'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: SynologyNoBackupConfigured
+        exp_alerts: []
+
+  # ==================== STAGE-008-022: GROUP synology_updates ====================
+
+  # ---- Rule 22: SynologyUpdateAvailable (available==1 AND is_security==0, for: 0m, no labels) ----
+  # FIRE: non-security update available. Both bare scalars; the `and` yields a label-less series.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_synology_dsm_update_available'
+        values: '1+0x4'
+      - series: 'homelab_synology_dsm_update_is_security'
+        values: '0+0x4'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: SynologyUpdateAvailable
+        exp_alerts:
+          - exp_labels:
+              severity: info
+              source_tool: vmalert-metrics
+              category: system
+              integration: synology
+            exp_annotations:
+              summary: "Synology DSM update available"
+              description: "A non-security DSM update is available (homelab_synology_dsm_update_available=1, homelab_synology_dsm_update_is_security=0). Plan a maintenance window to apply it."
+
+  # ---- Rule 22 NO-FIRE (mutual-exclusion): update IS a security update → SynologyUpdateAvailable
+  # does NOT fire. (The warning rule SynologyDsmSecurityUpdateAvailable fires on this same input, but
+  # the alertname filter scopes this assertion to SynologyUpdateAvailable only.) ----
+  - interval: 30s
+    input_series:
+      - series: 'homelab_synology_dsm_update_available'
+        values: '1+0x4'
+      - series: 'homelab_synology_dsm_update_is_security'
+        values: '1+0x4'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: SynologyUpdateAvailable
+        exp_alerts: []
+
+  # ---- Rule 23: SynologyDsmSecurityUpdateAvailable (available==1 AND is_security==1, for: 0m) ----
+  - interval: 30s
+    input_series:
+      - series: 'homelab_synology_dsm_update_available'
+        values: '1+0x4'
+      - series: 'homelab_synology_dsm_update_is_security'
+        values: '1+0x4'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: SynologyDsmSecurityUpdateAvailable
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              source_tool: vmalert-metrics
+              category: system
+              integration: synology
+            exp_annotations:
+              summary: "Synology DSM security update available"
+              description: "A security DSM update is available (homelab_synology_dsm_update_available=1, homelab_synology_dsm_update_is_security=1). Apply the security patch promptly."
+
+  # ---- Rule 23 NO-FIRE (mutual-exclusion): update is non-security → security rule does NOT fire. ----
+  - interval: 30s
+    input_series:
+      - series: 'homelab_synology_dsm_update_available'
+        values: '1+0x4'
+      - series: 'homelab_synology_dsm_update_is_security'
+        values: '0+0x4'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: SynologyDsmSecurityUpdateAvailable
+        exp_alerts: []
+
+  # ---- Rule 24: SynologyPackageUpdateAvailable (count(... == 1) > 0, for: 0m, no labels) ----
+  # FIRE: two package series, one ==1 one ==0. count(... == 1) counts only the ==1 series → 1 > 0.
+  # count(...) strips ALL labels → the firing series carries ONLY the 4 rule labels.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_synology_package_update_available{package="DSM-Plex"}'
+        values: '1+0x4'
+      - series: 'homelab_synology_package_update_available{package="DSM-Git"}'
+        values: '0+0x4'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: SynologyPackageUpdateAvailable
+        exp_alerts:
+          - exp_labels:
+              severity: info
+              source_tool: vmalert-metrics
+              category: system
+              integration: synology
+            exp_annotations:
+              summary: "Synology package updates available"
+              description: "One or more Synology packages have updates available (homelab_synology_package_update_available). Review Package Center and update when convenient."
+
+  # ---- Rule 24 NO-FIRE: all packages up to date → count(... == 1) is empty → `> 0` no match. ----
+  - interval: 30s
+    input_series:
+      - series: 'homelab_synology_package_update_available{package="DSM-Plex"}'
+        values: '0+0x4'
+      - series: 'homelab_synology_package_update_available{package="DSM-Git"}'
+        values: '0+0x4'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: SynologyPackageUpdateAvailable
+        exp_alerts: []
+
+  # ==================== STAGE-008-022: GROUP synology_security ====================
+
+  # ---- Rule 25: SynologySecurityAdvisorNotSafe (== 0, for: 10m, no labels) ----
+  - interval: 30s
+    input_series:
+      - series: 'homelab_synology_security_safe'
+        values: '0+0x30'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: SynologySecurityAdvisorNotSafe
+        exp_alerts:
+          - exp_labels:
+              severity: info
+              source_tool: vmalert-metrics
+              category: security
+              integration: synology
+            exp_annotations:
+              summary: "Synology Security Advisor reports not-safe"
+              description: "The Synology DSM Security Advisor reports a not-safe state (homelab_synology_security_safe=0). Open Security Advisor and address the flagged items."
+
+  # ---- Rule 25 NO-FIRE: Security Advisor reports safe ----
+  - interval: 30s
+    input_series:
+      - series: 'homelab_synology_security_safe'
+        values: '1+0x30'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: SynologySecurityAdvisorNotSafe
+        exp_alerts: []

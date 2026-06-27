@@ -1,0 +1,86 @@
+# vmalert METRICS rules for Synology Surveillance Station (STAGE-008-022 / EPIC-008).
+# Picked up by the vmalert-metrics sidecar (-rule=/etc/vmalert/metrics/*.yaml).
+# Severity vocabulary locked: info / warning / critical ONLY (spec §8.2; no 'error').
+#
+# Separate file from synology.yaml because Surveillance Station is a distinct DSM subsystem with its
+# own metric family (homelab_synology_ss_*) and its own category (surveillance). Keeping it isolated
+# keeps the core synology.yaml focused and lets the SS rules be golden-tested independently.
+#
+# Label convention (matches synology.yaml): severity / source_tool: vmalert-metrics /
+# category: surveillance / integration: synology on EVERY rule.
+#
+# Metric families consumed:
+#   homelab_synology_ss_camera_connected               — per-camera bool (1=connected, 0=offline).
+#                                                        Carries the {camera} label. Use THIS, not
+#                                                        ss_camera_status (whose value 3 = intentionally
+#                                                        disabled, which we do NOT want to alert on).
+#   homelab_synology_ss_camera_recording_retention_mode — per-camera bool, carries {camera, mode}.
+#                                                        mode="none" == 1 means recording retention is
+#                                                        disabled for that camera.
+#   homelab_synology_ss_info_license_used / _max       — bare scalars (no labels). used >= max means
+#                                                        the SS license capacity is exhausted. (Do NOT
+#                                                        use the dead ss_license_exhausted metric.)
+#
+# Annotations: summary is a static single line; description is a `>-` block referencing the relevant
+# label(s) via {{ $labels.X }} (or fully static text for the label-less license rule).
+#
+# Unit tests: deploy/vmalert/metrics/__tests__/synology-surveillance.tests.yaml. All 3 rules are
+# promtool-validatable. Run with promtool:
+#   docker run --rm --entrypoint promtool \
+#     -v $(pwd)/deploy/vmalert/metrics:/rules \
+#     prom/prometheus:v2.47.0 \
+#     test rules /rules/__tests__/synology-surveillance.tests.yaml
+
+groups:
+  - name: synology_surveillance
+    interval: 30s
+    rules:
+      # 1 — A camera is offline / disconnected. Uses the connected boolean (NOT ss_camera_status, whose
+      # value 3 means intentionally disabled). The {camera} label flows through from the metric.
+      - alert: SurveillanceCameraOffline
+        expr: homelab_synology_ss_camera_connected == 0
+        for: 5m
+        labels:
+          severity: warning
+          source_tool: vmalert-metrics
+          category: surveillance
+          integration: synology
+        annotations:
+          summary: "Surveillance Station camera is offline"
+          description: >-
+            Surveillance Station camera {{ $labels.camera }} is offline
+            (homelab_synology_ss_camera_connected=0). The camera is disconnected and not recording.
+
+      # 2 — Recording retention is disabled for a camera (mode="none"). Carries {camera, mode}; the
+      # description references the camera. mode="none" == 1 means no recording is being retained.
+      - alert: SurveillanceCameraRecordingDisabled
+        expr: homelab_synology_ss_camera_recording_retention_mode{mode="none"} == 1
+        for: 5m
+        labels:
+          severity: warning
+          source_tool: vmalert-metrics
+          category: surveillance
+          integration: synology
+        annotations:
+          summary: "Surveillance Station camera recording is disabled"
+          description: >-
+            Surveillance Station camera {{ $labels.camera }} has recording retention disabled
+            (mode=none). Recordings are not being retained for this camera.
+
+      # 3 — Surveillance Station license capacity is exhausted (used >= max). Both operands are bare
+      # scalars (no labels), so the plain >= matches directly and the result is a label-less series.
+      # (Do NOT use the dead ss_license_exhausted metric.)
+      - alert: SurveillanceLicenseExhausted
+        expr: homelab_synology_ss_info_license_used >= homelab_synology_ss_info_license_max
+        for: 15m
+        labels:
+          severity: warning
+          source_tool: vmalert-metrics
+          category: surveillance
+          integration: synology
+        annotations:
+          summary: "Surveillance Station license capacity exhausted"
+          description: >-
+            Surveillance Station has used all available camera licenses
+            (homelab_synology_ss_info_license_used >= homelab_synology_ss_info_license_max). Add licenses
+            before connecting more cameras.

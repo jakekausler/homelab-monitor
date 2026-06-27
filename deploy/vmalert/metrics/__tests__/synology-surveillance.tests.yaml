@@ -1,0 +1,117 @@
+# Rule unit-test fixtures for deploy/vmalert/metrics/synology-surveillance.yaml (STAGE-008-022 / EPIC-008).
+# Schema: Prometheus / vmalert rule unit-test format.
+# Run manually (vmalert has NO unit-test mode — use promtool, which understands the same
+# Prometheus rule-test schema):
+#   docker run --rm --entrypoint promtool \
+#     -v $(pwd)/deploy/vmalert/metrics:/rules \
+#     prom/prometheus:v2.47.0 \
+#     test rules /rules/__tests__/synology-surveillance.tests.yaml
+#
+# All 3 rules are promtool-validatable — this file has NO subquery / live-replay-only rules.
+#
+# ANNOTATION NOTE: under promtool v2.47.0, an OMITTED exp_annotations asserts Annotations:{} (empty),
+#   NOT "skip the check". So every firing stanza below includes exp_annotations with the EXACT rendered
+#   summary + description strings (rendered {{ $labels.X }} included).
+#
+# (No make target wires this yet — forward-compatible static fixture, NOT CI-run. Consistent with
+#  every other __tests__/*.tests.yaml in this directory.)
+
+rule_files:
+  - ../synology-surveillance.yaml
+
+evaluation_interval: 30s
+
+tests:
+  # ==================== GROUP synology_surveillance ====================
+
+  # ---- Rule 1: SurveillanceCameraOffline (== 0, for: 5m, carries `camera`) ----
+  - interval: 30s
+    input_series:
+      - series: 'homelab_synology_ss_camera_connected{camera="FrontDoor"}'
+        values: '0+0x16'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: SurveillanceCameraOffline
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              source_tool: vmalert-metrics
+              category: surveillance
+              integration: synology
+              camera: FrontDoor
+            exp_annotations:
+              summary: "Surveillance Station camera is offline"
+              description: "Surveillance Station camera FrontDoor is offline (homelab_synology_ss_camera_connected=0). The camera is disconnected and not recording."
+
+  # ---- Rule 1 NO-FIRE: camera connected ----
+  - interval: 30s
+    input_series:
+      - series: 'homelab_synology_ss_camera_connected{camera="FrontDoor"}'
+        values: '1+0x16'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: SurveillanceCameraOffline
+        exp_alerts: []
+
+  # ---- Rule 2: SurveillanceCameraRecordingDisabled (mode="none" == 1, for: 5m, carries `camera`+`mode`) ----
+  - interval: 30s
+    input_series:
+      - series: 'homelab_synology_ss_camera_recording_retention_mode{camera="FrontDoor",mode="none"}'
+        values: '1+0x16'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: SurveillanceCameraRecordingDisabled
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              source_tool: vmalert-metrics
+              category: surveillance
+              integration: synology
+              camera: FrontDoor
+              mode: none
+            exp_annotations:
+              summary: "Surveillance Station camera recording is disabled"
+              description: "Surveillance Station camera FrontDoor has recording retention disabled (mode=none). Recordings are not being retained for this camera."
+
+  # ---- Rule 2 NO-FIRE: recording retention enabled (mode="none" series is 0) ----
+  - interval: 30s
+    input_series:
+      - series: 'homelab_synology_ss_camera_recording_retention_mode{camera="FrontDoor",mode="none"}'
+        values: '0+0x16'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: SurveillanceCameraRecordingDisabled
+        exp_alerts: []
+
+  # ---- Rule 3: SurveillanceLicenseExhausted (used >= max, for: 15m, no labels) ----
+  # FIRE: used=90, max=90 → 90 >= 90. Both bare scalars → label-less alert.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_synology_ss_info_license_used'
+        values: '90+0x40'
+      - series: 'homelab_synology_ss_info_license_max'
+        values: '90+0x40'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: SurveillanceLicenseExhausted
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              source_tool: vmalert-metrics
+              category: surveillance
+              integration: synology
+            exp_annotations:
+              summary: "Surveillance Station license capacity exhausted"
+              description: "Surveillance Station has used all available camera licenses (homelab_synology_ss_info_license_used >= homelab_synology_ss_info_license_max). Add licenses before connecting more cameras."
+
+  # ---- Rule 3 NO-FIRE: license capacity available (used=3, max=90) ----
+  - interval: 30s
+    input_series:
+      - series: 'homelab_synology_ss_info_license_used'
+        values: '3+0x40'
+      - series: 'homelab_synology_ss_info_license_max'
+        values: '90+0x40'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: SurveillanceLicenseExhausted
+        exp_alerts: []

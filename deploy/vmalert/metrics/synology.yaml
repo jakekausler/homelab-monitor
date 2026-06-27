@@ -403,3 +403,115 @@ groups:
             Synology DSM API {{ $labels.api }} response time is over 2s
             (homelab_synology_api_took_seconds). The DSM API is slow to respond, which may delay metric
             collection.
+
+  # ==================== STAGE-008-022 groups ====================
+  # Protect (backup), updates (DSM + package), security advisor. Surveillance Station rules live in
+  # the dedicated deploy/vmalert/metrics/synology-surveillance.yaml file (separate concern, separate
+  # group). Label convention unchanged: severity / source_tool: vmalert-metrics / category / integration.
+
+  - name: synology_protect
+    interval: 30s
+    rules:
+      # 20 — A backup job's last run failed (always-seeded boolean; 1=ok, 0=failed). The `job` label
+      # flows through from the metric and names the specific backup task.
+      - alert: SynologyBackupFailed
+        expr: homelab_synology_backup_last_result_ok == 0
+        for: 5m
+        labels:
+          severity: critical
+          source_tool: vmalert-metrics
+          category: protect
+          integration: synology
+        annotations:
+          summary: "Synology backup job failed"
+          description: >-
+            Synology backup job {{ $labels.job }} last completed with a failure
+            (homelab_synology_backup_last_result_ok=0). Check Hyper Backup / the backup task and re-run.
+
+      # 21 — No backup task is configured on the NAS at all (standing advisory). Bare scalar metric
+      # (no labels) → label-less advisory alert.
+      - alert: SynologyNoBackupConfigured
+        expr: homelab_synology_no_backup_configured == 1
+        for: 15m
+        labels:
+          severity: info
+          source_tool: vmalert-metrics
+          category: protect
+          integration: synology
+        annotations:
+          summary: "Synology has no backup task configured"
+          description: >-
+            The Synology NAS has no backup task configured
+            (homelab_synology_no_backup_configured=1). Configure Hyper Backup so NAS data is protected.
+
+  - name: synology_updates
+    interval: 30s
+    rules:
+      # 22 — A non-security DSM update is available (advisory). The `and ... is_security==0` guard makes
+      # this MUTUALLY EXCLUSIVE with the security-update rule below. Both operands are bare scalars, so
+      # the `and` matches directly and the result is a label-less series.
+      - alert: SynologyUpdateAvailable
+        expr: homelab_synology_dsm_update_available == 1 and homelab_synology_dsm_update_is_security == 0
+        for: 0m
+        labels:
+          severity: info
+          source_tool: vmalert-metrics
+          category: system
+          integration: synology
+        annotations:
+          summary: "Synology DSM update available"
+          description: >-
+            A non-security DSM update is available (homelab_synology_dsm_update_available=1,
+            homelab_synology_dsm_update_is_security=0). Plan a maintenance window to apply it.
+
+      # 23 — A SECURITY DSM update is available (a problem, not just advisory). Mutually exclusive with
+      # rule 22 via the is_security==1 guard. Bare-scalar `and` → label-less series.
+      - alert: SynologyDsmSecurityUpdateAvailable
+        expr: homelab_synology_dsm_update_available == 1 and homelab_synology_dsm_update_is_security == 1
+        for: 0m
+        labels:
+          severity: warning
+          source_tool: vmalert-metrics
+          category: system
+          integration: synology
+        annotations:
+          summary: "Synology DSM security update available"
+          description: >-
+            A security DSM update is available (homelab_synology_dsm_update_available=1,
+            homelab_synology_dsm_update_is_security=1). Apply the security patch promptly.
+
+      # 24 — At least one package has an update available (rollup advisory). count(...) strips ALL labels,
+      # so the result is a single bare scalar series with NO per-package labels. (Do NOT use the buggy
+      # packages_with_updates_count metric.)
+      - alert: SynologyPackageUpdateAvailable
+        expr: count(homelab_synology_package_update_available == 1) > 0
+        for: 0m
+        labels:
+          severity: info
+          source_tool: vmalert-metrics
+          category: system
+          integration: synology
+        annotations:
+          summary: "Synology package updates available"
+          description: >-
+            One or more Synology packages have updates available
+            (homelab_synology_package_update_available). Review Package Center and update when convenient.
+
+  - name: synology_security
+    interval: 30s
+    rules:
+      # 25 — DSM Security Advisor reports a not-safe state (always-seeded boolean; 1=safe, 0=not-safe).
+      # Bare scalar metric → label-less advisory alert.
+      - alert: SynologySecurityAdvisorNotSafe
+        expr: homelab_synology_security_safe == 0
+        for: 10m
+        labels:
+          severity: info
+          source_tool: vmalert-metrics
+          category: security
+          integration: synology
+        annotations:
+          summary: "Synology Security Advisor reports not-safe"
+          description: >-
+            The Synology DSM Security Advisor reports a not-safe state
+            (homelab_synology_security_safe=0). Open Security Advisor and address the flagged items.
