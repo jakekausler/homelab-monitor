@@ -1,6 +1,6 @@
 # EPIC-008: Synology integration
 
-## Status: In Progress (current: STAGE-008-019 Complete; 017/018/032 Complete; next: STAGE-008-020)
+## Status: In Progress (current: STAGE-008-020 Complete; 017/018/019/032 Complete; next: STAGE-008-021)
 
 ## Build order + framework dependencies (LOCKED — 2026-06-22 brainstorm)
 
@@ -402,7 +402,7 @@ rules; mount-health + Docker-suppression before the rules/UI/dashboards that sur
 ### Wave G — Syslog pipeline (1)
 | # | Stage | Theme |
 |---|---|---|
-| STAGE-008-020 | vector Synology RFC-syslog source + `service="synology-*"` labels + Synology redaction patterns + DSM-side remote-syslog enable + syslog-vs-metric coverage map (mirror 007-016; verify DSM syslog format live at Design) |
+| STAGE-008-020 | vector Synology RFC-syslog source + `service="synology-*"` labels + Synology redaction patterns + DSM-side remote-syslog enable + syslog-vs-metric coverage map (mirror 007-016; verify DSM syslog format live at Design) — ✅ Complete |
 
 ### Wave H — Alert rules (3)
 | # | Stage | Theme |
