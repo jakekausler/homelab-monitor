@@ -1,6 +1,6 @@
 # EPIC-008: Synology integration
 
-## Status: In Progress (current: STAGE-008-018 Complete; next: STAGE-008-019)
+## Status: In Progress (current: STAGE-008-032 Complete [prerequisite, unblocked 018/019]; next: resume STAGE-008-019 Build)
 
 ## Build order + framework dependencies (LOCKED — 2026-06-22 brainstorm)
 
@@ -345,7 +345,7 @@ records which categories forward vs. are covered by metric collectors.
 - **Claude auto-fix runbook CONTENT** — engine + `homelab-fixer` user live in EPIC-009; candidate Synology
   runbooks (none high-value for an observe-only critical box) listed there if ever wanted.
 
-## Stage decomposition (31 stages, sequential within waves)
+## Stage decomposition (32 stages, sequential within waves)
 
 Each stage lands a single small slice and ships independently usable, mirroring the EPIC-005/006/007 wave
 shape. Wave order is sequenced for honest data dependencies (collectors before rules; syslog before log
@@ -426,6 +426,11 @@ rules; mount-health + Docker-suppression before the rules/UI/dashboards that sur
 |---|---|---|
 | STAGE-008-030 | `synology.json` (health/storage, disks/SMART, system/UPS, backup/replication, security, mount, SSH-probe rows) + Metrics-tab embed + readability pass |
 | STAGE-008-031 | `synology-surveillance.json` (cameras, events/recordings, license/homemode) + Metrics-tab embed + readability pass |
+
+### Wave K — Config-loading prerequisite (1)
+| # | Stage | Theme |
+|---|---|---|
+| STAGE-008-032 | CollectorConfig YAML-loading mechanism: populate `synology_mounts` (+ general collector config); PREREQUISITE for 018 real probing + 019/022 real-data mount alerting — ✅ Complete |
 
 ## Cross-stage acceptance criteria
 
