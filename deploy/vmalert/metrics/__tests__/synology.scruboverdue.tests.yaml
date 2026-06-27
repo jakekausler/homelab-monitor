@@ -1,0 +1,67 @@
+# Isolated SLOW golden tests for SynologyScrubOverdue (deploy/vmalert/metrics/synology.yaml, rule 9).
+#
+# WHY SEPARATE: this rule's threshold is (time() - scrub_last_done_ts) > 7776000 (90 days). promtool
+# starts series at Unix epoch 0, so the ONLY way to make the gap exceed 90d is eval_time >= ~91d.
+# `promtool test rules` steps EVERY rule group at the test file's top-level `evaluation_interval`
+# from t=0 to eval_time (the per-group `interval:` field is IGNORED by the harness). At the 30s
+# interval used by the main synology.tests.yaml, eval_time:91d = 262,080 evaluations/stanza and the
+# run hangs for minutes. These stanzas all use `for: 0m`, so a COARSE evaluation_interval is exact:
+# the alert is instantaneous at the firing step, no fine-grained `for:` window to honor. 6h keeps the
+# step count to ~366 and the file runs in ~1s. (A coarse interval CANNOT live in the main file: the
+# main file's `for:`-duration rules — 2m/5m/10m/15m tested at 3m/6m/11m/16m — require fine 30s steps.)
+#
+# RUN MANUALLY (not wired into any make target / CI, same as every other __tests__/*.tests.yaml):
+#   docker run --rm --entrypoint promtool \
+#     -v $(pwd)/deploy/vmalert/metrics:/rules \
+#     prom/prometheus:v2.47.0 \
+#     test rules /rules/__tests__/synology.scruboverdue.tests.yaml
+
+rule_files:
+  - ../synology.yaml
+
+evaluation_interval: 6h
+
+tests:
+  # ---- Rule 9: SynologyScrubOverdue (ts>0 and (time()-ts) > 7776000, for: 0m, carries `pool`) ----
+  # FIRE: ts=1 (a real, positive but ancient timestamp). promtool starts at Unix epoch 0, so at
+  # eval_time: 91d (7862400s): time()-1 = 7862399 > 7776000, AND ts=1 > 0. Both guards pass.
+  # interval: 6h, '1+0x366' spans 366*6h = 91.5d (>= eval_time 91d); 0xN re-emits the value each
+  # step so the series is fresh at every evaluation including t=91d.
+  - interval: 6h
+    input_series:
+      - series: 'homelab_synology_pool_scrub_last_done_timestamp{pool="pool1"}'
+        values: '1+0x366'
+    alert_rule_test:
+      - eval_time: 91d
+        alertname: SynologyScrubOverdue
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              source_tool: vmalert-metrics
+              category: storage
+              integration: synology
+              pool: pool1
+            exp_annotations:
+              summary: "Synology pool data-scrub is overdue (>90 days)"
+              description: "Synology pool pool1 has not completed a data-scrub in over 90 days (7776000s). Run a data-scrub so latent disk errors are caught before they compound."
+
+  # ---- Rule 9 NO-FIRE: scrub recent (ts > 0 but gap < 90d) ----
+  # At eval_time: 91d (7862400s), ts=7800000: gap = 62400s < 7776000. No fire.
+  - interval: 6h
+    input_series:
+      - series: 'homelab_synology_pool_scrub_last_done_timestamp{pool="pool1"}'
+        values: '7800000+0x366'
+    alert_rule_test:
+      - eval_time: 91d
+        alertname: SynologyScrubOverdue
+        exp_alerts: []
+
+  # ---- Rule 9 NO-FIRE: ts=0 sentinel (never scrubbed / DSM unknown) does not fire ----
+  - interval: 6h
+    input_series:
+      - series: 'homelab_synology_pool_scrub_last_done_timestamp{pool="pool1"}'
+        values: '0+0x366'
+    alert_rule_test:
+      - eval_time: 91d
+        alertname: SynologyScrubOverdue
+        exp_alerts: []

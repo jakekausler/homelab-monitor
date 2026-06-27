@@ -189,3 +189,468 @@ tests:
       - eval_time: 3m
         alertname: PodcastFeedContainerDown
         exp_alerts: []
+
+  # ==================== STAGE-008-021: GROUP synology_storage ====================
+
+  # ---- Rule 4: SynologyVolumeNearFull (>=80, for: 15m, carries `volume`) ----
+  - interval: 30s
+    input_series:
+      - series: 'homelab_synology_volume_used_percent{volume="volume1"}'
+        values: '85+0x40'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: SynologyVolumeNearFull
+        exp_alerts:
+          - exp_labels:
+              severity: info
+              source_tool: vmalert-metrics
+              category: storage
+              integration: synology
+              volume: volume1
+            exp_annotations:
+              summary: "Synology volume is filling up (>=80%)"
+              description: "Synology volume volume1 is at or above 80% used (homelab_synology_volume_used_percent). Plan cleanup or expansion before it fills."
+
+  # ---- Rule 4 NO-FIRE: volume below 80% ----
+  - interval: 30s
+    input_series:
+      - series: 'homelab_synology_volume_used_percent{volume="volume1"}'
+        values: '50+0x40'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: SynologyVolumeNearFull
+        exp_alerts: []
+
+  # ---- Rule 5: SynologyVolumeAlmostFull (>=90, for: 10m, carries `volume`) ----
+  - interval: 30s
+    input_series:
+      - series: 'homelab_synology_volume_used_percent{volume="volume1"}'
+        values: '95+0x30'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: SynologyVolumeAlmostFull
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              source_tool: vmalert-metrics
+              category: storage
+              integration: synology
+              volume: volume1
+            exp_annotations:
+              summary: "Synology volume is nearly full (>=90%)"
+              description: "Synology volume volume1 is at or above 90% used (homelab_synology_volume_used_percent). Free space urgently — a full volume risks data loss and service failures."
+
+  # ---- Rule 5 NO-FIRE: volume below 90% ----
+  - interval: 30s
+    input_series:
+      - series: 'homelab_synology_volume_used_percent{volume="volume1"}'
+        values: '85+0x30'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: SynologyVolumeAlmostFull
+        exp_alerts: []
+
+  # ---- Rule 6: SynologyVolumeDegraded (== 0, for: 2m, carries `volume`) ----
+  - interval: 30s
+    input_series:
+      - series: 'homelab_synology_volume_writable{volume="volume1"}'
+        values: '0+0x10'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: SynologyVolumeDegraded
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              source_tool: vmalert-metrics
+              category: storage
+              integration: synology
+              volume: volume1
+            exp_annotations:
+              summary: "Synology volume is not writable (degraded)"
+              description: "Synology volume volume1 is not writable (homelab_synology_volume_writable=0). The volume is degraded or read-only; writes are failing."
+
+  # ---- Rule 6 NO-FIRE: volume writable ----
+  - interval: 30s
+    input_series:
+      - series: 'homelab_synology_volume_writable{volume="volume1"}'
+        values: '1+0x10'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: SynologyVolumeDegraded
+        exp_alerts: []
+
+  # ---- Rule 7: SynologyPoolDegraded (== 0, for: 2m, carries `pool` + `raid`) ----
+  - interval: 30s
+    input_series:
+      - series: 'homelab_synology_raid_status{pool="pool1",raid="raid1"}'
+        values: '0+0x10'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: SynologyPoolDegraded
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              source_tool: vmalert-metrics
+              category: storage
+              integration: synology
+              pool: pool1
+              raid: raid1
+            exp_annotations:
+              summary: "Synology storage pool RAID is degraded"
+              description: "Synology pool pool1 RAID raid1 is degraded (homelab_synology_raid_status=0). Redundancy is reduced or lost — replace the failed member promptly."
+
+  # ---- Rule 7 NO-FIRE: RAID normal ----
+  - interval: 30s
+    input_series:
+      - series: 'homelab_synology_raid_status{pool="pool1",raid="raid1"}'
+        values: '1+0x10'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: SynologyPoolDegraded
+        exp_alerts: []
+
+  # ---- Rule 8: SynologyUnverifiedDisk (== 1, for: 5m, carries `pool`) ----
+  - interval: 30s
+    input_series:
+      - series: 'homelab_synology_pool_unverified_disk{pool="pool1"}'
+        values: '1+0x16'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: SynologyUnverifiedDisk
+        exp_alerts:
+          - exp_labels:
+              severity: info
+              source_tool: vmalert-metrics
+              category: storage
+              integration: synology
+              pool: pool1
+            exp_annotations:
+              summary: "Synology pool has an unverified disk"
+              description: "Synology pool pool1 has an unverified disk (homelab_synology_pool_unverified_disk=1). DSM is waiting to verify a recently added/replaced disk."
+
+  # ---- Rule 8 NO-FIRE: no unverified disk ----
+  - interval: 30s
+    input_series:
+      - series: 'homelab_synology_pool_unverified_disk{pool="pool1"}'
+        values: '0+0x16'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: SynologyUnverifiedDisk
+        exp_alerts: []
+
+  # ---- Rule 10: SynologyScrubError (disk_failure_number > 0, for: 0m, carries `pool`) ----
+  - interval: 30s
+    input_series:
+      - series: 'homelab_synology_pool_disk_failure_number{pool="pool1"}'
+        values: '1+0x4'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: SynologyScrubError
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              source_tool: vmalert-metrics
+              category: storage
+              integration: synology
+              pool: pool1
+            exp_annotations:
+              summary: "Synology pool has a failed disk (data-integrity risk)"
+              description: "Synology pool pool1 reports a failed disk (homelab_synology_pool_disk_failure_number > 0). Parity/scrub integrity is compromised until the disk is replaced and the pool rebuilds."
+
+  # ---- Rule 10 NO-FIRE: no failed disk ----
+  - interval: 30s
+    input_series:
+      - series: 'homelab_synology_pool_disk_failure_number{pool="pool1"}'
+        values: '0+0x4'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: SynologyScrubError
+        exp_alerts: []
+
+  # ==================== STAGE-008-021: GROUP synology_hardware ====================
+
+  # ---- Rule 11: SynologyDiskFailed (A or B or C, for: 5m, carries `disk`) ----
+  # FIRE via operand A only (disk_status{disk="sda"}==0). `or` keeps the matching operand's labels →
+  # ONE alert carrying {disk="sda"}. (Planting only A means operands B/C contribute no series.)
+  - interval: 30s
+    input_series:
+      - series: 'homelab_synology_disk_status{disk="sda"}'
+        values: '0+0x16'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: SynologyDiskFailed
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              source_tool: vmalert-metrics
+              category: hardware
+              integration: synology
+              disk: sda
+            exp_annotations:
+              summary: "Synology disk has failed or is failing SMART"
+              description: "Synology disk sda has failed: DSM disk status bad, SMART status bad, or a failing SMART attribute. Replace the disk and verify pool/volume health."
+
+  # ---- Rule 11 NO-FIRE: disk healthy (status==1, smart==1, no failing attr) ----
+  - interval: 30s
+    input_series:
+      - series: 'homelab_synology_disk_status{disk="sda"}'
+        values: '1+0x16'
+      - series: 'homelab_synology_disk_smart_status{disk="sda"}'
+        values: '1+0x16'
+      - series: 'homelab_synology_smart_attr_failing{disk="sda"}'
+        values: '0+0x16'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: SynologyDiskFailed
+        exp_alerts: []
+
+  # ---- Rule 12: SynologyDiskHighTemp (>=55, for: 10m, carries `disk` + `model`) ----
+  - interval: 30s
+    input_series:
+      - series: 'homelab_synology_disk_temp_celsius{disk="sda",model="WD80EFAX"}'
+        values: '58+0x30'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: SynologyDiskHighTemp
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              source_tool: vmalert-metrics
+              category: hardware
+              integration: synology
+              disk: sda
+              model: WD80EFAX
+            exp_annotations:
+              summary: "Synology disk temperature is high (>=55C)"
+              description: "Synology disk sda (WD80EFAX) is at or above 55C (homelab_synology_disk_temp_celsius). Check NAS airflow/ambient temperature."
+
+  # ---- Rule 12 NO-FIRE: disk temp below 55C ----
+  - interval: 30s
+    input_series:
+      - series: 'homelab_synology_disk_temp_celsius{disk="sda",model="WD80EFAX"}'
+        values: '40+0x30'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: SynologyDiskHighTemp
+        exp_alerts: []
+
+  # ---- Rule 13: SynologyUpsOnBattery (== 1, for: 0m, no labels) ----
+  - interval: 30s
+    input_series:
+      - series: 'homelab_synology_ups_on_battery'
+        values: '1+0x4'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: SynologyUpsOnBattery
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              source_tool: vmalert-metrics
+              category: hardware
+              integration: synology
+            exp_annotations:
+              summary: "Synology UPS is on battery (mains power lost)"
+              description: "The Synology UPS is running on battery (homelab_synology_ups_on_battery=1). Mains power has been lost; the NAS will shut down when the battery is exhausted."
+
+  # ---- Rule 13 NO-FIRE: UPS on mains ----
+  - interval: 30s
+    input_series:
+      - series: 'homelab_synology_ups_on_battery'
+        values: '0+0x4'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: SynologyUpsOnBattery
+        exp_alerts: []
+
+  # ---- Rule 14: SynologyUpsLowBattery (== 1, for: 0m, no labels) ----
+  - interval: 30s
+    input_series:
+      - series: 'homelab_synology_ups_low_battery'
+        values: '1+0x4'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: SynologyUpsLowBattery
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              source_tool: vmalert-metrics
+              category: hardware
+              integration: synology
+            exp_annotations:
+              summary: "Synology UPS battery is low (imminent shutdown)"
+              description: "The Synology UPS battery is low (homelab_synology_ups_low_battery=1). Shutdown is imminent; ensure dependent services flush state."
+
+  # ---- Rule 14 NO-FIRE: battery not low ----
+  - interval: 30s
+    input_series:
+      - series: 'homelab_synology_ups_low_battery'
+        values: '0+0x4'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: SynologyUpsLowBattery
+        exp_alerts: []
+
+  # ==================== STAGE-008-021: GROUP synology_system ====================
+
+  # ---- Rule 15: SynologyDown (health_ok == 0, for: 5m, no labels) ----
+  - interval: 30s
+    input_series:
+      - series: 'homelab_synology_health_ok'
+        values: '0+0x16'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: SynologyDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              source_tool: vmalert-metrics
+              category: system
+              integration: synology
+            exp_annotations:
+              summary: "Synology DSM reports a system-health problem"
+              description: "Synology DSM SystemHealth reports a problem (homelab_synology_health_ok=0). Check DSM's System Health / notifications. NOTE: this is a DSM-health problem, not total unreachability — for a fully unreachable / dead collector, see collector_silent_death in collector_health.yaml."
+
+  # ---- Rule 15 NO-FIRE: DSM healthy ----
+  - interval: 30s
+    input_series:
+      - series: 'homelab_synology_health_ok'
+        values: '1+0x16'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: SynologyDown
+        exp_alerts: []
+
+  # ---- Rule 16: SynologySysHighTemp (== 1, for: 5m, no labels) ----
+  - interval: 30s
+    input_series:
+      - series: 'homelab_synology_sys_temp_warning'
+        values: '1+0x16'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: SynologySysHighTemp
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              source_tool: vmalert-metrics
+              category: system
+              integration: synology
+            exp_annotations:
+              summary: "Synology system temperature warning"
+              description: "Synology DSM reports a system-temperature warning (homelab_synology_sys_temp_warning=1). Check NAS airflow and ambient temperature."
+
+  # ---- Rule 16 NO-FIRE: no system temp warning ----
+  - interval: 30s
+    input_series:
+      - series: 'homelab_synology_sys_temp_warning'
+        values: '0+0x16'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: SynologySysHighTemp
+        exp_alerts: []
+
+  # ---- Rule 17: SynologyHighCpuMem ((cpu_user+cpu_system) > 90 or mem > 90, for: 15m, no labels) ----
+  # FIRE via the mem branch (simplest single-series path; cpu series omitted so only the mem operand
+  # contributes). mem_usage_percent is label-less → one label-less alert.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_synology_mem_usage_percent'
+        values: '95+0x40'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: SynologyHighCpuMem
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              source_tool: vmalert-metrics
+              category: system
+              integration: synology
+            exp_annotations:
+              summary: "Synology CPU or memory usage is high (>90%)"
+              description: "Synology CPU (user+system) or memory usage is above 90% (homelab_synology_cpu_*_percent / homelab_synology_mem_usage_percent). The NAS may be under heavy load or memory pressure."
+
+  # ---- Rule 17 NO-FIRE: cpu+mem healthy (all three series present, all below threshold) ----
+  - interval: 30s
+    input_series:
+      - series: 'homelab_synology_cpu_user_percent'
+        values: '10+0x40'
+      - series: 'homelab_synology_cpu_system_percent'
+        values: '5+0x40'
+      - series: 'homelab_synology_mem_usage_percent'
+        values: '40+0x40'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: SynologyHighCpuMem
+        exp_alerts: []
+
+  # ---- Rule 18: SynologyNeedReboot (== 1, for: 0m, no labels) ----
+  - interval: 30s
+    input_series:
+      - series: 'homelab_synology_need_reboot'
+        values: '1+0x4'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: SynologyNeedReboot
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              source_tool: vmalert-metrics
+              category: system
+              integration: synology
+            exp_annotations:
+              summary: "Synology requests a reboot"
+              description: "Synology DSM is requesting a reboot (homelab_synology_need_reboot=1). A pending update or config change needs a reboot to take effect."
+
+  # ---- Rule 18 NO-FIRE: no reboot needed ----
+  - interval: 30s
+    input_series:
+      - series: 'homelab_synology_need_reboot'
+        values: '0+0x4'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: SynologyNeedReboot
+        exp_alerts: []
+
+  # ---- Rule 19: SynologyApiSlow (per-api > 2 excluding SYNO.Storage.CGI.Storage/*, for: 10m) ----
+  # FIRE: SYNO.Core.System at 3.5s (not excluded) → ONE alert carrying {api="SYNO.Core.System"}.
+  # SYNO.Storage.CGI.Storage/load_info at 3.7s is present but excluded by the label matcher → no alert.
+  - interval: 30s
+    input_series:
+      - series: 'homelab_synology_api_took_seconds{api="SYNO.Core.System"}'
+        values: '3.5+0x30'
+      - series: 'homelab_synology_api_took_seconds{api="SYNO.Storage.CGI.Storage/load_info"}'
+        values: '3.7+0x30'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: SynologyApiSlow
+        exp_alerts:
+          - exp_labels:
+              severity: info
+              source_tool: vmalert-metrics
+              category: system
+              integration: synology
+              api: SYNO.Core.System
+            exp_annotations:
+              summary: "Synology DSM API response time elevated"
+              description: "Synology DSM API SYNO.Core.System response time is over 2s (homelab_synology_api_took_seconds). The DSM API is slow to respond, which may delay metric collection."
+
+  # ---- Rule 19 NO-FIRE: all non-excluded api timings below 2s ----
+  - interval: 30s
+    input_series:
+      - series: 'homelab_synology_api_took_seconds{api="SYNO.Core.System"}'
+        values: '0.5+0x30'
+      - series: 'homelab_synology_api_took_seconds{api="SYNO.Storage.CGI.Storage/load_info"}'
+        values: '0.8+0x30'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: SynologyApiSlow
+        exp_alerts: []
+
+  # ---- Rule 19 NO-FIRE: excluded storage api above threshold does not fire ----
+  - interval: 30s
+    input_series:
+      - series: 'homelab_synology_api_took_seconds{api="SYNO.Storage.CGI.Storage/load_info"}'
+        values: '3.7+0x30'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: SynologyApiSlow
+        exp_alerts: []

@@ -38,6 +38,26 @@
 #     -v $(pwd)/deploy/vmalert/metrics:/rules \
 #     prom/prometheus:v2.47.0 \
 #     test rules /rules/__tests__/synology.tests.yaml
+#
+# ── STAGE-008-021 (core storage/hardware/system rules) — DELIBERATE NO-DUPLICATION ──────────────
+# This file gained 3 themed groups (synology_storage / synology_hardware / synology_system) in
+# STAGE-008-021. Two card-listed deliverables are SATISFIED-BY-REUSE and are intentionally NOT
+# re-authored here (re-authoring would DOUBLE-FIRE):
+#
+#   * SSH rules (SynologySshHostKeyMismatch / SynologySshProbeStale): EPIC-017's
+#     deploy/vmalert/metrics/ssh.yaml already has GENERIC, target-agnostic rules
+#     SshHostKeyMismatch (critical), SshProbeStale (warning), and SshTargetUnreachable
+#     (warning) with NO target filter. They ALREADY fire for the Synology SSH probe
+#     (target="synology") via homelab_ssh_*{target}. Authoring synology-scoped duplicates
+#     would double-fire. → Reuse ssh.yaml. No synology-scoped SSH rule here.
+#
+#   * Reachability / "DSM unreachable / collector dead": deploy/vmalert/metrics/collector_health.yaml
+#     already covers the synology collectors via collector_silent_death (critical) and
+#     collector_failure_rate_elevated (warning) — the synology collectors are NOT in those rules'
+#     exclusion lists. So total unreachability / collector death is already covered.
+#     SynologyDown below fires on the DSM SystemHealth aggregate (homelab_synology_health_ok == 0),
+#     a DSM-health PROBLEM signal — NOT total unreachability. For total unreachability, see
+#     collector_silent_death in collector_health.yaml.
 
 groups:
   - name: synology
@@ -100,3 +120,286 @@ groups:
           description: >-
             The podcast-feed container is not in a running state (no running series, or state
             {{ $labels.state }}). Podcast feed generation is down until the container recovers.
+
+  # ==================== STAGE-008-021 groups ====================
+
+  - name: synology_storage
+    interval: 30s
+    rules:
+      # 4 — A volume is filling up (advisory). The `volume` label flows through from the metric.
+      - alert: SynologyVolumeNearFull
+        expr: homelab_synology_volume_used_percent >= 80
+        for: 15m
+        labels:
+          severity: info
+          source_tool: vmalert-metrics
+          category: storage
+          integration: synology
+        annotations:
+          summary: "Synology volume is filling up (>=80%)"
+          description: >-
+            Synology volume {{ $labels.volume }} is at or above 80% used
+            (homelab_synology_volume_used_percent). Plan cleanup or expansion before it fills.
+
+      # 5 — A volume is nearly full (warning).
+      - alert: SynologyVolumeAlmostFull
+        expr: homelab_synology_volume_used_percent >= 90
+        for: 10m
+        labels:
+          severity: warning
+          source_tool: vmalert-metrics
+          category: storage
+          integration: synology
+        annotations:
+          summary: "Synology volume is nearly full (>=90%)"
+          description: >-
+            Synology volume {{ $labels.volume }} is at or above 90% used
+            (homelab_synology_volume_used_percent). Free space urgently — a full volume risks data loss
+            and service failures.
+
+      # 6 — A volume is read-only / not writable (DSM boolean; 1=writable, 0=not). critical.
+      - alert: SynologyVolumeDegraded
+        expr: homelab_synology_volume_writable == 0
+        for: 2m
+        labels:
+          severity: critical
+          source_tool: vmalert-metrics
+          category: storage
+          integration: synology
+        annotations:
+          summary: "Synology volume is not writable (degraded)"
+          description: >-
+            Synology volume {{ $labels.volume }} is not writable (homelab_synology_volume_writable=0).
+            The volume is degraded or read-only; writes are failing.
+
+      # 7 — A storage pool's RAID is degraded (DSM boolean; 1=normal, 0=degraded). critical.
+      - alert: SynologyPoolDegraded
+        expr: homelab_synology_raid_status == 0
+        for: 2m
+        labels:
+          severity: critical
+          source_tool: vmalert-metrics
+          category: storage
+          integration: synology
+        annotations:
+          summary: "Synology storage pool RAID is degraded"
+          description: >-
+            Synology pool {{ $labels.pool }} RAID {{ $labels.raid }} is degraded
+            (homelab_synology_raid_status=0). Redundancy is reduced or lost — replace the failed
+            member promptly.
+
+      # 8 — A pool has an unverified disk awaiting verification (advisory; always-seeded boolean).
+      - alert: SynologyUnverifiedDisk
+        expr: homelab_synology_pool_unverified_disk == 1
+        for: 5m
+        labels:
+          severity: info
+          source_tool: vmalert-metrics
+          category: storage
+          integration: synology
+        annotations:
+          summary: "Synology pool has an unverified disk"
+          description: >-
+            Synology pool {{ $labels.pool }} has an unverified disk
+            (homelab_synology_pool_unverified_disk=1). DSM is waiting to verify a recently
+            added/replaced disk.
+
+      # 9 — A pool's last data-scrub was >90 days ago (7776000s). Age vs time() — no TZ math.
+      # Guard ts>0: DSM reports 0 as "never scrubbed / unknown" sentinel; time()-0 ≈ 1.78B seconds
+      # which would always false-fire. Only alert when there is a real, dated scrub timestamp.
+      - alert: SynologyScrubOverdue
+        expr: >-
+          homelab_synology_pool_scrub_last_done_timestamp > 0
+          and (time() - homelab_synology_pool_scrub_last_done_timestamp) > 7776000
+        for: 0m
+        labels:
+          severity: warning
+          source_tool: vmalert-metrics
+          category: storage
+          integration: synology
+        annotations:
+          summary: "Synology pool data-scrub is overdue (>90 days)"
+          description: >-
+            Synology pool {{ $labels.pool }} has not completed a data-scrub in over 90 days
+            (7776000s). Run a data-scrub so latent disk errors are caught before they compound.
+
+      # 10 — Data-integrity proxy: the pool has a failed disk, making scrub/parity untrustworthy.
+      # NOTE: the real DSM scrub error-state enum string is UNCONFIRMED (only "ready" seen). This rule
+      # ships the CONFIRMED proxy homelab_synology_pool_disk_failure_number > 0 (a real metric: the pool
+      # has a failed disk). RE-VERIFY at Refinement: if a stable scrub error-state string exists, ADD a
+      # secondary state-set rule alongside this proxy (tracked as a 021 regression item).
+      - alert: SynologyScrubError
+        expr: homelab_synology_pool_disk_failure_number > 0
+        for: 0m
+        labels:
+          severity: warning
+          source_tool: vmalert-metrics
+          category: storage
+          integration: synology
+        annotations:
+          summary: "Synology pool has a failed disk (data-integrity risk)"
+          description: >-
+            Synology pool {{ $labels.pool }} reports a failed disk
+            (homelab_synology_pool_disk_failure_number > 0). Parity/scrub integrity is compromised
+            until the disk is replaced and the pool rebuilds.
+
+  - name: synology_hardware
+    interval: 30s
+    rules:
+      # 11 — A disk has failed: DSM disk status bad, OR SMART status bad, OR a failing SMART attribute.
+      # LABEL SEMANTICS: this is `A or B or C`. All three operands carry the {disk} label
+      # (disk_status{disk}, disk_smart_status{disk}, smart_attr_failing{disk}). `or` is a set-union
+      # that keeps the LEFT operand's series and adds right-operand series whose label set isn't already
+      # present. A planted disk_status{disk="sda"}==0 matches ONLY operand A → ONE alert carrying
+      # {disk="sda"}. The description references {{ $labels.disk }}, which every matching operand carries.
+      # (disk_temp_celsius is {disk,model} — but it is NOT in this expr, so its extra `model` label is
+      # irrelevant here.)
+      - alert: SynologyDiskFailed
+        expr: >-
+          homelab_synology_disk_status == 0
+          or homelab_synology_disk_smart_status == 0
+          or homelab_synology_smart_attr_failing > 0
+        for: 5m
+        labels:
+          severity: critical
+          source_tool: vmalert-metrics
+          category: hardware
+          integration: synology
+        annotations:
+          summary: "Synology disk has failed or is failing SMART"
+          description: >-
+            Synology disk {{ $labels.disk }} has failed: DSM disk status bad, SMART status bad, or a
+            failing SMART attribute. Replace the disk and verify pool/volume health.
+
+      # 12 — A disk is running hot. 55C is a FIRST-PASS threshold — tune at Refinement against real
+      # readings. The `model` label flows through alongside `disk` (metric is {disk,model}).
+      - alert: SynologyDiskHighTemp
+        expr: homelab_synology_disk_temp_celsius >= 55
+        for: 10m
+        labels:
+          severity: warning
+          source_tool: vmalert-metrics
+          category: hardware
+          integration: synology
+        annotations:
+          summary: "Synology disk temperature is high (>=55C)"
+          description: >-
+            Synology disk {{ $labels.disk }} ({{ $labels.model }}) is at or above 55C
+            (homelab_synology_disk_temp_celsius). Check NAS airflow/ambient temperature.
+
+      # 13 — The UPS is running on battery (mains power lost). No labels on the metric.
+      - alert: SynologyUpsOnBattery
+        expr: homelab_synology_ups_on_battery == 1
+        for: 0m
+        labels:
+          severity: critical
+          source_tool: vmalert-metrics
+          category: hardware
+          integration: synology
+        annotations:
+          summary: "Synology UPS is on battery (mains power lost)"
+          description: >-
+            The Synology UPS is running on battery (homelab_synology_ups_on_battery=1). Mains power has
+            been lost; the NAS will shut down when the battery is exhausted.
+
+      # 14 — The UPS battery is low (imminent shutdown). No labels on the metric.
+      - alert: SynologyUpsLowBattery
+        expr: homelab_synology_ups_low_battery == 1
+        for: 0m
+        labels:
+          severity: critical
+          source_tool: vmalert-metrics
+          category: hardware
+          integration: synology
+        annotations:
+          summary: "Synology UPS battery is low (imminent shutdown)"
+          description: >-
+            The Synology UPS battery is low (homelab_synology_ups_low_battery=1). Shutdown is imminent;
+            ensure dependent services flush state.
+
+  - name: synology_system
+    interval: 30s
+    rules:
+      # 15 — DSM SystemHealth aggregate reports a problem (always-seeded; 1=healthy, 0=problem).
+      # NOT total unreachability — for that see collector_silent_death in collector_health.yaml.
+      - alert: SynologyDown
+        expr: homelab_synology_health_ok == 0
+        for: 5m
+        labels:
+          severity: critical
+          source_tool: vmalert-metrics
+          category: system
+          integration: synology
+        annotations:
+          summary: "Synology DSM reports a system-health problem"
+          description: >-
+            Synology DSM SystemHealth reports a problem (homelab_synology_health_ok=0). Check DSM's
+            System Health / notifications. NOTE: this is a DSM-health problem, not total unreachability —
+            for a fully unreachable / dead collector, see collector_silent_death in collector_health.yaml.
+
+      # 16 — DSM reports a system-temperature warning (DSM-provided boolean; no raw threshold).
+      - alert: SynologySysHighTemp
+        expr: homelab_synology_sys_temp_warning == 1
+        for: 5m
+        labels:
+          severity: warning
+          source_tool: vmalert-metrics
+          category: system
+          integration: synology
+        annotations:
+          summary: "Synology system temperature warning"
+          description: >-
+            Synology DSM reports a system-temperature warning (homelab_synology_sys_temp_warning=1).
+            Check NAS airflow and ambient temperature.
+
+      # 17 — CPU or memory pinned high. cpu_user/cpu_system/mem_usage are no-label scalars, so `+` of
+      # the two cpu series and `or` with mem all collapse to a single (label-less) result → at most one
+      # alert, no flow-through labels. 90% thresholds are FIRST-PASS — tune at Refinement.
+      - alert: SynologyHighCpuMem
+        expr: >-
+          (homelab_synology_cpu_user_percent + homelab_synology_cpu_system_percent) > 90
+          or homelab_synology_mem_usage_percent > 90
+        for: 15m
+        labels:
+          severity: warning
+          source_tool: vmalert-metrics
+          category: system
+          integration: synology
+        annotations:
+          summary: "Synology CPU or memory usage is high (>90%)"
+          description: >-
+            Synology CPU (user+system) or memory usage is above 90% (homelab_synology_cpu_*_percent /
+            homelab_synology_mem_usage_percent). The NAS may be under heavy load or memory pressure.
+
+      # 18 — DSM requests a reboot (e.g. after an update). No labels on the metric.
+      - alert: SynologyNeedReboot
+        expr: homelab_synology_need_reboot == 1
+        for: 0m
+        labels:
+          severity: warning
+          source_tool: vmalert-metrics
+          category: system
+          integration: synology
+        annotations:
+          summary: "Synology requests a reboot"
+          description: >-
+            Synology DSM is requesting a reboot (homelab_synology_need_reboot=1). A pending update or
+            config change needs a reboot to take effect.
+
+      # 19 — DSM API responses are slow. Per-api granularity so the alert names the slow endpoint.
+      # SYNO.Storage.CGI.Storage/* is characteristically ~3.7s on a healthy NAS — excluded to avoid
+      # persistent info noise. The {api} label flows through from the metric.
+      - alert: SynologyApiSlow
+        expr: homelab_synology_api_took_seconds{api!~"SYNO\\.Storage\\.CGI\\.Storage/.*"} > 2
+        for: 10m
+        labels:
+          severity: info
+          source_tool: vmalert-metrics
+          category: system
+          integration: synology
+        annotations:
+          summary: "Synology DSM API response time elevated"
+          description: >-
+            Synology DSM API {{ $labels.api }} response time is over 2s
+            (homelab_synology_api_took_seconds). The DSM API is slow to respond, which may delay metric
+            collection.
