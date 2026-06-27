@@ -179,6 +179,30 @@ Note in items 1/2/3 that STAGE-008-022 owns the alert RULES consuming these metr
 
 - [ ] **PROVISIONAL — `synology_synotoken` redaction pattern is defensive, not yet confirmed against a real token line.** No token-shaped secret (SynoToken/sid/api-token) appeared in any real captured DSM line (only bracket-wrapped User/from/via identity fields, which ARE redacted by synology_user/synology_src_addr/synology_auth_method). The `synology_synotoken` pattern is RETAINED as a defensive guard (an unmatched redaction pattern costs only a tiny regex eval; a missing one risks leaking a real secret). If a future real capture shows DSM never logs a synotoken-shaped value, it may be dropped; until then it stays. (Rationale: for redaction, false-negative = leaked secret, so err toward keeping the guard.)
 
+## STAGE-008-021 — Synology alert rules (core: storage, hardware, system groups)
+
+- [ ] **Synology core alert-rule golden tests pass (fast).** Run:
+  ```
+  docker run --rm --entrypoint promtool -v "$(pwd)/deploy/vmalert/metrics:/rules" prom/prometheus:v2.47.0 test rules /rules/__tests__/synology.tests.yaml
+  ```
+  Expect: SUCCESS in ~2s. Validates the 16 new core rules (storage/hardware/system groups) + the 3 existing 019 rules — fire/no-fire, exact labels + annotations. (Includes the SynologyApiSlow per-api exclusion of `SYNO.Storage.CGI.Storage/*`.)
+
+- [ ] **SynologyScrubOverdue isolated slow golden test passes.** Run:
+  ```
+  docker run --rm --entrypoint promtool -v "$(pwd)/deploy/vmalert/metrics:/rules" prom/prometheus:v2.47.0 test rules /rules/__tests__/synology.scruboverdue.tests.yaml
+  ```
+  Expect: SUCCESS in ~2s. This rule needs eval_time≥91d (its threshold is `(time()-ts)>90d`), which forces a coarse `evaluation_interval: 6h` that can't coexist with the main file's fine-grained `for:`-duration tests — hence the separate file. Validates FIRE (ts=1, genuinely old) + NO-FIRE (recent ts; AND ts=0 "never/unknown" sentinel guarded out).
+
+- [ ] **Rule file validity.** Run:
+  ```
+  docker run --rm --entrypoint promtool -v "$(pwd)/deploy/vmalert/metrics:/rules" prom/prometheus:v2.47.0 check rules /rules/synology.yaml
+  ```
+  Expect: SUCCESS, 19 rules found (3 from 019 + 16 from 021).
+
+- [ ] **LIVE-VALIDATED against the real NAS (2026-06-27) — findings + fixes:** the 16 rules were evaluated against the live prod VictoriaMetrics series. Confirmed the critical-rule metrics FLOW on this NAS (health_ok, volume_writable, raid_status, disk_status, disk_smart_status, ups_on_battery/low_battery all present; `smart_attr_failing` is correctly absent-until-a-SMART-attr-fails — the SynologyDiskFailed rule still has its two always-present operands). Two FALSE-FIRE bugs were found + fixed in Refinement: (a) **SynologyApiSlow** false-fired on `SYNO.Storage.CGI.Storage/load_info` (characteristically ~3.7s, benign) — fixed by dropping `max()` → per-api with a `{api!~"SYNO\\.Storage\\.CGI\\.Storage/.*"}` exclusion (now names the slow api in the alert). (b) **SynologyScrubOverdue** false-fired on `scrub_last_done_timestamp==0` (DSM "never/unknown" sentinel → `time()-0` ≈ 1.78B s) — fixed by guarding `ts > 0`. Threshold reality-check on the live NAS: disk temps 38–54°C (55°C threshold sane), CPU 1% / mem 19% (90% threshold sane), no UPS-on-battery. Two rules legitimately FIRE on the real NAS as TRUE positives (not bugs): SynologyPoolUnverifiedDisk (the pool genuinely has an unverified disk) and SynologyScrubOverdue is now correctly silent on the ts=0 pool. RE-RUN periodically: re-evaluate the rules against live VM after major DSM changes; confirm no NEW false-fires.
+
+- [ ] **OPEN — capture the real volume_status / pool_status / scrub error-state enum strings (owned by STAGE-008-021; the degraded/crashed/scrub-error secondary rules depend on them).** Live capture (2026-06-27) showed `volume_status` ∈ {fs_almost_full, has_unverified_disk}, `pool_status` ∈ {pool_normal, has_unverified_disk}, `pool_scrub_status` = {ready} — NO `degraded`/`crashed`/scrub-error string observed (healthy NAS). The critical degraded rules therefore use unambiguous boolean gauges (`volume_writable==0`, `raid_status==0`), not state-set enum matches, and SynologyScrubError uses the `pool_disk_failure_number>0` proxy. WHEN the NAS next enters a degraded/crashed/scrub-error state (or via a controlled test), capture the real DSM enum string and, if stable, add a secondary state-set rule (`{status=~"<real-degraded>"}==1` / `{state=~"<real-scrub-error>"}==1`) alongside the boolean/proxy. The boolean/proxy rules are the always-safe primary; the state-set rule would be belt-and-suspenders. (No silent gap: the critical conditions ARE covered by the boolean gauges today.)
+
 ## STAGE-008-032 — CollectorConfig YAML-loading mechanism
 
 - [ ] **YAML config-loading populates a CollectorConfig subclass field.** A `/config/plugins/collectors/<name>.yaml` (e.g. `synology_mount_health.yaml` with `synology_mounts: ["/rackstation/Movies"]`) must flow through `loader.register()` so the registered collector's `LoadedCollector.config` is the SUBCLASS (e.g. `SynologyMountHealthCollectorConfig`) with the field populated. Verified live: register populated `synology_mounts` from YAML. Mechanism is GENERAL (any collector with a `config_class` ClassVar).
