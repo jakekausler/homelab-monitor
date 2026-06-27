@@ -285,7 +285,7 @@ key_field = "service"
 
 [sinks.vl]
 type = "http"
-inputs = ["throttle", "strip_markers_hmrun", "strip_markers_udm"]
+inputs = ["throttle", "strip_markers_hmrun", "strip_markers_udm", "strip_markers_synology"]
 uri = "http://victorialogs:9428/insert/jsonline?_msg_field=message"
 encoding.codec = "json"
 framing.method = "newline_delimited"
@@ -689,6 +689,146 @@ increment_by_value = false
 parse_failed = "{{ parse_failed }}"
 udm_format = "{{ udm_format }}"
 
+# SYNOLOGY DSM SYSLOG PIPELINE (STAGE-008-020)
+# ============================================
+# Parallel branch (mirrors the UDM branch shape: source -> parse -> throttle ->
+# redact -> strip_markers -> vl). The Synology DS3622xs+ (DSM 7.x) forwards
+# standard RFC 3164 (BSD) syslog over UDP to a DEDICATED port (5515) — distinct
+# from the UDM's 5514. The PORT is the sole discriminator (no source-IP filter:
+# the NAS is multi-NIC .4/.5/.6/.7 and the forwarding NIC is not stable).
+#
+# Every real DSM line is "<PRI>Mmm dd HH:MM:SS NAS CATEGORY[: ]message" with
+# PRI=14 (facility=1/user, severity=6/info) REGARDLESS of event type — so we
+# bucket by the CATEGORY WORD, not facility. The category delimiter is
+# INCONSISTENT: "Connection:" has a colon; "System Test message" is space-
+# delimited. We use parse_syslog() for the happy-path envelope (severity/
+# facility/appname/hostname/message), then RE-DERIVE the category from the
+# message with a colon-OR-space rule (we do NOT trust parse_syslog's .appname,
+# which is inconsistent across the two delimiter shapes). On parse_syslog
+# failure we fall back to service="synology-other" + parse_failed=1.
+#
+# Closed category->service map (case-insensitive):
+#   Connection        -> synology-auth     (login/auth)
+#   Storage Manager   -> synology-smart    (SMART/storage)
+#   Package Center    -> synology-package  (package events)
+#   <recognized else> -> synology-system   (general)
+#   parse-fail/none   -> synology-other    (parse_failed=1)
+# source_type="synology" + service="synology-*" become VictoriaLogs STREAM
+# fields (VL infers them; no sink change). facility/appname/category are stored
+# as NON-stream fields. Throttle runs BEFORE redaction (CPU not spent on dropped
+# events). The DSM is operator-enabled at Refinement; in Build this source just
+# listens and parses whatever (if anything) arrives.
+#
+# No regex lookarounds (Rust regex crate constraint).
+
+[sources.synology_syslog]
+type = "socket"
+mode = "udp"
+address = "${HM_SYNOLOGY_SYSLOG_BIND_HOST}:${HM_SYNOLOGY_SYSLOG_PORT}"
+
+[transforms.synology_parse]
+type = "remap"
+inputs = ["synology_syslog"]
+source = '''
+.parse_failed = 0
+raw = strip_whitespace(to_string(.message) ?? "")
+
+parsed, p_err = parse_syslog(raw)
+if p_err != null {
+  # parse_syslog rejected the datagram. Keep raw, mark parse_failed, bucket other.
+  .parse_failed = 1
+  .message = raw
+  .source_type = "synology"
+  .service = "synology-other"
+  .syn_category = ""
+} else {
+  # Envelope fields from parse_syslog (RFC 3164 happy path).
+  .source_type = "synology"
+  .host = to_string(parsed.hostname) ?? ""
+  .syslog_facility = to_string(parsed.facility) ?? ""
+  .syslog_severity_name = to_string(parsed.severity) ?? ""
+  .appname = to_string(parsed.appname) ?? ""
+  msg = to_string(parsed.message) ?? ""
+  .message = msg
+
+  # --- Category derivation: colon-OR-space, independent of parse_syslog .appname ---
+  # Build the candidate text we scan for the category. parse_syslog MAY have
+  # peeled the first word into .appname (colon tags) or left it in .message
+  # (space tags); to be robust we reconstruct a head from appname + message.
+  head_src = msg
+  if .appname != "" && !starts_with(msg, .appname) {
+    head_src = .appname + " " + msg
+  }
+  category = ""
+  # Rule 1: short colon-delimited head (Connection / Storage Manager / Package Center).
+  colon_parts = split(head_src, ":", limit: 2)
+  colon_head = strip_whitespace(to_string(colon_parts[0]) ?? "")
+  colon_word_count = length(split(colon_head, " "))
+  if length(colon_parts) > 1 && colon_word_count <= 3 && strlen(colon_head) <= 32 {
+    category = colon_head
+  } else {
+    # Rule 2: first whitespace token (System, etc.).
+    space_parts = split(head_src, " ", limit: 2)
+    category = strip_whitespace(to_string(space_parts[0]) ?? "")
+  }
+  .syn_category = category
+
+  # --- Closed-set category -> service map (case-insensitive) ---
+  cat_l = downcase(category)
+  if cat_l == "connection" {
+    .service = "synology-auth"
+  } else if cat_l == "storage manager" {
+    .service = "synology-smart"
+  } else if cat_l == "package center" {
+    .service = "synology-package"
+  } else if category != "" {
+    .service = "synology-system"
+  } else {
+    .service = "synology-other"
+  }
+}
+'''
+
+[transforms.synology_throttle]
+type = "throttle"
+inputs = ["synology_parse"]
+threshold = 50
+window_secs = 1
+key_field = "service"
+
+[transforms.redact_synology]
+type = "remap"
+inputs = ["synology_throttle"]
+source = '''
+${VECTOR_REDACT_TRANSFORMS}'''
+
+[transforms.strip_markers_synology]
+type = "remap"
+inputs = ["redact_synology"]
+source = '''
+${VECTOR_REDACT_STRIP_MARKERS}'''
+
+# SYNOLOGY PARSE-FAILURE METRIC (STAGE-008-020)
+# =============================================
+# Mirrors udm_parse_failed_metric. synology_parse sets .parse_failed = 0 on every
+# line and = 1 on a parse_syslog failure. The field is ALWAYS present, so
+# log_to_metric never hits its field-absent error+drop path. Taps synology_parse
+# DIRECTLY (before throttle) so dropped/throttled lines are still counted. Flows
+# to the existing prometheus_exporter sink on :9598.
+[transforms.synology_parse_failed_metric]
+type = "log_to_metric"
+inputs = ["synology_parse"]
+
+[[transforms.synology_parse_failed_metric.metrics]]
+type = "counter"
+field = "parse_failed"
+name = "synology_lines_total"
+increment_by_value = false
+
+[transforms.synology_parse_failed_metric.metrics.tags]
+parse_failed = "{{ parse_failed }}"
+service = "{{ service }}"
+
 # NON-SYSTEMD FALLBACK: cron_syslog source
 # ==========================================
 # MUTUALLY EXCLUSIVE with cron_journald_filter. Uncomment ONLY on non-systemd
@@ -716,10 +856,10 @@ udm_format = "{{ udm_format }}"
 # these markers never reach VictoriaLogs.
 [transforms.redaction_metric]
 type = "log_to_metric"
-inputs = ["redact_main", "redact_hmrun", "redact_udm"]
+inputs = ["redact_main", "redact_hmrun", "redact_udm", "redact_synology"]
 ${VECTOR_REDACT_METRICS}
 
 [sinks.redaction_metrics]
 type = "prometheus_exporter"
-inputs = ["redaction_metric", "internal_metrics", "udm_parse_failed_metric"]
+inputs = ["redaction_metric", "internal_metrics", "udm_parse_failed_metric", "synology_parse_failed_metric"]
 address = "0.0.0.0:9598"

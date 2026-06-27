@@ -79,8 +79,76 @@ enhancement. (Mirrors the Unifi integration's posture.)
 - DSM returns **HTTP 200** for logical errors; the failure is in the body as `{"success": false, "error": {"code": N}}`. On body error **119** (session expired) the client re-authenticates **once** and retries; a second 119 is surfaced as a typed `auth` error. Body error **400** (bad credentials) → `auth`; **105** (permission denied) and other codes → `api_error`.
 - Shutdown: `method=logout` (best-effort logout to free the session slot; never blocks teardown).
 
-## Logs
+## Logs (syslog → VictoriaLogs)
 
-DSM logs arrive via DSM remote-syslog forwarding → vector → VictoriaLogs (built in a
-later stage), scoped under `service="synology-*"` labels. **No DSM API is used for
-log polling.**
+DSM logs arrive via DSM remote-syslog forwarding → vector → VictoriaLogs, scoped
+under `source_type="synology"` + `service="synology-*"` stream labels. **No DSM
+API is used for log polling** (single source per signal).
+
+### Enable DSM remote syslog (operator step)
+
+1. In DSM, open **Control Panel → Log Center → Log Sending**.
+   (On some DSM builds this is **Log Center → Send Logs**.)
+2. Check **Send logs to a syslog server**.
+3. **Server:** `192.168.2.148` (the monitor host LAN IP).
+4. **Port:** `5515`  ·  **Transfer protocol:** `UDP`  ·  **Log format:** `BSD`
+   (RFC 3164). Do NOT use TLS/RFC 5424 — the vector socket source expects plain
+   UDP BSD.
+5. Apply. DSM immediately sends a `System Test message from Synology Syslog
+   Client from (<external-ip>)` heartbeat — that confirms the path end-to-end.
+
+The listener is `0.0.0.0:5515/udp` in prod (host-published by the `vector`
+sidecar under the `host-collectors` profile). The dedicated port `5515` (distinct
+from the UDM's `5514`) is the sole device discriminator — the NAS is multi-NIC
+(.4/.5/.6/.7) so we do NOT filter by source IP.
+
+### Service labels (category-word bucketing)
+
+All DSM lines carry PRI=14 (facility=user/info) regardless of event, so vector
+buckets by the CATEGORY WORD (the token after the hostname), handling both the
+colon-delimited (`Connection:`) and space-delimited (`System ...`) shapes:
+
+| DSM category      | `service` label     | Downstream (STAGE-008-023) |
+| ----------------- | ------------------- | -------------------------- |
+| `Connection`      | `synology-auth`     | failed-login burst / abnormal-login |
+| `Storage Manager` | `synology-smart`    | SMART-event rules          |
+| `Package Center`  | `synology-package`  | package-event rules        |
+| recognized, other | `synology-system`   | general error-rate         |
+| parse-fail / none | `synology-other`    | counted by `synology_lines_total{parse_failed="1"}` |
+
+Only `Connection` (auth) and `System` (system) are live-confirmed; the SMART /
+package category words are pending a richer real capture (the parser is
+category-generic with a safe `synology-system` fallback, so unseen categories are
+never dropped).
+
+### Redaction
+
+Synology lines are redacted at ingest (before VictoriaLogs) by the `synology_*`
+patterns (`config.py` `DEFAULT_REDACT_PATTERNS`): the account name (`User [...]`),
+source address (`from [...]`, often IPv6), auth method (`via [...]`), and the
+test-heartbeat external IP (`Synology Syslog Client from (...)`). A provisional
+`synology_synotoken` guard covers any DSM session token if one ever appears.
+
+### Coverage map (Amendment 5 / Q10b — nothing silently dropped)
+
+**Carried by syslog → VictoriaLogs:**
+
+| Signal               | Source category   | Stream            |
+| -------------------- | ----------------- | ----------------- |
+| Auth / login events  | `Connection`      | `synology-auth`   |
+| SMART / storage logs | `Storage Manager` | `synology-smart`  |
+| Package events       | `Package Center`  | `synology-package`|
+| General system logs  | (recognized else) | `synology-system` |
+
+**Covered by METRIC collectors instead (NOT syslog — single source per signal):**
+
+| Signal                              | Collector (stage)              |
+| ----------------------------------- | ------------------------------ |
+| Volume / disk / SMART-attribute gauges | Wave B/C collectors (008-008…008-014) |
+| Surveillance camera/event/recording state | SS-API collectors (008-015 / 008-016) |
+| License / HomeMode                  | 008-017                        |
+| NFS mount health                    | 008-018                        |
+
+**No silent drops:** an unrecognized syslog line → `synology-other` + the
+`synology_lines_total{parse_failed="1"}` counter (prometheus_exporter :9598);
+non-forwardable signals → covered by the named metric collector above.

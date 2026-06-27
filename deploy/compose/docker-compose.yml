@@ -336,6 +336,11 @@ services:
       - "2000"
     environment:
       VECTOR_DATA_DIR: /var/lib/vector
+      # STAGE-008-020: vector's [sources.synology_syslog].address uses these at
+      # config-load env-substitution. The CONTAINER listen port is fixed at 5515
+      # (the published mapping in ports: maps host:5515 -> container:5515).
+      HM_SYNOLOGY_SYSLOG_BIND_HOST: "0.0.0.0"
+      HM_SYNOLOGY_SYSLOG_PORT: "5515"
     # Redaction metrics (STAGE-004-006): prometheus_exporter on :9598, scraped
     # by vmagent over homelab-monitor-net (job_name: vector). Not host-published.
     expose:
@@ -347,6 +352,12 @@ services:
     # HM_UDM_SYSLOG_BIND_HOST / HM_UDM_SYSLOG_PORT in deploy/compose/.env.
     ports:
       - "${HM_UDM_SYSLOG_BIND_HOST:-0.0.0.0}:${HM_UDM_SYSLOG_PORT:-5514}:5514/udp"
+      # STAGE-008-020: Synology DSM syslog UDP listener. SECOND instance of the
+      # documented LAN-syslog 0.0.0.0 exception (the multi-NIC NAS on the LAN
+      # cannot reach a container-internal sidecar). Distinct port (5515) is the
+      # sole device discriminator. Configurable via HM_SYNOLOGY_SYSLOG_* in
+      # deploy/compose/.env.
+      - "${HM_SYNOLOGY_SYSLOG_BIND_HOST:-0.0.0.0}:${HM_SYNOLOGY_SYSLOG_PORT:-5515}:5515/udp"
     # The monitor renders vector.toml (with the cron-events ingest token
     # substituted) into data_vector_config at boot. Vector --configs the
     # rendered file. A named volume cannot overlay a single file path, so the

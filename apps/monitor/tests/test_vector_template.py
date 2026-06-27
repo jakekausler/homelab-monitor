@@ -90,14 +90,16 @@ def test_hmrun_shaped_transform_present(parsed_config: dict[str, Any]) -> None:
 
 
 def test_sinks_vl_inputs_rewired(parsed_config: dict[str, Any]) -> None:
-    """[sinks.vl].inputs = throttle + hmrun + udm markers (STAGE-004-006 + STAGE-007-016)."""
+    """[sinks.vl].inputs = throttle + hmrun + udm + synology markers."""
     sinks = parsed_config.get("sinks", {})
     vl = sinks.get("vl", {})
     inputs = vl.get("inputs", [])
-    assert inputs == ["throttle", "strip_markers_hmrun", "strip_markers_udm"], (
-        f"sinks.vl.inputs should be "
-        f"['throttle', 'strip_markers_hmrun', 'strip_markers_udm'], got: {inputs}"
-    )
+    assert inputs == [
+        "throttle",
+        "strip_markers_hmrun",
+        "strip_markers_udm",
+        "strip_markers_synology",
+    ], f"sinks.vl.inputs unexpected, got: {inputs}"
 
 
 def test_drop_noise_excludes_hmrun(parsed_config: dict[str, Any]) -> None:
@@ -1131,4 +1133,62 @@ def test_udm_syslog_source_and_pipeline(parsed_config: dict[str, Any]) -> None:
     exporter_inputs = sinks.get("redaction_metrics", {}).get("inputs", [])
     assert "udm_parse_failed_metric" in exporter_inputs, (
         f"redaction_metrics inputs missing parse-failed metric, got: {exporter_inputs}"
+    )
+
+
+def test_synology_syslog_source_and_pipeline(parsed_config: dict[str, Any]) -> None:
+    """STAGE-008-020: Synology DSM socket source + parse/throttle/redact branch."""
+    sources = parsed_config.get("sources", {})
+    syn = sources.get("synology_syslog", {})
+    assert syn.get("type") == "socket", f"synology_syslog type, got: {syn.get('type')}"
+    assert syn.get("mode") == "udp", f"synology_syslog mode, got: {syn.get('mode')}"
+    # address is "<BIND_HOST placeholder>:<PORT placeholder>" — both are vector
+    # env-var placeholders, NOT render.py placeholders, so they survive
+    # _render_template() literally. Assert the env-var form is present.
+    address = syn.get("address", "")
+    assert "HM_SYNOLOGY_SYSLOG_BIND_HOST" in address, f"synology address, got: {address}"
+    assert "HM_SYNOLOGY_SYSLOG_PORT" in address, f"synology address, got: {address}"
+
+    transforms = parsed_config.get("transforms", {})
+    for name in (
+        "synology_parse",
+        "synology_throttle",
+        "redact_synology",
+        "strip_markers_synology",
+        "synology_parse_failed_metric",
+    ):
+        assert name in transforms, f"missing {name}; keys: {list(transforms.keys())}"
+
+    assert transforms["synology_parse"].get("inputs") == ["synology_syslog"]
+    assert transforms["synology_throttle"].get("inputs") == ["synology_parse"]
+    assert transforms["synology_throttle"].get("type") == "throttle"
+    assert transforms["synology_throttle"].get("key_field") == "service"
+    assert transforms["redact_synology"].get("inputs") == ["synology_throttle"]
+    assert transforms["strip_markers_synology"].get("inputs") == ["redact_synology"]
+
+    pfm = transforms["synology_parse_failed_metric"]
+    assert pfm.get("type") == "log_to_metric"
+    assert pfm.get("inputs") == ["synology_parse"]
+
+    src = transforms["synology_parse"].get("source", "")
+    assert '.source_type = "synology"' in src, "synology_parse must set source_type=synology"
+    assert '"synology-auth"' in src, "must map the auth bucket"
+    assert '"synology-smart"' in src, "must map the smart bucket"
+    assert '"synology-package"' in src, "must map the package bucket"
+    assert '"synology-system"' in src, "must map the system bucket"
+    assert '"synology-other"' in src, "must have the synology-other fallback"
+    assert ".parse_failed = 1" in src, "must mark parse failures"
+    assert "parse_syslog(" in src, "must use parse_syslog()"
+    _assert_no_lookarounds(src)
+
+    sinks = parsed_config.get("sinks", {})
+    vl_inputs = sinks.get("vl", {}).get("inputs", [])
+    assert "strip_markers_synology" in vl_inputs, f"vl inputs missing synology, got: {vl_inputs}"
+
+    metric_inputs = transforms.get("redaction_metric", {}).get("inputs", [])
+    assert "redact_synology" in metric_inputs, f"redaction_metric inputs, got: {metric_inputs}"
+
+    exporter_inputs = sinks.get("redaction_metrics", {}).get("inputs", [])
+    assert "synology_parse_failed_metric" in exporter_inputs, (
+        f"redaction_metrics inputs missing synology parse-failed metric, got: {exporter_inputs}"
     )

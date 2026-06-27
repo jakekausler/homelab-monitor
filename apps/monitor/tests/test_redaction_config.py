@@ -23,7 +23,7 @@ class TestLoadRedactPatterns:
         config_path = tmp_path / "nonexistent.yaml"
         monkeypatch.setenv("HOMELAB_MONITOR_CONFIG", str(config_path))
         result = load_redact_patterns()
-        assert len(result) == 8  # noqa: PLR2004
+        assert len(result) == 13  # noqa: PLR2004
         assert result == list(DEFAULT_REDACT_PATTERNS)
 
     def test_absent_logs_section_returns_defaults(
@@ -34,7 +34,7 @@ class TestLoadRedactPatterns:
         config_file.write_text("disk_budget:\n  total_gb: 100\n")
         monkeypatch.setenv("HOMELAB_MONITOR_CONFIG", str(config_file))
         result = load_redact_patterns()
-        assert len(result) == 8  # noqa: PLR2004
+        assert len(result) == 13  # noqa: PLR2004
         assert result == list(DEFAULT_REDACT_PATTERNS)
 
     def test_absent_redact_subkey_returns_defaults(
@@ -45,7 +45,7 @@ class TestLoadRedactPatterns:
         config_file.write_text("logs:\n  something_else: 1\n")
         monkeypatch.setenv("HOMELAB_MONITOR_CONFIG", str(config_file))
         result = load_redact_patterns()
-        assert len(result) == 8  # noqa: PLR2004
+        assert len(result) == 13  # noqa: PLR2004
 
     def test_redact_none_returns_defaults(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -55,7 +55,7 @@ class TestLoadRedactPatterns:
         config_file.write_text("logs:\n  redact:\n")
         monkeypatch.setenv("HOMELAB_MONITOR_CONFIG", str(config_file))
         result = load_redact_patterns()
-        assert len(result) == 8  # noqa: PLR2004
+        assert len(result) == 13  # noqa: PLR2004
 
     def test_explicit_empty_list_returns_empty(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -221,8 +221,8 @@ class TestLoadRedactPatterns:
             load_redact_patterns()
 
     def test_defaults_content(self) -> None:
-        """Assert 8 defaults with exact names and no lookarounds."""
-        assert len(DEFAULT_REDACT_PATTERNS) == 8  # noqa: PLR2004
+        """Assert 13 defaults with exact names and no lookarounds."""
+        assert len(DEFAULT_REDACT_PATTERNS) == 13  # noqa: PLR2004
         names = [p.name for p in DEFAULT_REDACT_PATTERNS]
         assert names == [
             "bearer_token",
@@ -233,6 +233,11 @@ class TestLoadRedactPatterns:
             "udm_bearer",
             "udm_session",
             "udm_authkey",
+            "synology_user",
+            "synology_src_addr",
+            "synology_auth_method",
+            "synology_test_src",
+            "synology_synotoken",
         ]
         for pattern in DEFAULT_REDACT_PATTERNS:
             for token in ("(?=", "(?!", "(?<=", "(?<!"):

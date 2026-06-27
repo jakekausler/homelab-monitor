@@ -1556,6 +1556,35 @@ DEFAULT_REDACT_PATTERNS: tuple[RedactPattern, ...] = (
         pattern=r"(?i)authkey[\"']?\s*[:=]\s*[\"']?[A-Za-z0-9]{16,}",
         replacement="authkey=[REDACTED]",
     ),
+    # STAGE-008-020: Synology DSM syslog redaction. Grounded in REAL captured
+    # DSM lines (bracket/paren-wrapped identity + address fields). Rust-regex-safe
+    # (NO lookarounds). The synology_synotoken entry is PROVISIONAL — DROP it
+    # before Finalize if a richer real capture shows no SynoToken on the wire.
+    RedactPattern(
+        name="synology_user",
+        pattern=r"(?i)\bUser \[([^\]]+)\]",
+        replacement="User [REDACTED]",
+    ),
+    RedactPattern(
+        name="synology_src_addr",
+        pattern=r"(?i)\bfrom \[([^\]]+)\]",
+        replacement="from [REDACTED]",
+    ),
+    RedactPattern(
+        name="synology_auth_method",
+        pattern=r"(?i)\bvia \[([^\]]+)\]",
+        replacement="via [REDACTED]",
+    ),
+    RedactPattern(
+        name="synology_test_src",
+        pattern=r"(?i)Synology Syslog Client from \(([^)]+)\)",
+        replacement="Synology Syslog Client from (REDACTED)",
+    ),
+    RedactPattern(
+        name="synology_synotoken",
+        pattern=r"(?i)(_?synotoken)[\"']?\s*[:=]\s*[\"']?[A-Za-z0-9._-]{8,}",
+        replacement="${1}=[REDACTED]",
+    ),
 )
 
 _REDACT_KEY = "logs"

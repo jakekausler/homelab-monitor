@@ -99,12 +99,13 @@ All host bindings are `127.0.0.1`-only (isolated to localhost).
 | vmalert (logs)       | 18881            | container-internal | 8880    | Two containers, distinct host ports, same container port. |
 | Grafana              | 13000            | container-internal | 3000    | Host :3000 is collision-magnet. Never publish Grafana to :3000. |
 | UDM syslog (vector)  | 15514            | 5514 (0.0.0.0)     | 5514    | DELIBERATE EXCEPTION: a LAN syslog source (the UDM Pro) cannot reach a container-internal sidecar, so this is the ONE prod sidecar port host-published, and on `0.0.0.0` (not `127.0.0.1`) by necessity. UDP. Dev binds `127.0.0.1` only (no real UDM traffic in dev). |
+| Synology syslog (vector) | 15515            | 5515 (0.0.0.0)     | 5515    | DELIBERATE EXCEPTION (2nd instance): a LAN syslog source (the Synology DSM NAS) cannot reach a container-internal sidecar, so its port is host-published on `0.0.0.0` like the UDM's. Distinct port (5515) is the sole device discriminator — the multi-NIC NAS is NOT filtered by source IP. UDP. Dev binds `127.0.0.1` only (no real DSM traffic in dev). |
 
 **Invariant:** Dev published ports start with `1xxxx`. Prod publishes only the monitor backend on `2xxxx` (29090). All other sidecars are container-internal in prod and proxied via the monitor's `/api/<sidecar>/` endpoints.
 
 **Parallel instance ("B"):** a second, fully independent prod-like stack can run alongside A on the `3xxxx` band (monitor backend 39090). B sets `HM_INSTANCE` + `HM_CONTAINER_PREFIX` (both equal, e.g. `homelab-monitor-b`) to namespace project/network/volumes/containers, runs with `HOMELAB_MONITOR_DOCKER_ENABLED=false` (no container monitoring) and empty `COMPOSE_PROFILES` (no cadvisor/vector); host integration (cron/systemd) stays owned by A. Full procedure: `docs/dev/parallel-instance.md`.
 
-**Documented exception (STAGE-007-016):** the UDM syslog listener (vector, UDP `5514`) is the sole prod sidecar port host-published, bound `0.0.0.0` not `127.0.0.1`, because an off-host LAN syslog source cannot reach a container-internal sidecar. Its prod port (`5514`) does not follow the `2xxxx` convention because it must match the syslog default the UDM emits to.
+**Documented exception (STAGE-007-016 + STAGE-008-020):** the UDM syslog listener (vector, UDP `5514`) and the Synology DSM syslog listener (vector, UDP `5515`) are the only prod sidecar ports host-published, each bound `0.0.0.0` not `127.0.0.1`, because off-host LAN syslog sources cannot reach a container-internal sidecar. Their prod ports (`5514`/`5515`) do not follow the `2xxxx` convention because they must match the syslog defaults the devices emit to. The two devices are discriminated by PORT, not source IP (the Synology NAS is multi-NIC, so an IP filter would be fragile).
 
 `make dev-prod` (full prod compose stack on this dev host) uses the same `2xxxx` mappings as production.
 

@@ -1,0 +1,29 @@
+# Synology DSM syslog fixture — REAL captured + LABELED-SYNTHETIC samples.
+#
+# Source (REAL): live Synology DS3622xs+, DSM 7.3.2-86009, captured via host
+#   UDP listener 0.0.0.0:5515 on 2026-06-27 (DSM Log Center -> Log Sending ->
+#   192.168.2.148:5515 UDP, BSD format). Real datagrams persisted from the
+#   session capture.
+# Format: RFC 3164 (BSD). Every line "<PRI>Mmm dd HH:MM:SS NAS CATEGORY[: ]msg".
+#   PRI=14 (facility=1/user, severity=6/info) for ALL lines -> bucket by the
+#   CATEGORY WORD, not facility. Delimiter is inconsistent: "Connection:" has a
+#   colon; "System Test message" is space-delimited.
+# Secrets/PII on-wire (bracket/paren wrapped): User [<name>] ; from [<addr>] ;
+#   via [<method>] ; from (<ipv4>). Redaction patterns synology_* cover these.
+#
+# === REAL (live-captured 2026-06-27) ===
+# System (test heartbeat, space-delimited) -> synology-system
+<14>Jun 27 09:13:46 NAS System Test message from Synology Syslog Client from (70.229.192.120)
+# Connection (DSM login, colon-delimited; note IPv6 in from [...]) -> synology-auth
+<14>Jun 27 09:19:40 NAS Connection: User [jakekausler] from [2600:387:15:700e::8] signed in to [DSM] successfully via [amfa-email].
+#
+# === SYNTHETIC (pending real capture — Build/Refinement MUST confirm the exact
+#     category words against a richer live capture; see the stage Re-confirm list)
+# Storage Manager (SMART/storage) -> synology-smart  [SYNTHETIC]
+<14>Jun 27 10:00:00 NAS Storage Manager: [Storage Pool 1] SMART warning detected on disk 3.
+# Package Center (package event) -> synology-package  [SYNTHETIC]
+<14>Jun 27 10:01:00 NAS Package Center: Package [Docker] has been updated to version 24.0.2.
+# Backup (recognized-else -> synology-system)  [SYNTHETIC]
+<14>Jun 27 10:02:00 NAS Backup: scheduled Hyper Backup task completed successfully.
+# Connection failed-login (auth, colon-delimited)  [SYNTHETIC]
+<14>Jun 27 10:03:00 NAS Connection: User [jakekausler] from [192.168.2.50] failed to sign in to [DSM] via [password].
