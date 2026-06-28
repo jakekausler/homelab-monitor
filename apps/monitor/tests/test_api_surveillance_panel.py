@@ -191,6 +191,25 @@ class TestGetSurveillanceCameras:
                 return httpx.Response(200, json=_vector([({}, "1000")]))
             if query == "homelab_synology_ss_recordings_total":
                 return httpx.Response(200, json=_vector([({}, "777")]))
+            if query == "homelab_synology_ss_camera_info":
+                return httpx.Response(
+                    200,
+                    json=_vector(
+                        [
+                            (
+                                {
+                                    "camera": "FrontDoor",
+                                    "id": "1",
+                                    "ip": "192.168.2.50",
+                                    "model": "TV-IP1314PI",
+                                    "vendor": "TRENDnet",
+                                    "mac": "aa:bb:cc:dd:ee:ff",
+                                },
+                                "1",
+                            )
+                        ]
+                    ),
+                )
             if query == 'homelab_collector_run_success_total{name="synology_cameras"}':
                 return httpx.Response(200, json=_vector([({"name": "synology_cameras"}, "9")]))
             return httpx.Response(200, json=_empty_vector())
@@ -209,10 +228,18 @@ class TestGetSurveillanceCameras:
         assert body["cameras"][0]["connected"] is True
         assert body["cameras"][0]["status"] == 3.0  # noqa: PLR2004
         assert body["cameras"][0]["recordings_count"] == 42.0  # noqa: PLR2004
+        # FrontDoor present in _info -> model/ip/vendor populated
+        assert body["cameras"][0]["model"] == "TV-IP1314PI"
+        assert body["cameras"][0]["ip"] == "192.168.2.50"
+        assert body["cameras"][0]["vendor"] == "TRENDnet"
         assert body["cameras"][1]["camera"] == "Garage"
         assert body["cameras"][1]["connected"] is False
         assert body["cameras"][1]["status"] is None
         assert body["cameras"][1]["recordings_count"] is None
+        # Garage absent from _info -> honest nulls (NOT fabricated)
+        assert body["cameras"][1]["model"] is None
+        assert body["cameras"][1]["ip"] is None
+        assert body["cameras"][1]["vendor"] is None
         assert body["events_today"] == 5.0  # noqa: PLR2004
         assert body["events_total_all"] == 1000.0  # noqa: PLR2004
         assert body["recordings_total"] == 777.0  # noqa: PLR2004
@@ -263,6 +290,84 @@ class TestGetSurveillanceCameras:
         )
         response = await authenticated_client.get("/api/integrations/surveillance/cameras")
         assert response.status_code == _HTTP_BAD_GATEWAY
+
+    async def test_info_partial_labels(
+        self,
+        authenticated_client: AsyncClient,
+        httpx_mock: HTTPXMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Camera present in _info but missing the 'vendor' label -> vendor None."""
+        monkeypatch.setenv("HOMELAB_MONITOR_VM_URL", _VM_URL)
+
+        def vm_callback(request: httpx.Request) -> httpx.Response:
+            query = _query_of(request)
+            if query == "homelab_synology_ss_camera_connected":
+                return httpx.Response(200, json=_vector([({"camera": "FrontDoor"}, "1")]))
+            if query == "homelab_synology_ss_camera_info":
+                return httpx.Response(
+                    200,
+                    json=_vector([({"camera": "FrontDoor", "ip": "10.0.0.5", "model": "X"}, "1")]),
+                )
+            return httpx.Response(200, json=_empty_vector())
+
+        httpx_mock.add_callback(
+            vm_callback,
+            url=re.compile(r"http://vm-test:8428/api/v1/query\b.*"),
+            method="GET",
+            is_reusable=True,
+        )
+        response = await authenticated_client.get("/api/integrations/surveillance/cameras")
+        assert response.status_code == _HTTP_OK
+        body = response.json()
+        assert body["cameras"][0]["model"] == "X"
+        assert body["cameras"][0]["ip"] == "10.0.0.5"
+        assert body["cameras"][0]["vendor"] is None
+
+    async def test_info_empty_string_label_is_none(
+        self,
+        authenticated_client: AsyncClient,
+        httpx_mock: HTTPXMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Camera with empty-string label (vendor="") -> vendor None (coalesced)."""
+        monkeypatch.setenv("HOMELAB_MONITOR_VM_URL", _VM_URL)
+
+        def vm_callback(request: httpx.Request) -> httpx.Response:
+            query = _query_of(request)
+            if query == "homelab_synology_ss_camera_connected":
+                return httpx.Response(200, json=_vector([({"camera": "FrontDoor"}, "1")]))
+            if query == "homelab_synology_ss_camera_info":
+                return httpx.Response(
+                    200,
+                    json=_vector(
+                        [
+                            (
+                                {
+                                    "camera": "FrontDoor",
+                                    "ip": "192.168.2.50",
+                                    "model": "TV-IP1314PI",
+                                    "vendor": "",
+                                },
+                                "1",
+                            )
+                        ]
+                    ),
+                )
+            return httpx.Response(200, json=_empty_vector())
+
+        httpx_mock.add_callback(
+            vm_callback,
+            url=re.compile(r"http://vm-test:8428/api/v1/query\b.*"),
+            method="GET",
+            is_reusable=True,
+        )
+        response = await authenticated_client.get("/api/integrations/surveillance/cameras")
+        assert response.status_code == _HTTP_OK
+        body = response.json()
+        assert body["cameras"][0]["model"] == "TV-IP1314PI"
+        assert body["cameras"][0]["ip"] == "192.168.2.50"
+        assert body["cameras"][0]["vendor"] is None
 
 
 class TestSurveillancePanelAuth:

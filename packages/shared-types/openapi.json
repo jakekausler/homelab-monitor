@@ -535,6 +535,28 @@
             "title": "Connected",
             "type": "boolean"
           },
+          "ip": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ip"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
           "recordings_count": {
             "anyOf": [
               {
@@ -556,13 +578,27 @@
               }
             ],
             "title": "Status"
+          },
+          "vendor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vendor"
           }
         },
         "required": [
           "camera",
           "connected",
           "status",
-          "recordings_count"
+          "recordings_count",
+          "model",
+          "ip",
+          "vendor"
         ],
         "title": "CameraRow",
         "type": "object"

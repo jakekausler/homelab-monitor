@@ -52,6 +52,17 @@ def _bool_metric(samples: list[VmInstantSample]) -> bool:
     return _scalar(samples) == 1.0
 
 
+def _info_label(info: dict[str, str], key: str) -> str | None:
+    """Read an enrichment label, treating an empty string as unknown (None).
+
+    The camera collector always emits model/ip/vendor labels, using "" for a
+    missing source value. Coalesce "" -> None so the API reports an honest
+    unknown rather than an empty string masquerading as a present value.
+    """
+    value = info.get(key)
+    return value if value else None
+
+
 def _data_available(samples: list[VmInstantSample]) -> bool:
     """True iff the collector self-metric sample is present with value > 0."""
     val = _scalar(samples)
@@ -71,6 +82,7 @@ _Q_RECORDINGS_COUNT = "homelab_synology_ss_recordings_count"
 _Q_EVENTS_TODAY = "homelab_synology_ss_events_today"
 _Q_EVENTS_TOTAL_ALL = "homelab_synology_ss_events_total_all"
 _Q_RECORDINGS_TOTAL = "homelab_synology_ss_recordings_total"
+_Q_CAMERA_INFO = "homelab_synology_ss_camera_info"
 _Q_CAMERAS_AVAILABLE = 'homelab_collector_run_success_total{name="synology_cameras"}'
 
 
@@ -93,6 +105,9 @@ class CameraRow(BaseModel):
     connected: bool
     status: float | None
     recordings_count: float | None
+    model: str | None
+    ip: str | None
+    vendor: str | None
 
 
 class SurveillanceCameras(BaseModel):
@@ -155,6 +170,7 @@ async def get_surveillance_cameras(
         events_today_samples,
         events_total_samples,
         recordings_total_samples,
+        info_samples,
         available_samples,
     ) = await asyncio.gather(
         vm_instant_query(http_client, vm_url, _Q_CAMERA_CONNECTED),
@@ -163,20 +179,28 @@ async def get_surveillance_cameras(
         vm_instant_query(http_client, vm_url, _Q_EVENTS_TODAY),
         vm_instant_query(http_client, vm_url, _Q_EVENTS_TOTAL_ALL),
         vm_instant_query(http_client, vm_url, _Q_RECORDINGS_TOTAL),
+        vm_instant_query(http_client, vm_url, _Q_CAMERA_INFO),
         vm_instant_query(http_client, vm_url, _Q_CAMERAS_AVAILABLE),
     )
 
     status_idx = {s.labels.get("camera", ""): _sample_float(s) for s in status_samples}
     rec_idx = {s.labels.get("camera", ""): _sample_float(s) for s in recordings_samples}
-    cameras: list[CameraRow] = [
-        CameraRow(
-            camera=s.labels.get("camera", ""),
-            connected=_sample_float(s) == 1.0,
-            status=status_idx.get(s.labels.get("camera", "")),
-            recordings_count=rec_idx.get(s.labels.get("camera", "")),
+    info_idx = {s.labels.get("camera", ""): s.labels for s in info_samples}
+    cameras: list[CameraRow] = []
+    for s in connected_samples:
+        name = s.labels.get("camera", "")
+        info = info_idx.get(name, {})
+        cameras.append(
+            CameraRow(
+                camera=name,
+                connected=_sample_float(s) == 1.0,
+                status=status_idx.get(name),
+                recordings_count=rec_idx.get(name),
+                model=_info_label(info, "model"),
+                ip=_info_label(info, "ip"),
+                vendor=_info_label(info, "vendor"),
+            )
         )
-        for s in connected_samples
-    ]
 
     return SurveillanceCameras(
         cameras=cameras,

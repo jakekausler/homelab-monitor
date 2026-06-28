@@ -2,6 +2,7 @@ import { Link } from '@tanstack/react-router'
 import {
   AlertTriangle,
   Cable,
+  Cctv,
   CalendarRange,
   Clock,
   ClipboardList,
@@ -41,6 +42,7 @@ const NAV_ITEMS: NavItem[] = [
   { label: 'Home Assistant', to: '/integrations/home-assistant', icon: HousePlug, indent: true },
   { label: 'Network', to: '/integrations/network', icon: Network, indent: true },
   { label: 'Pi-hole', to: '/integrations/pihole', icon: ShieldBan, indent: true },
+  { label: 'Surveillance', to: '/integrations/surveillance', icon: Cctv, indent: true },
   { label: 'Synology', to: '/integrations/synology', icon: HardDrive, indent: true },
   { label: 'Unifi', to: '/integrations/unifi', icon: Router, indent: true },
   { label: 'Logs', to: '/logs', icon: ScrollText },

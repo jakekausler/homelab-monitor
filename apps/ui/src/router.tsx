@@ -44,6 +44,8 @@ import { UnifiDevicePage } from '@/routes/integrations/UnifiDevicePage'
 import { SynologyLayout } from '@/routes/integrations/SynologyLayout'
 import { SynologyHardwareTab } from '@/routes/integrations/SynologyHardwareTab'
 import { SynologyOpsTab } from '@/routes/integrations/SynologyOpsTab'
+import { SurveillanceLayout } from '@/routes/integrations/SurveillanceLayout'
+import { SurveillanceCamerasTab } from '@/routes/integrations/SurveillanceCamerasTab'
 import { PiholeLayout } from '@/routes/integrations/PiholeLayout'
 import { PiholeOverviewTab } from '@/routes/integrations/PiholeOverviewTab'
 import { PiholeLogsTab } from '@/routes/integrations/PiholeLogsTab'
@@ -540,6 +542,27 @@ const synologyOpsRoute = createRoute({
   component: SynologyOpsTab,
 })
 
+const surveillanceLayoutRoute = createRoute({
+  getParentRoute: () => protectedLayoutRoute,
+  path: '/integrations/surveillance',
+  component: SurveillanceLayout,
+})
+
+const surveillanceIndexRoute = createRoute({
+  getParentRoute: () => surveillanceLayoutRoute,
+  path: '/',
+  beforeLoad: () => {
+    // eslint-disable-next-line @typescript-eslint/only-throw-error -- TanStack Router redirect objects are thrown by design
+    throw redirect({ to: '/integrations/surveillance/cameras' })
+  },
+})
+
+const surveillanceCamerasRoute = createRoute({
+  getParentRoute: () => surveillanceLayoutRoute,
+  path: 'cameras',
+  component: SurveillanceCamerasTab,
+})
+
 const piholeLayoutRoute = createRoute({
   getParentRoute: () => protectedLayoutRoute,
   path: '/integrations/pihole',
@@ -698,6 +721,7 @@ const routeTree = rootRoute.addChildren([
       unifiDeviceRoute,
     ]),
     synologyLayoutRoute.addChildren([synologyIndexRoute, synologyHardwareRoute, synologyOpsRoute]),
+    surveillanceLayoutRoute.addChildren([surveillanceIndexRoute, surveillanceCamerasRoute]),
     piholeLayoutRoute.addChildren([piholeIndexRoute, piholeOverviewRoute, piholeLogsRoute]),
     networkLayoutRoute.addChildren([
       networkIndexRoute,
