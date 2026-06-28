@@ -525,6 +525,48 @@
         "title": "BlockingResponse",
         "type": "object"
       },
+      "CameraRow": {
+        "properties": {
+          "camera": {
+            "title": "Camera",
+            "type": "string"
+          },
+          "connected": {
+            "title": "Connected",
+            "type": "boolean"
+          },
+          "recordings_count": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recordings Count"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          }
+        },
+        "required": [
+          "camera",
+          "connected",
+          "status",
+          "recordings_count"
+        ],
+        "title": "CameraRow",
+        "type": "object"
+      },
       "ChangePasswordRequest": {
         "additionalProperties": false,
         "properties": {
@@ -853,6 +895,29 @@
           "actions"
         ],
         "title": "ComposeActionListResponse",
+        "type": "object"
+      },
+      "ConnectionRow": {
+        "properties": {
+          "ip": {
+            "title": "Ip",
+            "type": "string"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          },
+          "user": {
+            "title": "User",
+            "type": "string"
+          }
+        },
+        "required": [
+          "user",
+          "ip",
+          "type"
+        ],
+        "title": "ConnectionRow",
         "type": "object"
       },
       "ContainerCrashDetail": {
@@ -2379,6 +2444,60 @@
         "title": "CrontabDiffOut",
         "type": "object"
       },
+      "DiskRow": {
+        "properties": {
+          "disk": {
+            "title": "Disk",
+            "type": "string"
+          },
+          "smart_attr_failing": {
+            "title": "Smart Attr Failing",
+            "type": "boolean"
+          },
+          "smart_status": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Smart Status"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          },
+          "temp_celsius": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Temp Celsius"
+          }
+        },
+        "required": [
+          "disk",
+          "status",
+          "smart_status",
+          "temp_celsius",
+          "smart_attr_failing"
+        ],
+        "title": "DiskRow",
+        "type": "object"
+      },
       "DismissResponse": {
         "additionalProperties": false,
         "description": "Response for POST /api/alerts/{id}/dismiss.",
@@ -2672,6 +2791,31 @@
           "cycle_status"
         ],
         "title": "DrainCycleResultResponse",
+        "type": "object"
+      },
+      "FanRow": {
+        "properties": {
+          "state": {
+            "title": "State",
+            "type": "string"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          }
+        },
+        "required": [
+          "state",
+          "value"
+        ],
+        "title": "FanRow",
         "type": "object"
       },
       "FieldDescriptor": {
@@ -5193,6 +5337,36 @@
         "title": "ModelTemplateEntry",
         "type": "object"
       },
+      "MountRow": {
+        "properties": {
+          "mount": {
+            "title": "Mount",
+            "type": "string"
+          },
+          "mount_free_bytes": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mount Free Bytes"
+          },
+          "mount_up": {
+            "title": "Mount Up",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "mount",
+          "mount_up",
+          "mount_free_bytes"
+        ],
+        "title": "MountRow",
+        "type": "object"
+      },
       "OutcomeView": {
         "additionalProperties": false,
         "description": "One alert_outcomes row in API responses.",
@@ -5221,6 +5395,24 @@
           "decided_at"
         ],
         "title": "OutcomeView",
+        "type": "object"
+      },
+      "PackageUpdateRow": {
+        "properties": {
+          "package": {
+            "title": "Package",
+            "type": "string"
+          },
+          "update_available": {
+            "title": "Update Available",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "package",
+          "update_available"
+        ],
+        "title": "PackageUpdateRow",
         "type": "object"
       },
       "PiholeAdlistRow": {
@@ -5788,6 +5980,29 @@
         "title": "PiholeVersionInfo",
         "type": "object"
       },
+      "PoolRow": {
+        "properties": {
+          "pool": {
+            "title": "Pool",
+            "type": "string"
+          },
+          "raid_status": {
+            "title": "Raid Status",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "pool",
+          "status",
+          "raid_status"
+        ],
+        "title": "PoolRow",
+        "type": "object"
+      },
       "PreviewRunsResponse": {
         "additionalProperties": false,
         "description": "Response for both preview-runs endpoints.",
@@ -6186,6 +6401,31 @@
         "title": "RegisterCronBody",
         "type": "object"
       },
+      "ReplicationRow": {
+        "properties": {
+          "share": {
+            "title": "Share",
+            "type": "string"
+          },
+          "snapshot_count": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Snapshot Count"
+          }
+        },
+        "required": [
+          "share",
+          "snapshot_count"
+        ],
+        "title": "ReplicationRow",
+        "type": "object"
+      },
       "RetryResponse": {
         "additionalProperties": false,
         "description": "Response for POST /api/collectors/{name}/retry.",
@@ -6514,6 +6754,31 @@
           "source_type"
         ],
         "title": "SavedServiceIdentity",
+        "type": "object"
+      },
+      "SecurityFindingRow": {
+        "properties": {
+          "count": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Count"
+          },
+          "severity": {
+            "title": "Severity",
+            "type": "string"
+          }
+        },
+        "required": [
+          "severity",
+          "count"
+        ],
+        "title": "SecurityFindingRow",
         "type": "object"
       },
       "ServiceCount": {
@@ -6848,6 +7113,60 @@
         "title": "SilenceAllowlistResponse",
         "type": "object"
       },
+      "SmartAttrRow": {
+        "properties": {
+          "attr_id": {
+            "title": "Attr Id",
+            "type": "string"
+          },
+          "attr_name": {
+            "title": "Attr Name",
+            "type": "string"
+          },
+          "raw": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Raw"
+          },
+          "threshold": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Threshold"
+          },
+          "worst": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Worst"
+          }
+        },
+        "required": [
+          "attr_id",
+          "attr_name",
+          "raw",
+          "worst",
+          "threshold"
+        ],
+        "title": "SmartAttrRow",
+        "type": "object"
+      },
       "SuggestionAcceptRequest": {
         "additionalProperties": false,
         "properties": {
@@ -6955,6 +7274,594 @@
           "suggestion"
         ],
         "title": "SuggestionIgnoreResponse",
+        "type": "object"
+      },
+      "SurveillanceCameras": {
+        "properties": {
+          "cameras": {
+            "items": {
+              "$ref": "#/components/schemas/CameraRow"
+            },
+            "title": "Cameras",
+            "type": "array"
+          },
+          "data_available": {
+            "title": "Data Available",
+            "type": "boolean"
+          },
+          "events_today": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Events Today"
+          },
+          "events_total_all": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Events Total All"
+          },
+          "recordings_total": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recordings Total"
+          }
+        },
+        "required": [
+          "cameras",
+          "events_today",
+          "events_total_all",
+          "recordings_total",
+          "data_available"
+        ],
+        "title": "SurveillanceCameras",
+        "type": "object"
+      },
+      "SurveillanceSummary": {
+        "properties": {
+          "cameras_connected_total": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cameras Connected Total"
+          },
+          "cameras_disconnected_total": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cameras Disconnected Total"
+          },
+          "cameras_total": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cameras Total"
+          },
+          "data_available": {
+            "title": "Data Available",
+            "type": "boolean"
+          },
+          "homemode_on": {
+            "title": "Homemode On",
+            "type": "boolean"
+          },
+          "license_max": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "License Max"
+          },
+          "license_used": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "License Used"
+          }
+        },
+        "required": [
+          "license_used",
+          "license_max",
+          "homemode_on",
+          "cameras_total",
+          "cameras_connected_total",
+          "cameras_disconnected_total",
+          "data_available"
+        ],
+        "title": "SurveillanceSummary",
+        "type": "object"
+      },
+      "SynologyBackup": {
+        "properties": {
+          "configured_count": {
+            "title": "Configured Count",
+            "type": "integer"
+          },
+          "last_result_ok": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Result Ok"
+          },
+          "no_backup_configured": {
+            "title": "No Backup Configured",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "configured_count",
+          "no_backup_configured",
+          "last_result_ok"
+        ],
+        "title": "SynologyBackup",
+        "type": "object"
+      },
+      "SynologyConnections": {
+        "properties": {
+          "connections": {
+            "items": {
+              "$ref": "#/components/schemas/ConnectionRow"
+            },
+            "title": "Connections",
+            "type": "array"
+          },
+          "data_available": {
+            "title": "Data Available",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "connections",
+          "data_available"
+        ],
+        "title": "SynologyConnections",
+        "type": "object"
+      },
+      "SynologyDiskSmartAttrs": {
+        "properties": {
+          "attrs": {
+            "items": {
+              "$ref": "#/components/schemas/SmartAttrRow"
+            },
+            "title": "Attrs",
+            "type": "array"
+          },
+          "data_available": {
+            "title": "Data Available",
+            "type": "boolean"
+          },
+          "disk": {
+            "title": "Disk",
+            "type": "string"
+          }
+        },
+        "required": [
+          "disk",
+          "attrs",
+          "data_available"
+        ],
+        "title": "SynologyDiskSmartAttrs",
+        "type": "object"
+      },
+      "SynologyHardware": {
+        "properties": {
+          "disks": {
+            "items": {
+              "$ref": "#/components/schemas/DiskRow"
+            },
+            "title": "Disks",
+            "type": "array"
+          },
+          "pools": {
+            "items": {
+              "$ref": "#/components/schemas/PoolRow"
+            },
+            "title": "Pools",
+            "type": "array"
+          },
+          "ssh_probe": {
+            "$ref": "#/components/schemas/SynologySshProbe"
+          },
+          "ssh_probe_data_available": {
+            "title": "Ssh Probe Data Available",
+            "type": "boolean"
+          },
+          "system": {
+            "$ref": "#/components/schemas/SynologySystem"
+          },
+          "ups": {
+            "$ref": "#/components/schemas/SynologyUps"
+          },
+          "volumes": {
+            "items": {
+              "$ref": "#/components/schemas/VolumeRow"
+            },
+            "title": "Volumes",
+            "type": "array"
+          }
+        },
+        "required": [
+          "volumes",
+          "pools",
+          "disks",
+          "system",
+          "ups",
+          "ssh_probe",
+          "ssh_probe_data_available"
+        ],
+        "title": "SynologyHardware",
+        "type": "object"
+      },
+      "SynologyOps": {
+        "properties": {
+          "backup": {
+            "$ref": "#/components/schemas/SynologyBackup"
+          },
+          "mount_data_available": {
+            "title": "Mount Data Available",
+            "type": "boolean"
+          },
+          "mounts": {
+            "items": {
+              "$ref": "#/components/schemas/MountRow"
+            },
+            "title": "Mounts",
+            "type": "array"
+          },
+          "replication": {
+            "$ref": "#/components/schemas/SynologyReplication"
+          },
+          "security": {
+            "$ref": "#/components/schemas/SynologySecurity"
+          },
+          "updates": {
+            "$ref": "#/components/schemas/SynologyUpdates"
+          }
+        },
+        "required": [
+          "backup",
+          "replication",
+          "updates",
+          "security",
+          "mounts",
+          "mount_data_available"
+        ],
+        "title": "SynologyOps",
+        "type": "object"
+      },
+      "SynologyReplication": {
+        "properties": {
+          "replication_available": {
+            "title": "Replication Available",
+            "type": "boolean"
+          },
+          "shares": {
+            "items": {
+              "$ref": "#/components/schemas/ReplicationRow"
+            },
+            "title": "Shares",
+            "type": "array"
+          }
+        },
+        "required": [
+          "shares",
+          "replication_available"
+        ],
+        "title": "SynologyReplication",
+        "type": "object"
+      },
+      "SynologySecurity": {
+        "properties": {
+          "findings": {
+            "items": {
+              "$ref": "#/components/schemas/SecurityFindingRow"
+            },
+            "title": "Findings",
+            "type": "array"
+          },
+          "security_safe": {
+            "title": "Security Safe",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "security_safe",
+          "findings"
+        ],
+        "title": "SynologySecurity",
+        "type": "object"
+      },
+      "SynologySshProbe": {
+        "properties": {
+          "cpu_temp_celsius": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cpu Temp Celsius"
+          },
+          "load1": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Load1"
+          },
+          "mdstat_array_degraded": {
+            "title": "Mdstat Array Degraded",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "load1",
+          "cpu_temp_celsius",
+          "mdstat_array_degraded"
+        ],
+        "title": "SynologySshProbe",
+        "type": "object"
+      },
+      "SynologySummary": {
+        "properties": {
+          "backup_configured": {
+            "title": "Backup Configured",
+            "type": "boolean"
+          },
+          "dsm_up": {
+            "title": "Dsm Up",
+            "type": "boolean"
+          },
+          "last_seen": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Seen"
+          },
+          "security_safe": {
+            "title": "Security Safe",
+            "type": "boolean"
+          },
+          "update_available": {
+            "title": "Update Available",
+            "type": "boolean"
+          },
+          "ups_charge_percent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ups Charge Percent"
+          },
+          "ups_on_battery": {
+            "title": "Ups On Battery",
+            "type": "boolean"
+          },
+          "volume_used_percent_max": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Volume Used Percent Max"
+          }
+        },
+        "required": [
+          "dsm_up",
+          "volume_used_percent_max",
+          "ups_on_battery",
+          "ups_charge_percent",
+          "update_available",
+          "security_safe",
+          "backup_configured",
+          "last_seen"
+        ],
+        "title": "SynologySummary",
+        "type": "object"
+      },
+      "SynologySystem": {
+        "properties": {
+          "fans": {
+            "items": {
+              "$ref": "#/components/schemas/FanRow"
+            },
+            "title": "Fans",
+            "type": "array"
+          },
+          "firmware": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Firmware"
+          },
+          "health_ok": {
+            "title": "Health Ok",
+            "type": "boolean"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "need_reboot": {
+            "title": "Need Reboot",
+            "type": "boolean"
+          },
+          "serial": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Serial"
+          },
+          "sys_temp_celsius": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sys Temp Celsius"
+          },
+          "uptime_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Uptime Seconds"
+          }
+        },
+        "required": [
+          "health_ok",
+          "uptime_seconds",
+          "sys_temp_celsius",
+          "need_reboot",
+          "model",
+          "serial",
+          "firmware",
+          "fans"
+        ],
+        "title": "SynologySystem",
+        "type": "object"
+      },
+      "SynologyUpdates": {
+        "properties": {
+          "dsm_update_available": {
+            "title": "Dsm Update Available",
+            "type": "boolean"
+          },
+          "packages": {
+            "items": {
+              "$ref": "#/components/schemas/PackageUpdateRow"
+            },
+            "title": "Packages",
+            "type": "array"
+          },
+          "packages_with_updates_count": {
+            "title": "Packages With Updates Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "dsm_update_available",
+          "packages_with_updates_count",
+          "packages"
+        ],
+        "title": "SynologyUpdates",
+        "type": "object"
+      },
+      "SynologyUps": {
+        "properties": {
+          "charge_percent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Charge Percent"
+          },
+          "connected": {
+            "title": "Connected",
+            "type": "boolean"
+          },
+          "on_battery": {
+            "title": "On Battery",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "connected",
+          "on_battery",
+          "charge_percent"
+        ],
+        "title": "SynologyUps",
         "type": "object"
       },
       "UnifiApiTook": {
@@ -8664,6 +9571,36 @@
           "users_configured"
         ],
         "title": "VersionResponse",
+        "type": "object"
+      },
+      "VolumeRow": {
+        "properties": {
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "used_percent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Used Percent"
+          },
+          "volume": {
+            "title": "Volume",
+            "type": "string"
+          }
+        },
+        "required": [
+          "volume",
+          "used_percent",
+          "status"
+        ],
+        "title": "VolumeRow",
         "type": "object"
       }
     }
@@ -12205,6 +13142,181 @@
         "summary": "Get Pihole Upstreams",
         "tags": [
           "integrations-pihole"
+        ]
+      }
+    },
+    "/api/integrations/surveillance/cameras": {
+      "get": {
+        "description": "Return per-camera status + activity plus system-wide event scalars.",
+        "operationId": "get_surveillance_cameras_api_integrations_surveillance_cameras_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SurveillanceCameras"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Surveillance Cameras",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/api/integrations/surveillance/summary": {
+      "get": {
+        "description": "Return Surveillance Station summary (license/homemode/camera rollups).",
+        "operationId": "get_surveillance_summary_api_integrations_surveillance_summary_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SurveillanceSummary"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Surveillance Summary",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/api/integrations/synology/connections": {
+      "get": {
+        "description": "Return the LIVE DSM active connection list (re-queried from the NAS).\n\nAuth: cookie session required. A live SynologyError / unreachable DSM\ndegrades to data_available=false with an empty list (NOT a 502). A missing\nclient -> 503 (via the dependency). PRIVACY: NEVER persisted.",
+        "operationId": "get_synology_connections_api_integrations_synology_connections_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SynologyConnections"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Synology Connections",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/api/integrations/synology/disks/{disk}/smart-attrs": {
+      "get": {
+        "description": "Return per-attribute SMART rows for one disk (from the SSH probe series).",
+        "operationId": "get_synology_disk_smart_attrs_api_integrations_synology_disks__disk__smart_attrs_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "disk",
+            "required": true,
+            "schema": {
+              "title": "Disk",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SynologyDiskSmartAttrs"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Synology Disk Smart Attrs",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/api/integrations/synology/hardware": {
+      "get": {
+        "description": "Return Synology hardware detail (volumes/pools/disks/system/ups/ssh-probe).",
+        "operationId": "get_synology_hardware_api_integrations_synology_hardware_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SynologyHardware"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Synology Hardware",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/api/integrations/synology/ops": {
+      "get": {
+        "description": "Return Synology ops detail (backup/replication/updates/security/mounts).",
+        "operationId": "get_synology_ops_api_integrations_synology_ops_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SynologyOps"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Synology Ops",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/api/integrations/synology/summary": {
+      "get": {
+        "description": "Return Synology DSM panel summary from VictoriaMetrics instant queries.\n\nAuth: cookie session required. Each scalar defaults to None/False when its\ninstant query returns an empty vector. VM transport failure -> 502.",
+        "operationId": "get_synology_summary_api_integrations_synology_summary_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SynologySummary"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Synology Summary",
+        "tags": [
+          "integrations"
         ]
       }
     },

@@ -33,6 +33,8 @@ from homelab_monitor.kernel.api.routers import (
     integrations_ha,
     integrations_home_assistant,
     integrations_pihole,
+    integrations_surveillance,
+    integrations_synology,
     integrations_unifi,
     karma,
     logs,
@@ -98,6 +100,8 @@ def create_app(*, lifespan_enabled: bool = True) -> FastAPI:
     app.include_router(integrations_home_assistant.router, prefix="/api")
     app.include_router(integrations_pihole.router, prefix="/api")
     app.include_router(integrations_unifi.router, prefix="/api")
+    app.include_router(integrations_synology.router, prefix="/api")
+    app.include_router(integrations_surveillance.router, prefix="/api")
     app.include_router(crons.router, prefix="/api")
     app.include_router(cron_events.router, prefix="/api")
     app.include_router(docker.router, prefix="/api")
