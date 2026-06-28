@@ -223,10 +223,16 @@ class TestGetSynologyHardware:
             query_responses = {
                 "homelab_synology_volume_used_percent": _vector([({"volume": "volume_1"}, "73.4")]),
                 "homelab_synology_volume_status": _vector(
-                    [({"volume": "volume_1", "status": "normal"}, "1")]
+                    [
+                        ({"volume": "volume_1", "status": "fs_almost_full"}, "1"),
+                        ({"volume": "volume_1", "status": "has_unverified_disk"}, "1"),
+                    ]
                 ),
                 "homelab_synology_pool_status": _vector(
-                    [({"pool": "pool_1", "status": "normal"}, "1")]
+                    [
+                        ({"pool": "pool_1", "status": "pool_normal"}, "1"),
+                        ({"pool": "pool_1", "status": "has_unverified_disk"}, "1"),
+                    ]
                 ),
                 "homelab_synology_raid_status": _vector(
                     [({"pool": "pool_1", "raid": "raid_5"}, "1")]
@@ -234,7 +240,7 @@ class TestGetSynologyHardware:
                 "homelab_synology_disk_status": _vector([({"disk": "sda"}, "1")]),
                 "homelab_synology_disk_smart_status": _vector([({"disk": "sda"}, "1")]),
                 "homelab_synology_disk_temp_celsius": _vector(
-                    [({"disk": "sda", "model": "M"}, "38")]
+                    [({"disk": "sda", "model": "WD40EFRX"}, "38")]
                 ),
                 "homelab_synology_smart_attr_failing": _vector([({"disk": "sda"}, "0")]),
                 "homelab_synology_system_uptime_seconds": _vector([({}, "123456")]),
@@ -263,6 +269,17 @@ class TestGetSynologyHardware:
                 'homelab_collector_run_success_total{name="synology-probe"}': _vector(
                     [({"name": "synology-probe"}, "5")]
                 ),
+                "homelab_synology_disk_remain_life": _vector([({"disk": "sda"}, "-1")]),
+                'homelab_ssh_up{target="synology"}': _vector([({"target": "synology"}, "1")]),
+                'homelab_ssh_host_key_mismatch{target="synology"}': _vector(
+                    [({"target": "synology"}, "0")]
+                ),
+                'homelab_ssh_last_success_age_seconds{target="synology"}': _vector(
+                    [({"target": "synology"}, "12.5")]
+                ),
+                'homelab_ssh_probe_duration_seconds{target="synology"}': _vector(
+                    [({"target": "synology"}, "0.8")]
+                ),
             }
             return httpx.Response(200, json=query_responses.get(query, _empty_vector()))
 
@@ -278,10 +295,10 @@ class TestGetSynologyHardware:
         assert len(body["volumes"]) == 1
         assert body["volumes"][0]["volume"] == "volume_1"
         assert body["volumes"][0]["used_percent"] == 73.4  # noqa: PLR2004
-        assert body["volumes"][0]["status"] == "normal"
+        assert body["volumes"][0]["status"] == ["fs_almost_full", "has_unverified_disk"]
         assert len(body["pools"]) == 1
         assert body["pools"][0]["pool"] == "pool_1"
-        assert body["pools"][0]["status"] == "normal"
+        assert body["pools"][0]["status"] == ["pool_normal", "has_unverified_disk"]
         assert body["pools"][0]["raid_status"] == "raid_5"
         assert len(body["disks"]) == 1
         assert body["disks"][0]["disk"] == "sda"
@@ -302,6 +319,109 @@ class TestGetSynologyHardware:
         assert body["ssh_probe"]["cpu_temp_celsius"] == 45.0  # noqa: PLR2004
         assert body["ssh_probe"]["mdstat_array_degraded"] is False
         assert body["ssh_probe_data_available"] is True
+        assert body["disks"][0]["model"] == "WD40EFRX"
+        assert body["disks"][0]["remain_life"] == -1.0
+        assert body["ssh_probe"]["up"] is True
+        assert body["ssh_probe"]["host_key_mismatch"] is False
+        assert body["ssh_probe"]["last_success_age_seconds"] == 12.5  # noqa: PLR2004
+        assert body["ssh_probe"]["probe_duration_seconds"] == 0.8  # noqa: PLR2004
+
+    async def test_volumes_pools_dedup_and_empty_status(
+        self,
+        authenticated_client: AsyncClient,
+        httpx_mock: HTTPXMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Volume with no status series -> status=[]; pool with one status -> status=[label]."""
+        monkeypatch.setenv("HOMELAB_MONITOR_VM_URL", _VM_URL)
+
+        def vm_callback(request: httpx.Request) -> httpx.Response:
+            query = _query_of(request)
+            query_responses = {
+                # volume_1 has pct but no status series; volume_2 has one status
+                "homelab_synology_volume_used_percent": _vector(
+                    [
+                        ({"volume": "volume_1"}, "73.4"),
+                        ({"volume": "volume_2"}, "50.0"),
+                    ]
+                ),
+                "homelab_synology_volume_status": _vector(
+                    [({"volume": "volume_2", "status": "normal"}, "1")]
+                ),
+                # pool_1 with a single status
+                "homelab_synology_pool_status": _vector(
+                    [({"pool": "pool_1", "status": "pool_normal"}, "1")]
+                ),
+                "homelab_synology_raid_status": _vector(
+                    [({"pool": "pool_1", "raid": "raid_5"}, "1")]
+                ),
+            }
+            return httpx.Response(200, json=query_responses.get(query, _empty_vector()))
+
+        httpx_mock.add_callback(
+            vm_callback,
+            url=re.compile(r"http://vm-test:8428/api/v1/query\b.*"),
+            method="GET",
+            is_reusable=True,
+        )
+        response = await authenticated_client.get("/api/integrations/synology/hardware")
+        assert response.status_code == _HTTP_OK
+        body = response.json()
+        vols = {v["volume"]: v for v in body["volumes"]}
+        assert len(vols) == 2  # noqa: PLR2004
+        assert vols["volume_1"]["status"] == []
+        assert vols["volume_2"]["status"] == ["normal"]
+        pools = body["pools"]
+        assert len(pools) == 1
+        assert pools[0]["status"] == ["pool_normal"]
+
+    async def test_new_fields_absent_and_fallback_branches(
+        self,
+        authenticated_client: AsyncClient,
+        httpx_mock: HTTPXMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("HOMELAB_MONITOR_VM_URL", _VM_URL)
+
+        def vm_callback(request: httpx.Request) -> httpx.Response:
+            query = _query_of(request)
+            query_responses: dict[str, dict[str, object]] = {
+                # one disk present so DiskRow rows are built; temp has an EMPTY
+                # model label -> model falls back to the disk id ("sda").
+                "homelab_synology_disk_status": _vector([({"disk": "sda"}, "1")]),
+                "homelab_synology_disk_smart_status": _vector([({"disk": "sda"}, "1")]),
+                "homelab_synology_disk_temp_celsius": _vector(
+                    [({"disk": "sda", "model": ""}, "38")]
+                ),
+                "homelab_synology_smart_attr_failing": _vector([({"disk": "sda"}, "0")]),
+                # remain_life present with a POSITIVE value (alternate of the -1 case)
+                "homelab_synology_disk_remain_life": _vector([({"disk": "sda"}, "87")]),
+                # SSH state: up=0, host_key_mismatch=1 (alternate bool branches);
+                # last_success_age + probe_duration ABSENT -> None.
+                'homelab_ssh_up{target="synology"}': _vector([({"target": "synology"}, "0")]),
+                'homelab_ssh_host_key_mismatch{target="synology"}': _vector(
+                    [({"target": "synology"}, "1")]
+                ),
+            }
+            return httpx.Response(200, json=query_responses.get(query, _empty_vector()))
+
+        httpx_mock.add_callback(
+            vm_callback,
+            url=re.compile(r"http://vm-test:8428/api/v1/query\b.*"),
+            method="GET",
+            is_reusable=True,
+        )
+        response = await authenticated_client.get("/api/integrations/synology/hardware")
+        assert response.status_code == _HTTP_OK
+        body = response.json()
+        # model falls back to the disk id when the temp model label is empty
+        assert body["disks"][0]["model"] == "sda"
+        assert body["disks"][0]["remain_life"] == 87.0  # noqa: PLR2004
+        # SSH probe alternate / absent branches
+        assert body["ssh_probe"]["up"] is False
+        assert body["ssh_probe"]["host_key_mismatch"] is True
+        assert body["ssh_probe"]["last_success_age_seconds"] is None
+        assert body["ssh_probe"]["probe_duration_seconds"] is None
 
     async def test_smart_failing_and_info_absent(
         self,
@@ -382,6 +502,55 @@ class TestGetSynologyHardware:
         )
         response = await authenticated_client.get("/api/integrations/synology/hardware")
         assert response.status_code == _HTTP_BAD_GATEWAY
+
+    async def test_volumes_pools_duplicate_status_dedup(
+        self,
+        authenticated_client: AsyncClient,
+        httpx_mock: HTTPXMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Duplicate status labels per volume/pool dedup to one (covers 483->478, 506->501)."""
+        monkeypatch.setenv("HOMELAB_MONITOR_VM_URL", _VM_URL)
+
+        def vm_callback(request: httpx.Request) -> httpx.Response:
+            query = _query_of(request)
+            query_responses = {
+                # volume_1: duplicate "normal" status labels (should dedup to one)
+                "homelab_synology_volume_used_percent": _vector([({"volume": "volume_1"}, "73.4")]),
+                "homelab_synology_volume_status": _vector(
+                    [
+                        ({"volume": "volume_1", "status": "normal"}, "1"),
+                        ({"volume": "volume_1", "status": "normal"}, "1"),
+                    ]
+                ),
+                # pool_1: duplicate "pool_normal" status labels (should dedup to one)
+                "homelab_synology_pool_status": _vector(
+                    [
+                        ({"pool": "pool_1", "status": "pool_normal"}, "1"),
+                        ({"pool": "pool_1", "status": "pool_normal"}, "1"),
+                    ]
+                ),
+                "homelab_synology_raid_status": _vector(
+                    [({"pool": "pool_1", "raid": "raid_5"}, "1")]
+                ),
+            }
+            return httpx.Response(200, json=query_responses.get(query, _empty_vector()))
+
+        httpx_mock.add_callback(
+            vm_callback,
+            url=re.compile(r"http://vm-test:8428/api/v1/query\b.*"),
+            method="GET",
+            is_reusable=True,
+        )
+        response = await authenticated_client.get("/api/integrations/synology/hardware")
+        assert response.status_code == _HTTP_OK
+        body = response.json()
+        assert len(body["volumes"]) == 1
+        assert body["volumes"][0]["volume"] == "volume_1"
+        assert body["volumes"][0]["status"] == ["normal"]  # NOT duplicated
+        assert len(body["pools"]) == 1
+        assert body["pools"][0]["pool"] == "pool_1"
+        assert body["pools"][0]["status"] == ["pool_normal"]  # NOT duplicated
 
 
 class TestGetSynologyOps:

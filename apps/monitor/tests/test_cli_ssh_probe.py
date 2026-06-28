@@ -531,7 +531,7 @@ def test_install_instructions_dedicated_user(
         tmp_path,
         monkeypatch,
         "ssh_targets:\n"
-        "  - id: synology\n"
+        "  - id: generichost\n"
         "    host: 192.168.2.4\n"
         "    port: 53197\n"
         "    user: monitor\n"
@@ -540,10 +540,10 @@ def test_install_instructions_dedicated_user(
     main(["migrate"])
     capsys.readouterr()
 
-    assert main(["ssh-probe", "keygen", "synology"]) == 0
+    assert main(["ssh-probe", "keygen", "generichost"]) == 0
     capsys.readouterr()
 
-    rc = main(["ssh-probe", "install-instructions", "synology"])
+    rc = main(["ssh-probe", "install-instructions", "generichost"])
     _captured = capsys.readouterr()
     out, err = _captured.out, _captured.err
     assert rc == 0
@@ -554,7 +554,7 @@ def test_install_instructions_dedicated_user(
         'command="/home/monitor/hm-probe.sh",no-port-forwarding,no-pty,no-X11-forwarding,no-agent-forwarding'
         in out
     )
-    assert "hm-probe-synology" in out
+    assert "hm-probe-generichost" in out
     assert "ssh-ed25519 " in out
     assert "WARNING (UniFi OS firmware persistence)" not in out
     assert "PRIVATE KEY" not in out
@@ -568,6 +568,57 @@ def test_install_instructions_dedicated_user_with_script_id(
     tmp_path: Path,
 ) -> None:
     """install-instructions dedicated-user with script_id: renders the 5-step recipe."""
+    _write_install_config(
+        tmp_path,
+        monkeypatch,
+        "ssh_targets:\n"
+        "  - id: generichost\n"
+        "    host: 192.168.2.4\n"
+        "    port: 53197\n"
+        "    user: homelab-probe\n"
+        "    account_mode: dedicated-user\n"
+        "    script_id: generic_probe\n",
+    )
+    main(["migrate"])
+    capsys.readouterr()
+
+    assert main(["ssh-probe", "keygen", "generichost"]) == 0
+    capsys.readouterr()
+
+    rc = main(["ssh-probe", "install-instructions", "generichost"])
+    _captured = capsys.readouterr()
+    out, err = _captured.out, _captured.err
+    assert rc == 0
+    # Dedicated-user 5-step recipe present.
+    assert "sudo useradd -m -s /bin/sh homelab-probe" in out
+    assert "cat /proc/uptime" in out
+    # Advisory sudoers step is present (rendered as optional/advisory — not a hard requirement).
+    assert "homelab-probe ALL=(root) NOPASSWD: <ABSOLUTE_PATHS_OF_READ_ONLY_COMMANDS>" in out
+    assert "(Only if your script needs privileged read commands)" in out
+    # Forced-command authorized_keys line with correct user path and target comment.
+    assert (
+        'command="/home/homelab-probe/hm-probe.sh",no-port-forwarding,no-pty,no-X11-forwarding,no-agent-forwarding'
+        in out
+    )
+    assert "hm-probe-generichost" in out
+    # Public key is present.
+    assert "ssh-ed25519 " in out
+    # No appliance-mode persistence warning.
+    assert "WARNING (UniFi OS firmware persistence)" not in out
+    # Private key never printed.
+    assert "PRIVATE KEY" not in out
+    assert "PRIVATE KEY" not in err
+
+
+def test_install_instructions_synology_branch(
+    cli_env: str,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """install-instructions for the 'synology' target: emits the canonical script body,
+    the DSM nologin/shell sed step + revert caveat, the deploy guidance, and the
+    authorized_keys.d path — NOT the generic dedicated-user exemplar."""
     _write_install_config(
         tmp_path,
         monkeypatch,
@@ -586,28 +637,74 @@ def test_install_instructions_dedicated_user_with_script_id(
     capsys.readouterr()
 
     rc = main(["ssh-probe", "install-instructions", "synology"])
-    _captured = capsys.readouterr()
-    out, err = _captured.out, _captured.err
+    captured = capsys.readouterr()
+    out, err = captured.out, captured.err
     assert rc == 0
-    # Dedicated-user 5-step recipe present.
-    assert "sudo useradd -m -s /bin/sh homelab-probe" in out
-    assert "cat /proc/uptime" in out
-    # Advisory sudoers step is present (rendered as optional/advisory — not a hard requirement).
-    assert "homelab-probe ALL=(root) NOPASSWD: <ABSOLUTE_PATHS_OF_READ_ONLY_COMMANDS>" in out
-    assert "(Only if your script needs privileged read commands)" in out
-    # Forced-command authorized_keys line with correct user path and target comment.
+
+    # Synology-specific framing.
+    assert "Synology DSM, dedicated-user mode" in out
+    # Canonical script source-of-truth reference + the embedded body.
+    assert "deploy/ssh-probes/hm-probe-synology.sh" in out
+    assert "===HM_UPTIME===" in out
+    assert "===HM_END===" in out
+    assert "/usr/syno/bin/synodisk --enum" in out
+    # nologin/shell sed step (user-substituted) + revert caveat.
+    assert "sudo sed -i '/^homelab-probe:/ s#/sbin/nologin#/bin/sh#' /etc/passwd" in out
+    assert "DSM can rewrite /etc/passwd" in out
+    # Deploy guidance: /usr/local/bin path, root:root 0755, authorized_keys.d path.
+    assert "/usr/local/bin/hm-probe-synology.sh" in out
+    assert "chmod 0755 /usr/local/bin/hm-probe-synology.sh" in out
+    assert "/etc/ssh/authorized_keys.d/homelab-probe" in out
+    # Forced-command line points at the deployed absolute path with the target comment.
     assert (
-        'command="/home/homelab-probe/hm-probe.sh",no-port-forwarding,no-pty,no-X11-forwarding,no-agent-forwarding'
-        in out
+        'command="/usr/local/bin/hm-probe-synology.sh",no-port-forwarding,no-pty,'
+        "no-X11-forwarding,no-agent-forwarding" in out
     )
     assert "hm-probe-synology" in out
-    # Public key is present.
     assert "ssh-ed25519 " in out
-    # No appliance-mode persistence warning.
+    # NOT the generic dedicated-user exemplar, NOT the appliance persistence warning.
+    assert "cat /proc/uptime" not in out
+    assert "sudo useradd -m -s /bin/sh" not in out
     assert "WARNING (UniFi OS firmware persistence)" not in out
     # Private key never printed.
     assert "PRIVATE KEY" not in out
     assert "PRIVATE KEY" not in err
+
+
+def test_install_instructions_generic_dedicated_user_not_synology(
+    cli_env: str,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """REGRESSION: a dedicated-user target whose id is NOT 'synology' still gets the
+    generic 5-step exemplar, NOT the Synology recipe (proves the elif is id-scoped)."""
+    _write_install_config(
+        tmp_path,
+        monkeypatch,
+        "ssh_targets:\n"
+        "  - id: generichost\n"
+        "    host: 192.168.9.9\n"
+        "    user: monitor\n"
+        "    account_mode: dedicated-user\n",
+    )
+    main(["migrate"])
+    capsys.readouterr()
+
+    assert main(["ssh-probe", "keygen", "generichost"]) == 0
+    capsys.readouterr()
+
+    rc = main(["ssh-probe", "install-instructions", "generichost"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    # Generic recipe markers present.
+    assert "sudo useradd -m -s /bin/sh monitor" in out
+    assert "cat /proc/uptime" in out
+    assert 'command="/home/monitor/hm-probe.sh"' in out
+    # Synology-specific content absent.
+    assert "Synology DSM, dedicated-user mode" not in out
+    assert "/usr/local/bin/hm-probe-synology.sh" not in out
+    assert "===HM_END===" not in out
 
 
 @pytest.mark.asyncio

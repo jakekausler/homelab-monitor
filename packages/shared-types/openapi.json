@@ -2450,6 +2450,21 @@
             "title": "Disk",
             "type": "string"
           },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "remain_life": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Remain Life"
+          },
           "smart_attr_failing": {
             "title": "Smart Attr Failing",
             "type": "boolean"
@@ -2490,10 +2505,12 @@
         },
         "required": [
           "disk",
+          "model",
           "status",
           "smart_status",
           "temp_celsius",
-          "smart_attr_failing"
+          "smart_attr_failing",
+          "remain_life"
         ],
         "title": "DiskRow",
         "type": "object"
@@ -5991,8 +6008,11 @@
             "type": "string"
           },
           "status": {
+            "items": {
+              "type": "string"
+            },
             "title": "Status",
-            "type": "string"
+            "type": "array"
           }
         },
         "required": [
@@ -7629,6 +7649,21 @@
             ],
             "title": "Cpu Temp Celsius"
           },
+          "host_key_mismatch": {
+            "title": "Host Key Mismatch",
+            "type": "boolean"
+          },
+          "last_success_age_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Success Age Seconds"
+          },
           "load1": {
             "anyOf": [
               {
@@ -7643,12 +7678,31 @@
           "mdstat_array_degraded": {
             "title": "Mdstat Array Degraded",
             "type": "boolean"
+          },
+          "probe_duration_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Probe Duration Seconds"
+          },
+          "up": {
+            "title": "Up",
+            "type": "boolean"
           }
         },
         "required": [
           "load1",
           "cpu_temp_celsius",
-          "mdstat_array_degraded"
+          "mdstat_array_degraded",
+          "up",
+          "host_key_mismatch",
+          "last_success_age_seconds",
+          "probe_duration_seconds"
         ],
         "title": "SynologySshProbe",
         "type": "object"
@@ -9576,8 +9630,11 @@
       "VolumeRow": {
         "properties": {
           "status": {
+            "items": {
+              "type": "string"
+            },
             "title": "Status",
-            "type": "string"
+            "type": "array"
           },
           "used_percent": {
             "anyOf": [

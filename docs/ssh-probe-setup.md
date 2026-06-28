@@ -395,29 +395,26 @@ c. **Set the login shell to `/bin/sh`.** DSM may default service users to `/sbin
    > after user-config changes, reverting the shell to `nologin`. If the probe reports
    > `up=0` after a reboot, re-check and re-apply this step.
 
-d. **Install the placeholder probe script** at `/home/homelab-probe/hm-probe.sh` (owned by
-   `homelab-probe`, mode `0755`). STAGE-008-014 replaces the body with the real combined
-   Synology collector (SMART, array, UPS, hwmon via DSM API + SSH cross-check):
-
-   ```sh
-   #!/bin/sh
-   # hm-probe-synology exemplar — STAGE-008-014 replaces this body
-   # with the real combined Synology probe (SMART/array/UPS/hwmon).
-   cat /proc/uptime
-   ```
-
-   Install it:
+d. **Deploy the canonical combined probe script.** The source of truth is
+   `deploy/ssh-probes/hm-probe-synology.sh` in this repo — do **not** hand-author it.
+   Deploy that exact file to `/usr/local/bin/hm-probe-synology.sh` (owner `root:root`,
+   mode `0755`). The full body is also printed at the bottom of
+   `hm ssh-probe install-instructions synology`, so you can copy it from there:
 
    ```bash
-   sudo mkdir -p /home/homelab-probe/.ssh
-   cat > /tmp/hm-probe.sh <<'EOF'
-   #!/bin/sh
-   # hm-probe-synology exemplar — STAGE-008-014 replaces this body
-   # with the real combined Synology probe (SMART/array/UPS/hwmon).
-   cat /proc/uptime
-   EOF
-   sudo install -o homelab-probe -m 0755 /tmp/hm-probe.sh /home/homelab-probe/hm-probe.sh
+   # On the NAS, paste the body printed by `hm ssh-probe install-instructions synology`
+   # (the block between "BEGIN canonical ..." and "END canonical ..."):
+   sudo tee /usr/local/bin/hm-probe-synology.sh > /dev/null <<'HM_PROBE_EOF'
+   <paste the canonical script body>
+   HM_PROBE_EOF
+   sudo chown root:root /usr/local/bin/hm-probe-synology.sh
+   sudo chmod 0755 /usr/local/bin/hm-probe-synology.sh
    ```
+
+   The forced command in `authorized_keys` then points at
+   `/usr/local/bin/hm-probe-synology.sh` (the `install-instructions` output already uses
+   this absolute path). Edit the canonical repo file and redeploy if the probe body ever
+   changes; never hand-edit the copy on the NAS.
 
 e. **Append the forced-command `authorized_keys` line.** Copy the exact line printed by
    `hm ssh-probe install-instructions synology` (it includes your actual public key). It

@@ -137,6 +137,13 @@ _Q_SSH_LOAD1 = "homelab_synology_ssh_load1"
 _Q_SSH_CPU_TEMP = "homelab_synology_ssh_cpu_temp_celsius"
 _Q_MDSTAT_DEGRADED = "homelab_synology_mdstat_array_degraded"
 _Q_SSH_PROBE_AVAILABLE = 'homelab_collector_run_success_total{name="synology-probe"}'
+# /hardware — ssh probe state (EPIC-017)
+_Q_SSH_UP = 'homelab_ssh_up{target="synology"}'
+_Q_SSH_HOST_KEY_MISMATCH = 'homelab_ssh_host_key_mismatch{target="synology"}'
+_Q_SSH_LAST_SUCCESS_AGE = 'homelab_ssh_last_success_age_seconds{target="synology"}'
+_Q_SSH_PROBE_DURATION = 'homelab_ssh_probe_duration_seconds{target="synology"}'
+# /hardware — disk remaining life
+_Q_DISK_REMAIN_LIFE = "homelab_synology_disk_remain_life"
 
 # /ops — backup
 _Q_BACKUP_CONFIGURED_COUNT = "homelab_synology_backup_configured_count"
@@ -180,14 +187,14 @@ class VolumeRow(BaseModel):
 
     volume: str
     used_percent: float | None
-    status: str
+    status: list[str]
 
 
 class PoolRow(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     pool: str
-    status: str
+    status: list[str]
     raid_status: str
 
 
@@ -195,10 +202,12 @@ class DiskRow(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     disk: str
+    model: str
     status: float | None
     smart_status: float | None
     temp_celsius: float | None
     smart_attr_failing: bool
+    remain_life: float | None
 
 
 class FanRow(BaseModel):
@@ -235,6 +244,10 @@ class SynologySshProbe(BaseModel):
     load1: float | None
     cpu_temp_celsius: float | None
     mdstat_array_degraded: bool
+    up: bool
+    host_key_mismatch: bool
+    last_success_age_seconds: float | None
+    probe_duration_seconds: float | None
 
 
 class SynologyHardware(BaseModel):
@@ -425,6 +438,11 @@ async def get_synology_hardware(
         ssh_cpu_temp_samples,
         mdstat_samples,
         ssh_available_samples,
+        disk_remain_life_samples,
+        ssh_up_samples,
+        ssh_host_key_mismatch_samples,
+        ssh_last_success_age_samples,
+        ssh_probe_duration_samples,
     ) = await asyncio.gather(
         vm_instant_query(http_client, vm_url, _Q_VOLUME_USED_PCT),
         vm_instant_query(http_client, vm_url, _Q_VOLUME_STATUS),
@@ -447,40 +465,71 @@ async def get_synology_hardware(
         vm_instant_query(http_client, vm_url, _Q_SSH_CPU_TEMP),
         vm_instant_query(http_client, vm_url, _Q_MDSTAT_DEGRADED),
         vm_instant_query(http_client, vm_url, _Q_SSH_PROBE_AVAILABLE),
+        vm_instant_query(http_client, vm_url, _Q_DISK_REMAIN_LIFE),
+        vm_instant_query(http_client, vm_url, _Q_SSH_UP),
+        vm_instant_query(http_client, vm_url, _Q_SSH_HOST_KEY_MISMATCH),
+        vm_instant_query(http_client, vm_url, _Q_SSH_LAST_SUCCESS_AGE),
+        vm_instant_query(http_client, vm_url, _Q_SSH_PROBE_DURATION),
     )
 
     vol_pct_idx = {s.labels.get("volume", ""): _sample_float(s) for s in vol_pct_samples}
+    # Dedup volumes by name; collect all distinct status labels per volume.
+    _vol_statuses: dict[str, list[str]] = {}
+    for s in vol_status_samples:
+        name = s.labels.get("volume", "")
+        label = s.labels.get("status", "")
+        if name not in _vol_statuses:
+            _vol_statuses[name] = []
+        if label and label not in _vol_statuses[name]:
+            _vol_statuses[name].append(label)
+    # Include volumes that appear in pct samples but have no status series.
+    for name in vol_pct_idx:
+        if name not in _vol_statuses:
+            _vol_statuses[name] = []
     volumes: list[VolumeRow] = [
         VolumeRow(
-            volume=s.labels.get("volume", ""),
-            used_percent=vol_pct_idx.get(s.labels.get("volume", "")),
-            status=s.labels.get("status", ""),
+            volume=name,
+            used_percent=vol_pct_idx.get(name),
+            status=statuses,
         )
-        for s in vol_status_samples
+        for name, statuses in _vol_statuses.items()
     ]
 
     raid_idx = {s.labels.get("pool", ""): s.labels.get("raid", "") for s in raid_status_samples}
+    # Dedup pools by name; collect all distinct status labels per pool.
+    _pool_statuses: dict[str, list[str]] = {}
+    for s in pool_status_samples:
+        name = s.labels.get("pool", "")
+        label = s.labels.get("status", "")
+        if name not in _pool_statuses:
+            _pool_statuses[name] = []
+        if label and label not in _pool_statuses[name]:
+            _pool_statuses[name].append(label)
     pools: list[PoolRow] = [
         PoolRow(
-            pool=s.labels.get("pool", ""),
-            status=s.labels.get("status", ""),
-            raid_status=raid_idx.get(s.labels.get("pool", ""), ""),
+            pool=name,
+            status=statuses,
+            raid_status=raid_idx.get(name, ""),
         )
-        for s in pool_status_samples
+        for name, statuses in _pool_statuses.items()
     ]
 
     smart_idx = {s.labels.get("disk", ""): _sample_float(s) for s in disk_smart_samples}
     temp_idx = {s.labels.get("disk", ""): _sample_float(s) for s in disk_temp_samples}
+    model_idx = {s.labels.get("disk", ""): s.labels.get("model", "") for s in disk_temp_samples}
+    remain_idx = {s.labels.get("disk", ""): _sample_float(s) for s in disk_remain_life_samples}
     failing_idx = {
         s.labels.get("disk", ""): (_sample_float(s) == 1.0) for s in smart_failing_samples
     }
     disks: list[DiskRow] = [
         DiskRow(
             disk=s.labels.get("disk", ""),
+            model=model_idx.get(s.labels.get("disk", "")) or s.labels.get("disk", ""),
             status=_sample_float(s),
             smart_status=smart_idx.get(s.labels.get("disk", "")),
             temp_celsius=temp_idx.get(s.labels.get("disk", "")),
             smart_attr_failing=failing_idx.get(s.labels.get("disk", ""), False),
+            remain_life=remain_idx.get(s.labels.get("disk", "")),
         )
         for s in disk_status_samples
     ]
@@ -519,6 +568,10 @@ async def get_synology_hardware(
         load1=_scalar(ssh_load1_samples),
         cpu_temp_celsius=_scalar(ssh_cpu_temp_samples),
         mdstat_array_degraded=_bool_metric(mdstat_samples),
+        up=_bool_metric(ssh_up_samples),
+        host_key_mismatch=_bool_metric(ssh_host_key_mismatch_samples),
+        last_success_age_seconds=_scalar(ssh_last_success_age_samples),
+        probe_duration_seconds=_scalar(ssh_probe_duration_samples),
     )
 
     return SynologyHardware(

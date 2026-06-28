@@ -43,6 +43,59 @@ _CAPTURE_CONNECT_TIMEOUT = 5
 _CAPTURE_LOGIN_TIMEOUT = 5
 _RESTRICTION_EXIT_CODE = 3
 
+# Canonical Synology forced-command probe script. The single source of truth is the
+# repo file deploy/ssh-probes/hm-probe-synology.sh; this constant is its byte-for-byte
+# twin so the CLI can emit it WITHOUT a runtime filesystem read (the monitor container
+# does not mount the repo `deploy/` tree). tests/ssh/test_synology_probe_script.py
+# asserts this constant equals that file exactly, so drift fails CI.
+_SYNOLOGY_PROBE_SCRIPT = """#!/bin/sh
+# hm-probe-synology.sh - Synology NAS forced-command probe for homelab-monitor.
+#
+# CANONICAL SOURCE: deploy/ssh-probes/hm-probe-synology.sh in the homelab-monitor repo.
+# This repo file is the single source of truth. Operators deploy it to the NAS at
+#   /usr/local/bin/hm-probe-synology.sh   (owner root:root, mode 0755)
+# and wire it as the forced command in the homelab-probe user's authorized_keys.
+# Do NOT hand-edit the copy on the NAS; edit THIS file and redeploy. The CLI command
+# `hm ssh-probe install-instructions synology` emits this exact body plus deploy steps.
+#
+# Emits ===HM_*=== marker sections parsed by the SynologyProbe collector.
+# NOTE: no `set -e` - synodisk requires root and will fail as the unprivileged
+# homelab-probe user; failed sections are honest-empty and the script still
+# reaches ===HM_END=== and exits 0.
+
+echo '===HM_UPTIME==='
+uptime
+
+echo '===HM_DF==='
+df -P
+
+echo '===HM_SYNODISK_ENUM==='
+/usr/syno/bin/synodisk --enum 2>/dev/null || true
+
+for d in a b c d e f g h; do
+  echo "===HM_SMART /dev/sd$d==="
+  /usr/syno/bin/synodisk --smart_info_get /dev/sd$d 2>/dev/null || true
+done
+
+echo '===HM_MDSTAT==='
+cat /proc/mdstat
+
+echo '===HM_UPSC==='
+/usr/bin/upsc ups 2>/dev/null || true
+
+echo '===HM_HWMON==='
+for h in /sys/class/hwmon/hwmon*; do
+  [ -d "$h" ] || continue
+  nm=$(cat "$h/name" 2>/dev/null)
+  for f in "$h"/temp*_input "$h"/temp*_label; do
+    [ -e "$f" ] && echo "$h $nm $(basename "$f")=$(cat "$f" 2>/dev/null)"
+  done
+done
+
+echo '===HM_END==='
+exit 0
+"""
+
 
 # argparse exposes no public type for sub-parsers; using the private alias is the
 # pyright-recommended workaround. https://github.com/python/typeshed/issues/2569
@@ -343,6 +396,74 @@ on the target as an administrator.
 The private key is NEVER printed and stays in the secrets store (secret: {key_secret_ref})."""
 
 
+def _render_synology_instructions(target: str, user: str, pub: str, key_secret_ref: str) -> str:
+    """Render the Synology-specific dedicated-user recipe.
+
+    Synology DSM differs from a generic Linux host in three ways this recipe handles:
+    (1) the probe script is the canonical combined collector (deploy/ssh-probes/
+    hm-probe-synology.sh), deployed to /usr/local/bin/hm-probe-synology.sh root:root 0755;
+    (2) DSM defaults service users to /sbin/nologin, which blocks the forced command —
+    the login shell must be set to /bin/sh; (3) DSM can revert /etc/passwd on reboot/
+    user-config change, so the shell fix may need re-applying.
+    """
+    forced = "/usr/local/bin/hm-probe-synology.sh"
+    authkeys_line = (
+        f'command="{forced}",no-port-forwarding,no-pty,'
+        f"no-X11-forwarding,no-agent-forwarding {pub} hm-probe-{target}"
+    )
+    return f"""SSH probe setup — target '{target}' (Synology DSM, dedicated-user mode)
+
+This framework NEVER writes to the target's auth config. Perform these steps by hand on
+the NAS as a DSM administrator. The probe script is the canonical combined Synology
+collector; its source of truth in the repo is deploy/ssh-probes/hm-probe-synology.sh.
+
+1. Create the dedicated low-privilege DSM user '{user}' (Control Panel → User & Group).
+   Assign it to NO admin/privileged groups. It is a read-only service account.
+
+2. Set its login shell to /bin/sh. DSM defaults service users to /sbin/nologin, which
+   blocks the forced command (the probe will report up=0). Apply:
+
+   sudo sed -i '/^{user}:/ s#/sbin/nologin#/bin/sh#' /etc/passwd
+   getent passwd {user}   # verify the last field is /bin/sh
+
+   CAVEAT: DSM can rewrite /etc/passwd from its user database on reboot or after any
+   user-config change, reverting the shell to nologin. If the probe reports up=0 after a
+   reboot, re-check 'getent passwd {user}' and re-apply this sed.
+
+3. Deploy the canonical probe script to /usr/local/bin/hm-probe-synology.sh (owner
+   root:root, mode 0755). The exact body is printed at the END of this output. Install
+   wrap-proof via a heredoc:
+
+   sudo tee /usr/local/bin/hm-probe-synology.sh > /dev/null <<'HM_PROBE_EOF'
+   <paste the script body from the bottom of this output>
+   HM_PROBE_EOF
+   sudo chown root:root /usr/local/bin/hm-probe-synology.sh
+   sudo chmod 0755 /usr/local/bin/hm-probe-synology.sh
+
+4. Append this EXACT single line to the user's authorized_keys. On DSM the per-user file
+   is /etc/ssh/authorized_keys.d/{user} (DSM's AuthorizedKeysFile location); if your DSM
+   uses ~/.ssh/authorized_keys instead, use that path. Install wrap-proof (ONE physical
+   line — do NOT paste into a terminal editor):
+
+   printf '%s\\n' '{authkeys_line}' \\
+     | sudo tee -a /etc/ssh/authorized_keys.d/{user} > /dev/null
+   sudo chown root:{user} /etc/ssh/authorized_keys.d/{user}
+   sudo chmod 0640 /etc/ssh/authorized_keys.d/{user}
+
+5. Verify the restriction holds:
+
+   hm ssh-probe test {target}
+
+No sudoers entry is needed: the probe reads everything unprivileged (synodisk --enum /
+--smart_info_get, /proc/mdstat, upsc, hwmon sysfs, df). synodisk needs root and will fail
+honest-empty as this user; that is expected.
+
+The private key is NEVER printed and stays in the secrets store (secret: {key_secret_ref}).
+
+--- BEGIN canonical hm-probe-synology.sh (source: deploy/ssh-probes/hm-probe-synology.sh) ---
+{_SYNOLOGY_PROBE_SCRIPT}--- END canonical hm-probe-synology.sh ---"""
+
+
 async def _cmd_install_instructions(target: str) -> int:  # noqa: PLR0911
     """``hm ssh-probe install-instructions TARGET`` — pure render, no network."""
     if not _valid_target(target):
@@ -402,6 +523,8 @@ async def _cmd_install_instructions(target: str) -> int:  # noqa: PLR0911
                 file=sys.stderr,
             )
         print(_render_appliance_instructions(target, forced, pub, key_secret_ref))
+    elif target == "synology":
+        print(_render_synology_instructions(target, cfg.user, pub, key_secret_ref))
     else:  # account_mode == "dedicated-user"
         print(_render_dedicated_user_instructions(target, cfg.user, pub, key_secret_ref))
 
