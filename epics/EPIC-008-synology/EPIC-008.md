@@ -1,6 +1,6 @@
 # EPIC-008: Synology integration
 
-## Status: In Progress (current: STAGE-008-027 Complete; 017/018/019/020/021/022/023/024/025/026/027/032 Complete; next: STAGE-008-028)
+## Status: In Progress (current: STAGE-008-028 Complete; 017/018/019/020/021/022/023/024/025/026/027/028/032 Complete; next: STAGE-008-029)
 
 ## Build order + framework dependencies (LOCKED — 2026-06-22 brainstorm)
 
@@ -418,7 +418,7 @@ rules; mount-health + Docker-suppression before the rules/UI/dashboards that sur
 | STAGE-008-025 | Synology page shell + sidebar registration (alphabetical) + header status strip — ✅ Complete |
 | STAGE-008-026 | Synology widgets: storage/volume + disk/SMART grid + RAID/pool + system/temps/UPS + SSH-probe state — ✅ Complete |
 | STAGE-008-027 | Synology widgets: backup/replication timeline + updates/packages + Security Advisor + active-connections + mount-health — ✅ Complete |
-| STAGE-008-028 | Surveillance page shell + registration + camera status grid + license/HomeMode strip |
+| STAGE-008-028 | Surveillance page shell + registration + camera status grid + license/HomeMode strip — ✅ Complete |
 | STAGE-008-029 | Surveillance widgets: per-camera events/recording activity + recording-storage + embedded `<LogViewer>` (`service:"synology-*"`) on the Synology page |
 
 ### Wave J — Grafana (2)
