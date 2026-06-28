@@ -1,6 +1,6 @@
 # EPIC-008: Synology integration
 
-## Status: In Progress (current: STAGE-008-023 Complete; 017/018/019/020/021/022/023/032 Complete; next: STAGE-008-024)
+## Status: In Progress (current: STAGE-008-024 Complete; 017/018/019/020/021/022/023/024/032 Complete; next: STAGE-008-025)
 
 ## Build order + framework dependencies (LOCKED — 2026-06-22 brainstorm)
 
@@ -414,7 +414,7 @@ rules; mount-health + Docker-suppression before the rules/UI/dashboards that sur
 ### Wave I — UI (6)
 | # | Stage | Theme |
 |---|---|---|
-| STAGE-008-024 | Backend panel data endpoints (Synology summary/detail + Surveillance summary/detail) — typed rows; OpenAPI regen |
+| STAGE-008-024 | Backend panel data endpoints (Synology summary/detail + Surveillance summary/detail) — typed rows; OpenAPI regen — ✅ Complete |
 | STAGE-008-025 | Synology page shell + sidebar registration (alphabetical) + header status strip |
 | STAGE-008-026 | Synology widgets: storage/volume + disk/SMART grid + RAID/pool + system/temps/UPS + SSH-probe state |
 | STAGE-008-027 | Synology widgets: backup/replication timeline + updates/packages + Security Advisor + active-connections + mount-health |
