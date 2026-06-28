@@ -20,6 +20,7 @@ from fastapi import FastAPI
 from httpx import AsyncClient
 from pytest_httpx import HTTPXMock
 
+from homelab_monitor.kernel.api.routers import integrations_synology
 from homelab_monitor.kernel.synology.client import SynologyResponse
 from homelab_monitor.kernel.synology.errors import SynologyError
 
@@ -84,8 +85,8 @@ class TestGetSynologySummary:
                 "max(homelab_synology_volume_used_percent)": _vector([({}, "73.4")]),
                 "homelab_synology_ups_on_battery": _vector([({}, "0")]),
                 "homelab_synology_ups_charge_percent": _vector([({}, "100")]),
-                "homelab_synology_dsm_update_available": _vector([({}, "1")]),
-                "homelab_synology_security_safe": _vector([({}, "1")]),
+                "last_over_time(homelab_synology_dsm_update_available[2h])": _vector([({}, "1")]),
+                "last_over_time(homelab_synology_security_safe[2h])": _vector([({}, "1")]),
                 "homelab_synology_no_backup_configured": _vector([({}, "0")]),
             }
             return httpx.Response(200, json=query_responses.get(query, _empty_vector()))
@@ -570,13 +571,17 @@ class TestGetSynologyOps:
                 "homelab_synology_backup_last_result_ok": _vector([({"job": "j1"}, "1")]),
                 "homelab_synology_snapshot_count": _vector([({"share": "share_a"}, "12")]),
                 "homelab_synology_replication_available": _vector([({}, "1")]),
-                "homelab_synology_dsm_update_available": _vector([({}, "1")]),
-                "homelab_synology_packages_with_updates_count": _vector([({}, "3")]),
-                "homelab_synology_package_update_available": _vector([({"package": "Plex"}, "1")]),
-                "homelab_synology_security_findings_total": _vector(
+                "last_over_time(homelab_synology_dsm_update_available[2h])": _vector([({}, "1")]),
+                "last_over_time(homelab_synology_packages_with_updates_count[2h])": _vector(
+                    [({}, "3")]
+                ),
+                "last_over_time(homelab_synology_package_update_available[2h])": _vector(
+                    [({"package": "Plex"}, "1")]
+                ),
+                "last_over_time(homelab_synology_security_findings_total[2h])": _vector(
                     [({"severity": "warning"}, "4")]
                 ),
-                "homelab_synology_security_safe": _vector([({}, "1")]),
+                "last_over_time(homelab_synology_security_safe[2h])": _vector([({}, "1")]),
                 "homelab_synology_mount_up": _vector([({"mount": "/mnt/a"}, "1")]),
                 "homelab_synology_mount_free_bytes": _vector([({"mount": "/mnt/a"}, "9000")]),
                 'homelab_collector_run_success_total{name="synology_mount_health"}': _vector(
@@ -630,7 +635,7 @@ class TestGetSynologyOps:
             query = _query_of(request)
             if query == "homelab_synology_backup_last_result_ok":
                 return httpx.Response(200, json=_vector([({"job": "j1"}, "0")]))
-            if query == "homelab_synology_package_update_available":
+            if query == "last_over_time(homelab_synology_package_update_available[2h])":
                 return httpx.Response(200, json=_vector([({"package": "Plex"}, "0")]))
             if query == "homelab_synology_mount_up":
                 return httpx.Response(200, json=_vector([({"mount": "/mnt/a"}, "0")]))
@@ -886,3 +891,21 @@ class TestSynologyPanelAuth:
     async def test_requires_auth(self, unauthenticated_client: AsyncClient, path: str) -> None:
         resp = await unauthenticated_client.get(path)
         assert resp.status_code == _HTTP_UNAUTH
+
+
+class TestSynologyQueryConstantsUseLotWindow:
+    """Lock in that hourly-collector queries use last_over_time to prevent stale-read regression."""
+
+    def test_hourly_collector_queries_wrapped_in_last_over_time(self) -> None:
+        hourly_constants = [
+            "_Q_DSM_UPDATE_AVAILABLE",
+            "_Q_SECURITY_SAFE",
+            "_Q_PACKAGES_WITH_UPDATES",
+            "_Q_PACKAGE_UPDATE_AVAILABLE",
+            "_Q_SECURITY_FINDINGS_TOTAL",
+        ]
+        for name in hourly_constants:
+            value: str = getattr(integrations_synology, name)
+            assert "last_over_time" in value, (
+                f"{name} must use last_over_time to avoid 5-min staleness window; got: {value!r}"
+            )

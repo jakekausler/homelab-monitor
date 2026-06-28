@@ -58,9 +58,36 @@ export function statusTone(status: string | null | undefined): BadgeVariant {
   return 'warn'
 }
 
+/**
+ * Map a Synology security-finding severity to a badge tone.
+ * danger -> critical; risk/warning/outOfDate -> warn; everything else -> muted.
+ */
+export function severityVariant(severity: string): BadgeVariant {
+  switch (severity) {
+    case 'danger':
+      return 'critical'
+    case 'risk':
+    case 'warning':
+    case 'outOfDate':
+      return 'warn'
+    default:
+      return 'muted'
+  }
+}
+
 /** Type alias re-exports for the tab (keeps row prop typing local). */
 export type DiskRow = Schema<'DiskRow'>
 export type SmartAttrRow = Schema<'SmartAttrRow'>
 export type VolumeRow = Schema<'VolumeRow'>
 export type PoolRow = Schema<'PoolRow'>
 export type FanRow = Schema<'FanRow'>
+
+export type SynologyBackup = Schema<'SynologyBackup'>
+export type SynologyReplication = Schema<'SynologyReplication'>
+export type ReplicationRow = Schema<'ReplicationRow'>
+export type SynologyUpdates = Schema<'SynologyUpdates'>
+export type PackageUpdateRow = Schema<'PackageUpdateRow'>
+export type SynologySecurity = Schema<'SynologySecurity'>
+export type SecurityFindingRow = Schema<'SecurityFindingRow'>
+export type MountRow = Schema<'MountRow'>
+export type ConnectionRow = Schema<'ConnectionRow'>

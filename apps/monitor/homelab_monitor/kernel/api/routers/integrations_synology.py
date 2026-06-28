@@ -111,8 +111,8 @@ _Q_HEALTH_OK = "homelab_synology_health_ok"
 _Q_VOLUME_USED_PCT_MAX = "max(homelab_synology_volume_used_percent)"
 _Q_UPS_ON_BATTERY = "homelab_synology_ups_on_battery"
 _Q_UPS_CHARGE_PCT = "homelab_synology_ups_charge_percent"
-_Q_DSM_UPDATE_AVAILABLE = "homelab_synology_dsm_update_available"
-_Q_SECURITY_SAFE = "homelab_synology_security_safe"
+_Q_DSM_UPDATE_AVAILABLE = "last_over_time(homelab_synology_dsm_update_available[2h])"
+_Q_SECURITY_SAFE = "last_over_time(homelab_synology_security_safe[2h])"
 _Q_NO_BACKUP_CONFIGURED = "homelab_synology_no_backup_configured"
 
 # /hardware — storage
@@ -152,10 +152,10 @@ _Q_BACKUP_LAST_RESULT_OK = "homelab_synology_backup_last_result_ok"
 _Q_SNAPSHOT_COUNT = "homelab_synology_snapshot_count"
 _Q_REPLICATION_AVAILABLE = "homelab_synology_replication_available"
 # /ops — updates
-_Q_PACKAGES_WITH_UPDATES = "homelab_synology_packages_with_updates_count"
-_Q_PACKAGE_UPDATE_AVAILABLE = "homelab_synology_package_update_available"
+_Q_PACKAGES_WITH_UPDATES = "last_over_time(homelab_synology_packages_with_updates_count[2h])"
+_Q_PACKAGE_UPDATE_AVAILABLE = "last_over_time(homelab_synology_package_update_available[2h])"
 # /ops — security
-_Q_SECURITY_FINDINGS_TOTAL = "homelab_synology_security_findings_total"
+_Q_SECURITY_FINDINGS_TOTAL = "last_over_time(homelab_synology_security_findings_total[2h])"
 # /ops — mounts
 _Q_MOUNT_UP = "homelab_synology_mount_up"
 _Q_MOUNT_FREE_BYTES = "homelab_synology_mount_free_bytes"
