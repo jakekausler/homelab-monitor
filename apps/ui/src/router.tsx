@@ -41,6 +41,9 @@ import { UnifiOverviewTab } from '@/routes/integrations/UnifiOverviewTab'
 import { UnifiLogsTab } from '@/routes/integrations/UnifiLogsTab'
 import { UnifiThreatsTab } from '@/routes/integrations/UnifiThreatsTab'
 import { UnifiDevicePage } from '@/routes/integrations/UnifiDevicePage'
+import { SynologyLayout } from '@/routes/integrations/SynologyLayout'
+import { SynologyHardwareTab } from '@/routes/integrations/SynologyHardwareTab'
+import { SynologyOpsTab } from '@/routes/integrations/SynologyOpsTab'
 import { PiholeLayout } from '@/routes/integrations/PiholeLayout'
 import { PiholeOverviewTab } from '@/routes/integrations/PiholeOverviewTab'
 import { PiholeLogsTab } from '@/routes/integrations/PiholeLogsTab'
@@ -510,6 +513,33 @@ const unifiDeviceRoute = createRoute({
   component: UnifiDevicePage,
 })
 
+const synologyLayoutRoute = createRoute({
+  getParentRoute: () => protectedLayoutRoute,
+  path: '/integrations/synology',
+  component: SynologyLayout,
+})
+
+const synologyIndexRoute = createRoute({
+  getParentRoute: () => synologyLayoutRoute,
+  path: '/',
+  beforeLoad: () => {
+    // eslint-disable-next-line @typescript-eslint/only-throw-error -- TanStack Router redirect objects are thrown by design
+    throw redirect({ to: '/integrations/synology/hardware' })
+  },
+})
+
+const synologyHardwareRoute = createRoute({
+  getParentRoute: () => synologyLayoutRoute,
+  path: 'hardware',
+  component: SynologyHardwareTab,
+})
+
+const synologyOpsRoute = createRoute({
+  getParentRoute: () => synologyLayoutRoute,
+  path: 'ops',
+  component: SynologyOpsTab,
+})
+
 const piholeLayoutRoute = createRoute({
   getParentRoute: () => protectedLayoutRoute,
   path: '/integrations/pihole',
@@ -667,6 +697,7 @@ const routeTree = rootRoute.addChildren([
       unifiThreatsRoute,
       unifiDeviceRoute,
     ]),
+    synologyLayoutRoute.addChildren([synologyIndexRoute, synologyHardwareRoute, synologyOpsRoute]),
     piholeLayoutRoute.addChildren([piholeIndexRoute, piholeOverviewRoute, piholeLogsRoute]),
     networkLayoutRoute.addChildren([
       networkIndexRoute,
