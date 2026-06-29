@@ -34,6 +34,7 @@ const MOCK_CAMERAS: SurveillanceCameras = {
       connected: true,
       status: 3,
       recordings_count: 42,
+      recordings_bytes: 987654321,
       model: 'TV-IP1314PI',
       ip: '192.168.2.50',
       vendor: 'TRENDnet',
@@ -43,6 +44,7 @@ const MOCK_CAMERAS: SurveillanceCameras = {
       connected: false,
       status: null,
       recordings_count: null,
+      recordings_bytes: null,
       model: null,
       ip: null,
       vendor: null,
@@ -52,6 +54,7 @@ const MOCK_CAMERAS: SurveillanceCameras = {
       connected: true,
       status: 1,
       recordings_count: 0,
+      recordings_bytes: 0,
       model: 'AXIS-M1065',
       ip: '192.168.2.51',
       vendor: 'Axis',
@@ -60,6 +63,7 @@ const MOCK_CAMERAS: SurveillanceCameras = {
   events_today: 5,
   events_total_all: 1000,
   recordings_total: 777,
+  recordings_bytes_total: 3065976,
   data_available: true,
 }
 

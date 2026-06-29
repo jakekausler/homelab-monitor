@@ -79,9 +79,11 @@ _Q_CAMERAS_DISCONNECTED = "homelab_synology_ss_cameras_disconnected_total"
 _Q_CAMERA_CONNECTED = "homelab_synology_ss_camera_connected"
 _Q_CAMERA_STATUS = "homelab_synology_ss_camera_status"
 _Q_RECORDINGS_COUNT = "homelab_synology_ss_recordings_count"
+_Q_RECORDINGS_BYTES = "homelab_synology_ss_recordings_bytes"
 _Q_EVENTS_TODAY = "homelab_synology_ss_events_today"
 _Q_EVENTS_TOTAL_ALL = "homelab_synology_ss_events_total_all"
 _Q_RECORDINGS_TOTAL = "homelab_synology_ss_recordings_total"
+_Q_RECORDINGS_BYTES_TOTAL = "homelab_synology_ss_recordings_bytes_total"
 _Q_CAMERA_INFO = "homelab_synology_ss_camera_info"
 _Q_CAMERAS_AVAILABLE = 'homelab_collector_run_success_total{name="synology_cameras"}'
 
@@ -105,6 +107,7 @@ class CameraRow(BaseModel):
     connected: bool
     status: float | None
     recordings_count: float | None
+    recordings_bytes: float | None
     model: str | None
     ip: str | None
     vendor: str | None
@@ -117,6 +120,7 @@ class SurveillanceCameras(BaseModel):
     events_today: float | None
     events_total_all: float | None
     recordings_total: float | None
+    recordings_bytes_total: float | None
     data_available: bool
 
 
@@ -167,24 +171,29 @@ async def get_surveillance_cameras(
         connected_samples,
         status_samples,
         recordings_samples,
+        bytes_samples,
         events_today_samples,
         events_total_samples,
         recordings_total_samples,
+        recordings_bytes_total_samples,
         info_samples,
         available_samples,
     ) = await asyncio.gather(
         vm_instant_query(http_client, vm_url, _Q_CAMERA_CONNECTED),
         vm_instant_query(http_client, vm_url, _Q_CAMERA_STATUS),
         vm_instant_query(http_client, vm_url, _Q_RECORDINGS_COUNT),
+        vm_instant_query(http_client, vm_url, _Q_RECORDINGS_BYTES),
         vm_instant_query(http_client, vm_url, _Q_EVENTS_TODAY),
         vm_instant_query(http_client, vm_url, _Q_EVENTS_TOTAL_ALL),
         vm_instant_query(http_client, vm_url, _Q_RECORDINGS_TOTAL),
+        vm_instant_query(http_client, vm_url, _Q_RECORDINGS_BYTES_TOTAL),
         vm_instant_query(http_client, vm_url, _Q_CAMERA_INFO),
         vm_instant_query(http_client, vm_url, _Q_CAMERAS_AVAILABLE),
     )
 
     status_idx = {s.labels.get("camera", ""): _sample_float(s) for s in status_samples}
     rec_idx = {s.labels.get("camera", ""): _sample_float(s) for s in recordings_samples}
+    bytes_idx = {s.labels.get("camera", ""): _sample_float(s) for s in bytes_samples}
     info_idx = {s.labels.get("camera", ""): s.labels for s in info_samples}
     cameras: list[CameraRow] = []
     for s in connected_samples:
@@ -196,6 +205,7 @@ async def get_surveillance_cameras(
                 connected=_sample_float(s) == 1.0,
                 status=status_idx.get(name),
                 recordings_count=rec_idx.get(name),
+                recordings_bytes=bytes_idx.get(name),
                 model=_info_label(info, "model"),
                 ip=_info_label(info, "ip"),
                 vendor=_info_label(info, "vendor"),
@@ -207,5 +217,6 @@ async def get_surveillance_cameras(
         events_today=_scalar(events_today_samples),
         events_total_all=_scalar(events_total_samples),
         recordings_total=_scalar(recordings_total_samples),
+        recordings_bytes_total=_scalar(recordings_bytes_total_samples),
         data_available=_data_available(available_samples),
     )

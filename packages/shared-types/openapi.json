@@ -557,6 +557,17 @@
             ],
             "title": "Model"
           },
+          "recordings_bytes": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recordings Bytes"
+          },
           "recordings_count": {
             "anyOf": [
               {
@@ -596,6 +607,7 @@
           "connected",
           "status",
           "recordings_count",
+          "recordings_bytes",
           "model",
           "ip",
           "vendor"
@@ -7367,6 +7379,17 @@
             ],
             "title": "Events Total All"
           },
+          "recordings_bytes_total": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recordings Bytes Total"
+          },
           "recordings_total": {
             "anyOf": [
               {
@@ -7384,6 +7407,7 @@
           "events_today",
           "events_total_all",
           "recordings_total",
+          "recordings_bytes_total",
           "data_available"
         ],
         "title": "SurveillanceCameras",

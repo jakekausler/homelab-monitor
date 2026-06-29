@@ -5,8 +5,10 @@ import { ErrorDisplay } from '@/components/ErrorDisplay'
 import { Badge } from '@/components/ui/badge'
 import { useSurveillanceSummary } from '@/api/surveillance'
 
-const TABS = [{ path: '/integrations/surveillance/cameras', label: 'Cameras' }] as const
-// SCAFFOLDING: STAGE-008-029 adds an "Activity" tab here.
+const TABS = [
+  { path: '/integrations/surveillance/cameras', label: 'Cameras' },
+  { path: '/integrations/surveillance/activity', label: 'Activity' },
+] as const
 
 type BadgeVariant = 'ok' | 'warn' | 'critical' | 'muted'
 

@@ -185,12 +185,24 @@ class TestGetSurveillanceCameras:
                 return httpx.Response(200, json=_vector([({"camera": "FrontDoor"}, "3")]))
             if query == "homelab_synology_ss_recordings_count":
                 return httpx.Response(200, json=_vector([({"camera": "FrontDoor"}, "42")]))
+            if query == "homelab_synology_ss_recordings_bytes":
+                return httpx.Response(
+                    200,
+                    json=_vector(
+                        [
+                            ({"camera": "FrontDoor"}, "123456789"),
+                            ({"camera": "Garage"}, "0"),
+                        ]
+                    ),
+                )
             if query == "homelab_synology_ss_events_today":
                 return httpx.Response(200, json=_vector([({}, "5")]))
             if query == "homelab_synology_ss_events_total_all":
                 return httpx.Response(200, json=_vector([({}, "1000")]))
             if query == "homelab_synology_ss_recordings_total":
                 return httpx.Response(200, json=_vector([({}, "777")]))
+            if query == "homelab_synology_ss_recordings_bytes_total":
+                return httpx.Response(200, json=_vector([({}, "987654321")]))
             if query == "homelab_synology_ss_camera_info":
                 return httpx.Response(
                     200,
@@ -228,6 +240,7 @@ class TestGetSurveillanceCameras:
         assert body["cameras"][0]["connected"] is True
         assert body["cameras"][0]["status"] == 3.0  # noqa: PLR2004
         assert body["cameras"][0]["recordings_count"] == 42.0  # noqa: PLR2004
+        assert body["cameras"][0]["recordings_bytes"] == 123456789.0  # noqa: PLR2004
         # FrontDoor present in _info -> model/ip/vendor populated
         assert body["cameras"][0]["model"] == "TV-IP1314PI"
         assert body["cameras"][0]["ip"] == "192.168.2.50"
@@ -236,6 +249,8 @@ class TestGetSurveillanceCameras:
         assert body["cameras"][1]["connected"] is False
         assert body["cameras"][1]["status"] is None
         assert body["cameras"][1]["recordings_count"] is None
+        # Garage present-but-zero in bytes_idx -> honest 0.0 (not None)
+        assert body["cameras"][1]["recordings_bytes"] == 0.0
         # Garage absent from _info -> honest nulls (NOT fabricated)
         assert body["cameras"][1]["model"] is None
         assert body["cameras"][1]["ip"] is None
@@ -243,6 +258,7 @@ class TestGetSurveillanceCameras:
         assert body["events_today"] == 5.0  # noqa: PLR2004
         assert body["events_total_all"] == 1000.0  # noqa: PLR2004
         assert body["recordings_total"] == 777.0  # noqa: PLR2004
+        assert body["recordings_bytes_total"] == 987654321.0  # noqa: PLR2004
         assert body["data_available"] is True
 
     async def test_all_absent(
@@ -269,6 +285,7 @@ class TestGetSurveillanceCameras:
         assert body["events_today"] is None
         assert body["events_total_all"] is None
         assert body["recordings_total"] is None
+        assert body["recordings_bytes_total"] is None
         assert body["data_available"] is False
 
     async def test_vm_down_502(

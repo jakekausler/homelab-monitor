@@ -68,12 +68,11 @@ beforeEach(() => {
 })
 
 describe('SurveillanceLayout', () => {
-  it('renders header, the single Cameras tab, and outlet', () => {
+  it('renders header, the Cameras and Activity tabs, and outlet', () => {
     render(<SurveillanceLayout />)
     expect(screen.getByRole('heading', { name: /surveillance/i })).toBeInTheDocument()
     expect(screen.getByTestId('surveillance-tab-cameras')).toHaveTextContent('Cameras')
-    // No Activity tab yet (STAGE-008-029)
-    expect(screen.queryByTestId('surveillance-tab-activity')).not.toBeInTheDocument()
+    expect(screen.getByTestId('surveillance-tab-activity')).toHaveTextContent('Activity')
     expect(screen.getByTestId('surveillance-outlet')).toBeInTheDocument()
   })
 

@@ -46,6 +46,7 @@ import { SynologyHardwareTab } from '@/routes/integrations/SynologyHardwareTab'
 import { SynologyOpsTab } from '@/routes/integrations/SynologyOpsTab'
 import { SurveillanceLayout } from '@/routes/integrations/SurveillanceLayout'
 import { SurveillanceCamerasTab } from '@/routes/integrations/SurveillanceCamerasTab'
+import { SurveillanceActivityTab } from '@/routes/integrations/SurveillanceActivityTab'
 import { PiholeLayout } from '@/routes/integrations/PiholeLayout'
 import { PiholeOverviewTab } from '@/routes/integrations/PiholeOverviewTab'
 import { PiholeLogsTab } from '@/routes/integrations/PiholeLogsTab'
@@ -563,6 +564,12 @@ const surveillanceCamerasRoute = createRoute({
   component: SurveillanceCamerasTab,
 })
 
+const surveillanceActivityRoute = createRoute({
+  getParentRoute: () => surveillanceLayoutRoute,
+  path: 'activity',
+  component: SurveillanceActivityTab,
+})
+
 const piholeLayoutRoute = createRoute({
   getParentRoute: () => protectedLayoutRoute,
   path: '/integrations/pihole',
@@ -721,7 +728,11 @@ const routeTree = rootRoute.addChildren([
       unifiDeviceRoute,
     ]),
     synologyLayoutRoute.addChildren([synologyIndexRoute, synologyHardwareRoute, synologyOpsRoute]),
-    surveillanceLayoutRoute.addChildren([surveillanceIndexRoute, surveillanceCamerasRoute]),
+    surveillanceLayoutRoute.addChildren([
+      surveillanceIndexRoute,
+      surveillanceCamerasRoute,
+      surveillanceActivityRoute,
+    ]),
     piholeLayoutRoute.addChildren([piholeIndexRoute, piholeOverviewRoute, piholeLogsRoute]),
     networkLayoutRoute.addChildren([
       networkIndexRoute,
