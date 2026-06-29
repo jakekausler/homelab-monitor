@@ -1,6 +1,6 @@
 # EPIC-009: Auto-fix subsystem
 
-## Status: In Progress (2/13 stages — STAGE-009-001..013; decomposed 2026-06-29)
+## Status: In Progress (3/13 stages — STAGE-009-001..013; decomposed 2026-06-29)
 
 ## Overview
 

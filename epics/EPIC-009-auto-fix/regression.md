@@ -20,3 +20,15 @@
 - [ ] **STAGE-009-002:** the monitor container mounts the transcript dir READ-ONLY (`docker-compose.yml`: `...runbook-transcripts:/data/runbook-transcripts:ro`) — confirm the `:ro` suffix is present (audit integrity #4: monitor must not be able to mutate in-progress transcripts).
 - [ ] **STAGE-009-002:** the orchestrator's docker-exec path is viable — the prod `homelab-monitor` container mounts `/var/run/docker.sock` RW, has the docker GID in its process supplementary groups, and can `docker exec` into sibling containers (in-container `/usr/bin/docker` CLI + SDK-over-socket both available). This is the path future stages use to exec into the fixer-runner.
 - [ ] **STAGE-009-002 (host PATH gotcha):** on this host the homebrew `setfacl` (`/home/linuxbrew/.linuxbrew/bin/setfacl`) rejects bare numeric UIDs; the system `/usr/bin/setfacl` handles them. `sudo bash host-setup.sh` uses root's `secure_path` (no homebrew) so it resolves the system setfacl correctly — but if section 3.9 is ever run NOT via sudo/root, ensure the system setfacl is used (numeric-UID-capable).
+
+## STAGE-009-003 — `fixer-runner` container — Dockerfile + static CLAUDE.md + compose wiring
+
+- [ ] fixer-runner image builds with a FAKE claude (`--build-arg CLAUDE_BINARY_SOURCE=fake`) and runs the idle keepalive (PID 1 = `tail -f /dev/null`).
+- [ ] Non-interactive `docker exec -i -u homelab-fixer ... claude -p <folder> --dangerously-skip-permissions < /dev/null` works: argv passthrough captured, transcript written to the RW-mounted dir, file owned by HM_FIXER_UID:GID (1002:1002 default) — #3 identity.
+- [ ] `docker kill` terminates a `FAKE_CLAUDE_SLEEP`-stalled in-flight exec — #7 kill switch.
+- [ ] Integration test `apps/monitor/tests/integration/test_fixer_runner.py` SKIPS FAST (require_docker) when the docker daemon is unavailable; runs (both tests pass) under `make integration` with Docker present.
+- [ ] Dockerfile #3 identity holds: homelab-fixer created from build-arg UID/GID, `USER homelab-fixer` at end, NO root at runtime, NO docker group, NO sudoers; compose has NO `user:` override.
+- [ ] Dockerfile claude-install RUN ends with `test -x` (presence check), NEVER a binary-EXECUTING command (executing the fake at build time fails: transcript dir absent at that layer).
+- [ ] fixer-runner compose service is `profiles: ["fixer"]` (OFF by default); RW transcript mount (NO `:ro`) while the monitor's transcript mount stays `:ro`; NO `ports:`; ANTHROPIC_API_KEY empty passthrough; on the dedicated `fixer-egress` network.
+- [ ] baked CLAUDE.md floor contains ONLY universal invariants — NO host-specific allow/deny targets leaked (open-source split intact).
+- [ ] Real-host ACL round-trip (host-setup.sh §3.9 applied): fixer (1002) writes a transcript into /var/lib/homelab-monitor/runbook-transcripts; new file inherits the default ACL (monitor UID 995 effective r--, audit-readable); the live prod monitor's `:ro` mount can LIST+CAT it but CANNOT write (audit integrity #4).
