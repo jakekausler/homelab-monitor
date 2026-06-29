@@ -78,3 +78,11 @@ deploy/compose/docker-compose.override.yml
 # OS
 .DS_Store
 Thumbs.db
+
+# >>> epic-loop (epic-stage-workflow-autonomous) >>>
+# Runtime state for the autonomous loop — do not commit.
+/ralph-state.local.md
+/HANDOFF.md
+/HANDOFF-NEXT.md
+/scratch/
+# <<< epic-loop (epic-stage-workflow-autonomous) <<<
