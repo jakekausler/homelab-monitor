@@ -70,6 +70,20 @@ services:
       - "${HM_HOST_COMPOSE_GID:-994}"
     volumes:
       - data_monitor:/data
+      # EPIC-009 / STAGE-009-002: runbook transcript host bind-mount.
+      # The auto-fix subsystem's fixer-runner container (STAGE-009-003) WRITES
+      # Claude transcripts here; this monitor container only READS them (the
+      # transcript viewer in STAGE-009-011 + audit). Mounted READ-ONLY into the
+      # monitor by design (non-negotiable #4 audit integrity): the monitor must
+      # NOT be able to mutate an in-progress audit transcript. A host bind-mount
+      # (not a named volume) keeps transcripts on a host path that the §10.4
+      # rsync backup already covers, and survives container rebuilds.
+      # Default host source /var/lib/homelab-monitor/runbook-transcripts sits in
+      # the same state-dir tree as cron-apply/crontab-snapshot. POSIX default
+      # ACLs on that dir (applied by scripts/host-setup.sh) make every file the
+      # runner writes inherit monitor-readable (rX) + fixer-writable (rwX) perms.
+      # The fixer-runner's OWN rw mount of this dir is added in STAGE-009-003.
+      - ${HM_FIXER_TRANSCRIPTS_SRC:-/var/lib/homelab-monitor/runbook-transcripts}:/data/runbook-transcripts:ro
       - data_vm:/var/vm-data:ro
       - data_vl:/var/vl-data:ro
       - data_backup:/storage/backup/homelab-monitor

@@ -266,3 +266,12 @@ sudo /usr/local/sbin/hm-crontab-snapshot
 Set `HM_CRON_DISCOVERY_INTERVAL_SECONDS=86400` (24h) to effectively disable
 periodic polling. The `POST /api/crons/discover-now` endpoint remains
 available for manual triggers.
+
+## Auto-fix provisioning (optional)
+
+If you enable the optional auto-remediation subsystem, `scripts/host-setup.sh`
+also provisions the runbook-transcript directory and its POSIX default ACLs (the
+`homelab-fixer` identity gets write; the monitor gets read-only). That is the
+same idempotent script documented above — no separate run is needed. See
+[`autofix-provisioning.md`](autofix-provisioning.md) for the identity model, the
+`HM_FIXER_UID`/`HM_FIXER_GID` contract, and the docker-socket dependency.

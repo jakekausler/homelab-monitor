@@ -65,6 +65,25 @@ readonly COMPOSE_GROUP="homelab-compose"
 readonly COMPOSE_GROUP_DESKTOP_USER="${COMPOSE_GROUP_DESKTOP_USER:-${SUDO_USER:-jakekausler}}"
 readonly SHARED_FILES_CONF="$SCRIPT_DIR/host-setup-shared-files.conf"
 
+# STAGE-009-002: auto-fix transcript directory + POSIX default ACLs.
+# The fixer-runner container (STAGE-009-003) writes Claude transcripts here; the
+# monitor container READS them (transcript viewer + audit). The dir is bind-
+# mounted into the monitor at /data/runbook-transcripts (READ-ONLY for the
+# monitor — non-negotiable #4 audit integrity). Default ACLs make every file the
+# runner writes inherit monitor-readable (rX) + fixer-writable (rwX).
+readonly FIXER_TRANSCRIPTS_DIR="${HM_FIXER_TRANSCRIPTS_SRC:-/var/lib/homelab-monitor/runbook-transcripts}"
+# Numeric identity the ACL grants. UID = the in-container homelab-fixer user
+# (created in STAGE-009-003); GID = the shared-GID fallback group when setfacl is
+# absent. Defaults 1002:1002 avoid colliding with this project's own service IDs
+# (1000 homelab, 2000 amconfig, 999 docker, 994 homelab-compose) but are NOT
+# guaranteed free against arbitrary host users — verify against your host's
+# /etc/passwd and /etc/group and override via env if 1002 is taken, e.g.
+#   HM_FIXER_UID=5001 HM_FIXER_GID=5001 sudo bash scripts/host-setup.sh
+readonly FIXER_UID="${HM_FIXER_UID:-1002}"
+readonly FIXER_GID="${HM_FIXER_GID:-1002}"
+# Fallback group name (used only when setfacl is unavailable — shared-GID + setgid dir).
+readonly FIXER_FALLBACK_GROUP="homelab-fixer"
+
 CHECK_ONLY=0
 WRITE_ENV_FILE=""
 
@@ -344,6 +363,146 @@ done
 do_or_check "chown root:root '$SNAPSHOT_DIR'"
 do_or_check "chmod 0755 '$SNAPSHOT_DIR'"
 
+# --- 3.9. STAGE-009-002: runbook transcript dir + POSIX default ACLs ---
+# The auto-fix fixer-runner (STAGE-009-003) WRITES Claude transcripts into this
+# directory; the monitor container only READS them (transcript viewer + audit).
+# We apply POSIX DEFAULT ACLs so every file the runner creates INHERITS:
+#   - monitor UID : rX  (READ-only — non-negotiable #4: the monitor must never
+#                        be able to mutate an in-progress audit transcript)
+#   - fixer  UID : rwX  (the runner writes here)
+# Default ACLs survive cross-container UID/umask differences (the monitor runs
+# at a host-specific runtime UID that need not equal the build-time 1000).
+#
+# This stage does NOT create the in-container homelab-fixer OS user (that is the
+# runner image's job in STAGE-009-003) and grants NO docker group / NO sudoers
+# to the fixer — only this single directory's read/write boundary (#3).
+readonly MONITOR_RUNTIME_UID="${HM_CRON_HOST_UID:-$(id -u "$USERNAME" 2>/dev/null || echo 1000)}"
+
+# 3.9a. Ensure the directory exists.
+for d in "/var/lib/homelab-monitor" "$FIXER_TRANSCRIPTS_DIR"; do
+    if [[ -d "$d" ]]; then
+        log "OK: $d already exists"
+    else
+        do_or_check "mkdir -p '$d'"
+    fi
+done
+
+if ! command -v setfacl >/dev/null 2>&1; then
+    # 3.9b-fallback. setfacl unavailable: WARN-degrade to a shared supplementary
+    # GID + setgid directory (chmod 2770), mirroring the amconfig GID-2000 idiom.
+    # The monitor (group member) and the fixer (group member) both get group
+    # rwx; the setgid bit makes new files inherit the group. NOTE: under the
+    # fallback the monitor gets group-WRITE too (group rwx) — this is a weaker
+    # posture than the ACL path (which gives the monitor read-only). The ACL
+    # path is STRONGLY preferred; install the `acl` package (Debian/Ubuntu:
+    # apt install acl) to get the read-only-monitor guarantee of #4.
+    log "WARN: setfacl not installed; falling back to shared GID + setgid dir."
+    log "WARN: install the 'acl' package for the read-only-monitor ACL posture (#4)."
+    if getent group "$FIXER_FALLBACK_GROUP" >/dev/null 2>&1; then
+        log "OK: group $FIXER_FALLBACK_GROUP already exists"
+    else
+        do_or_check "groupadd --system --gid '$FIXER_GID' '$FIXER_FALLBACK_GROUP' || groupadd --system '$FIXER_FALLBACK_GROUP'"
+        if [[ $CHECK_ONLY -eq 0 ]]; then
+            _actual_fallback_gid=$(getent group "$FIXER_FALLBACK_GROUP" 2>/dev/null | cut -d: -f3 || echo "$FIXER_GID")
+            if [[ "$_actual_fallback_gid" != "$FIXER_GID" ]]; then
+                log "WARN: $FIXER_FALLBACK_GROUP was created with GID $_actual_fallback_gid (requested GID $FIXER_GID was already taken on this host)."
+                log "WARN: the summary and --write-env below will report the REQUESTED GID ($FIXER_GID)."
+                log "WARN: update HM_FIXER_GID=$_actual_fallback_gid in your overrides env and re-run host-setup.sh."
+            fi
+        fi
+    fi
+    do_or_check "chgrp '$FIXER_FALLBACK_GROUP' '$FIXER_TRANSCRIPTS_DIR'"
+    do_or_check "chmod 2770 '$FIXER_TRANSCRIPTS_DIR'"
+    log "WARN: under the fallback, add BOTH the monitor user and the fixer user to"
+    log "WARN: group $FIXER_FALLBACK_GROUP (the runner does this for the fixer in 003;"
+    log "WARN: the monitor needs group_add for $FIXER_FALLBACK_GROUP's GID in compose)."
+else
+    # 3.9b. setfacl present (preferred path). Base ownership: dir owned by the
+    # monitor runtime user so the monitor can traverse/read; mode 0750.
+    do_or_check "chown '$MONITOR_RUNTIME_UID':'$MONITOR_RUNTIME_UID' '$FIXER_TRANSCRIPTS_DIR'"
+    do_or_check "chmod 0750 '$FIXER_TRANSCRIPTS_DIR'"
+
+    if [[ $CHECK_ONLY -eq 1 ]]; then
+        # --check mode: print intended ACL actions (do_or_check already logs WOULD:).
+        monitor_acl=$(getfacl --absolute-names "$FIXER_TRANSCRIPTS_DIR" 2>/dev/null | grep "user:$MONITOR_RUNTIME_UID:r-x" || true)
+        if [[ -n "$monitor_acl" ]]; then
+            log "OK: access ACL (monitor rx) already set on $FIXER_TRANSCRIPTS_DIR"
+        else
+            do_or_check "setfacl -m 'u:$MONITOR_RUNTIME_UID:rx' '$FIXER_TRANSCRIPTS_DIR'"
+        fi
+        fixer_acl=$(getfacl --absolute-names "$FIXER_TRANSCRIPTS_DIR" 2>/dev/null | grep "user:$FIXER_UID:rwx" || true)
+        if [[ -n "$fixer_acl" ]]; then
+            log "OK: access ACL (fixer rwx) already set on $FIXER_TRANSCRIPTS_DIR"
+        else
+            do_or_check "setfacl -m 'u:$FIXER_UID:rwx' '$FIXER_TRANSCRIPTS_DIR'"
+        fi
+        monitor_default=$(getfacl --absolute-names "$FIXER_TRANSCRIPTS_DIR" 2>/dev/null | grep "default:user:$MONITOR_RUNTIME_UID:r-x" || true)
+        if [[ -n "$monitor_default" ]]; then
+            log "OK: default ACL (monitor rx) already set on $FIXER_TRANSCRIPTS_DIR"
+        else
+            do_or_check "setfacl -d -m 'u:$MONITOR_RUNTIME_UID:rx' '$FIXER_TRANSCRIPTS_DIR'"
+        fi
+        fixer_default=$(getfacl --absolute-names "$FIXER_TRANSCRIPTS_DIR" 2>/dev/null | grep "default:user:$FIXER_UID:rwx" || true)
+        if [[ -n "$fixer_default" ]]; then
+            log "OK: default ACL (fixer rwx) already set on $FIXER_TRANSCRIPTS_DIR"
+        else
+            do_or_check "setfacl -d -m 'u:$FIXER_UID:rwx' '$FIXER_TRANSCRIPTS_DIR'"
+        fi
+    else
+        # Live mode: apply all four ACLs in a single non-fatal block.
+        # If ANY setfacl call fails (e.g. host filesystem rejects numeric UID ACLs),
+        # WARN and degrade to the shared-GID + setgid fallback rather than aborting
+        # the entire script under set -e. An `if ! { ... }` compound command does
+        # NOT trigger set -e on inner failures — only the compound result matters.
+        _setfacl_ok=1
+        monitor_acl=$(getfacl --absolute-names "$FIXER_TRANSCRIPTS_DIR" 2>/dev/null | grep "user:$MONITOR_RUNTIME_UID:r-x" || true)
+        fixer_acl=$(getfacl --absolute-names "$FIXER_TRANSCRIPTS_DIR" 2>/dev/null | grep "user:$FIXER_UID:rwx" || true)
+        monitor_default=$(getfacl --absolute-names "$FIXER_TRANSCRIPTS_DIR" 2>/dev/null | grep "default:user:$MONITOR_RUNTIME_UID:r-x" || true)
+        fixer_default=$(getfacl --absolute-names "$FIXER_TRANSCRIPTS_DIR" 2>/dev/null | grep "default:user:$FIXER_UID:rwx" || true)
+
+        if [[ -n "$monitor_acl" ]]; then
+            log "OK: access ACL (monitor rx) already set on $FIXER_TRANSCRIPTS_DIR"
+        fi
+        if [[ -n "$fixer_acl" ]]; then
+            log "OK: access ACL (fixer rwx) already set on $FIXER_TRANSCRIPTS_DIR"
+        fi
+        if [[ -n "$monitor_default" ]]; then
+            log "OK: default ACL (monitor rx) already set on $FIXER_TRANSCRIPTS_DIR"
+        fi
+        if [[ -n "$fixer_default" ]]; then
+            log "OK: default ACL (fixer rwx) already set on $FIXER_TRANSCRIPTS_DIR"
+        fi
+
+        if { \
+            { [[ -n "$monitor_acl" ]] || setfacl -m "u:$MONITOR_RUNTIME_UID:rx" "$FIXER_TRANSCRIPTS_DIR"; } && \
+            { [[ -n "$fixer_acl" ]] || setfacl -m "u:$FIXER_UID:rwx" "$FIXER_TRANSCRIPTS_DIR"; } && \
+            { [[ -n "$monitor_default" ]] || setfacl -d -m "u:$MONITOR_RUNTIME_UID:rx" "$FIXER_TRANSCRIPTS_DIR"; } && \
+            { [[ -n "$fixer_default" ]] || setfacl -d -m "u:$FIXER_UID:rwx" "$FIXER_TRANSCRIPTS_DIR"; }; \
+        }; then
+            log "EXEC: ACLs applied on $FIXER_TRANSCRIPTS_DIR (monitor rx, fixer rwx, defaults)"
+        else
+            _setfacl_ok=0
+            log "WARN: one or more setfacl calls failed on $FIXER_TRANSCRIPTS_DIR."
+            log "WARN: degrading to shared-GID + setgid fallback (weaker posture — monitor gets group-write)."
+            log "WARN: install the 'acl' package and re-run for the read-only-monitor ACL guarantee (#4)."
+            if getent group "$FIXER_FALLBACK_GROUP" >/dev/null 2>&1; then
+                log "OK: group $FIXER_FALLBACK_GROUP already exists"
+            else
+                groupadd --system --gid "$FIXER_GID" "$FIXER_FALLBACK_GROUP" || groupadd --system "$FIXER_FALLBACK_GROUP"
+                _actual_gid=$(getent group "$FIXER_FALLBACK_GROUP" 2>/dev/null | cut -d: -f3 || echo "$FIXER_GID")
+                _EFFECTIVE_FIXER_GID="$_actual_gid"
+                if [[ "$_EFFECTIVE_FIXER_GID" != "$FIXER_GID" ]]; then
+                    log "WARN: $FIXER_FALLBACK_GROUP was created with GID $_EFFECTIVE_FIXER_GID (requested $FIXER_GID was taken)."
+                    log "WARN: update HM_FIXER_GID=$_EFFECTIVE_FIXER_GID in your overrides env and re-run host-setup.sh."
+                fi
+            fi
+            chgrp "$FIXER_FALLBACK_GROUP" "$FIXER_TRANSCRIPTS_DIR"
+            chmod 2770 "$FIXER_TRANSCRIPTS_DIR"
+            log "WARN: add BOTH the monitor user and the fixer user to group $FIXER_FALLBACK_GROUP."
+        fi
+    fi
+fi
+
 # --- 4. Install systemd units and executor scripts ---
 # Install the snapshot script + units (which refresh the crontab snapshot on
 # spool changes and on a periodic timer) and the cron-apply executor (apply
@@ -502,7 +661,16 @@ Paste these into deploy/dev/dev.env (or your production env):
   HM_CRON_HOST_GID=$GID_VAL
   HM_HOST_HOSTNAME=$HOSTNAME_VAL
 
-Then restart the monitor: make compose-up
+The auto-fix (STAGE-009-002) transcript ACL was granted for:
+
+  HM_FIXER_UID=$FIXER_UID
+  HM_FIXER_GID=$FIXER_GID
+
+(These are the values this run's ACL used. They MUST match the homelab-fixer
+user that STAGE-009-003's fixer-runner image creates. Set the real values in
+your overrides env BEFORE running this script if 1002 collides on your host.)
+
+Then restart the monitor: docker compose up -d --force-recreate monitor
 EOF
 
 # Handle env file writing if requested
@@ -512,11 +680,15 @@ if [[ -n "$WRITE_ENV_FILE" ]]; then
         log "  HM_CRON_HOST_UID=$UID_VAL"
         log "  HM_CRON_HOST_GID=$GID_VAL"
         log "  HM_HOST_HOSTNAME=$HOSTNAME_VAL"
+        log "  HM_FIXER_UID=$FIXER_UID"
+        log "  HM_FIXER_GID=$FIXER_GID"
     else
         if update_env_var "$WRITE_ENV_FILE" "HM_CRON_HOST_UID" "$UID_VAL" && \
            update_env_var "$WRITE_ENV_FILE" "HM_CRON_HOST_GID" "$GID_VAL" && \
-           update_env_var "$WRITE_ENV_FILE" "HM_HOST_HOSTNAME" "$HOSTNAME_VAL"; then
-            log "WROTE: $WRITE_ENV_FILE (updated HM_CRON_HOST_UID, HM_CRON_HOST_GID, HM_HOST_HOSTNAME)"
+           update_env_var "$WRITE_ENV_FILE" "HM_HOST_HOSTNAME" "$HOSTNAME_VAL" && \
+           update_env_var "$WRITE_ENV_FILE" "HM_FIXER_UID" "$FIXER_UID" && \
+           update_env_var "$WRITE_ENV_FILE" "HM_FIXER_GID" "$FIXER_GID"; then
+            log "WROTE: $WRITE_ENV_FILE (updated HM_CRON_HOST_UID, HM_CRON_HOST_GID, HM_HOST_HOSTNAME, HM_FIXER_UID, HM_FIXER_GID)"
         else
             log "ERROR: failed to write env file"
             exit 1
