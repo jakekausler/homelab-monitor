@@ -1,0 +1,844 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": { "type": "grafana", "uid": "-- Grafana --" },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "description": "Synology Surveillance Station: cameras connected/disconnected, license usage, HomeMode family, events, recordings & retention, per-camera identity, and SS version. Provisioned by homelab-monitor (STAGE-008-031).",
+  "editable": false,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Cameras connected",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "h": 4, "w": 5, "x": 0, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "—",
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null } ] },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "value"
+      },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_synology_ss_cameras_connected_total", "legendFormat": "connected", "instant": true }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Cameras disconnected",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "h": 4, "w": 5, "x": 5, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "—",
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 1 } ] },
+          "mappings": [ { "type": "value", "options": { "0": { "text": "0", "color": "green", "index": 0 } } } ]
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "value"
+      },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_synology_ss_cameras_disconnected_total", "legendFormat": "disconnected", "instant": true }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "License used",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "h": 4, "w": 5, "x": 10, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "—",
+          "max": 90,
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 81 }, { "color": "red", "value": 90 } ] },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "value"
+      },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_synology_ss_license_used", "legendFormat": "used", "instant": true }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "HomeMode",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "h": 4, "w": 5, "x": 15, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "—",
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null } ] },
+          "mappings": [ { "type": "value", "options": { "0": { "text": "Off", "color": "text", "index": 0 }, "1": { "text": "On", "color": "blue", "index": 1 } } } ]
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "value"
+      },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_synology_ss_homemode_on", "legendFormat": "homemode", "instant": true }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Events today",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "—",
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null } ] },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "value"
+      },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_synology_ss_events_today", "legendFormat": "events", "instant": true }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "row",
+      "title": "Cameras",
+      "collapsed": true,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 4 },
+      "panels": [
+        {
+          "id": 11,
+          "type": "table",
+          "title": "Cameras",
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "gridPos": { "h": 8, "w": 18, "x": 0, "y": 5 },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null } ] },
+              "custom": { "align": "auto", "cellOptions": { "type": "auto" }, "inspect": false }
+            },
+            "overrides": [
+              { "matcher": { "id": "byName", "options": "Connected" }, "properties": [ { "id": "mappings", "value": [ { "type": "value", "options": { "1": { "text": "Connected", "color": "green", "index": 0 }, "0": { "text": "Disconnected", "color": "red", "index": 1 } } } ] }, { "id": "custom.cellOptions", "value": { "type": "color-background" } } ] },
+              { "matcher": { "id": "byName", "options": "Status" }, "properties": [ { "id": "mappings", "value": [ { "type": "value", "options": { "1": { "text": "OK", "color": "green", "index": 0 }, "0": { "text": "Fault", "color": "red", "index": 1 } } } ] }, { "id": "custom.cellOptions", "value": { "type": "color-text" } } ] },
+              { "matcher": { "id": "byName", "options": "FPS" }, "properties": [ { "id": "unit", "value": "short" } ] }
+            ]
+          },
+          "options": { "showHeader": true, "cellHeight": "sm", "footer": { "show": false, "reducer": ["sum"], "countRows": false, "fields": "" } },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "max by (camera) (homelab_synology_ss_camera_connected)", "legendFormat": "", "instant": true, "format": "table" },
+            { "refId": "B", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "max by (camera) (homelab_synology_ss_camera_status)", "legendFormat": "", "instant": true, "format": "table" },
+            { "refId": "C", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "max by (camera) (homelab_synology_ss_camera_fps)", "legendFormat": "", "instant": true, "format": "table" },
+            { "refId": "D", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_synology_ss_camera_resolution", "legendFormat": "", "instant": true, "format": "table" },
+            { "refId": "E", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_synology_ss_camera_info", "legendFormat": "", "instant": true, "format": "table" }
+          ],
+          "transformations": [
+            { "id": "joinByField", "options": { "byField": "camera", "mode": "outer" } },
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": {
+                  "Time": true, "Time 1": true, "Time 2": true, "Time 3": true, "Time 4": true, "Time 5": true,
+                  "__name__": true, "job": true, "instance": true, "service": true,
+                  "Value #D": true, "Value #E": true,
+                  "id": true, "mac": true, "model": true, "vendor": true
+                },
+                "indexByName": {
+                  "camera": 0, "Value #A": 1, "Value #B": 2, "Value #C": 3, "resolution": 4, "ip": 5
+                },
+                "renameByName": {
+                  "camera": "Camera", "Value #A": "Connected", "Value #B": "Status", "Value #C": "FPS",
+                  "resolution": "Resolution", "ip": "IP"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "id": 12,
+          "type": "stat",
+          "title": "Total cameras",
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "gridPos": { "h": 4, "w": 6, "x": 18, "y": 5 },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "noValue": "—",
+              "color": { "mode": "thresholds" },
+              "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null } ] },
+              "mappings": []
+            },
+            "overrides": []
+          },
+          "options": {
+            "colorMode": "value",
+            "graphMode": "none",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "textMode": "value"
+          },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_synology_ss_cameras_total", "legendFormat": "total", "instant": true }
+          ]
+        },
+        {
+          "id": 13,
+          "type": "stat",
+          "title": "Reported count",
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "gridPos": { "h": 4, "w": 6, "x": 18, "y": 9 },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "noValue": "—",
+              "color": { "mode": "thresholds" },
+              "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null } ] },
+              "mappings": []
+            },
+            "overrides": []
+          },
+          "options": {
+            "colorMode": "value",
+            "graphMode": "none",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "textMode": "value"
+          },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_synology_ss_info_camera_number", "legendFormat": "reported", "instant": true }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 20,
+      "type": "row",
+      "title": "Recordings & identity",
+      "collapsed": true,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 5 },
+      "panels": [
+        {
+          "id": 21,
+          "type": "table",
+          "title": "Recordings per camera",
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "gridPos": { "h": 9, "w": 24, "x": 0, "y": 6 },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null } ] },
+              "custom": { "align": "auto", "cellOptions": { "type": "auto" }, "inspect": false }
+            },
+            "overrides": [
+              { "matcher": { "id": "byName", "options": "Size" }, "properties": [ { "id": "unit", "value": "bytes" } ] },
+              { "matcher": { "id": "byName", "options": "Recordings" }, "properties": [ { "id": "unit", "value": "short" } ] },
+              { "matcher": { "id": "byName", "options": "Keep days" }, "properties": [ { "id": "unit", "value": "short" } ] },
+              { "matcher": { "id": "byName", "options": "Keep size (MB)" }, "properties": [ { "id": "unit", "value": "decmbytes" } ] }
+            ]
+          },
+          "options": { "showHeader": true, "cellHeight": "sm", "footer": { "show": false, "reducer": ["sum"], "countRows": false, "fields": "" } },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "max by (camera) (homelab_synology_ss_recordings_count)", "legendFormat": "", "instant": true, "format": "table" },
+            { "refId": "B", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "max by (camera) (homelab_synology_ss_recordings_bytes)", "legendFormat": "", "instant": true, "format": "table" },
+            { "refId": "C", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "max by (camera) (homelab_synology_ss_camera_recording_keep_days)", "legendFormat": "", "instant": true, "format": "table" },
+            { "refId": "D", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "max by (camera) (homelab_synology_ss_camera_recording_keep_size_mb)", "legendFormat": "", "instant": true, "format": "table" },
+            { "refId": "E", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_synology_ss_camera_recording_retention_mode", "legendFormat": "", "instant": true, "format": "table" },
+            { "refId": "F", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_synology_ss_camera_info", "legendFormat": "", "instant": true, "format": "table" }
+          ],
+          "transformations": [
+            { "id": "joinByField", "options": { "byField": "camera", "mode": "outer" } },
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": {
+                  "Time": true, "Time 1": true, "Time 2": true, "Time 3": true, "Time 4": true, "Time 5": true, "Time 6": true,
+                  "__name__": true, "job": true, "instance": true, "service": true,
+                  "Value #E": true, "Value #F": true,
+                  "id": true, "ip": true, "mac": true, "resolution": true
+                },
+                "indexByName": {
+                  "camera": 0, "Value #A": 1, "Value #B": 2, "Value #C": 3, "Value #D": 4, "mode": 5, "model": 6, "vendor": 7
+                },
+                "renameByName": {
+                  "camera": "Camera", "Value #A": "Recordings", "Value #B": "Size", "Value #C": "Keep days",
+                  "Value #D": "Keep size (MB)", "mode": "Retention", "model": "Model", "vendor": "Vendor"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "id": 22,
+          "type": "stat",
+          "title": "All recordings",
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "gridPos": { "h": 4, "w": 6, "x": 0, "y": 15 },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "noValue": "—",
+              "color": { "mode": "thresholds" },
+              "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null } ] },
+              "mappings": []
+            },
+            "overrides": []
+          },
+          "options": {
+            "colorMode": "value",
+            "graphMode": "none",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "textMode": "value"
+          },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_synology_ss_recordings_total", "legendFormat": "recordings", "instant": true }
+          ]
+        },
+        {
+          "id": 23,
+          "type": "stat",
+          "title": "Total size",
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "gridPos": { "h": 4, "w": 6, "x": 6, "y": 15 },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "bytes",
+              "noValue": "—",
+              "color": { "mode": "thresholds" },
+              "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null } ] },
+              "mappings": []
+            },
+            "overrides": []
+          },
+          "options": {
+            "colorMode": "value",
+            "graphMode": "none",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "textMode": "value"
+          },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_synology_ss_recordings_bytes_total", "legendFormat": "size", "instant": true }
+          ]
+        },
+        {
+          "id": 24,
+          "type": "timeseries",
+          "title": "Recording storage growth",
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "gridPos": { "h": 8, "w": 24, "x": 0, "y": 19 },
+          "fieldConfig": {
+            "defaults": { "unit": "bytes", "color": { "mode": "palette-classic" } },
+            "overrides": []
+          },
+          "options": {
+            "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+            "tooltip": { "mode": "multi", "sort": "none" }
+          },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_synology_ss_recordings_bytes_total", "legendFormat": "total size", "range": true }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 30,
+      "type": "row",
+      "title": "License, HomeMode & events",
+      "collapsed": true,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 6 },
+      "panels": [
+        {
+          "id": 31,
+          "type": "stat",
+          "title": "License used",
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "gridPos": { "h": 4, "w": 4, "x": 0, "y": 7 },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "noValue": "—",
+              "max": 90,
+              "color": { "mode": "thresholds" },
+              "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 81 }, { "color": "red", "value": 90 } ] },
+              "mappings": []
+            },
+            "overrides": []
+          },
+          "options": {
+            "colorMode": "value",
+            "graphMode": "none",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "textMode": "value"
+          },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_synology_ss_license_used", "legendFormat": "used", "instant": true }
+          ]
+        },
+        {
+          "id": 32,
+          "type": "stat",
+          "title": "License max",
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "gridPos": { "h": 4, "w": 4, "x": 4, "y": 7 },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "noValue": "—",
+              "color": { "mode": "thresholds" },
+              "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null } ] },
+              "mappings": []
+            },
+            "overrides": []
+          },
+          "options": {
+            "colorMode": "value",
+            "graphMode": "none",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "textMode": "value"
+          },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_synology_ss_license_max", "legendFormat": "max", "instant": true }
+          ]
+        },
+        {
+          "id": 33,
+          "type": "stat",
+          "title": "License total",
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "gridPos": { "h": 4, "w": 4, "x": 8, "y": 7 },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "noValue": "—",
+              "color": { "mode": "thresholds" },
+              "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null } ] },
+              "mappings": []
+            },
+            "overrides": []
+          },
+          "options": {
+            "colorMode": "value",
+            "graphMode": "none",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "textMode": "value"
+          },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_synology_ss_license_total", "legendFormat": "total", "instant": true }
+          ]
+        },
+        {
+          "id": 34,
+          "type": "stat",
+          "title": "Cameras per license",
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "gridPos": { "h": 4, "w": 4, "x": 12, "y": 7 },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "noValue": "—",
+              "color": { "mode": "thresholds" },
+              "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null } ] },
+              "mappings": []
+            },
+            "overrides": []
+          },
+          "options": {
+            "colorMode": "value",
+            "graphMode": "none",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "textMode": "value"
+          },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_synology_ss_license_camera_count", "legendFormat": "per license", "instant": true }
+          ]
+        },
+        {
+          "id": 35,
+          "type": "stat",
+          "title": "License exhausted",
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "gridPos": { "h": 4, "w": 4, "x": 16, "y": 7 },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "noValue": "—",
+              "color": { "mode": "thresholds" },
+              "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 1 } ] },
+              "mappings": [ { "type": "value", "options": { "0": { "text": "OK", "color": "green", "index": 0 }, "1": { "text": "Exhausted", "color": "red", "index": 1 } } } ]
+            },
+            "overrides": []
+          },
+          "options": {
+            "colorMode": "background",
+            "graphMode": "none",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "textMode": "value"
+          },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_synology_ss_license_exhausted", "legendFormat": "exhausted", "instant": true }
+          ]
+        },
+        {
+          "id": 36,
+          "type": "stat",
+          "title": "Reported max",
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "gridPos": { "h": 4, "w": 4, "x": 20, "y": 7 },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "noValue": "—",
+              "color": { "mode": "thresholds" },
+              "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null } ] },
+              "mappings": []
+            },
+            "overrides": []
+          },
+          "options": {
+            "colorMode": "value",
+            "graphMode": "none",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "textMode": "value"
+          },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_synology_ss_info_license_max", "legendFormat": "reported max", "instant": true }
+          ]
+        },
+        {
+          "id": 37,
+          "type": "stat",
+          "title": "HomeMode",
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "gridPos": { "h": 4, "w": 5, "x": 0, "y": 11 },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "noValue": "—",
+              "color": { "mode": "thresholds" },
+              "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null } ] },
+              "mappings": [ { "type": "value", "options": { "0": { "text": "Off", "color": "text", "index": 0 }, "1": { "text": "On", "color": "blue", "index": 1 } } } ]
+            },
+            "overrides": []
+          },
+          "options": {
+            "colorMode": "value",
+            "graphMode": "none",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "textMode": "value"
+          },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_synology_ss_homemode_on", "legendFormat": "homemode", "instant": true }
+          ]
+        },
+        {
+          "id": 38,
+          "type": "stat",
+          "title": "Schedule",
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "gridPos": { "h": 4, "w": 5, "x": 5, "y": 11 },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "noValue": "—",
+              "color": { "mode": "thresholds" },
+              "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null } ] },
+              "mappings": [ { "type": "value", "options": { "0": { "text": "Off", "color": "text", "index": 0 }, "1": { "text": "On", "color": "blue", "index": 1 } } } ]
+            },
+            "overrides": []
+          },
+          "options": {
+            "colorMode": "value",
+            "graphMode": "none",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "textMode": "value"
+          },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_synology_ss_homemode_schedule_on", "legendFormat": "schedule", "instant": true }
+          ]
+        },
+        {
+          "id": 39,
+          "type": "stat",
+          "title": "Streaming",
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "gridPos": { "h": 4, "w": 5, "x": 10, "y": 11 },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "noValue": "—",
+              "color": { "mode": "thresholds" },
+              "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null } ] },
+              "mappings": [ { "type": "value", "options": { "0": { "text": "Off", "color": "text", "index": 0 }, "1": { "text": "On", "color": "blue", "index": 1 } } } ]
+            },
+            "overrides": []
+          },
+          "options": {
+            "colorMode": "value",
+            "graphMode": "none",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "textMode": "value"
+          },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_synology_ss_homemode_streaming_on", "legendFormat": "streaming", "instant": true }
+          ]
+        },
+        {
+          "id": 40,
+          "type": "stat",
+          "title": "Notify",
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "gridPos": { "h": 4, "w": 5, "x": 15, "y": 11 },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "noValue": "—",
+              "color": { "mode": "thresholds" },
+              "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null } ] },
+              "mappings": [ { "type": "value", "options": { "0": { "text": "Off", "color": "text", "index": 0 }, "1": { "text": "On", "color": "blue", "index": 1 } } } ]
+            },
+            "overrides": []
+          },
+          "options": {
+            "colorMode": "value",
+            "graphMode": "none",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "textMode": "value"
+          },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_synology_ss_homemode_notify_on", "legendFormat": "notify", "instant": true }
+          ]
+        },
+        {
+          "id": 41,
+          "type": "stat",
+          "title": "Rec schedule",
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "gridPos": { "h": 4, "w": 4, "x": 20, "y": 11 },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "noValue": "—",
+              "color": { "mode": "thresholds" },
+              "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null } ] },
+              "mappings": [ { "type": "value", "options": { "0": { "text": "Off", "color": "text", "index": 0 }, "1": { "text": "On", "color": "blue", "index": 1 } } } ]
+            },
+            "overrides": []
+          },
+          "options": {
+            "colorMode": "value",
+            "graphMode": "none",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "textMode": "value"
+          },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_synology_ss_homemode_rec_schedule_on", "legendFormat": "rec schedule", "instant": true }
+          ]
+        },
+        {
+          "id": 42,
+          "type": "stat",
+          "title": "Events today",
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "gridPos": { "h": 4, "w": 6, "x": 0, "y": 15 },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "noValue": "—",
+              "color": { "mode": "thresholds" },
+              "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null } ] },
+              "mappings": []
+            },
+            "overrides": []
+          },
+          "options": {
+            "colorMode": "value",
+            "graphMode": "none",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "textMode": "value"
+          },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_synology_ss_events_today", "legendFormat": "today", "instant": true }
+          ]
+        },
+        {
+          "id": 43,
+          "type": "stat",
+          "title": "All events",
+          "description": "Aggregate event count across all cameras (homelab_synology_ss_events_total_all). The related homelab_synology_ss_events_total metric carries the per-camera breakdown, which sums to this total; it is not separately charted here.",
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "gridPos": { "h": 4, "w": 6, "x": 6, "y": 15 },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "noValue": "—",
+              "color": { "mode": "thresholds" },
+              "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null } ] },
+              "mappings": []
+            },
+            "overrides": []
+          },
+          "options": {
+            "colorMode": "value",
+            "graphMode": "none",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "textMode": "value"
+          },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_synology_ss_events_total_all", "legendFormat": "all events", "instant": true }
+          ]
+        },
+        {
+          "id": 44,
+          "type": "table",
+          "title": "Surveillance Station version",
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "gridPos": { "h": 4, "w": 12, "x": 12, "y": 15 },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null } ] },
+              "custom": { "align": "auto", "cellOptions": { "type": "auto" }, "inspect": false }
+            },
+            "overrides": []
+          },
+          "options": { "showHeader": true, "cellHeight": "sm", "footer": { "show": false, "reducer": ["sum"], "countRows": false, "fields": "" } },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_synology_ss_info_version", "legendFormat": "", "instant": true, "format": "table" }
+          ],
+          "transformations": [
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": { "Time": true, "__name__": true, "job": true, "instance": true, "service": true, "Value": true },
+                "indexByName": { "version": 0 },
+                "renameByName": { "version": "Version" }
+              }
+            }
+          ]
+        },
+        {
+          "id": 45,
+          "type": "timeseries",
+          "title": "Events today (trend)",
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "gridPos": { "h": 8, "w": 24, "x": 0, "y": 19 },
+          "fieldConfig": {
+            "defaults": { "unit": "short", "color": { "mode": "palette-classic" } },
+            "overrides": []
+          },
+          "options": {
+            "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+            "tooltip": { "mode": "multi", "sort": "none" }
+          },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_synology_ss_events_today", "legendFormat": "events today", "range": true }
+          ]
+        }
+      ]
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 40,
+  "tags": ["homelab-monitor", "synology", "surveillance"],
+  "templating": { "list": [] },
+  "time": { "from": "now-6h", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Synology Surveillance",
+  "uid": "synology-surveillance",
+  "version": 1,
+  "weekStart": ""
+}

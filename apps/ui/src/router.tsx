@@ -23,6 +23,7 @@ import { MetricsUnifiTab } from '@/routes/metrics/MetricsUnifiTab'
 import { MetricsNetworkTab } from '@/routes/metrics/MetricsNetworkTab'
 import { MetricsPiholeTab } from '@/routes/metrics/MetricsPiholeTab'
 import { MetricsSynologyTab } from '@/routes/metrics/MetricsSynologyTab'
+import { MetricsSurveillanceTab } from '@/routes/metrics/MetricsSurveillanceTab'
 import { CronsListPage } from '@/routes/integrations/crons/CronsList'
 import { CronDetailPage } from '@/routes/integrations/crons/CronDetailPage'
 import { CronRunsListPage } from '@/routes/integrations/crons/CronRunsList'
@@ -224,6 +225,12 @@ const metricsSynologyRoute = createRoute({
   getParentRoute: () => metricsLayoutRoute,
   path: 'synology',
   component: MetricsSynologyTab,
+})
+
+const metricsSurveillanceRoute = createRoute({
+  getParentRoute: () => metricsLayoutRoute,
+  path: 'surveillance',
+  component: MetricsSurveillanceTab,
 })
 
 /**
@@ -707,6 +714,7 @@ const routeTree = rootRoute.addChildren([
       metricsNetworkRoute,
       metricsPiholeRoute,
       metricsSynologyRoute,
+      metricsSurveillanceRoute,
     ]),
     logsLayoutRoute.addChildren([
       logsIndexRoute,
