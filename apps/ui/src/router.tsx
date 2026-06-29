@@ -22,6 +22,7 @@ import { MetricsHomeAssistantTab } from '@/routes/metrics/MetricsHomeAssistantTa
 import { MetricsUnifiTab } from '@/routes/metrics/MetricsUnifiTab'
 import { MetricsNetworkTab } from '@/routes/metrics/MetricsNetworkTab'
 import { MetricsPiholeTab } from '@/routes/metrics/MetricsPiholeTab'
+import { MetricsSynologyTab } from '@/routes/metrics/MetricsSynologyTab'
 import { CronsListPage } from '@/routes/integrations/crons/CronsList'
 import { CronDetailPage } from '@/routes/integrations/crons/CronDetailPage'
 import { CronRunsListPage } from '@/routes/integrations/crons/CronRunsList'
@@ -217,6 +218,12 @@ const metricsPiholeRoute = createRoute({
   getParentRoute: () => metricsLayoutRoute,
   path: 'pihole',
   component: MetricsPiholeTab,
+})
+
+const metricsSynologyRoute = createRoute({
+  getParentRoute: () => metricsLayoutRoute,
+  path: 'synology',
+  component: MetricsSynologyTab,
 })
 
 /**
@@ -699,6 +706,7 @@ const routeTree = rootRoute.addChildren([
       metricsUnifiRoute,
       metricsNetworkRoute,
       metricsPiholeRoute,
+      metricsSynologyRoute,
     ]),
     logsLayoutRoute.addChildren([
       logsIndexRoute,

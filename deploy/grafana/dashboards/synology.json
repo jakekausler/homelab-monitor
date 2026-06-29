@@ -1,0 +1,995 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": { "type": "grafana", "uid": "-- Grafana --" },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "description": "Synology DSM NAS: health & alerts at a glance, storage/volumes/pools, disks & SMART, system & UPS, backup & replication, security, mount-health, and SSH-probe liveness. Provisioned by homelab-monitor (STAGE-008-030).",
+  "editable": false,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Health",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "h": 4, "w": 5, "x": 0, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "—",
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "green", "value": 1 } ] },
+          "mappings": [ { "type": "value", "options": { "1": { "text": "OK", "color": "green", "index": 0 }, "0": { "text": "ALERT", "color": "red", "index": 1 } } } ]
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "value"
+      },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_synology_health_ok", "legendFormat": "health", "instant": true }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "DSM update",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "h": 4, "w": 5, "x": 5, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "—",
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 1 } ] },
+          "mappings": [ { "type": "value", "options": { "0": { "text": "Up to date", "color": "green", "index": 0 }, "1": { "text": "Update available", "color": "yellow", "index": 1 } } } ]
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "value"
+      },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_synology_dsm_update_available", "legendFormat": "update", "instant": true }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Backup configured",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "h": 4, "w": 5, "x": 10, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "—",
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 1 } ] },
+          "mappings": [ { "type": "value", "options": { "0": { "text": "Configured", "color": "green", "index": 0 }, "1": { "text": "No backup", "color": "red", "index": 1 } } } ]
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "value"
+      },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_synology_no_backup_configured", "legendFormat": "backup", "instant": true }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Security status",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "h": 4, "w": 5, "x": 15, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "—",
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 1 } ] },
+          "mappings": [ { "type": "value", "options": { "0": { "text": "Good", "color": "green", "index": 0 } } } ]
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "value"
+      },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_synology_security_status", "legendFormat": "security", "instant": true }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "SSH up",
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "—",
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "green", "value": 1 } ] },
+          "mappings": [ { "type": "value", "options": { "1": { "text": "Up", "color": "green", "index": 0 }, "0": { "text": "Down", "color": "red", "index": 1 } } } ]
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "value"
+      },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_ssh_up{target=\"synology\"}", "legendFormat": "ssh", "instant": true }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "row",
+      "title": "Health & storage",
+      "collapsed": true,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 4 },
+      "panels": [
+        {
+          "id": 11,
+          "type": "stat",
+          "title": "Health OK",
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "gridPos": { "h": 4, "w": 4, "x": 0, "y": 5 },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "color": { "mode": "thresholds" },
+              "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "green", "value": 1 } ] },
+              "mappings": [ { "type": "value", "options": { "1": { "text": "OK", "color": "green", "index": 0 }, "0": { "text": "ALERT", "color": "red", "index": 1 } } } ]
+            },
+            "overrides": []
+          },
+          "options": {
+            "colorMode": "value",
+            "graphMode": "none",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "textMode": "value"
+          },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_synology_health_ok", "legendFormat": "health", "instant": true }
+          ]
+        },
+        {
+          "id": 12,
+          "type": "stat",
+          "title": "Health priority",
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "gridPos": { "h": 4, "w": 5, "x": 4, "y": 5 },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "color": { "mode": "thresholds" },
+              "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null } ] },
+              "mappings": []
+            },
+            "overrides": []
+          },
+          "options": {
+            "colorMode": "value",
+            "graphMode": "none",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "textMode": "value"
+          },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_synology_health_priority", "legendFormat": "priority", "instant": true }
+          ]
+        },
+        {
+          "id": 13,
+          "type": "stat",
+          "title": "Need reboot",
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "gridPos": { "h": 4, "w": 5, "x": 9, "y": 5 },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "color": { "mode": "thresholds" },
+              "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 1 } ] },
+              "mappings": [ { "type": "value", "options": { "0": { "text": "No", "color": "green", "index": 0 }, "1": { "text": "Reboot needed", "color": "red", "index": 1 } } } ]
+            },
+            "overrides": []
+          },
+          "options": {
+            "colorMode": "background",
+            "graphMode": "none",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "textMode": "value"
+          },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_synology_need_reboot", "legendFormat": "reboot", "instant": true }
+          ]
+        },
+        {
+          "id": 14,
+          "type": "stat",
+          "title": "Sys temp",
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "gridPos": { "h": 4, "w": 5, "x": 14, "y": 5 },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "celsius",
+              "color": { "mode": "thresholds" },
+              "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 60 }, { "color": "red", "value": 75 } ] },
+              "mappings": []
+            },
+            "overrides": []
+          },
+          "options": {
+            "colorMode": "value",
+            "graphMode": "area",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "textMode": "value"
+          },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_synology_sys_temp_celsius", "legendFormat": "temp", "instant": true }
+          ]
+        },
+        {
+          "id": 15,
+          "type": "table",
+          "title": "Volumes",
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 9 },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null } ] },
+              "custom": { "align": "auto", "cellOptions": { "type": "auto" }, "inspect": false }
+            },
+            "overrides": [
+              { "matcher": { "id": "byName", "options": "Used %" }, "properties": [ { "id": "unit", "value": "percent" } ] },
+              { "matcher": { "id": "byName", "options": "Used" }, "properties": [ { "id": "unit", "value": "bytes" } ] },
+              { "matcher": { "id": "byName", "options": "Total" }, "properties": [ { "id": "unit", "value": "bytes" } ] }
+            ]
+          },
+          "options": { "showHeader": true, "cellHeight": "sm", "footer": { "show": false, "reducer": ["sum"], "countRows": false, "fields": "" } },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "max by (volume) (homelab_synology_volume_used_percent)", "legendFormat": "", "instant": true, "format": "table" },
+            { "refId": "B", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "max by (volume) (homelab_synology_volume_used_bytes)", "legendFormat": "", "instant": true, "format": "table" },
+            { "refId": "C", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "max by (volume) (homelab_synology_volume_total_bytes)", "legendFormat": "", "instant": true, "format": "table" }
+          ],
+          "transformations": [
+            { "id": "merge" },
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": { "Time": true, "Time 1": true, "Time 2": true, "Time 3": true, "__name__": true, "job": true, "instance": true, "service": true },
+                "indexByName": { "volume": 0, "Value #A": 1, "Value #B": 2, "Value #C": 3 },
+                "renameByName": { "volume": "Volume", "Value #A": "Used %", "Value #B": "Used", "Value #C": "Total" }
+              }
+            }
+          ]
+        },
+        {
+          "id": 16,
+          "type": "table",
+          "title": "Pool status",
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 9 },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null } ] },
+              "custom": { "align": "auto", "cellOptions": { "type": "auto" }, "inspect": false }
+            },
+            "overrides": []
+          },
+          "options": { "showHeader": true, "cellHeight": "sm", "footer": { "show": false, "reducer": ["sum"], "countRows": false, "fields": "" } },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_synology_pool_status", "legendFormat": "", "instant": true, "format": "table" }
+          ],
+          "transformations": [
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": { "Time": true, "__name__": true, "job": true, "instance": true, "service": true, "Value": true },
+                "indexByName": { "pool": 0, "status": 1 },
+                "renameByName": { "pool": "Pool", "status": "Status" }
+              }
+            }
+          ]
+        },
+        {
+          "id": 17,
+          "type": "timeseries",
+          "title": "Volume used %",
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "gridPos": { "h": 8, "w": 24, "x": 0, "y": 17 },
+          "fieldConfig": {
+            "defaults": { "unit": "percent", "min": 0, "max": 100, "color": { "mode": "palette-classic" } },
+            "overrides": []
+          },
+          "options": {
+            "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+            "tooltip": { "mode": "multi", "sort": "none" }
+          },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_synology_volume_used_percent", "legendFormat": "{{volume}}", "range": true }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 20,
+      "type": "row",
+      "title": "Disks & SMART",
+      "collapsed": true,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 25 },
+      "panels": [
+        {
+          "id": 21,
+          "type": "table",
+          "title": "Disks (SMART)",
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "gridPos": { "h": 9, "w": 24, "x": 0, "y": 26 },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null } ] },
+              "custom": { "align": "auto", "cellOptions": { "type": "auto" }, "inspect": false }
+            },
+            "overrides": [
+              { "matcher": { "id": "byName", "options": "Temp" }, "properties": [ { "id": "unit", "value": "celsius" } ] },
+              { "matcher": { "id": "byName", "options": "Status" }, "properties": [ { "id": "mappings", "value": [ { "type": "value", "options": { "1": { "text": "Normal", "color": "green", "index": 0 }, "0": { "text": "Abnormal", "color": "red", "index": 1 } } } ] }, { "id": "custom.cellOptions", "value": { "type": "color-text" } } ] },
+              { "matcher": { "id": "byName", "options": "SMART" }, "properties": [ { "id": "mappings", "value": [ { "type": "value", "options": { "1": { "text": "Normal", "color": "green", "index": 0 }, "0": { "text": "Failing", "color": "red", "index": 1 } } } ] }, { "id": "custom.cellOptions", "value": { "type": "color-text" } } ] },
+              { "matcher": { "id": "byName", "options": "Life remaining" }, "properties": [ { "id": "unit", "value": "percent" }, { "id": "mappings", "value": [ { "type": "value", "options": { "-1": { "text": "n/a", "index": 0 } } } ] }, { "id": "noValue", "value": "—" } ] }
+            ]
+          },
+          "options": { "showHeader": true, "cellHeight": "sm", "footer": { "show": false, "reducer": ["sum"], "countRows": false, "fields": "" } },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "max by (disk) (homelab_synology_disk_temp_celsius)", "legendFormat": "", "instant": true, "format": "table" },
+            { "refId": "B", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "max by (disk) (homelab_synology_disk_status)", "legendFormat": "", "instant": true, "format": "table" },
+            { "refId": "C", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "max by (disk) (homelab_synology_disk_smart_status)", "legendFormat": "", "instant": true, "format": "table" },
+            { "refId": "E", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "max by (disk) (homelab_synology_disk_unc_count)", "legendFormat": "", "instant": true, "format": "table" },
+            { "refId": "F", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "max by (disk) (homelab_synology_disk_remain_life)", "legendFormat": "", "instant": true, "format": "table" }
+          ],
+          "transformations": [
+            { "id": "merge" },
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": { "Time": true, "Time 1": true, "Time 2": true, "Time 3": true, "Time 4": true, "Time 5": true, "__name__": true, "job": true, "instance": true, "service": true },
+                "indexByName": { "disk": 0, "Value #A": 1, "Value #B": 2, "Value #C": 3, "Value #E": 4, "Value #F": 5 },
+                "renameByName": { "disk": "Disk", "Value #A": "Temp", "Value #B": "Status", "Value #C": "SMART", "Value #E": "UNC", "Value #F": "Life remaining" }
+              }
+            }
+          ]
+        },
+        {
+          "id": 22,
+          "type": "timeseries",
+          "title": "Disk temperature",
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "gridPos": { "h": 8, "w": 24, "x": 0, "y": 35 },
+          "fieldConfig": {
+            "defaults": { "unit": "celsius", "color": { "mode": "palette-classic" } },
+            "overrides": []
+          },
+          "options": {
+            "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+            "tooltip": { "mode": "multi", "sort": "none" }
+          },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_synology_disk_temp_celsius", "legendFormat": "{{disk}}", "range": true }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 30,
+      "type": "row",
+      "title": "System & UPS",
+      "collapsed": true,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 43 },
+      "panels": [
+        {
+          "id": 31,
+          "type": "timeseries",
+          "title": "CPU load",
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 44 },
+          "fieldConfig": {
+            "defaults": { "unit": "short", "color": { "mode": "palette-classic" } },
+            "overrides": []
+          },
+          "options": {
+            "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+            "tooltip": { "mode": "multi", "sort": "none" }
+          },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_synology_cpu_load1", "legendFormat": "load1", "range": true },
+            { "refId": "B", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_synology_cpu_load5", "legendFormat": "load5", "range": true },
+            { "refId": "C", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_synology_cpu_load15", "legendFormat": "load15", "range": true }
+          ]
+        },
+        {
+          "id": 32,
+          "type": "timeseries",
+          "title": "CPU breakdown",
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 44 },
+          "fieldConfig": {
+            "defaults": { "unit": "percent", "min": 0, "max": 100, "color": { "mode": "palette-classic" } },
+            "overrides": []
+          },
+          "options": {
+            "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+            "tooltip": { "mode": "multi", "sort": "none" }
+          },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_synology_cpu_user_percent", "legendFormat": "user", "range": true },
+            { "refId": "B", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_synology_cpu_system_percent", "legendFormat": "system", "range": true },
+            { "refId": "C", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_synology_cpu_other_percent", "legendFormat": "other", "range": true }
+          ]
+        },
+        {
+          "id": 33,
+          "type": "timeseries",
+          "title": "Memory usage",
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 58 },
+          "fieldConfig": {
+            "defaults": { "unit": "percent", "min": 0, "max": 100, "color": { "mode": "palette-classic" } },
+            "overrides": []
+          },
+          "options": {
+            "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+            "tooltip": { "mode": "multi", "sort": "none" }
+          },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_synology_mem_usage_percent", "legendFormat": "mem", "range": true }
+          ]
+        },
+        {
+          "id": 34,
+          "type": "stat",
+          "title": "UPS charge",
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "gridPos": { "h": 6, "w": 6, "x": 6, "y": 52 },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percent",
+              "color": { "mode": "thresholds" },
+              "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "yellow", "value": 30 }, { "color": "green", "value": 60 } ] },
+              "mappings": []
+            },
+            "overrides": []
+          },
+          "options": {
+            "colorMode": "value",
+            "graphMode": "none",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "textMode": "value"
+          },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_synology_ups_charge_percent", "legendFormat": "charge", "instant": true }
+          ]
+        },
+        {
+          "id": 35,
+          "type": "stat",
+          "title": "UPS status",
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "gridPos": { "h": 6, "w": 6, "x": 12, "y": 52 },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "color": { "mode": "thresholds" },
+              "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null } ] },
+              "mappings": []
+            },
+            "overrides": []
+          },
+          "options": {
+            "colorMode": "value",
+            "graphMode": "none",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "textMode": "value"
+          },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_synology_ups_status", "legendFormat": "status", "instant": true }
+          ]
+        },
+        {
+          "id": 36,
+          "type": "stat",
+          "title": "UPS on battery",
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "gridPos": { "h": 6, "w": 6, "x": 18, "y": 52 },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "color": { "mode": "thresholds" },
+              "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 1 } ] },
+              "mappings": [ { "type": "value", "options": { "0": { "text": "On line", "color": "green", "index": 0 }, "1": { "text": "On battery", "color": "red", "index": 1 } } } ]
+            },
+            "overrides": []
+          },
+          "options": {
+            "colorMode": "background",
+            "graphMode": "none",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "textMode": "value"
+          },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_synology_ups_on_battery", "legendFormat": "battery", "instant": true }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 40,
+      "type": "row",
+      "title": "Backup & replication",
+      "collapsed": true,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 58 },
+      "panels": [
+        {
+          "id": 41,
+          "type": "stat",
+          "title": "No backup configured",
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "gridPos": { "h": 4, "w": 6, "x": 0, "y": 59 },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "color": { "mode": "thresholds" },
+              "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 1 } ] },
+              "mappings": [ { "type": "value", "options": { "0": { "text": "Configured", "color": "green", "index": 0 }, "1": { "text": "No backup", "color": "red", "index": 1 } } } ]
+            },
+            "overrides": []
+          },
+          "options": {
+            "colorMode": "value",
+            "graphMode": "none",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "textMode": "value"
+          },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_synology_no_backup_configured", "legendFormat": "backup", "instant": true }
+          ]
+        },
+        {
+          "id": 42,
+          "type": "stat",
+          "title": "Backup configured count",
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "gridPos": { "h": 4, "w": 6, "x": 6, "y": 59 },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "color": { "mode": "thresholds" },
+              "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null } ] },
+              "mappings": []
+            },
+            "overrides": []
+          },
+          "options": {
+            "colorMode": "value",
+            "graphMode": "none",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "textMode": "value"
+          },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_synology_backup_configured_count", "legendFormat": "configured", "instant": true }
+          ]
+        },
+        {
+          "id": 43,
+          "type": "stat",
+          "title": "Replication available",
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "gridPos": { "h": 4, "w": 6, "x": 12, "y": 59 },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "color": { "mode": "thresholds" },
+              "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null } ] },
+              "mappings": [ { "type": "value", "options": { "1": { "text": "Available", "color": "green", "index": 0 }, "0": { "text": "None", "index": 1 } } } ]
+            },
+            "overrides": []
+          },
+          "options": {
+            "colorMode": "value",
+            "graphMode": "none",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "textMode": "value"
+          },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_synology_replication_available", "legendFormat": "replication", "instant": true }
+          ]
+        },
+        {
+          "id": 44,
+          "type": "stat",
+          "title": "Snapshots configured",
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "gridPos": { "h": 4, "w": 6, "x": 18, "y": 59 },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "color": { "mode": "thresholds" },
+              "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null } ] },
+              "mappings": []
+            },
+            "overrides": []
+          },
+          "options": {
+            "colorMode": "value",
+            "graphMode": "none",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "textMode": "value"
+          },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_synology_snapshots_configured", "legendFormat": "configured", "instant": true }
+          ]
+        },
+        {
+          "id": 45,
+          "type": "table",
+          "title": "Snapshot count per share",
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "gridPos": { "h": 8, "w": 24, "x": 0, "y": 63 },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null } ] },
+              "custom": { "align": "auto", "cellOptions": { "type": "auto" }, "inspect": false }
+            },
+            "overrides": [
+              { "matcher": { "id": "byName", "options": "Snapshots" }, "properties": [ { "id": "unit", "value": "short" } ] }
+            ]
+          },
+          "options": { "showHeader": true, "cellHeight": "sm", "footer": { "show": false, "reducer": ["sum"], "countRows": false, "fields": "" } },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_synology_snapshot_count", "legendFormat": "", "instant": true, "format": "table" }
+          ],
+          "transformations": [
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": { "Time": true, "__name__": true, "job": true, "instance": true, "service": true },
+                "indexByName": { "share": 0, "Value": 1 },
+                "renameByName": { "share": "Share", "Value": "Snapshots" }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 50,
+      "type": "row",
+      "title": "Security",
+      "collapsed": true,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 71 },
+      "panels": [
+        {
+          "id": 51,
+          "type": "stat",
+          "title": "Security status",
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "gridPos": { "h": 4, "w": 6, "x": 0, "y": 72 },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "color": { "mode": "thresholds" },
+              "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 1 } ] },
+              "mappings": [ { "type": "value", "options": { "0": { "text": "Good", "color": "green", "index": 0 } } } ]
+            },
+            "overrides": []
+          },
+          "options": {
+            "colorMode": "value",
+            "graphMode": "none",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "textMode": "value"
+          },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_synology_security_status", "legendFormat": "security", "instant": true }
+          ]
+        },
+        {
+          "id": 52,
+          "type": "stat",
+          "title": "Security safe",
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "gridPos": { "h": 4, "w": 6, "x": 6, "y": 72 },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "color": { "mode": "thresholds" },
+              "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "green", "value": 1 } ] },
+              "mappings": [ { "type": "value", "options": { "1": { "text": "Safe", "color": "green", "index": 0 }, "0": { "text": "Unsafe", "color": "red", "index": 1 } } } ]
+            },
+            "overrides": []
+          },
+          "options": {
+            "colorMode": "background",
+            "graphMode": "none",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "textMode": "value"
+          },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_synology_security_safe", "legendFormat": "safe", "instant": true }
+          ]
+        },
+        {
+          "id": 53,
+          "type": "stat",
+          "title": "Last scan age",
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "gridPos": { "h": 4, "w": 6, "x": 12, "y": 72 },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "color": { "mode": "thresholds" },
+              "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 604800 }, { "color": "red", "value": 2592000 } ] },
+              "mappings": []
+            },
+            "overrides": []
+          },
+          "options": {
+            "colorMode": "value",
+            "graphMode": "none",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "textMode": "value"
+          },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_synology_security_last_scan_age_seconds", "legendFormat": "age", "instant": true }
+          ]
+        },
+        {
+          "id": 54,
+          "type": "table",
+          "title": "Findings by severity",
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "gridPos": { "h": 8, "w": 24, "x": 0, "y": 76 },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null } ] },
+              "custom": { "align": "auto", "cellOptions": { "type": "auto" }, "inspect": false }
+            },
+            "overrides": [
+              { "matcher": { "id": "byName", "options": "Findings" }, "properties": [ { "id": "unit", "value": "short" } ] }
+            ]
+          },
+          "options": { "showHeader": true, "cellHeight": "sm", "footer": { "show": false, "reducer": ["sum"], "countRows": false, "fields": "" } },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_synology_security_findings_total", "legendFormat": "", "instant": true, "format": "table" }
+          ],
+          "transformations": [
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": { "Time": true, "__name__": true, "job": true, "instance": true, "service": true },
+                "indexByName": { "severity": 0, "Value": 1 },
+                "renameByName": { "severity": "Severity", "Value": "Findings" }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 60,
+      "type": "row",
+      "title": "Mount-health",
+      "collapsed": true,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 84 },
+      "panels": [
+        {
+          "id": 61,
+          "type": "table",
+          "title": "Mount up",
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 85 },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null } ] },
+              "custom": { "align": "auto", "cellOptions": { "type": "color-background" }, "inspect": false }
+            },
+            "overrides": [
+              { "matcher": { "id": "byName", "options": "Up" }, "properties": [ { "id": "mappings", "value": [ { "type": "value", "options": { "1": { "text": "Up", "color": "green", "index": 0 }, "0": { "text": "Down", "color": "red", "index": 1 } } } ] } ] }
+            ]
+          },
+          "options": { "showHeader": true, "cellHeight": "sm", "footer": { "show": false, "reducer": ["sum"], "countRows": false, "fields": "" } },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_synology_mount_up", "legendFormat": "", "instant": true, "format": "table" }
+          ],
+          "transformations": [
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": { "Time": true, "__name__": true, "job": true, "instance": true, "service": true },
+                "indexByName": { "mount": 0, "Value": 1 },
+                "renameByName": { "mount": "Mount", "Value": "Up" }
+              }
+            }
+          ]
+        },
+        {
+          "id": 62,
+          "type": "table",
+          "title": "Mount free/total",
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 85 },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null } ] },
+              "custom": { "align": "auto", "cellOptions": { "type": "auto" }, "inspect": false }
+            },
+            "overrides": [
+              { "matcher": { "id": "byName", "options": "Free" }, "properties": [ { "id": "unit", "value": "bytes" } ] },
+              { "matcher": { "id": "byName", "options": "Total" }, "properties": [ { "id": "unit", "value": "bytes" } ] }
+            ]
+          },
+          "options": { "showHeader": true, "cellHeight": "sm", "footer": { "show": false, "reducer": ["sum"], "countRows": false, "fields": "" } },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "max by (mount) (homelab_synology_mount_free_bytes)", "legendFormat": "", "instant": true, "format": "table" },
+            { "refId": "B", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "max by (mount) (homelab_synology_mount_total_bytes)", "legendFormat": "", "instant": true, "format": "table" }
+          ],
+          "transformations": [
+            { "id": "merge" },
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": { "Time": true, "Time 1": true, "Time 2": true, "__name__": true, "job": true, "instance": true, "service": true },
+                "indexByName": { "mount": 0, "Value #A": 1, "Value #B": 2 },
+                "renameByName": { "mount": "Mount", "Value #A": "Free", "Value #B": "Total" }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 70,
+      "type": "row",
+      "title": "SSH-probe",
+      "collapsed": true,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 93 },
+      "panels": [
+        {
+          "id": 71,
+          "type": "stat",
+          "title": "SSH up",
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "gridPos": { "h": 4, "w": 6, "x": 0, "y": 94 },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "color": { "mode": "thresholds" },
+              "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "green", "value": 1 } ] },
+              "mappings": [ { "type": "value", "options": { "1": { "text": "Up", "color": "green", "index": 0 }, "0": { "text": "Down", "color": "red", "index": 1 } } } ]
+            },
+            "overrides": []
+          },
+          "options": {
+            "colorMode": "value",
+            "graphMode": "none",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "textMode": "value"
+          },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_ssh_up{target=\"synology\"}", "legendFormat": "ssh", "instant": true }
+          ]
+        },
+        {
+          "id": 72,
+          "type": "stat",
+          "title": "SSH last-success age",
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "gridPos": { "h": 4, "w": 6, "x": 6, "y": 94 },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "color": { "mode": "thresholds" },
+              "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 600 }, { "color": "red", "value": 1800 } ] },
+              "mappings": []
+            },
+            "overrides": []
+          },
+          "options": {
+            "colorMode": "value",
+            "graphMode": "none",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "textMode": "value"
+          },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "victoriametrics" }, "expr": "homelab_ssh_last_success_age_seconds{target=\"synology\"}", "legendFormat": "age", "instant": true }
+          ]
+        }
+      ]
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 40,
+  "tags": ["homelab-monitor", "synology"],
+  "templating": { "list": [] },
+  "time": { "from": "now-6h", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Synology",
+  "uid": "synology",
+  "version": 1,
+  "weekStart": ""
+}

@@ -11,6 +11,7 @@ const TABS = [
   { path: '/metrics/unifi', label: 'Unifi' },
   { path: '/metrics/network', label: 'Network' },
   { path: '/metrics/pihole', label: 'Pi-hole' },
+  { path: '/metrics/synology', label: 'Synology' },
 ] as const
 
 export function MetricsLayout(): JSX.Element {
