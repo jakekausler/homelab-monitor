@@ -1,6 +1,6 @@
 # EPIC-008: Synology integration
 
-## Status: In Progress (current: STAGE-008-029 Complete; 017/018/019/020/021/022/023/024/025/026/027/028/029/032 Complete; next: STAGE-008-030)
+## Status: In Progress (current: STAGE-008-030 Complete; 017/018/019/020/021/022/023/024/025/026/027/028/029/030/032 Complete; next: STAGE-008-031)
 
 ## Build order + framework dependencies (LOCKED — 2026-06-22 brainstorm)
 
@@ -424,7 +424,7 @@ rules; mount-health + Docker-suppression before the rules/UI/dashboards that sur
 ### Wave J — Grafana (2)
 | # | Stage | Theme |
 |---|---|---|
-| STAGE-008-030 | `synology.json` (health/storage, disks/SMART, system/UPS, backup/replication, security, mount, SSH-probe rows) + Metrics-tab embed + readability pass |
+| STAGE-008-030 | `synology.json` (health/storage, disks/SMART, system/UPS, backup/replication, security, mount, SSH-probe rows) + Metrics-tab embed + readability pass — ✅ Complete |
 | STAGE-008-031 | `synology-surveillance.json` (cameras, events/recordings, license/homemode) + Metrics-tab embed + readability pass |
 
 ### Wave K — Config-loading prerequisite (1)
