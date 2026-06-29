@@ -1,6 +1,6 @@
 # EPIC-008: Synology integration
 
-## Status: In Progress (current: STAGE-008-031 Complete; 017/018/019/020/021/022/023/024/025/026/027/028/029/030/031/032 Complete; next: STAGE-008-033)
+## Status: Complete (33/33 stages — STAGE-008-001..033 Complete; EPIC-008 closed 2026-06-29)
 
 ## Build order + framework dependencies (LOCKED — 2026-06-22 brainstorm)
 
@@ -435,7 +435,7 @@ rules; mount-health + Docker-suppression before the rules/UI/dashboards that sur
 ### Wave L — Host-collector hardening (1)
 | # | Stage | Theme |
 |---|---|---|
-| STAGE-008-033 | Host-collector hardening: timeout-wrap host.py's blocking `psutil.disk_usage` probes (non-hanging on wedged NFS; mirrors 018's bounded-executor pattern) |
+| STAGE-008-033 | Host-collector hardening: timeout-wrap host.py's blocking `psutil.disk_usage` probes (non-hanging on wedged NFS; mirrors 018's bounded-executor pattern) — ✅ Complete |
 
 ## Cross-stage acceptance criteria
 
