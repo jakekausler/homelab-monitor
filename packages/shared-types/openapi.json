@@ -4437,6 +4437,24 @@
         "title": "ListProbesResponse",
         "type": "object"
       },
+      "LoadErrorOut": {
+        "properties": {
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "message"
+        ],
+        "title": "LoadErrorOut",
+        "type": "object"
+      },
       "LogLine": {
         "additionalProperties": false,
         "description": "One converged log line returned by every log-viewing endpoint.\n\n`severity`/`host`/`service` are promoted out of the raw VictoriaLogs\n`fields` bag into typed top-level columns by `from_victorialogs_line`.\n`fields` retains the full original bag (plus `severity_raw` when a raw\nseverity was present), so nothing is lost.",
@@ -6380,6 +6398,46 @@
         "title": "RefreshCycleResponse",
         "type": "object"
       },
+      "RefreshResponse": {
+        "properties": {
+          "errors": {
+            "items": {
+              "$ref": "#/components/schemas/LoadErrorOut"
+            },
+            "title": "Errors",
+            "type": "array"
+          },
+          "refreshed": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Refreshed",
+            "type": "array"
+          },
+          "registered": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Registered",
+            "type": "array"
+          },
+          "skipped": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Skipped",
+            "type": "array"
+          }
+        },
+        "required": [
+          "registered",
+          "refreshed",
+          "skipped",
+          "errors"
+        ],
+        "title": "RefreshResponse",
+        "type": "object"
+      },
       "RefreshStatusResponse": {
         "additionalProperties": false,
         "description": "Status of a manually-triggered drain cycle.",
@@ -6618,6 +6676,139 @@
           "truncated"
         ],
         "title": "RunLogResponse",
+        "type": "object"
+      },
+      "RunbookGatesPatch": {
+        "additionalProperties": false,
+        "properties": {
+          "auto_trigger": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auto Trigger"
+          },
+          "enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enabled"
+          }
+        },
+        "title": "RunbookGatesPatch",
+        "type": "object"
+      },
+      "RunbookListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/RunbookOut"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "RunbookListResponse",
+        "type": "object"
+      },
+      "RunbookOut": {
+        "properties": {
+          "alert_match_patterns": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Alert Match Patterns",
+            "type": "array"
+          },
+          "auto_trigger": {
+            "title": "Auto Trigger",
+            "type": "boolean"
+          },
+          "content_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content Hash"
+          },
+          "cooldown_seconds": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cooldown Seconds"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "dry_run_required": {
+            "title": "Dry Run Required",
+            "type": "boolean"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "rate_limit_per_hour": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rate Limit Per Hour"
+          },
+          "risk_tag": {
+            "title": "Risk Tag",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "path",
+          "created_at",
+          "alert_match_patterns",
+          "risk_tag",
+          "dry_run_required",
+          "rate_limit_per_hour",
+          "cooldown_seconds",
+          "enabled",
+          "auto_trigger",
+          "content_hash"
+        ],
+        "title": "RunbookOut",
         "type": "object"
       },
       "SaveQueryCreateRequest": {
@@ -15800,6 +15991,100 @@
           }
         },
         "summary": "Metrics Snapshot"
+      }
+    },
+    "/api/runbooks": {
+      "get": {
+        "operationId": "list_runbooks_api_runbooks_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunbookListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Runbooks",
+        "tags": [
+          "runbooks"
+        ]
+      }
+    },
+    "/api/runbooks/refresh": {
+      "post": {
+        "operationId": "refresh_runbooks_api_runbooks_refresh_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefreshResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Refresh Runbooks",
+        "tags": [
+          "runbooks"
+        ]
+      }
+    },
+    "/api/runbooks/{runbook_id}": {
+      "patch": {
+        "operationId": "patch_runbook_gates_api_runbooks__runbook_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "runbook_id",
+            "required": true,
+            "schema": {
+              "title": "Runbook Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunbookGatesPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunbookOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Patch Runbook Gates",
+        "tags": [
+          "runbooks"
+        ]
       }
     },
     "/api/settings/logs/retention": {

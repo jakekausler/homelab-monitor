@@ -204,6 +204,17 @@ def get_public_url() -> str | None:
     return os.environ.get("HOMELAB_MONITOR_PUBLIC_URL") or None
 
 
+def get_runbooks_dir() -> Path:
+    """Return the runbooks-registry root directory.
+
+    Source of registered runbooks. Defaults to ``/runbooks`` (the in-container
+    mount of the repo ``runbooks/`` dir); override with HOMELAB_MONITOR_RUNBOOKS_DIR
+    (e.g. tests point it at a tmp dir). The directory need not exist; the loader
+    reports a non-directory root as a single error.
+    """
+    return Path(os.environ.get("HOMELAB_MONITOR_RUNBOOKS_DIR", "/runbooks"))
+
+
 @dataclass(frozen=True, slots=True)
 class VlQueryLimits:
     """Hard bounds applied to every VictoriaLogsClient query.

@@ -40,6 +40,7 @@ from homelab_monitor.kernel.api.routers import (
     logs,
     metrics,
     observability,
+    runbooks,
     settings_logs,
 )
 from homelab_monitor.kernel.api.routers import auth as auth_router
@@ -105,6 +106,7 @@ def create_app(*, lifespan_enabled: bool = True) -> FastAPI:
     app.include_router(crons.router, prefix="/api")
     app.include_router(cron_events.router, prefix="/api")
     app.include_router(docker.router, prefix="/api")
+    app.include_router(runbooks.router, prefix="/api")
     app.include_router(settings_logs.router, prefix="/api")
     app.include_router(observability.router)  # mounted at root: /metrics
 
