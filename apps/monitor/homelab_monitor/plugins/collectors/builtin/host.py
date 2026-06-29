@@ -10,10 +10,12 @@ Real VM-backed writer lands in STAGE-001-015. This collector is backend-agnostic
 
 from __future__ import annotations
 
+import asyncio
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
-from typing import ClassVar, NamedTuple
+from typing import ClassVar, Final, NamedTuple, cast
 
 import psutil
 from pydantic import Field
@@ -39,6 +41,88 @@ class _ProcRow(NamedTuple):
 
 
 _TRACKED_STATES: tuple[str, ...] = ("running", "sleeping", "zombie")
+
+# --- Disk-usage hung-mount guard (STAGE-008-033) ----------------------------
+# Mirrors the synology_mount_health.py idiom (STAGE-008-018): a hard-mounted NFS
+# export whose server has gone away makes the underlying statvfs (psutil.disk_usage)
+# block uninterruptibly in the kernel. We run ONLY that blocking call in a dedicated
+# bounded thread pool guarded by asyncio.wait_for, and skip mountpoints not present
+# in the kernel mount table so we never spawn a thread for an absent path.
+_PROBE_TIMEOUT: Final[float] = 5.0  # seconds; disk_usage hung-mount guard
+_EXECUTOR_MAX_WORKERS: Final[int] = 4  # bounded blast radius for a wedged disk_usage
+_MOUNTINFO_PATH: Final[str] = "/proc/self/mountinfo"
+
+# Mountinfo field layout (man 5 proc, /proc/<pid>/mountinfo):
+#   0:mount-id 1:parent-id 2:major:minor 3:root 4:MOUNT-POINT 5:options ...
+# We only need field index 4 (the mount point / target path). A well-formed line
+# has at least 5 whitespace-separated fields; shorter lines are malformed and skipped.
+_MOUNTINFO_TARGET_FIELD: Final[int] = 4
+_MOUNTINFO_MIN_FIELDS: Final[int] = 5
+
+# Dedicated bounded pool. Module-level => created once, lives for process lifetime
+# (no explicit shutdown: a wedged disk_usage would block shutdown anyway; capping at
+# 4 workers is the whole point). pyright-clean concrete stdlib type.
+_EXECUTOR: Final[ThreadPoolExecutor] = ThreadPoolExecutor(
+    max_workers=_EXECUTOR_MAX_WORKERS,
+    thread_name_prefix="host-disk",
+)
+
+
+def parse_mountinfo(text: str) -> set[str]:
+    """Extract the set of mount-target paths from ``/proc/self/mountinfo`` text.
+
+    Pure function (no I/O) so it is trivially unit-testable. Handles arbitrary
+    mount-target depth. Malformed lines — fewer than ``_MOUNTINFO_MIN_FIELDS``
+    whitespace-separated fields, including blank lines — are skipped.
+    """
+    targets: set[str] = set()
+    for line in text.splitlines():
+        fields = line.split()
+        if len(fields) < _MOUNTINFO_MIN_FIELDS:
+            continue
+        targets.add(fields[_MOUNTINFO_TARGET_FIELD])
+    return targets
+
+
+def read_mountinfo(path: str = _MOUNTINFO_PATH) -> str:
+    """Read the raw mountinfo file. Separated for test monkeypatching."""
+    with open(path, encoding="utf-8") as fh:
+        return fh.read()
+
+
+def present_mounts() -> set[str]:
+    """Return the set of currently-mounted target paths. Never blocks on NFS.
+
+    Reading ``/proc/self/mountinfo`` enumerates the kernel mount table; it does
+    NOT stat the underlying filesystems, so a wedged hard-NFS mount still appears
+    here without hanging.
+    """
+    return parse_mountinfo(read_mountinfo())
+
+
+class _DiskUsage(NamedTuple):
+    """Structural mirror of psutil's functional namedtuple ``sdiskusage``.
+
+    psutil 7.x ships no type information and builds ``sdiskusage`` via the
+    functional ``namedtuple(...)`` form, so pyright cannot name it as a type.
+    We declare the fields the collector actually reads (``total``/``used``);
+    ``_disk_usage`` returns the real psutil object, which is field-compatible.
+    """
+
+    total: int
+    used: int
+
+
+def _disk_usage(path: str) -> _DiskUsage:
+    """Thin wrapper around :func:`psutil.disk_usage`. Separated for monkeypatching.
+
+    This is what runs inside ``_EXECUTOR``; tests monkeypatch ``host.psutil.disk_usage``
+    (the underlying call) so the real filesystem is never touched. ``psutil.disk_usage``
+    is the only blocking syscall in the host collector that can hang on a wedged NFS
+    mount, so it is the only call wrapped (psutil.disk_partitions / disk_io_counters are
+    out of scope — see Design Notes).
+    """
+    return cast(_DiskUsage, psutil.disk_usage(path))
 
 
 def _build_exclude_pattern(devs: list[str]) -> re.Pattern[str] | None:
@@ -122,14 +206,15 @@ class HostCollector(BaseCollector):
         )
         exclude_temp_sensors: list[str] = list(getattr(ctx.config, "exclude_temp_sensors", []))
 
+        disk_usage_result = await self._collect_disk_usage(
+            ctx, extra_mountpoints, exclude_disk_devs, disk_mountpoint_relabel
+        )
         for n, errs in [
             self._collect_cpu(ctx),
             self._collect_load_average(ctx),
             self._collect_memory(ctx),
             self._collect_swap(ctx),
-            self._collect_disk_usage(
-                ctx, extra_mountpoints, exclude_disk_devs, disk_mountpoint_relabel
-            ),
+            disk_usage_result,
             self._collect_disk_io(ctx, exclude_disk_devs),
             self._collect_net_io(ctx),
             self._collect_uptime(ctx),
@@ -203,7 +288,7 @@ class HostCollector(BaseCollector):
         except Exception as exc:  # pragma: no cover -- defensive psutil failure
             return 0, [f"swap: {exc}"]
 
-    def _collect_disk_usage(
+    async def _collect_disk_usage(
         self,
         ctx: CollectorContext,
         extra_mountpoints: list[str],
@@ -216,6 +301,9 @@ class HostCollector(BaseCollector):
         # Tracks emitted friendly labels to deduplicate across both loops.
         seen: set[str] = set()
         use_allowlist = bool(disk_mountpoint_relabel)
+        # Read the kernel mount table ONCE per tick (mirrors synology_mount_health.py)
+        # instead of re-reading /proc/self/mountinfo per mountpoint.
+        present = present_mounts()
 
         try:
             for part in psutil.disk_partitions(all=False):
@@ -227,7 +315,9 @@ class HostCollector(BaseCollector):
                     friendly = disk_mountpoint_relabel[part.mountpoint]
                 else:
                     friendly = part.mountpoint
-                count, err = self._emit_disk_mountpoint(ctx, part.mountpoint, friendly, seen)
+                count, err = await self._emit_disk_mountpoint(
+                    ctx, part.mountpoint, friendly, seen, present
+                )
                 emitted += count
                 if err is not None:
                     errors.append(err)
@@ -245,7 +335,7 @@ class HostCollector(BaseCollector):
                 friendly = disk_mountpoint_relabel[mp]
             else:
                 friendly = mp
-            count, _err = self._emit_disk_mountpoint(ctx, mp, friendly, seen)
+            count, _err = await self._emit_disk_mountpoint(ctx, mp, friendly, seen, present)
             emitted += count
             # _err intentionally discarded: extra_mountpoints silently skips
             # unmounted/inaccessible paths (no error recorded, preserving
@@ -253,26 +343,43 @@ class HostCollector(BaseCollector):
 
         return emitted, errors
 
-    def _emit_disk_mountpoint(
+    async def _emit_disk_mountpoint(
         self,
         ctx: CollectorContext,
         raw_mp: str,
         friendly: str,
         seen: set[str],
+        present: set[str],
     ) -> tuple[int, str | None]:
         """Emit disk usage gauges for one mountpoint.
 
-        Returns (emitted_count, error_string_or_None).
-        emitted_count is 0 or 2.
-        error_string is non-None only when disk_usage() raises; the caller
-        decides whether to record or discard it (partition loop records,
+        Returns (emitted_count, error_string_or_None). emitted_count is 0 or 2.
+        error_string is non-None only when the probe fails (timeout / OSError); the
+        caller decides whether to record or discard it (partition loop records,
         extra_mountpoints loop discards).
+
+        Hung-mount guard (STAGE-008-033): ``psutil.disk_usage`` can block forever on a
+        wedged hard-NFS mount. We (1) skip mountpoints absent from the kernel mount
+        table — no probe, no thread spawned — and (2) run the probe in a dedicated
+        bounded executor under ``asyncio.wait_for`` so a single wedged mount leaks at
+        most ``_EXECUTOR_MAX_WORKERS`` threads and times out at ``_PROBE_TIMEOUT``.
         """
         if friendly in seen:
             return 0, None
+        if raw_mp not in present:
+            # Not in the kernel mount table: don't probe (would hang or error on a
+            # path that isn't even mounted). Skip exactly like a missing mount.
+            return 0, None
+        loop = asyncio.get_running_loop()
         try:
-            usage = psutil.disk_usage(raw_mp)
-        except (FileNotFoundError, PermissionError, OSError) as exc:
+            usage = await asyncio.wait_for(
+                loop.run_in_executor(_EXECUTOR, _disk_usage, raw_mp),
+                timeout=_PROBE_TIMEOUT,
+            )
+        except (TimeoutError, OSError) as exc:
+            # Hung (TimeoutError from wait_for OR raised inside the executor) or any
+            # OSError (FileNotFoundError / PermissionError are OSError subclasses, so
+            # this preserves the prior behavior of catching those).
             return 0, f"disk_usage {raw_mp}: {exc}"
         if usage.total == 0:
             return 0, None

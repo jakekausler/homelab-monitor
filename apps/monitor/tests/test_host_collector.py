@@ -196,6 +196,32 @@ def _patch_psutil_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
         _no_sensors_stub,  # default: no sensors — temp-specific tests override this
     )
 
+    # STAGE-008-033: the disk-usage hung-mount guard skips mountpoints absent from
+    # the kernel mount table. The happy-path mock asserts EVERY probed mountpoint is
+    # "present" so existing disk tests (which mock psutil.disk_usage directly) are
+    # unaffected by the new present_mounts() pre-check. Tests that specifically want
+    # an ABSENT mount override this with their own monkeypatch.
+    monkeypatch.setattr(
+        host_module,
+        "present_mounts",
+        lambda: {
+            "/",
+            "/storage",
+            "/rackstation",
+            "/config",
+            "/host-compose",
+            "/data",
+            "/zero",
+            "/zero_extra",
+            "/good_extra",
+            "/shared",
+            "/snap/x",
+            "/ram",
+            "/etc/hosts",
+            "/run/secrets",
+        },
+    )
+
 
 @pytest.mark.asyncio
 async def test_run_emits_cpu_metrics(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -908,3 +934,199 @@ async def test_run_temperature_empty_dict_is_not_error(
     result = await HostCollector().run(_ctx(writer, cfg))
     assert result.ok is True
     assert not [e for e in writer.snapshot() if e.name == "homelab_host_temperature_celsius"]
+
+
+# ---------------------------------------------------------------------------
+# STAGE-008-033 — disk-usage hung-mount guard: mountinfo helpers + probe branches
+# ---------------------------------------------------------------------------
+
+
+def test_parse_mountinfo_extracts_targets_including_nested() -> None:
+    from homelab_monitor.plugins.collectors.builtin.host import (  # noqa: PLC0415
+        parse_mountinfo,
+    )
+
+    text = (
+        "36 35 98:0 / / rw,relatime shared:1 - ext4 /dev/sda1 rw\n"
+        "37 36 98:0 / /storage rw,relatime shared:2 - ext4 /dev/sdb1 rw\n"
+        "38 37 98:0 / /rackstation/Media/TV rw,relatime shared:3 - nfs4 srv:/tv rw\n"
+    )
+    targets = parse_mountinfo(text)
+    assert targets == {"/", "/storage", "/rackstation/Media/TV"}
+
+
+def test_parse_mountinfo_skips_malformed_line() -> None:
+    from homelab_monitor.plugins.collectors.builtin.host import (  # noqa: PLC0415
+        parse_mountinfo,
+    )
+
+    text = (
+        "too few fields\n"  # < 5 fields -> skipped
+        "36 35 98:0 / /storage rw - ext4 /dev/sdb1 rw\n"  # valid
+    )
+    targets = parse_mountinfo(text)
+    assert targets == {"/storage"}
+
+
+def test_parse_mountinfo_empty_input_is_empty_set() -> None:
+    from homelab_monitor.plugins.collectors.builtin.host import (  # noqa: PLC0415
+        parse_mountinfo,
+    )
+
+    assert parse_mountinfo("") == set()
+
+
+def test_present_mounts_uses_read_mountinfo(monkeypatch: pytest.MonkeyPatch) -> None:
+    sample = "36 35 98:0 / /storage rw - ext4 /dev/sdb1 rw\n"
+    monkeypatch.setattr(host_module, "read_mountinfo", lambda: sample)
+    assert host_module.present_mounts() == {"/storage"}
+
+
+def test_read_mountinfo_reads_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = tmp_path / "mountinfo"
+    fake.write_text("36 35 98:0 / /storage rw - ext4 /dev/sdb1 rw\n")
+    text = host_module.read_mountinfo(str(fake))
+    assert "/storage" in text
+
+
+def test_disk_usage_wrapper_calls_psutil(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The _disk_usage seam delegates to psutil.disk_usage (covers the wrapper line)."""
+    sentinel = _Usage(total=1234, used=567, percent=45.0)
+
+    def _stub_disk_usage(mp: str) -> _Usage:
+        del mp
+        return sentinel
+
+    monkeypatch.setattr(host_module.psutil, "disk_usage", _stub_disk_usage)
+    from homelab_monitor.plugins.collectors.builtin.host import (  # noqa: PLC0415
+        _disk_usage,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    assert _disk_usage("/") is sentinel
+
+
+@pytest.mark.asyncio
+async def test_disk_partition_absent_from_mountinfo_is_skipped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A partition mountpoint NOT in present_mounts() is skipped: no probe, no bytes."""
+    _patch_psutil_happy_path(monkeypatch)
+
+    def _parts(all: bool = False) -> list[_Part]:
+        del all
+        return [
+            _Part(device="/dev/sda1", mountpoint="/", fstype="ext4"),
+            _Part(device="/dev/sdb1", mountpoint="/notmounted", fstype="ext4"),
+        ]
+
+    monkeypatch.setattr(host_module.psutil, "disk_partitions", _parts)
+    # present_mounts() returns "/" but NOT "/notmounted" -> the latter is skipped.
+    monkeypatch.setattr(host_module, "present_mounts", lambda: {"/"})
+
+    def _disk_usage_guard(mp: str) -> _Usage:
+        if mp == "/notmounted":
+            raise AssertionError("disk_usage must not run for an absent mountpoint")
+        return _Usage(total=1000, used=400, percent=40.0)
+
+    monkeypatch.setattr(host_module.psutil, "disk_usage", _disk_usage_guard)
+    writer = MemoryRetainingMetricsWriter()
+    cfg = HostCollectorConfig(name="host", extra_mountpoints=[], disk_mountpoint_relabel={})
+    result = await HostCollector().run(_ctx(writer, cfg))
+    assert result.ok
+    mountpoints = {
+        e.labels["mountpoint"] for e in writer.snapshot() if e.name == "homelab_host_disk_bytes"
+    }
+    assert "/" in mountpoints
+    assert "/notmounted" not in mountpoints
+    # Absent extra_mountpoints are a silent skip, not an error.
+    assert result.errors == []
+
+
+@pytest.mark.asyncio
+async def test_extra_mountpoint_absent_from_mountinfo_is_skipped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An extra_mountpoint NOT in present_mounts() is skipped: no probe, no bytes, no error."""
+    _patch_psutil_happy_path(monkeypatch)
+    monkeypatch.setattr(host_module, "present_mounts", lambda: {"/"})
+
+    def _disk_usage_guard(mp: str) -> _Usage:
+        if mp == "/rackstation":
+            raise AssertionError("disk_usage must not run for an absent extra_mountpoint")
+        return _Usage(total=1000, used=400, percent=40.0)
+
+    monkeypatch.setattr(host_module.psutil, "disk_usage", _disk_usage_guard)
+    writer = MemoryRetainingMetricsWriter()
+    cfg = HostCollectorConfig(
+        name="host", extra_mountpoints=["/rackstation"], disk_mountpoint_relabel={}
+    )
+    result = await HostCollector().run(_ctx(writer, cfg))
+    assert result.ok
+    mps = {e.labels["mountpoint"] for e in writer.snapshot() if e.name == "homelab_host_disk_bytes"}
+    assert "/rackstation" not in mps
+    assert result.errors == []
+
+
+@pytest.mark.asyncio
+async def test_disk_partition_probe_timeout_records_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PARTITION loop: a wedged disk_usage (TimeoutError) records an error -> ok=False.
+
+    The fake disk_usage raises TimeoutError; run_in_executor re-raises it, and
+    asyncio.wait_for surfaces it identically to a real timeout — driving the
+    except (TimeoutError, OSError) branch deterministically (no 5s wait).
+    """
+    _patch_psutil_happy_path(monkeypatch)
+    monkeypatch.setattr(host_module, "present_mounts", lambda: {"/"})
+
+    def _hang(mp: str) -> _Usage:
+        del mp
+        raise TimeoutError("simulated wedged disk_usage")
+
+    monkeypatch.setattr(host_module.psutil, "disk_usage", _hang)
+    writer = MemoryRetainingMetricsWriter()
+    cfg = HostCollectorConfig(name="host", extra_mountpoints=[], disk_mountpoint_relabel={})
+    result = await HostCollector().run(_ctx(writer, cfg))
+    # Partition-loop probe failure is RECORDED -> ok=False (the asymmetry).
+    assert result.ok is False
+    assert any("disk_usage /" in e for e in result.errors)
+    assert any("simulated wedged disk_usage" in e for e in result.errors)
+    mps = {e.labels["mountpoint"] for e in writer.snapshot() if e.name == "homelab_host_disk_bytes"}
+    assert mps == set()
+
+
+@pytest.mark.asyncio
+async def test_extra_mountpoint_probe_timeout_discarded_ok_true(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """EXTRA_MOUNTPOINTS loop: a wedged disk_usage (TimeoutError) is DISCARDED -> ok=True.
+
+    Proves the two-loop asymmetry under a probe timeout: partition loop records the
+    error (test above), extra_mountpoints loop swallows it and the mount is skipped.
+    """
+    _patch_psutil_happy_path(monkeypatch)
+    monkeypatch.setattr(host_module, "present_mounts", lambda: {"/rackstation"})
+
+    def _hang(mp: str) -> _Usage:
+        del mp
+        raise TimeoutError("simulated wedged NFS")
+
+    monkeypatch.setattr(host_module.psutil, "disk_usage", _hang)
+
+    # No partitions, so only the extra_mountpoints loop runs.
+    def _no_partitions(all: bool = False) -> list[_Part]:
+        del all
+        return []
+
+    monkeypatch.setattr(host_module.psutil, "disk_partitions", _no_partitions)
+    writer = MemoryRetainingMetricsWriter()
+    cfg = HostCollectorConfig(
+        name="host", extra_mountpoints=["/rackstation"], disk_mountpoint_relabel={}
+    )
+    result = await HostCollector().run(_ctx(writer, cfg))
+    # extra_mountpoints probe failure is DISCARDED -> ok stays True, mount skipped.
+    assert result.ok is True
+    assert result.errors == []
+    mps = {e.labels["mountpoint"] for e in writer.snapshot() if e.name == "homelab_host_disk_bytes"}
+    assert "/rackstation" not in mps
