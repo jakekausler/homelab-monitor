@@ -8,6 +8,6 @@ pytest-xdist rationale). This conftest only re-exports the gate for convenience.
 
 from __future__ import annotations
 
-from .helpers.rig_health import require_rig_components
+from .helpers.rig_health import docker_available, require_docker, require_rig_components
 
-__all__ = ["require_rig_components"]
+__all__ = ["docker_available", "require_docker", "require_rig_components"]

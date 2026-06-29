@@ -23,6 +23,9 @@ The gate must be importable WITHOUT a running rig (pure stdlib + httpx + pytest)
 
 from __future__ import annotations
 
+import shutil
+import subprocess
+
 import httpx
 import pytest
 
@@ -116,6 +119,7 @@ def rig_health() -> dict[str, bool]:
 def reset_health_cache() -> None:
     """Clear the session cache. ONLY for the gate's own unit tests."""
     _health_cache.clear()
+    _docker_cache.clear()
 
 
 def require_rig_components(*names: str) -> None:
@@ -130,4 +134,53 @@ def require_rig_components(*names: str) -> None:
         pytest.skip(
             f"rig component(s) unavailable: {', '.join(sorted(downed))} "
             "-- start the rig via `make integration` (docker-compose.test.yml)"
+        )
+
+
+# --- Docker daemon reachability gate (STAGE-009-003) -------------------------
+# The fixer-runner integration test builds + runs a container via the docker CLI
+# (not an HTTP endpoint), so it cannot use the httpx-based COMPONENT_NAMES probes
+# above. This is a separate, fast (<=2s) daemon-reachability check: `docker
+# version` succeeds iff the CLI is on PATH AND the daemon socket answers.
+
+_DOCKER_PROBE_TIMEOUT_S = 2.0
+_docker_cache: dict[str, bool] = {}
+
+
+def docker_available() -> bool:
+    """Return True iff the docker CLI is on PATH and the daemon is reachable.
+
+    Cached per worker process. A 2s `docker version` probe; any non-zero exit,
+    missing binary, or timeout returns False. NEVER raises.
+    """
+    if "docker" in _docker_cache:
+        return _docker_cache["docker"]
+    if shutil.which("docker") is None:
+        _docker_cache["docker"] = False
+        return False
+    try:
+        result = subprocess.run(
+            ["docker", "version", "--format", "{{.Server.Version}}"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=_DOCKER_PROBE_TIMEOUT_S,
+        )
+    except (OSError, subprocess.SubprocessError):
+        _docker_cache["docker"] = False
+        return False
+    _docker_cache["docker"] = result.returncode == 0
+    return _docker_cache["docker"]
+
+
+def require_docker() -> None:
+    """Skip the calling test FAST if the docker daemon is unreachable.
+
+    Used by docker-driven integration tests (e.g. the fixer-runner build/run
+    test) that need the daemon rather than an HTTP rig component.
+    """
+    if not docker_available():
+        pytest.skip(
+            "docker daemon unavailable (CLI missing or daemon down) "
+            "-- start docker to run this integration test"
         )

@@ -578,9 +578,84 @@ services:
       retries: 5
       start_period: 60s
 
+  # ===========================================================================
+  # EPIC-009 / STAGE-009-003 — fixer-runner (Claude auto-fix runtime)
+  # ===========================================================================
+  # Hosts the dedicated low-privilege `homelab-fixer` identity + the `claude`
+  # CLI. NON-NEGOTIABLE #3: identity is baked at BUILD via the FIXER_UID/FIXER_GID
+  # build args (so it matches the transcript-dir POSIX default ACL granted to
+  # HM_FIXER_UID by host-setup.sh §3.9). Therefore there is intentionally NO
+  # compose `user:` override here — contrast the monitor, which sets a runtime
+  # `user:` to match a host UID. NON-NEGOTIABLE #7: PID 1 is `tail -f /dev/null`;
+  # claude is NEVER launched at boot — the orchestrator (STAGE-009-005)
+  # `docker exec`s it on demand. `docker kill` stops the container + in-flight exec.
+  #
+  # OFF BY DEFAULT: gated behind the NEW `fixer` profile (mirrors the
+  # `host-collectors` profile on cadvisor/vector). Enable by adding `fixer` to
+  # COMPOSE_PROFILES in deploy/compose/.env.
+  fixer-runner:
+    profiles: ["fixer"]
+    build:
+      context: ./fixer-runner
+      dockerfile: Dockerfile
+      args:
+        # Identity baked at build time (#3). Defaults 1002:1002 match
+        # .env.example + host-setup.sh §3.9's transcript ACL grant.
+        FIXER_UID: ${HM_FIXER_UID:-1002}
+        FIXER_GID: ${HM_FIXER_GID:-1002}
+        # Version-pinned claude; real install in prod, fake in CI/integration.
+        CLAUDE_VERSION: ${CLAUDE_VERSION:-stable}
+        # real|fake. Prod = real; CI + the integration test override to `fake`.
+        CLAUDE_BINARY_SOURCE: ${CLAUDE_BINARY_SOURCE:-real}
+    container_name: ${HM_CONTAINER_PREFIX:-homelab}-fixer-runner
+    restart: unless-stopped
+    # NO compose `user:` — identity is the image's baked USER homelab-fixer
+    # (build-arg UID/GID). A runtime override would break the transcript ACL match.
+    # NO `ports:` — the fixer-runner is reached only via `docker exec`; it must
+    # NOT publish anything (#7 / least exposure).
+    networks:
+      - fixer-egress
+    environment:
+      # STAGE-009-003 ships ANTHROPIC_API_KEY as a plain compose passthrough
+      # sourced from .env / host env. It is NEVER committed. Under CI / the
+      # integration test (CLAUDE_BINARY_SOURCE=fake) this is empty/absent and the
+      # fake claude records anthropic_api_key_present=0.
+      # TODO(STAGE-009-005): replace this static passthrough with exec-time vault
+      # injection (`docker exec -e ANTHROPIC_API_KEY=<vault-fetched> ...`). The
+      # orchestrator, not compose, will supply the real key at run time.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    volumes:
+      # The fixer is the WRITER of transcripts: mount the SAME host path as the
+      # monitor's :ro mount, but READ-WRITE here (no :ro). POSIX default ACLs on
+      # the host dir (host-setup.sh §3.9) make every file the fixer writes
+      # monitor-readable (rX) + fixer-writable (rwX). The fixer adopts HM_FIXER_UID
+      # (baked), so the ACL applies.
+      - ${HM_FIXER_TRANSCRIPTS_SRC:-/var/lib/homelab-monitor/runbook-transcripts}:/data/runbook-transcripts
+      # Optional host-specific CLAUDE overlay (the allow/deny TARGET list),
+      # sourced from the operator's private overrides repo. READ-ONLY. The baked
+      # /home/homelab-fixer/CLAUDE.md floor names this path; the overlay can only
+      # NARROW the floor. Unset = /dev/null (harmless: only the baked floor applies).
+      # TODO(STAGE-009-008): this overlay's real TARGET content + per-runbook
+      # egress destination filtering are owned by STAGE-009-008 + the overrides repo.
+      - ${HM_FIXER_POLICY_OVERLAY_SRC:-/dev/null}:/data/policy/CLAUDE.host.md:ro
+    # No healthcheck: the keepalive has no service endpoint, and nothing
+    # `depends_on` the fixer-runner's health. Liveness is `docker inspect`.
+    # TODO(STAGE-009-005): surface runner liveness (so a wedged/crash-looping keepalive
+    # is observable to the monitor/orchestrator rather than silently auto-restarted by
+    # `restart: unless-stopped`). Tracked, not silently dropped.
+
 networks:
   homelab-monitor-net:
     name: ${HM_INSTANCE:-homelab-monitor}-net
+  # STAGE-009-003: dedicated egress bridge for the fixer-runner. It is
+  # internet-reachable (claude needs the Anthropic API), so it is NOT `internal`.
+  # It is a SEPARATE network from homelab-monitor-net so the fixer cannot reach
+  # the monitor's sidecars (VM/VL/AM/etc.) directly — its only inbound surface is
+  # `docker exec`. No `ports:` are published on the fixer-runner service.
+  # TODO(STAGE-009-008): per-runbook egress DESTINATION filtering (restricting
+  # this network's reachable endpoints) is owned by STAGE-009-008.
+  fixer-egress:
+    name: ${HM_INSTANCE:-homelab-monitor}-fixer-egress
 
 volumes:
   data_monitor:

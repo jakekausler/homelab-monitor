@@ -116,6 +116,81 @@ If that succeeds, the orchestrator's exec path is usable. No additional
 permission beyond the existing socket mount + docker group is required for
 `docker exec` (it is the same socket API surface as discovery).
 
+## Claude CLI + API credential (STAGE-009-003)
+
+The fixer-runner image bakes a **version-pinned native `claude` binary** (no
+Node, auto-update disabled). The version is controlled by the `CLAUDE_VERSION`
+build arg (`deploy/compose/.env`, default `latest` — pin a specific version in
+production).
+
+The Claude API credential is supplied via `ANTHROPIC_API_KEY`:
+
+- It is a **host/overrides-only** value. **NEVER commit a real key to this repo.**
+  Put it in your private overrides `.env` or the host environment.
+- In `deploy/compose/.env` it is wired as a passthrough
+  (`ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}`); leave the `.env.example` entry
+  empty.
+- Under CI and the integration test the image is built with
+  `CLAUDE_BINARY_SOURCE=fake`, so no real key is used and the fake records
+  `anthropic_api_key_present=0`.
+
+> **Deferral (STAGE-009-005).** This static passthrough is a placeholder. A later
+> stage moves the key to **exec-time vault injection**: the orchestrator fetches
+> the key from the vault and supplies it per `docker exec -e ANTHROPIC_API_KEY=…`,
+> rather than baking it into the container environment via compose.
+
+## fixer-runner service wiring (STAGE-009-003)
+
+The `fixer-runner` service is **OFF BY DEFAULT**, gated behind the `fixer`
+compose profile (mirroring the `host-collectors` profile). To enable it, add
+`fixer` to `COMPOSE_PROFILES` in `deploy/compose/.env`:
+
+```bash
+COMPOSE_PROFILES=host-collectors,fixer
+docker compose up -d fixer-runner
+```
+
+Key properties:
+
+- **Identity is baked at build time** (`FIXER_UID`/`FIXER_GID` build args, default
+  1002:1002 from `HM_FIXER_UID`/`HM_FIXER_GID`). There is intentionally **no**
+  compose `user:` override — the image's `USER homelab-fixer` is the identity, so
+  it matches the transcript-dir POSIX default ACL granted to `HM_FIXER_UID`.
+- **PID 1 is `tail -f /dev/null`** — an idle keepalive. `claude` is NEVER launched
+  at boot; the orchestrator (STAGE-009-005) `docker exec`s it on demand. `docker
+  kill` stops the container and any in-flight exec (non-negotiable #7).
+- **Read-write transcript mount.** The fixer is the WRITER: it mounts the same
+  host transcript path the monitor mounts read-only, but read-write
+  (`…/runbook-transcripts:/data/runbook-transcripts`, no `:ro`). The POSIX default
+  ACLs (host-setup.sh §3.9) keep every file it writes monitor-readable.
+- **Dedicated egress network** (`fixer-egress`). It is internet-reachable (claude
+  needs the Anthropic API) and SEPARATE from `homelab-monitor-net`, so the fixer
+  cannot reach the monitor's sidecars directly. **No ports are published.**
+
+> **Deferral (STAGE-009-008).** Per-runbook egress DESTINATION filtering
+> (restricting which endpoints the `fixer-egress` network can reach) is owned by
+> STAGE-009-008.
+
+## Baked CLAUDE.md floor vs mounted host overlay (STAGE-009-003)
+
+`claude` is governed by two layers:
+
+1. **Baked public floor** — a public-safe `CLAUDE.md` baked into the image at
+   `/home/homelab-fixer/CLAUDE.md` (also the container WORKDIR, so `claude`
+   discovers it). It contains ONLY universal invariants: you are in a container
+   not the host; you are fully non-interactive (never wait for or request input);
+   deny by default; if uncertain, exit non-zero. It contains **no** host-specific
+   targets.
+2. **Mounted host overlay** — an optional, read-only host-specific overlay at
+   `/data/policy/CLAUDE.host.md`, sourced from your private overrides repo
+   (`HM_FIXER_POLICY_OVERLAY_SRC`, default `/dev/null` = absent). It carries the
+   host-specific allow/deny TARGET list. **The overlay can only NARROW the floor**
+   — it can never widen the baked invariants.
+
+> **Deferral (STAGE-009-008).** The overlay's real TARGET content lives in the
+> private overrides repo and is owned by STAGE-009-008. This stage ships only the
+> baked floor + the read-only mount point + the compose plumbing.
+
 ## Security implications
 
 - The fixer identity is low-privilege: no shell-on-host, no sudoers, no docker
@@ -129,12 +204,18 @@ permission beyond the existing socket mount + docker group is required for
 
 ## Deferred to later stages
 
-- The `fixer-runner` service block in `docker-compose.yml` (its
-  `USER homelab-fixer`, its own read-write transcript mount, egress-only
-  network) → **STAGE-009-003**.
-- Creating the in-container `homelab-fixer` OS user in the runner image →
-  **STAGE-009-003**.
-- The orchestrator `docker exec` invocation + populating the
-  `runbook_runs.fixer_user` / `runbook_runs.host` audit columns → later
-  EPIC-009 orchestrator-wiring stages (the exec itself in STAGE-009-005; the
-  column writes in the populating-write stage).
+- The orchestrator `docker exec` invocation that launches `claude`, plus
+  exec-time vault injection of `ANTHROPIC_API_KEY`, plus populating the
+  `runbook_runs.fixer_user` / `runbook_runs.host` audit columns →
+  **STAGE-009-005** (the exec + key injection) and the populating-write stage
+  (the column writes).
+- Per-runbook egress DESTINATION filtering on the `fixer-egress` network, and the
+  real host-specific allow/deny TARGET content of the mounted
+  `/data/policy/CLAUDE.host.md` overlay → **STAGE-009-008** + the private
+  overrides repo.
+
+> Delivered in STAGE-009-003: the `fixer-runner` service block, the in-image
+> `homelab-fixer` OS user (`USER homelab-fixer`), the read-write transcript mount,
+> the dedicated `fixer-egress` network, the idle-keepalive entrypoint, the baked
+> CLAUDE.md floor + read-only overlay mount point, and the `ANTHROPIC_API_KEY` /
+> `CLAUDE_VERSION` compose plumbing.

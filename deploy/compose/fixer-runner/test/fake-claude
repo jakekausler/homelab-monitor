@@ -1,0 +1,51 @@
+#!/bin/sh
+# Fake `claude` CLI used by the fixer-runner image when built with
+# --build-arg CLAUDE_BINARY_SOURCE=fake. NOT installed in real images.
+#
+# Purpose (STAGE-009-003 integration test harness):
+#   - Prove the non-interactive exec shape works (stdin drained, argv captured).
+#   - Prove the RW transcript bind-mount is writable BY THE homelab-fixer user.
+#   - Prove written files are owned by HM_FIXER_UID:HM_FIXER_GID (default ACL +
+#     the in-image USER homelab-fixer identity).
+#   - Optionally hang (FAKE_CLAUDE_SLEEP) so the `docker kill` test has an
+#     in-flight exec to terminate.
+#
+# It writes into the transcript dir mounted at /data/runbook-transcripts.
+set -eu
+
+TRANSCRIPT_DIR="${FAKE_CLAUDE_TRANSCRIPT_DIR:-/data/runbook-transcripts}"
+PREFIX="fake-claude-$$"
+
+# (1) Drain stdin to EOF so `< /dev/null` (or any piped stdin) never blocks.
+cat >/dev/null || true
+
+# (2) Record argv (one arg per line) so the test can assert -p / folder /
+#     --dangerously-skip-permissions were passed through.
+ARGS_FILE="${TRANSCRIPT_DIR}/${PREFIX}.args"
+: >"${ARGS_FILE}"
+for a in "$@"; do
+    printf '%s\n' "$a" >>"${ARGS_FILE}"
+done
+
+# (3) Write a transcript file (proves the RW mount + ownership). Include a
+#     timestamp so concurrent invocations don't clobber, and echo the API key
+#     PRESENCE (never the value) so the test can assert it is empty under fake.
+TRANSCRIPT_FILE="${TRANSCRIPT_DIR}/${PREFIX}.transcript"
+{
+    printf 'fake-claude transcript\n'
+    printf 'timestamp=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    printf 'argv=%s\n' "$*"
+    if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
+        printf 'anthropic_api_key_present=1\n'
+    else
+        printf 'anthropic_api_key_present=0\n'
+    fi
+} >"${TRANSCRIPT_FILE}"
+
+# (4) Optional hang for the kill test. Sleep BEFORE exiting.
+if [ -n "${FAKE_CLAUDE_SLEEP:-}" ]; then
+    sleep "${FAKE_CLAUDE_SLEEP}"
+fi
+
+# (5) Success.
+exit 0
