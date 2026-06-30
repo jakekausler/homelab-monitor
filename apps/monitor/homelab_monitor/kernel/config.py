@@ -758,6 +758,46 @@ def load_pihole_unbound_config() -> PiholeUnboundConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class FixerRunnerConfig:
+    """Auto-fix exec target + transcript/exec-log dirs (STAGE-009-005). Env-only.
+
+    ``container`` is the fixer-runner container the orchestrator execs ``claude``
+    into (compose ``container_name``, default ``homelab-fixer-runner``; override
+    for prefixed/parallel instances).
+    ``transcript_dir`` is the monitor-visible READ mount of the claude transcript
+    dir (``:ro``); the orchestrator scans it to learn the transcript filename.
+    ``exec_log_dir`` is a monitor-WRITABLE dir (on the ``data_monitor`` volume)
+    where the orchestrator writes ``<run_id>.exec.log``.
+    ``fixer_user`` is the low-priv user the exec runs as.
+    ``exec_timeout_seconds`` bounds a single claude exec.
+    """
+
+    container: str = "homelab-fixer-runner"
+    transcript_dir: str = "/data/runbook-transcripts"
+    exec_log_dir: str = "/data/exec-logs"
+    fixer_user: str = "homelab-fixer"
+    exec_timeout_seconds: float = 1800.0
+
+
+def load_fixer_runner_config() -> FixerRunnerConfig:
+    """Load fixer-runner config from ``HOMELAB_MONITOR_FIXER_*`` env vars."""
+    defaults = FixerRunnerConfig()
+    container = os.environ.get("HOMELAB_MONITOR_FIXER_RUNNER_CONTAINER", defaults.container)
+    transcript_dir = os.environ.get("HOMELAB_MONITOR_FIXER_TRANSCRIPT_DIR", defaults.transcript_dir)
+    exec_log_dir = os.environ.get("HOMELAB_MONITOR_FIXER_EXEC_LOG_DIR", defaults.exec_log_dir)
+    fixer_user = os.environ.get("HOMELAB_MONITOR_FIXER_USER", defaults.fixer_user)
+    timeout_raw = os.environ.get("HOMELAB_MONITOR_FIXER_EXEC_TIMEOUT_SECONDS")
+    exec_timeout_seconds = defaults.exec_timeout_seconds if not timeout_raw else float(timeout_raw)
+    return FixerRunnerConfig(
+        container=container,
+        transcript_dir=transcript_dir,
+        exec_log_dir=exec_log_dir,
+        fixer_user=fixer_user,
+        exec_timeout_seconds=exec_timeout_seconds,
+    )
+
+
+@dataclass(frozen=True, slots=True)
 class SynologyConfig:
     """Synology DSM connection config (STAGE-008-001). Env-only.
 
@@ -2009,6 +2049,7 @@ __all__ = [
     "DrainConfig",
     "ErrorPattern",
     "ErrorRateOverride",
+    "FixerRunnerConfig",
     "HaConfig",
     "HaRegistryConfig",
     "HealthcheckLogConfig",
@@ -2033,6 +2074,7 @@ __all__ = [
     "load_disk_budget_config",
     "load_docker_config",
     "load_drain_config",
+    "load_fixer_runner_config",
     "load_ha_config",
     "load_ha_registry_config",
     "load_healthcheck_log_config",

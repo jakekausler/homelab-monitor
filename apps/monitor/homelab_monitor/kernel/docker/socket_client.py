@@ -17,7 +17,7 @@ from __future__ import annotations
 import asyncio
 import json
 import struct
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass
 from typing import Final, NotRequired, TypedDict, cast
 
@@ -48,6 +48,16 @@ class DockerSocketError(Exception):
 
 class DockerSocketConnectionError(DockerSocketError):
     """Socket file missing, permission denied, or peer reset."""
+
+
+class DockerExecTimeoutError(DockerSocketConnectionError):
+    """Raised when a bounded ``exec_capture`` exceeds its ``timeout_seconds``.
+
+    Subclass of ``DockerSocketConnectionError`` so existing ``except`` clauses
+    keep catching it, while callers that need to distinguish a timeout from a
+    generic connection failure can ``isinstance``-check this type (the
+    orchestrator maps it to exit-code sentinel 124).
+    """
 
 
 class DockerSocketProtocolError(DockerSocketError):
@@ -459,6 +469,8 @@ class DockerSocketClient:
         container_id: str,
         cmd: list[str],
         timeout_seconds: float,
+        user: str | None = None,
+        env: Mapping[str, str] | None = None,
     ) -> ExecResult:
         """Run ``cmd`` (argv list) inside container_id; CAPTURE stdout/stderr + exit code.
 
@@ -471,6 +483,9 @@ class DockerSocketClient:
 
         ``cmd`` is passed as argv directly (no ``sh -c`` shell layer), e.g.
         ``["unbound-control", "stats_noreset"]``.
+
+        ``user`` (optional) is the user to run the exec as (e.g. ``"homelab-fixer"``).
+        ``env`` (optional) is a dict of environment variables to set.
 
         The whole operation is bounded by ``asyncio.wait_for(timeout_seconds)``; a
         timeout surfaces as DockerSocketConnectionError (a timed-out socket is a
@@ -488,28 +503,41 @@ class DockerSocketClient:
         """
         try:
             return await asyncio.wait_for(
-                self._exec_capture_inner(container_id=container_id, cmd=cmd),
+                self._exec_capture_inner(
+                    container_id=container_id,
+                    cmd=cmd,
+                    user=user,
+                    env=env,
+                    timeout_seconds=timeout_seconds,
+                ),
                 timeout=timeout_seconds,
             )
         except TimeoutError as exc:
-            raise DockerSocketConnectionError(
+            raise DockerExecTimeoutError(
                 f"docker exec timed out after {timeout_seconds}s in {container_id}: {exc}"
             ) from exc
 
-    async def _exec_capture_inner(
+    async def _exec_capture_inner(  # noqa: PLR0912 -- User/Env/timeout extension adds branches
         self,
         *,
         container_id: str,
         cmd: list[str],
+        user: str | None = None,
+        env: Mapping[str, str] | None = None,
+        timeout_seconds: float = _REQUEST_TIMEOUT_SECONDS,
     ) -> ExecResult:
         """Unbounded body of exec_capture (wrapped in a timeout by the caller)."""
         # 1. Create the exec instance (attach stdout + stderr for capture).
-        create_body = {
+        create_body: dict[str, object] = {
             "Cmd": cmd,
             "AttachStdout": True,
             "AttachStderr": True,
             "Tty": False,
         }
+        if user is not None:
+            create_body["User"] = user
+        if env is not None:
+            create_body["Env"] = [f"{k}={v}" for k, v in env.items()]
         try:
             resp = await self._client.post(
                 f"/containers/{container_id}/exec",
@@ -539,10 +567,13 @@ class DockerSocketClient:
         exec_id: str = str(cast(dict[str, object], data)["Id"])
 
         # 2. Start the exec instance and READ the multiplexed stream body.
+        # stdin intentionally not attached: Docker gives an unattached exec stdin
+        # an immediate EOF (003 contract: claude must see EOF on stdin and never block).
         try:
             start_resp = await self._client.post(
                 f"/exec/{exec_id}/start",
                 json={"Detach": False, "Tty": False},
+                timeout=timeout_seconds,
             )
         except httpx.HTTPError as exc:
             raise DockerSocketConnectionError(f"docker socket transport error: {exc}") from exc

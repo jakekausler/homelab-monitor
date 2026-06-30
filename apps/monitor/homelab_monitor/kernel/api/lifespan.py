@@ -1532,6 +1532,36 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
     app.state.loader = loader
     app.state.failure_budget = failure_budget
 
+    # 7g. Auto-fix orchestrator (STAGE-009-005) — fire-and-forget async handler.
+    # Requires RunbookRepo, AlertRepository, docker client, and app_settings_repo.
+    # Constructed only when docker is enabled (parallel instance B has docker disabled).
+    docker_client = getattr(app.state, "docker_socket_client", None)
+    if docker_client is not None:
+        from homelab_monitor.kernel.autofix import AutoFixOrchestrator  # noqa: PLC0415
+        from homelab_monitor.kernel.autofix.runs_repository import (  # noqa: PLC0415
+            RunbookRunsRepository,
+        )
+        from homelab_monitor.kernel.config import load_fixer_runner_config  # noqa: PLC0415
+        from homelab_monitor.kernel.db.repositories.app_settings_repository import (  # noqa: PLC0415
+            AppSettingsRepository,
+        )
+        from homelab_monitor.kernel.runbooks.repository import RunbookRepo  # noqa: PLC0415
+
+        runbook_repo = RunbookRepo(repo)
+        app.state.autofix_orchestrator = AutoFixOrchestrator(
+            runbook_repo=runbook_repo,
+            alert_repo=alert_repo,
+            app_settings_repo=AppSettingsRepository(repo),
+            secrets_repo=secrets_repo,
+            docker_client=docker_client,
+            db=repo,
+            runs_repo=RunbookRunsRepository(repo),
+            config=load_fixer_runner_config(),
+            log=log.bind(component="autofix"),
+        )
+    else:
+        app.state.autofix_orchestrator = None
+
     # 8. Backup service (admin endpoint + CLI share this instance).
     db_path_str = _extract_sqlite_path(
         os.environ.get("HOMELAB_MONITOR_DB_URL", "sqlite+aiosqlite:////data/homelab-monitor.db")
@@ -1677,6 +1707,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
             image_events_task_handle.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await image_events_task_handle
+        # Drain fire-and-forget auto-fix dispatch tasks (Minor #2, STAGE-009-005).
+        # In-flight claims orphaned by this cancellation self-heal via the
+        # staleness-aware count_inflight (Important #1a).
+        from homelab_monitor.kernel.api.routers.alerts import (  # noqa: PLC0415
+            drain_autofix_dispatch_tasks,
+        )
+
+        await drain_autofix_dispatch_tasks()
         # Stop HA entity-registry cache (STAGE-005-037) — before the WS client it uses.
         ha_registry_handle = getattr(app.state, "ha_entity_registry", None)
         if ha_registry_handle is not None:  # pragma: no branch -- always set in full boot

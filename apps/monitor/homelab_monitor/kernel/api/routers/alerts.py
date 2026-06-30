@@ -17,11 +17,13 @@ where the operator can inspect them via ``GET /api/alerts/{id}``.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
 from typing import Annotated, Any
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict
 from starlette.responses import JSONResponse
 from structlog.stdlib import BoundLogger
@@ -62,6 +64,11 @@ from homelab_monitor.kernel.db.time import utc_now_iso
 from homelab_monitor.kernel.dispatch.dispatcher import AlertDispatcher
 
 router = APIRouter(prefix="/alerts", tags=["alerts"])
+
+# Strong refs to fire-and-forget autofix-dispatch tasks so they are NOT
+# garbage-collected mid-flight (asyncio only holds a weak ref to created tasks).
+# The done-callback discards each task once it finishes.
+_AUTOFIX_DISPATCH_TASKS: set[asyncio.Task[None]] = set()
 
 
 class CommentBody(BaseModel):
@@ -137,6 +144,42 @@ def _build_payload_json(item: AlertmanagerV2AlertItem) -> str:
     return json.dumps(payload, sort_keys=True, separators=(",", ":"))
 
 
+async def _dispatch_autofix(
+    orchestrator: object,  # AutoFixOrchestrator (avoid circular import)
+    alert_repo: AlertRepository,
+    alert_id: str,
+    log: BoundLogger,
+) -> None:
+    """Load the hydrated alert and run the orchestrator; never raise into the loop."""
+    try:
+        alert = await alert_repo.get_alert_by_id(alert_id)
+        if alert is None:
+            return
+        # Import here to avoid circular dependency at module load
+        from homelab_monitor.kernel.autofix import AutoFixOrchestrator  # noqa: PLC0415
+
+        # Type-safe narrow from object to AutoFixOrchestrator
+        if isinstance(orchestrator, AutoFixOrchestrator):
+            await orchestrator.handle_alert(alert)
+    except Exception:
+        log.exception("autofix_dispatch_failed", alert_id=alert_id)
+
+
+async def drain_autofix_dispatch_tasks() -> None:
+    """Cancel + await any in-flight fire-and-forget auto-fix dispatch tasks.
+
+    Called from the lifespan shutdown path so an in-flight `docker exec` is
+    not abandoned silently. In-flight claims orphaned by this cancellation
+    self-heal via the staleness-aware ``count_inflight`` (STAGE-009-005,
+    Important #1a). Public wrapper so the lifespan does not import the
+    module-private task set (avoids reportPrivateUsage).
+    """
+    for task in list(_AUTOFIX_DISPATCH_TASKS):
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+
 @router.post(
     "/ingest",
     response_model=IngestResponse,
@@ -150,6 +193,7 @@ async def ingest_alerts(
     ],
     alert_repo: Annotated[AlertRepository, Depends(get_alert_repo)],
     dispatcher: Annotated[AlertDispatcher, Depends(get_alert_dispatcher)],
+    request: Request,
 ) -> JSONResponse:
     """Ingest an Alertmanager v2 webhook payload.
 
@@ -169,6 +213,7 @@ async def ingest_alerts(
     log = structlog.get_logger().bind(component="alerts.ingest")
     received = len(payload.alerts)
     ingested = 0
+    firing_alert_id: str | None = None
 
     log.info(
         "alert.ingest.received",
@@ -217,6 +262,7 @@ async def ingest_alerts(
                     annotations=existing.annotations,
                     ts=ts,
                 )
+                firing_alert_id = existing.id
             else:
                 # The full Alertmanager item payload (startsAt/endsAt/etc.)
                 # is preserved on the alert row so the operator can inspect
@@ -250,6 +296,7 @@ async def ingest_alerts(
                     annotations=annotations,
                     ts=ts,
                 )
+                firing_alert_id = new_id
             await dispatcher.dispatch(event)
             ingested += 1
             log.info(
@@ -297,6 +344,18 @@ async def ingest_alerts(
                 source_tool=item.labels.get("source_tool"),
                 status=item.status,
             )
+
+    # SEAM (STAGE-009-005): fire-and-forget auto-fix for firing alerts.
+    # Must NOT block the 202 response. handle_alert no-ops on no-match and
+    # self-audits on denial.
+    if firing_alert_id is not None:
+        orchestrator = getattr(request.app.state, "autofix_orchestrator", None)
+        if orchestrator is not None:
+            task = asyncio.create_task(
+                _dispatch_autofix(orchestrator, alert_repo, firing_alert_id, log)
+            )
+            _AUTOFIX_DISPATCH_TASKS.add(task)
+            task.add_done_callback(_AUTOFIX_DISPATCH_TASKS.discard)
 
     return JSONResponse(
         status_code=202,
