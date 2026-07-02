@@ -24,7 +24,7 @@ interface ConfirmPhraseDialogProps {
   confirmLabel: string
   onConfirm: () => void
   isPending: boolean
-  errorMessage?: string
+  errorMessage?: string | undefined
 }
 
 export function ConfirmPhraseDialog({

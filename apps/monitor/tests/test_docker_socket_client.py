@@ -12,6 +12,7 @@ import pytest
 import structlog
 
 from homelab_monitor.kernel.docker.socket_client import (
+    _WRITE_TIMEOUT_SECONDS,  # pyright: ignore[reportPrivateUsage]
     DockerSocketClient,
     DockerSocketConnectionError,
     DockerSocketProtocolError,
@@ -1885,4 +1886,183 @@ async def test_stop_container_per_call_timeout() -> None:
     call_kwargs = mock_http.post.call_args.kwargs
     assert "timeout" in call_kwargs
     assert isinstance(call_kwargs["timeout"], httpx.Timeout)
+    await client.aclose()
+
+
+# ---------------------------------------------------------------------------
+# kill_container (STAGE-009-007)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_kill_container_204_success() -> None:
+    """kill_container with status 204 returns None."""
+    log = structlog.get_logger()
+
+    mock_response = AsyncMock()
+    mock_response.status_code = 204
+
+    mock_http = AsyncMock(spec=httpx.AsyncClient)
+    mock_http.post.return_value = mock_response
+    client = DockerSocketClient(socket_path="/var/run/docker.sock", log=log, httpx_client=mock_http)
+
+    result = await client.kill_container("abc123")
+
+    assert result is None
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_kill_container_409_treated_as_stopped() -> None:
+    """kill_container with status 409 (already stopped) returns None and warns."""
+    log = structlog.get_logger()
+
+    mock_response = AsyncMock()
+    mock_response.status_code = 409
+    mock_response.text = "container already stopped"
+
+    mock_http = AsyncMock(spec=httpx.AsyncClient)
+    mock_http.post.return_value = mock_response
+    client = DockerSocketClient(socket_path="/var/run/docker.sock", log=log, httpx_client=mock_http)
+    client._log.warning = MagicMock()  # pyright: ignore[reportPrivateUsage]
+
+    result = await client.kill_container("abc123")
+
+    assert result is None
+    client._log.warning.assert_called_once()  # pyright: ignore[reportPrivateUsage]
+    call_kwargs = client._log.warning.call_args.kwargs  # pyright: ignore[reportPrivateUsage]
+    assert call_kwargs["container_id"] == "abc123"
+    assert call_kwargs["status"] == 409  # noqa: PLR2004
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_kill_container_connect_error_raises_connection_error() -> None:
+    """kill_container with ConnectError raises DockerSocketConnectionError."""
+    log = structlog.get_logger()
+    socket_path = "/var/run/docker.sock"
+
+    mock_http = AsyncMock(spec=httpx.AsyncClient)
+    mock_http.post.side_effect = httpx.ConnectError("refused")
+    client = DockerSocketClient(socket_path=socket_path, log=log, httpx_client=mock_http)
+
+    with pytest.raises(DockerSocketConnectionError) as exc_info:
+        await client.kill_container("abc123")
+
+    assert socket_path in str(exc_info.value)
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_kill_container_http_error_raises_connection_error() -> None:
+    """kill_container with other httpx.HTTPError raises DockerSocketConnectionError."""
+    log = structlog.get_logger()
+
+    mock_http = AsyncMock(spec=httpx.AsyncClient)
+    mock_http.post.side_effect = httpx.ReadTimeout("timeout")
+    client = DockerSocketClient(socket_path="/var/run/docker.sock", log=log, httpx_client=mock_http)
+
+    with pytest.raises(DockerSocketConnectionError) as exc_info:
+        await client.kill_container("abc123")
+
+    assert "transport error" in str(exc_info.value)
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_kill_container_unexpected_status_raises_protocol_error() -> None:
+    """kill_container with status 500 raises DockerSocketProtocolError."""
+    log = structlog.get_logger()
+
+    mock_response = AsyncMock()
+    mock_response.status_code = 500
+    mock_response.text = "server error"
+
+    mock_http = AsyncMock(spec=httpx.AsyncClient)
+    mock_http.post.return_value = mock_response
+    client = DockerSocketClient(socket_path="/var/run/docker.sock", log=log, httpx_client=mock_http)
+
+    with pytest.raises(DockerSocketProtocolError) as exc_info:
+        await client.kill_container("abc123")
+
+    assert "500" in str(exc_info.value)
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_kill_container_signal_param_forwarded() -> None:
+    """kill_container forwards a non-default signal via params."""
+    log = structlog.get_logger()
+
+    mock_response = AsyncMock()
+    mock_response.status_code = 204
+
+    mock_http = AsyncMock(spec=httpx.AsyncClient)
+    mock_http.post.return_value = mock_response
+    client = DockerSocketClient(socket_path="/var/run/docker.sock", log=log, httpx_client=mock_http)
+
+    await client.kill_container("abc123", signal="SIGTERM")
+
+    call_kwargs = mock_http.post.call_args.kwargs
+    assert call_kwargs["params"] == {"signal": "SIGTERM"}
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_kill_container_default_signal_is_sigkill() -> None:
+    """kill_container defaults to SIGKILL when signal is not specified."""
+    log = structlog.get_logger()
+
+    mock_response = AsyncMock()
+    mock_response.status_code = 204
+
+    mock_http = AsyncMock(spec=httpx.AsyncClient)
+    mock_http.post.return_value = mock_response
+    client = DockerSocketClient(socket_path="/var/run/docker.sock", log=log, httpx_client=mock_http)
+
+    await client.kill_container("abc123")
+
+    call_kwargs = mock_http.post.call_args.kwargs
+    assert call_kwargs["params"] == {"signal": "SIGKILL"}
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_kill_container_uses_default_write_timeout_when_none() -> None:
+    """kill_container with timeout_seconds=None uses _WRITE_TIMEOUT_SECONDS."""
+    log = structlog.get_logger()
+
+    mock_response = AsyncMock()
+    mock_response.status_code = 204
+
+    mock_http = AsyncMock(spec=httpx.AsyncClient)
+    mock_http.post.return_value = mock_response
+    client = DockerSocketClient(socket_path="/var/run/docker.sock", log=log, httpx_client=mock_http)
+
+    await client.kill_container("abc123")
+
+    call_kwargs = mock_http.post.call_args.kwargs
+    assert isinstance(call_kwargs["timeout"], httpx.Timeout)
+    assert call_kwargs["timeout"].write == _WRITE_TIMEOUT_SECONDS
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_kill_container_uses_explicit_timeout_when_provided() -> None:
+    """kill_container with explicit timeout_seconds uses that value, not the default."""
+    log = structlog.get_logger()
+
+    mock_response = AsyncMock()
+    mock_response.status_code = 204
+
+    mock_http = AsyncMock(spec=httpx.AsyncClient)
+    mock_http.post.return_value = mock_response
+    client = DockerSocketClient(socket_path="/var/run/docker.sock", log=log, httpx_client=mock_http)
+
+    await client.kill_container("abc123", timeout_seconds=2.5)
+
+    call_kwargs = mock_http.post.call_args.kwargs
+    assert isinstance(call_kwargs["timeout"], httpx.Timeout)
+    assert call_kwargs["timeout"].write == 2.5  # noqa: PLR2004
+    assert call_kwargs["timeout"].write != _WRITE_TIMEOUT_SECONDS
     await client.aclose()

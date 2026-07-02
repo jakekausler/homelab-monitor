@@ -23,6 +23,7 @@ from homelab_monitor.kernel.api.routers import (
     admin,
     alerts,
     autofix,
+    autofix_settings,
     collectors,
     cron_events,
     crons,
@@ -110,6 +111,7 @@ def create_app(*, lifespan_enabled: bool = True) -> FastAPI:
     app.include_router(runbooks.router, prefix="/api")
     app.include_router(autofix.router, prefix="/api")
     app.include_router(settings_logs.router, prefix="/api")
+    app.include_router(autofix_settings.router, prefix="/api")
     app.include_router(observability.router)  # mounted at root: /metrics
 
     # Serve the built UI with true SPA fallback.

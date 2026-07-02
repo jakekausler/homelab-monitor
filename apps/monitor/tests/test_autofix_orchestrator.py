@@ -24,10 +24,11 @@ Tests that still patch count_inflight to return 0 or 1 do so for logical test co
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -52,6 +53,8 @@ from homelab_monitor.kernel.autofix.matcher import (
 )
 from homelab_monitor.kernel.autofix.orchestrator import (
     AutoFixOrchestrator,
+    KillResult,
+    _CurrentRun,  # pyright: ignore[reportPrivateUsage]
     _is_truthy,  # pyright: ignore[reportPrivateUsage]
 )
 from homelab_monitor.kernel.autofix.runs_repository import RunbookRunsRepository
@@ -101,6 +104,12 @@ class _FakeDockerClient:
     last_call_cmd: list[str] | None = None
     last_call_user: str | None = None
     last_call_env: Mapping[str, str] | None = None
+    # STAGE-009-007: kill_container support.
+    kill_raises: BaseException | None = None
+    last_kill_container_id: str | None = None
+    last_kill_signal: str | None = None
+    last_kill_timeout_seconds: float | None = None
+    on_kill_call: Callable[[], None] | None = None  # optional callback invoked before returning
 
     async def exec_capture(
         self,
@@ -121,6 +130,21 @@ class _FakeDockerClient:
             with open(self.transcript_to_write, "w", encoding="utf-8") as fh:
                 fh.write("fake-claude-transcript\n")
         return self.result
+
+    async def kill_container(
+        self,
+        container_id: str,
+        *,
+        signal: str = "SIGKILL",
+        timeout_seconds: float | None = None,
+    ) -> None:
+        self.last_kill_container_id = container_id
+        self.last_kill_signal = signal
+        self.last_kill_timeout_seconds = timeout_seconds
+        if self.on_kill_call is not None:
+            self.on_kill_call()
+        if self.kill_raises is not None:
+            raise self.kill_raises
 
 
 def _make_runbook_record(  # noqa: PLR0913
@@ -4534,3 +4558,580 @@ async def test_dry_claim_error_audited(
         {},
     )
     assert len(audits) >= 1
+
+
+# ---------------------------------------------------------------------------
+# STAGE-009-007: kill_inflight
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_kill_inflight_no_current_run_returns_no_inflight_and_audits(
+    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository
+) -> None:
+    """No in-flight run -> KillResult(killed=False, error='no_inflight_run') + audit."""
+    docker = _FakeDockerClient()
+    orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+
+    result = await orch.kill_inflight(reason="test", killed_by="test-user")
+
+    assert result == KillResult(
+        killed=False,
+        run_id=None,
+        reason="test",
+        error="no_inflight_run",
+        unwind_warning=None,
+    )
+
+    audit = await repo.fetch_one(
+        text("SELECT after_json FROM audit_log WHERE what = 'autofix.kill_no_inflight'"), {}
+    )
+    assert audit is not None
+    after = json.loads(str(audit[0]))
+    assert after["reason"] == "test"
+
+
+@pytest.mark.asyncio
+async def test_kill_inflight_success_stamps_killed_at_and_audits_killed(
+    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository
+) -> None:
+    """Success: docker.kill_container succeeds, killed_at stamped, audit written,
+    unwind observed cleanly (post_snapshot is None fast-path is NOT exercised here
+    because _current_run stays non-None until we clear it ourselves after the kill,
+    simulating the exec unwinding concurrently)."""
+    rb = _make_runbook_record(alertname="TestAlert")
+    await _insert_runbook(repo, rb)
+    alert = _make_alert(alertname="TestAlert")
+    await _insert_alert(repo, alert)
+
+    runs_repo = RunbookRunsRepository(repo)
+    async with repo.transaction() as conn:
+        run_id = await runs_repo.insert_started(
+            conn,
+            runbook_id=rb.id,
+            alert_id=alert.id,
+            prompt=rb.path,
+            fixer_user="homelab-fixer",
+            host="testhost",
+            runbook_hash=rb.content_hash,
+            mode=RunMode.REAL,
+        )
+
+    docker = _FakeDockerClient()
+    orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+    orch._current_run = _CurrentRun(  # pyright: ignore[reportPrivateUsage]
+        run_id=run_id, container="test-fixer", started_at_monotonic=time.monotonic()
+    )
+    # Clear the handle as a side effect of the kill call, so the post-kill
+    # snapshot (before the poll) is already non-None initially but the poll
+    # observes the clear almost immediately.
+    docker.on_kill_call = lambda: setattr(orch, "_current_run", None)  # pyright: ignore[reportPrivateUsage]
+
+    result = await orch.kill_inflight(reason="user_toggle", killed_by="user:admin")
+
+    assert result.killed is True
+    assert result.run_id == run_id
+    assert result.error is None
+    assert result.unwind_warning is None
+    assert docker.last_kill_container_id == "test-fixer"
+    assert docker.last_kill_signal == "SIGKILL"
+    assert docker.last_kill_timeout_seconds == 5.0  # noqa: PLR2004
+
+    run_row = await repo.fetch_one(
+        text("SELECT killed_at, ended_at FROM runbook_runs WHERE id = :id"), {"id": run_id}
+    )
+    assert run_row is not None
+    assert run_row[0] is not None  # killed_at set
+    assert run_row[1] is None  # ended_at untouched
+
+    audit = await repo.fetch_one(
+        text("SELECT after_json FROM audit_log WHERE what = 'autofix.killed'"), {}
+    )
+    assert audit is not None
+    after = json.loads(str(audit[0]))
+    assert after["run_id"] == run_id
+    assert after["killed_by"] == "user:admin"
+
+
+@pytest.mark.asyncio
+async def test_kill_inflight_docker_kill_fails_audits_kill_failed_and_reraises(
+    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository
+) -> None:
+    """docker.kill_container raises DockerSocketError -> audited + re-raised."""
+    docker = _FakeDockerClient(kill_raises=DockerSocketConnectionError("boom"))
+    orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+    orch._current_run = _CurrentRun(  # pyright: ignore[reportPrivateUsage]
+        run_id="r1", container="test-fixer", started_at_monotonic=time.monotonic()
+    )
+
+    with pytest.raises(DockerSocketConnectionError):
+        await orch.kill_inflight(reason="user_toggle", killed_by="user:admin")
+
+    audit = await repo.fetch_one(
+        text("SELECT after_json FROM audit_log WHERE what = 'autofix.kill_failed'"), {}
+    )
+    assert audit is not None
+    after = json.loads(str(audit[0]))
+    assert after["run_id"] == "r1"
+    assert "boom" in after["error"]
+
+    rows = await repo.fetch_all(
+        text("SELECT what FROM audit_log WHERE what LIKE 'autofix.kill%'"), {}
+    )
+    whats = [r[0] for r in rows]
+    assert "autofix.kill_attempted" in whats
+    assert "autofix.kill_failed" in whats
+    assert "autofix.killed" not in whats
+
+
+@pytest.mark.asyncio
+async def test_kill_inflight_unwind_deadline_exceeded_returns_warning(
+    repo: SqliteRepository,
+    secrets_repo_fixture: AsyncSecretsRepository,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """_current_run never clears -> unwind_warning='unwind_deadline_exceeded'."""
+    monkeypatch.setattr(
+        "homelab_monitor.kernel.autofix.orchestrator._KILL_UNWIND_DEADLINE_SECONDS", 0.05
+    )
+    monkeypatch.setattr(
+        "homelab_monitor.kernel.autofix.orchestrator._KILL_UNWIND_POLL_INTERVAL_SECONDS", 0.01
+    )
+
+    rb = _make_runbook_record(alertname="TestAlert")
+    await _insert_runbook(repo, rb)
+    alert = _make_alert(alertname="TestAlert")
+    await _insert_alert(repo, alert)
+
+    runs_repo = RunbookRunsRepository(repo)
+    async with repo.transaction() as conn:
+        run_id = await runs_repo.insert_started(
+            conn,
+            runbook_id=rb.id,
+            alert_id=alert.id,
+            prompt=rb.path,
+            fixer_user="homelab-fixer",
+            host="testhost",
+            runbook_hash=rb.content_hash,
+            mode=RunMode.REAL,
+        )
+
+    docker = _FakeDockerClient()
+    orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+    # NEVER clear _current_run — simulates the exec never unwinding within the
+    # deadline. The snapshot the poll observes stays non-None throughout.
+    orch._current_run = _CurrentRun(  # pyright: ignore[reportPrivateUsage]
+        run_id=run_id, container="test-fixer", started_at_monotonic=time.monotonic()
+    )
+
+    result = await orch.kill_inflight(reason="user_toggle", killed_by="user:admin")
+
+    assert result.killed is True
+    assert result.unwind_warning == "unwind_deadline_exceeded"
+
+
+@pytest.mark.asyncio
+async def test_kill_inflight_unwind_observed_returns_no_warning(
+    repo: SqliteRepository,
+    secrets_repo_fixture: AsyncSecretsRepository,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """_current_run is non-None when the poll starts but clears mid-poll (not
+    at the pre-poll snapshot) -> the `if cleared: break` path is taken and
+    unwind_warning stays None (clean unwind observed)."""
+    monkeypatch.setattr(
+        "homelab_monitor.kernel.autofix.orchestrator._KILL_UNWIND_DEADLINE_SECONDS", 1.0
+    )
+    monkeypatch.setattr(
+        "homelab_monitor.kernel.autofix.orchestrator._KILL_UNWIND_POLL_INTERVAL_SECONDS", 0.01
+    )
+
+    rb = _make_runbook_record(alertname="TestAlert")
+    await _insert_runbook(repo, rb)
+    alert = _make_alert(alertname="TestAlert")
+    await _insert_alert(repo, alert)
+
+    runs_repo = RunbookRunsRepository(repo)
+    async with repo.transaction() as conn:
+        run_id = await runs_repo.insert_started(
+            conn,
+            runbook_id=rb.id,
+            alert_id=alert.id,
+            prompt=rb.path,
+            fixer_user="homelab-fixer",
+            host="testhost",
+            runbook_hash=rb.content_hash,
+            mode=RunMode.REAL,
+        )
+
+    docker = _FakeDockerClient()
+    orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+    # Non-None at snapshot time (post_snapshot is not None -> loop entered).
+    # Do NOT clear via on_kill_call — the delayed task below does the
+    # clearing, AFTER the poll has started, so the loop's `if cleared: break`
+    # branch (not the pre-poll fast path) is what resolves this.
+    orch._current_run = _CurrentRun(  # pyright: ignore[reportPrivateUsage]
+        run_id=run_id, container="test-fixer", started_at_monotonic=time.monotonic()
+    )
+
+    async def _delayed_clear() -> None:
+        await asyncio.sleep(0.05)
+        orch._current_run = None  # pyright: ignore[reportPrivateUsage]
+
+    delay_task = asyncio.create_task(_delayed_clear())
+    try:
+        result = await orch.kill_inflight(reason="user_toggle", killed_by="user:admin")
+    finally:
+        # Ensure the delayed-clear task completes or is cancelled cleanly.
+        if not delay_task.done():
+            delay_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await delay_task
+
+    assert result.killed is True
+    assert result.unwind_warning is None
+    assert result.error is None
+    assert result.run_id == run_id
+
+
+@pytest.mark.asyncio
+async def test_kill_inflight_current_run_already_none_at_post_snapshot_skips_polling(
+    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository
+) -> None:
+    """When _current_run is already None at the post-kill snapshot (post_snapshot
+    is None), the unwind-deadline poll is skipped entirely (fast-path). Success
+    path still runs: killed_at is stamped and autofix.killed is audited."""
+    rb = _make_runbook_record(alertname="TestAlert")
+    await _insert_runbook(repo, rb)
+    alert = _make_alert(alertname="TestAlert")
+    await _insert_alert(repo, alert)
+
+    runs_repo = RunbookRunsRepository(repo)
+    async with repo.transaction() as conn:
+        run_id = await runs_repo.insert_started(
+            conn,
+            runbook_id=rb.id,
+            alert_id=alert.id,
+            prompt=rb.path,
+            fixer_user="homelab-fixer",
+            host="testhost",
+            runbook_hash=rb.content_hash,
+            mode=RunMode.REAL,
+        )
+
+    docker = _FakeDockerClient()
+    orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+    orch._current_run = _CurrentRun(  # pyright: ignore[reportPrivateUsage]
+        run_id=run_id, container="test-fixer", started_at_monotonic=time.monotonic()
+    )
+    # Clear it as a side effect of the kill call itself, so by the time
+    # kill_inflight takes its post-kill snapshot, _current_run is already None.
+    docker.on_kill_call = lambda: setattr(orch, "_current_run", None)  # pyright: ignore[reportPrivateUsage]
+
+    result = await orch.kill_inflight(reason="user_toggle", killed_by="user:admin")
+
+    assert result.killed is True
+    assert result.unwind_warning is None
+
+    run_row = await repo.fetch_one(
+        text("SELECT killed_at FROM runbook_runs WHERE id = :id"), {"id": run_id}
+    )
+    assert run_row is not None
+    assert run_row[0] is not None
+
+
+@pytest.mark.asyncio
+async def test_kill_inflight_wrong_run_race_audits_and_skips_stamp(
+    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository
+) -> None:
+    """When _current_run is republished with a different run_id between the
+    snapshot and post-kill re-check, kill_inflight audits
+    autofix.kill_wrong_run_race and returns killed=False,
+    error='wrong_run_race' without stamping killed_at on either run."""
+    rb = _make_runbook_record(alertname="TestAlert")
+    await _insert_runbook(repo, rb)
+    alert = _make_alert(alertname="TestAlert")
+    await _insert_alert(repo, alert)
+
+    runs_repo = RunbookRunsRepository(repo)
+    async with repo.transaction() as conn:
+        run_id_a = await runs_repo.insert_started(
+            conn,
+            runbook_id=rb.id,
+            alert_id=alert.id,
+            prompt=rb.path,
+            fixer_user="homelab-fixer",
+            host="testhost",
+            runbook_hash=rb.content_hash,
+            mode=RunMode.REAL,
+        )
+
+    docker = _FakeDockerClient()
+    orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+    orch._current_run = _CurrentRun(  # pyright: ignore[reportPrivateUsage]
+        run_id=run_id_a, container="test-fixer", started_at_monotonic=time.monotonic()
+    )
+
+    # Republish _current_run with a DIFFERENT run_id during the kill call.
+    # This simulates a concurrent execute_approved starting a fresh run
+    # after our snapshot but before our post-kill re-check.
+    docker.on_kill_call = lambda: setattr(  # pyright: ignore[reportPrivateUsage]
+        orch,
+        "_current_run",
+        _CurrentRun(
+            run_id="run_id_b_replaced",
+            container="test-fixer",
+            started_at_monotonic=time.monotonic(),
+        ),
+    )
+
+    result = await orch.kill_inflight(reason="user_toggle", killed_by="user:admin")
+
+    assert result.killed is False
+    assert result.error == "wrong_run_race"
+    assert result.run_id == run_id_a
+
+    run_row = await repo.fetch_one(
+        text("SELECT killed_at FROM runbook_runs WHERE id = :id"), {"id": run_id_a}
+    )
+    assert run_row is not None
+    assert run_row[0] is None
+
+    killed_row = await repo.fetch_one(
+        text("SELECT id FROM audit_log WHERE what = 'autofix.killed'"), {}
+    )
+    assert killed_row is None
+
+    race_rows = await repo.fetch_all(
+        text("SELECT after_json FROM audit_log WHERE what = 'autofix.kill_wrong_run_race'"),
+        {},
+    )
+    assert len(race_rows) == 1
+    after = json.loads(str(race_rows[0][0]))
+    assert after["snapshot_run_id"] == run_id_a
+    assert after["current_run_id"] == "run_id_b_replaced"
+
+    attempted_rows = await repo.fetch_all(
+        text("SELECT id FROM audit_log WHERE what = 'autofix.kill_attempted'"), {}
+    )
+    assert len(attempted_rows) == 1
+
+
+@pytest.mark.asyncio
+async def test_kill_inflight_writes_pre_kill_audit_before_docker_kill(
+    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository
+) -> None:
+    """The pre-kill autofix.kill_attempted audit row commits BEFORE
+    docker.kill_container is called, so a crash mid-kill still leaves a
+    forensic trail. Verified by making docker.kill_container raise: the
+    pre-kill audit row must still be present."""
+    docker = _FakeDockerClient(kill_raises=DockerSocketConnectionError("boom"))
+    orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+    orch._current_run = _CurrentRun(  # pyright: ignore[reportPrivateUsage]
+        run_id="r1", container="test-fixer", started_at_monotonic=time.monotonic()
+    )
+
+    with pytest.raises(DockerSocketConnectionError):
+        await orch.kill_inflight(reason="user_toggle", killed_by="user:admin")
+
+    attempted_rows = await repo.fetch_all(
+        text("SELECT after_json FROM audit_log WHERE what = 'autofix.kill_attempted'"), {}
+    )
+    assert len(attempted_rows) == 1
+    attempted_after = json.loads(str(attempted_rows[0][0]))
+    assert attempted_after["run_id"] == "r1"
+
+    failed_rows = await repo.fetch_all(
+        text("SELECT after_json FROM audit_log WHERE what = 'autofix.kill_failed'"), {}
+    )
+    assert len(failed_rows) == 1
+    failed_after = json.loads(str(failed_rows[0][0]))
+    assert failed_after["run_id"] == "r1"
+
+    killed_row = await repo.fetch_one(
+        text("SELECT id FROM audit_log WHERE what = 'autofix.killed'"), {}
+    )
+    assert killed_row is None
+
+    run_row = await repo.fetch_one(
+        text("SELECT killed_at FROM runbook_runs WHERE id = :id"), {"id": "r1"}
+    )
+    # No runbook_runs row was inserted for "r1" in this test (unlike the
+    # other kill_inflight tests) -- confirm no accidental row exists.
+    assert run_row is None
+
+
+# ---------------------------------------------------------------------------
+# STAGE-009-007: _exec_claude publish/clear of _current_run
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_exec_claude_publishes_and_clears_current_run_on_success(
+    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+) -> None:
+    """dry=False success: _current_run set during exec, cleared after (finally)."""
+    rb = _make_runbook_record(alertname="TestAlert")
+    alert = _make_alert(alertname="TestAlert")
+
+    transcript_dir = str(tmp_path / "transcripts")
+    os.makedirs(transcript_dir, exist_ok=True)
+
+    observed_during_exec: _CurrentRun | None = None
+
+    class _ObservingDocker(_FakeDockerClient):
+        async def exec_capture(
+            self,
+            *,
+            container_id: str,
+            cmd: list[str],
+            timeout_seconds: float,
+            user: str | None = None,
+            env: Mapping[str, str] | None = None,
+        ) -> ExecResult:
+            nonlocal observed_during_exec
+            observed_during_exec = orch._current_run  # pyright: ignore[reportPrivateUsage]
+            return await super().exec_capture(
+                container_id=container_id,
+                cmd=cmd,
+                timeout_seconds=timeout_seconds,
+                user=user,
+                env=env,
+            )
+
+    docker = _ObservingDocker(result=ExecResult(exit_code=0, stdout="ok", stderr=""))
+    orch = _make_orchestrator(repo, secrets_repo_fixture, docker, transcript_dir=transcript_dir)
+
+    assert orch._current_run is None  # pyright: ignore[reportPrivateUsage]
+
+    await orch._exec_claude(  # pyright: ignore[reportPrivateUsage]
+        record=rb, alert=alert, run_id="r1", dry=False
+    )
+
+    assert observed_during_exec is not None
+    assert observed_during_exec.run_id == "r1"
+    assert observed_during_exec.container == "test-fixer"
+    assert orch._current_run is None  # pyright: ignore[reportPrivateUsage]
+
+
+@pytest.mark.asyncio
+async def test_exec_claude_clears_current_run_on_docker_socket_error(
+    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+) -> None:
+    """dry=False, exec_capture raises DockerSocketError -> _current_run cleared after."""
+    rb = _make_runbook_record(alertname="TestAlert")
+    alert = _make_alert(alertname="TestAlert")
+
+    transcript_dir = str(tmp_path / "transcripts")
+    os.makedirs(transcript_dir, exist_ok=True)
+
+    docker = _FakeDockerClient(raises=DockerSocketConnectionError("boom"))
+    orch = _make_orchestrator(repo, secrets_repo_fixture, docker, transcript_dir=transcript_dir)
+
+    exec_result, _transcript, error_msg, errored = await orch._exec_claude(  # pyright: ignore[reportPrivateUsage]
+        record=rb, alert=alert, run_id="r1", dry=False
+    )
+
+    assert errored is True
+    assert error_msg is not None
+    assert exec_result.exit_code == 1
+    assert orch._current_run is None  # pyright: ignore[reportPrivateUsage]
+
+
+@pytest.mark.asyncio
+async def test_exec_claude_clears_current_run_on_timeout(
+    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+) -> None:
+    """dry=False, exec_capture raises DockerExecTimeoutError -> exit 124, cleared after."""
+    rb = _make_runbook_record(alertname="TestAlert")
+    alert = _make_alert(alertname="TestAlert")
+
+    transcript_dir = str(tmp_path / "transcripts")
+    os.makedirs(transcript_dir, exist_ok=True)
+
+    docker = _FakeDockerClient(raises=DockerExecTimeoutError("timed out"))
+    orch = _make_orchestrator(repo, secrets_repo_fixture, docker, transcript_dir=transcript_dir)
+
+    exec_result, _transcript, error_msg, errored = await orch._exec_claude(  # pyright: ignore[reportPrivateUsage]
+        record=rb, alert=alert, run_id="r1", dry=False
+    )
+
+    _TIMEOUT_EXIT_CODE = 124
+    assert errored is True
+    assert error_msg is not None
+    assert exec_result.exit_code == _TIMEOUT_EXIT_CODE
+    assert orch._current_run is None  # pyright: ignore[reportPrivateUsage]
+
+
+@pytest.mark.asyncio
+async def test_exec_claude_does_not_publish_current_run_for_dry(
+    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+) -> None:
+    """dry=True: _current_run stays None throughout (never published)."""
+    rb = _make_runbook_record(alertname="TestAlert")
+    alert = _make_alert(alertname="TestAlert")
+
+    transcript_dir = str(tmp_path / "transcripts")
+    os.makedirs(transcript_dir, exist_ok=True)
+
+    observed_during_exec: _CurrentRun | None = None
+
+    class _ObservingDocker(_FakeDockerClient):
+        async def exec_capture(
+            self,
+            *,
+            container_id: str,
+            cmd: list[str],
+            timeout_seconds: float,
+            user: str | None = None,
+            env: Mapping[str, str] | None = None,
+        ) -> ExecResult:
+            nonlocal observed_during_exec
+            observed_during_exec = orch._current_run  # pyright: ignore[reportPrivateUsage]
+            return await super().exec_capture(
+                container_id=container_id,
+                cmd=cmd,
+                timeout_seconds=timeout_seconds,
+                user=user,
+                env=env,
+            )
+
+    docker = _ObservingDocker(result=ExecResult(exit_code=0, stdout="plan", stderr=""))
+    orch = _make_orchestrator(repo, secrets_repo_fixture, docker, transcript_dir=transcript_dir)
+
+    await orch._exec_claude(  # pyright: ignore[reportPrivateUsage]
+        record=rb, alert=alert, run_id="r1", dry=True
+    )
+
+    assert observed_during_exec is None
+    assert orch._current_run is None  # pyright: ignore[reportPrivateUsage]
+
+
+# ---------------------------------------------------------------------------
+# STAGE-009-007: pre-run gate denial latency (kill-switch check must be O(1))
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_pre_run_gate_denial_latency_under_100ms(
+    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository
+) -> None:
+    """_check_operational_gates denies fast (kill-switch off, checked first) —
+    no accidental blocking I/O added by the kill-switch feature. Runs the check
+    ~10 times and asserts the max wall-clock delta stays under 100ms."""
+    rb = _make_runbook_record(alertname="TestAlert")
+    await _insert_runbook(repo, rb)
+
+    docker = _FakeDockerClient()
+    orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+    # autofix_enabled left unset (falsy) -> kill-switch gate denies immediately.
+
+    max_delta = 0.0
+    for _ in range(10):
+        start = time.monotonic()
+        denial = await orch._check_operational_gates(rb)  # pyright: ignore[reportPrivateUsage]
+        delta = time.monotonic() - start
+        max_delta = max(max_delta, delta)
+        assert denial == DenialReason.KILL_SWITCH
+
+    assert max_delta < 0.100  # noqa: PLR2004

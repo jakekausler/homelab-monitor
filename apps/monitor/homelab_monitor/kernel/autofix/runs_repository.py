@@ -34,6 +34,10 @@ _UPDATE_COMPLETION_SQL = text(
     "WHERE id = :id"
 )
 
+_UPDATE_KILLED_SQL = text(
+    "UPDATE runbook_runs SET killed_at = :killed_at WHERE id = :id AND killed_at IS NULL"
+)
+
 _COUNT_RECENT_SQL = text(
     "SELECT COUNT(*) AS n FROM runbook_runs "
     "WHERE runbook_id = :runbook_id AND started_at >= :threshold"
@@ -198,4 +202,22 @@ class RunbookRunsRepository:
                 "exit_code": exit_code,
                 "transcript_path": transcript_path,
             },
+        )
+
+    async def mark_killed_conn(
+        self,
+        conn: AsyncConnection,
+        *,
+        run_id: str,
+        killed_at: str,
+    ) -> None:
+        """Conn-taking UPDATE of runbook_runs.killed_at (STAGE-009-007).
+
+        Written on the caller's txn so the killed_at stamp + audit row commit
+        atomically. Does NOT touch ended_at — a natural exec exit may still
+        stamp ended_at afterwards; the two columns are independent.
+        """
+        await conn.execute(
+            _UPDATE_KILLED_SQL,
+            {"id": run_id, "killed_at": killed_at},
         )

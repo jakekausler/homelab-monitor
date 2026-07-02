@@ -64,6 +64,7 @@ import { SignatureDetailPage } from '@/routes/logs/SignatureDetailPage'
 import { SilenceAllowlistTab } from '@/routes/logs/SilenceAllowlistTab'
 import { SettingsLayout } from '@/routes/settings/SettingsLayout'
 import { SettingsLogsPage } from '@/routes/settings/SettingsLogsPage'
+import { SettingsAutofixPage } from '@/routes/settings/SettingsAutofixPage'
 import { AppShell } from '@/components/AppShell'
 import { ErrorDisplay } from '@/components/ErrorDisplay'
 
@@ -452,6 +453,12 @@ const settingsLogsRoute = createRoute({
   component: SettingsLogsPage,
 })
 
+const settingsAutofixRoute = createRoute({
+  getParentRoute: () => settingsLayoutRoute,
+  path: 'autofix',
+  component: SettingsAutofixPage,
+})
+
 const dockerIntegrationRoute = createRoute({
   getParentRoute: () => protectedLayoutRoute,
   path: '/integrations/docker',
@@ -724,7 +731,7 @@ const routeTree = rootRoute.addChildren([
       logsSilenceAllowlistRoute,
       logsModelsDebugRoute,
     ]),
-    settingsLayoutRoute.addChildren([settingsIndexRoute, settingsLogsRoute]),
+    settingsLayoutRoute.addChildren([settingsIndexRoute, settingsLogsRoute, settingsAutofixRoute]),
     dockerIntegrationRoute,
     cronsListRoute,
     cronDetailRoute,

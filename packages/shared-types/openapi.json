@@ -4529,6 +4529,97 @@
         "title": "InstallWrapperResult",
         "type": "object"
       },
+      "KillSwitchState": {
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "required": [
+          "enabled",
+          "updated_at"
+        ],
+        "title": "KillSwitchState",
+        "type": "object"
+      },
+      "KillSwitchToggleRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "confirm_phrase": {
+            "title": "Confirm Phrase",
+            "type": "string"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled",
+          "confirm_phrase"
+        ],
+        "title": "KillSwitchToggleRequest",
+        "type": "object"
+      },
+      "KillSwitchToggleResponse": {
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "killed_inflight_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Killed Inflight Run Id"
+          },
+          "unwind_warning": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unwind Warning"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "required": [
+          "enabled",
+          "updated_at"
+        ],
+        "title": "KillSwitchToggleResponse",
+        "type": "object"
+      },
       "LastCycleResponse": {
         "additionalProperties": false,
         "description": "Response for GET /api/logs/signatures/cycle/last.\n\n`has_run` is False (and all numeric fields are null/zero) when no cycle has run\nyet \u2014 this is NOT an error.",
@@ -16534,6 +16625,67 @@
         "summary": "Patch Runbook Gates",
         "tags": [
           "runbooks"
+        ]
+      }
+    },
+    "/api/settings/autofix/kill-switch": {
+      "get": {
+        "description": "Return the current kill-switch state + last-updated timestamp.",
+        "operationId": "get_kill_switch_api_settings_autofix_kill_switch_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KillSwitchState"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Kill Switch",
+        "tags": [
+          "settings"
+        ]
+      },
+      "post": {
+        "operationId": "toggle_kill_switch_api_settings_autofix_kill_switch_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KillSwitchToggleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KillSwitchToggleResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Toggle Kill Switch",
+        "tags": [
+          "settings"
         ]
       }
     },

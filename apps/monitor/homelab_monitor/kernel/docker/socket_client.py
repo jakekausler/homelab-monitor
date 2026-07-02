@@ -698,3 +698,49 @@ class DockerSocketClient:
                 f"unexpected status {resp.status_code} from "
                 f"/containers/{container_id}/stop: {resp.text[:200]}"
             )
+
+    async def kill_container(
+        self,
+        container_id: str,
+        *,
+        signal: str = "SIGKILL",
+        timeout_seconds: float | None = None,
+    ) -> None:
+        """POST /containers/{id}/kill?signal=<signal>.
+
+        204 == killed. 409 == container is not running == treated as idempotent
+        success (we log a warning and return). This mirrors ``stop_container``'s
+        idempotent semantics: the caller's job (stamp killed_at, audit) is still
+        valid even if the container was already stopped by another actor.
+
+        Raises:
+            DockerSocketConnectionError: socket unreachable / transport error.
+            DockerSocketProtocolError: unexpected (non-204/409) status.
+        """
+        write_timeout = _WRITE_TIMEOUT_SECONDS if timeout_seconds is None else timeout_seconds
+        try:
+            resp = await self._client.post(
+                f"/containers/{container_id}/kill",
+                params={"signal": signal},
+                timeout=httpx.Timeout(write_timeout, connect=_REQUEST_TIMEOUT_SECONDS),
+            )
+        except httpx.ConnectError as exc:
+            raise DockerSocketConnectionError(
+                f"docker socket unreachable at {self._socket_path}: {exc}"
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise DockerSocketConnectionError(f"docker socket transport error: {exc}") from exc
+        if resp.status_code == 409:  # noqa: PLR2004
+            self._log.warning(
+                "docker_kill_container_already_stopped",
+                container_id=container_id,
+                signal=signal,
+                status=resp.status_code,
+                body=resp.text[:200],
+            )
+            return
+        if resp.status_code != 204:  # noqa: PLR2004
+            raise DockerSocketProtocolError(
+                f"unexpected status {resp.status_code} from "
+                f"/containers/{container_id}/kill: {resp.text[:200]}"
+            )

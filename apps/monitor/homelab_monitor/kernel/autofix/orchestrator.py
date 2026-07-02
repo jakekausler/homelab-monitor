@@ -5,10 +5,12 @@ from __future__ import annotations
 import asyncio
 import os
 import socket
+import time
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import Final
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
@@ -62,6 +64,35 @@ class DryPlan:
     exit_code: int | None
 
 
+_KILL_UNWIND_DEADLINE_SECONDS: Final[float] = 5.0
+_KILL_UNWIND_POLL_INTERVAL_SECONDS: Final[float] = 0.05
+
+
+@dataclass(frozen=True, slots=True)
+class _CurrentRun:
+    """In-flight real-exec handle held by the orchestrator during _exec_claude."""
+
+    run_id: str
+    container: str
+    started_at_monotonic: float
+
+
+@dataclass(frozen=True, slots=True)
+class KillResult:
+    """Return value of AutoFixOrchestrator.kill_inflight().
+
+    ``killed`` is True only when the docker kill was issued AND stamped a
+    killed_at row. All non-happy outcomes surface via ``error`` (a short
+    machine-readable tag) and are still audited.
+    """
+
+    killed: bool
+    run_id: str | None
+    reason: str
+    error: str | None
+    unwind_warning: str | None
+
+
 class AutoFixOrchestrator:
     """Auto-fix orchestrator: alert -> match -> gate -> durable claim -> exec -> persist."""
 
@@ -98,6 +129,13 @@ class AutoFixOrchestrator:
         # Trade-off: this serializes ALL fixes process-wide. Acceptable for a
         # conservative single-user safety subsystem at this scale.
         self._transcript_lock = asyncio.Lock()
+        # STAGE-009-007: in-flight real-exec handle + kill mutex. Set/cleared
+        # under _kill_lock inside _exec_claude; read/snapshotted under the same
+        # lock by kill_inflight. Only tracks REAL exec; dry-run plans are not
+        # killable (they run inside the fixer-runner too, but the safety story
+        # is that dry plans do not modify state).
+        self._current_run: _CurrentRun | None = None
+        self._kill_lock: asyncio.Lock = asyncio.Lock()
 
     def _lock_for(self, runbook_id: str) -> asyncio.Lock:
         """Get or create a per-runbook lock."""
@@ -253,24 +291,42 @@ class AutoFixOrchestrator:
         async with self._transcript_lock:
             before = self._snapshot_dir(transcript_dir)
             exec_started = datetime.now(tz=UTC)
-            try:
-                async with self._maintenance_window(record, alert):
-                    exec_result = await self._docker.exec_capture(
-                        container_id=self._config.container,
-                        cmd=cmd,
-                        timeout_seconds=self._config.exec_timeout_seconds,
-                        user=self._config.fixer_user,
-                        env=env or None,
+            # STAGE-009-007: publish the in-flight handle so kill_inflight can
+            # target it. Only REAL runs are tracked (dry runs are plan-only and
+            # not killable per safety-model §7.4).
+            if not dry:
+                async with self._kill_lock:
+                    self._current_run = _CurrentRun(
+                        run_id=run_id,
+                        container=self._config.container,
+                        started_at_monotonic=time.monotonic(),
                     )
-            except DockerSocketError as exc:
-                errored = True
-                error_msg = str(exc)
-                is_timeout = isinstance(exc, DockerExecTimeoutError)
-                exec_result = ExecResult(
-                    exit_code=124 if is_timeout else 1,
-                    stdout="",
-                    stderr="",
-                )
+            try:
+                try:
+                    async with self._maintenance_window(record, alert):
+                        exec_result = await self._docker.exec_capture(
+                            container_id=self._config.container,
+                            cmd=cmd,
+                            timeout_seconds=self._config.exec_timeout_seconds,
+                            user=self._config.fixer_user,
+                            env=env or None,
+                        )
+                except DockerSocketError as exc:
+                    errored = True
+                    error_msg = str(exc)
+                    is_timeout = isinstance(exc, DockerExecTimeoutError)
+                    exec_result = ExecResult(
+                        exit_code=124 if is_timeout else 1,
+                        stdout="",
+                        stderr="",
+                    )
+            finally:
+                # ALWAYS clear _current_run when the exec unwinds — success,
+                # timeout, DockerSocketError, or otherwise — so kill_inflight's
+                # unwind-deadline observer sees the transition to None.
+                if not dry:
+                    async with self._kill_lock:
+                        self._current_run = None
             exec_ended = datetime.now(tz=UTC)
             transcript_path = self._resolve_transcript(
                 transcript_dir, before, started=exec_started, ended=exec_ended
@@ -825,6 +881,179 @@ class AutoFixOrchestrator:
             exit_code=result.exit_code,
             denial_reason=result.denial_reason,
             approval_id=approval_id,
+        )
+
+    async def kill_inflight(
+        self,
+        *,
+        reason: str,
+        killed_by: str,
+        ip: str | None = None,
+    ) -> KillResult:
+        """Kill the currently in-flight REAL run (if any) via SIGKILL to the
+        fixer-runner container.
+
+        Contract:
+          - No in-flight run -> audit ``autofix.kill_no_inflight`` (fresh txn),
+            return KillResult(killed=False, error="no_inflight_run").
+          - Handle transitions to None between the initial snapshot and the
+            actual kill (natural exec exit races us) -> same as no-inflight but
+            error="exec_completed_before_kill".
+          - docker.kill_container raises -> audit ``autofix.kill_failed`` in a
+            fresh txn and RE-RAISE (router surfaces 502).
+          - Success -> audit ``autofix.killed`` + stamp runbook_runs.killed_at
+            in the SAME txn. Then observe self._current_run returning to None
+            for up to _KILL_UNWIND_DEADLINE_SECONDS. On timeout, set
+            unwind_warning="unwind_deadline_exceeded" on the result but keep
+            killed=True.
+        """
+        # Snapshot under lock.
+        async with self._kill_lock:
+            snapshot = self._current_run
+
+        if snapshot is None:
+            # No in-flight run to kill. Still audit for the compliance trail.
+            async with self._db.transaction() as conn:
+                await insert_audit(
+                    conn,
+                    who=killed_by,
+                    what="autofix.kill_no_inflight",
+                    after={"reason": reason},
+                    ip=ip,
+                )
+            return KillResult(
+                killed=False,
+                run_id=None,
+                reason=reason,
+                error="no_inflight_run",
+                unwind_warning=None,
+            )
+
+        run_id_snapshot = snapshot.run_id
+        container_snapshot = snapshot.container
+
+        # Pre-kill audit in a FRESH txn (Important #3): commits BEFORE the
+        # SIGKILL fires so a crash between the docker kill and the killed_at
+        # stamp still leaves a forensic trail that a kill was attempted.
+        async with self._db.transaction() as conn:
+            await insert_audit(
+                conn,
+                who=killed_by,
+                what="autofix.kill_attempted",
+                after={
+                    "run_id": run_id_snapshot,
+                    "reason": reason,
+                    "killed_by": killed_by,
+                    "container": container_snapshot,
+                },
+                ip=ip,
+            )
+
+        # Issue the kill. Any DockerSocketError is audited + re-raised so the
+        # caller (toggle endpoint) can return 502. Panic-path timeout is
+        # deliberately short (5s): a stuck docker socket should not hold the
+        # kill-switch endpoint for the default 30s write-timeout (Minor #3).
+        try:
+            await self._docker.kill_container(
+                container_snapshot, signal="SIGKILL", timeout_seconds=5.0
+            )
+        except DockerSocketError as exc:
+            async with self._db.transaction() as conn:
+                await insert_audit(
+                    conn,
+                    who=killed_by,
+                    what="autofix.kill_failed",
+                    after={
+                        "run_id": run_id_snapshot,
+                        "reason": reason,
+                        "error": str(exc),
+                        "container": container_snapshot,
+                    },
+                    ip=ip,
+                )
+            raise
+
+        # Between the snapshot and the successful kill, the exec may have
+        # completed naturally AND a concurrent execute_approved may have
+        # republished _current_run with a DIFFERENT run_id. Re-verify under
+        # lock: if the current run_id differs from our snapshot, we killed a
+        # run that has already unwound and a fresh run has taken its place.
+        # Audit autofix.kill_wrong_run_race and DO NOT stamp killed_at on the
+        # snapshot (we cannot vouch that our SIGKILL affected either run
+        # deterministically — the safe move is to record the race and let the
+        # operator retry the kill against the fresh run).
+        async with self._kill_lock:
+            post_snapshot = self._current_run
+            wrong_run_race = post_snapshot is not None and post_snapshot.run_id != run_id_snapshot
+
+        if wrong_run_race:
+            async with self._db.transaction() as conn:
+                await insert_audit(
+                    conn,
+                    who=killed_by,
+                    what="autofix.kill_wrong_run_race",
+                    after={
+                        "snapshot_run_id": run_id_snapshot,
+                        "current_run_id": (
+                            post_snapshot.run_id if post_snapshot is not None else None
+                        ),
+                        "reason": reason,
+                        "killed_by": killed_by,
+                        "container": container_snapshot,
+                    },
+                    ip=ip,
+                )
+            return KillResult(
+                killed=False,
+                run_id=run_id_snapshot,
+                reason=reason,
+                error="wrong_run_race",
+                unwind_warning=None,
+            )
+
+        # Stamp killed_at + audit success in ONE txn. Idempotency gate on
+        # killed_at IS NULL lives in the SQL (Minor: _UPDATE_KILLED_SQL).
+        killed_at_iso = utc_now_iso()
+        async with self._db.transaction() as conn:
+            await self._runs.mark_killed_conn(
+                conn,
+                run_id=run_id_snapshot,
+                killed_at=killed_at_iso,
+            )
+            await insert_audit(
+                conn,
+                who=killed_by,
+                what="autofix.killed",
+                after={
+                    "run_id": run_id_snapshot,
+                    "reason": reason,
+                    "killed_by": killed_by,
+                    "container": container_snapshot,
+                },
+                ip=ip,
+            )
+
+        # Wait up to _KILL_UNWIND_DEADLINE_SECONDS for _exec_claude's finally
+        # block to clear _current_run (evidence the exec actually unwound).
+        unwind_warning: str | None = None
+        deadline = time.monotonic() + _KILL_UNWIND_DEADLINE_SECONDS
+        # If the exec already unwound (post_snapshot is None) we can skip the poll.
+        if post_snapshot is not None:
+            while time.monotonic() < deadline:
+                async with self._kill_lock:
+                    cleared = self._current_run is None
+                if cleared:
+                    break
+                await asyncio.sleep(_KILL_UNWIND_POLL_INTERVAL_SECONDS)
+            else:
+                unwind_warning = "unwind_deadline_exceeded"
+
+        return KillResult(
+            killed=True,
+            run_id=run_id_snapshot,
+            reason=reason,
+            error=None,
+            unwind_warning=unwind_warning,
         )
 
     async def _load_alert_for_exec(self, alert_id: str | None) -> Alert:
