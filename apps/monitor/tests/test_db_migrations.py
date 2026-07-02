@@ -37,6 +37,7 @@ EXPECTED_TABLES = {
     "runbooks",
     "runbook_runs",
     "runbook_run_approvals",
+    "runbook_run_feedback",
     "secrets",
     "channels",
     "routing_rules",
@@ -1217,5 +1218,93 @@ async def test_migration_0044_round_trip(db_url: str) -> None:
             tables_at_0043 = await conn.run_sync(_list_tables)
         assert "unifi_clients" not in tables_at_0043
         assert "unifi_client_observations" not in tables_at_0043
+    finally:
+        await engine.dispose()
+
+
+async def test_migration_0049_round_trip(db_url: str) -> None:
+    """Migration 0049 creates runbook_run_feedback + its index; downgrade drops them."""
+    engine = get_engine(url=db_url)
+    try:
+        await run_migrations(engine)
+
+        def _list_tables(sync_conn: object) -> set[str]:
+            inspector = inspect(sync_conn)
+            return set(inspector.get_table_names()) if inspector is not None else set()
+
+        async with engine.connect() as conn:
+            tables_at_head = await conn.run_sync(_list_tables)
+        assert "runbook_run_feedback" in tables_at_head
+
+        # Round-trip a real row: seed parent runbooks + runbook_runs rows (FK
+        # dependency), insert a runbook_run_feedback row, verify it reads back.
+        runbook_id = "test-runbook-id"
+        runbook_run_id = "test-runbook-run-id"
+        feedback_id = "test-feedback-id"
+        async with engine.begin() as conn:
+            await conn.execute(
+                text("INSERT INTO runbooks (id, path, created_at) VALUES (:id, :path, :ts)"),
+                {"id": runbook_id, "path": "/test/runbook.md", "ts": "2026-07-02T14:00:00Z"},
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO runbook_runs (id, runbook_id, created_at) "
+                    "VALUES (:id, :rb_id, :ca)"
+                ),
+                {
+                    "id": runbook_run_id,
+                    "rb_id": runbook_id,
+                    "ca": "2026-07-02T14:00:00Z",
+                },
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO runbook_run_feedback "
+                    "(id, runbook_run_id, kind, suggestion_text, structured_hint, created_at) "
+                    "VALUES (:id, :run_id, :kind, :text, :hint, :ca)"
+                ),
+                {
+                    "id": feedback_id,
+                    "run_id": runbook_run_id,
+                    "kind": "other",
+                    "text": "test",
+                    "hint": None,
+                    "ca": "2026-07-02T14:00:00Z",
+                },
+            )
+
+        async with engine.connect() as conn:
+            row = (
+                await conn.execute(
+                    text(
+                        "SELECT id, runbook_run_id, kind, suggestion_text, "
+                        "structured_hint, created_at FROM runbook_run_feedback "
+                        "WHERE id = :id"
+                    ),
+                    {"id": feedback_id},
+                )
+            ).fetchone()
+        assert row is not None
+        assert row[0] == feedback_id
+        assert row[1] == runbook_run_id
+        assert row[2] == "other"
+        assert row[3] == "test"
+        assert row[4] is None
+        assert row[5] == "2026-07-02T14:00:00Z"
+
+        async with engine.connect() as conn:
+            idx_rows = (
+                await conn.execute(text("PRAGMA index_list('runbook_run_feedback')"))
+            ).fetchall()
+        assert any(r[1] == "ix_runbook_run_feedback_runbook_run_id" for r in idx_rows)
+
+        cfg = Config()
+        cfg.set_main_option("script_location", str(ALEMBIC_DIR))
+        cfg.set_main_option("sqlalchemy.url", db_url)
+        command.downgrade(cfg, "0048")
+
+        async with engine.connect() as conn:
+            tables_at_0048 = await conn.run_sync(_list_tables)
+        assert "runbook_run_feedback" not in tables_at_0048
     finally:
         await engine.dispose()

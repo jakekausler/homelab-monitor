@@ -39,6 +39,17 @@ for a in "$@"; do
     prev="$a"
 done
 
+# (4a) STAGE-009-009 feedback sentinel. Two mutually-exclusive envs:
+#   FAKE_CLAUDE_FEEDBACK_MALFORMED=1  -> write intentionally-broken JSON
+#   FAKE_CLAUDE_FEEDBACK=<json-string> -> write verbatim payload
+# Neither set -> no feedback file (default; existing tests unaffected).
+FEEDBACK_FILE="${TRANSCRIPT_DIR}/${PREFIX}.feedback.json"
+if [ "${FAKE_CLAUDE_FEEDBACK_MALFORMED:-}" = "1" ]; then
+    printf 'not valid json{{{' >"${FEEDBACK_FILE}"
+elif [ -n "${FAKE_CLAUDE_FEEDBACK:-}" ]; then
+    printf '%s' "${FAKE_CLAUDE_FEEDBACK}" >"${FEEDBACK_FILE}"
+fi
+
 if [ "${IS_PLAN}" = "1" ]; then
     PLAN_MARKER="${TRANSCRIPT_DIR}/${PREFIX}.plan"
     : >"${PLAN_MARKER}"
@@ -53,7 +64,7 @@ if [ "${IS_PLAN}" = "1" ]; then
     exit 0
 fi
 
-# (3) Write a transcript file (proves the RW mount + ownership). Include a
+# (5) Write a transcript file (proves the RW mount + ownership). Include a
 #     timestamp so concurrent invocations don't clobber, and echo the API key
 #     PRESENCE (never the value) so the test can assert it is empty under fake.
 TRANSCRIPT_FILE="${TRANSCRIPT_DIR}/${PREFIX}.transcript"
@@ -68,10 +79,10 @@ TRANSCRIPT_FILE="${TRANSCRIPT_DIR}/${PREFIX}.transcript"
     fi
 } >"${TRANSCRIPT_FILE}"
 
-# (4) Optional hang for the kill test. Sleep BEFORE exiting.
+# (6) Optional hang for the kill test. Sleep BEFORE exiting.
 if [ -n "${FAKE_CLAUDE_SLEEP:-}" ]; then
     sleep "${FAKE_CLAUDE_SLEEP}"
 fi
 
-# (5) Success.
+# (7) Success.
 exit 0

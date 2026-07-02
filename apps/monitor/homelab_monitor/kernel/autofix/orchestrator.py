@@ -28,10 +28,19 @@ from homelab_monitor.kernel.alerts.types import (
 from homelab_monitor.kernel.autofix.approvals_repository import (
     RunbookRunApprovalsRepository,
 )
+from homelab_monitor.kernel.autofix.feedback_parser import (
+    ParsedFeedbackItem,
+    parse_feedback_file,
+    scan_transcript_dir_for_feedback,
+)
+from homelab_monitor.kernel.autofix.feedback_repository import (
+    RunbookRunFeedbackRepository,
+)
 from homelab_monitor.kernel.autofix.matcher import matching_runbooks
 from homelab_monitor.kernel.autofix.runs_repository import RunbookRunsRepository
 from homelab_monitor.kernel.autofix.types import (
     DenialReason,
+    FeedbackKind,
     GrantResolutionError,
     ResolvedGrants,
     RunMode,
@@ -121,6 +130,8 @@ class AutoFixOrchestrator:
         config: FixerRunnerConfig,
         log: BoundLogger,
         ssh_target_ids_provider: Callable[[], frozenset[str]] = frozenset,
+        feedback_repo: RunbookRunFeedbackRepository | None = None,
+        feedback_id_provider: Callable[[], str] | None = None,
     ) -> None:
         self._runbook_repo = runbook_repo
         self._alert_repo = alert_repo
@@ -133,6 +144,10 @@ class AutoFixOrchestrator:
         self._config = config
         self._log = log
         self._ssh_target_ids_provider = ssh_target_ids_provider
+        self._feedback_repo = feedback_repo
+        self._feedback_id_provider: Callable[[], str] = (
+            feedback_id_provider if feedback_id_provider is not None else uuid7
+        )
         self._locks: dict[str, asyncio.Lock] = {}
         # Process-wide lock serializing the transcript snapshot->exec->resolve
         # critical section across ALL runbooks. The per-runbook lock cannot
@@ -349,15 +364,17 @@ class AutoFixOrchestrator:
 
     async def _exec_claude(
         self, *, record: RunbookRecord, alert: Alert, run_id: str, dry: bool
-    ) -> tuple[ExecResult, str | None, str | None, bool]:
+    ) -> tuple[ExecResult, str | None, str | None, bool, list[ParsedFeedbackItem] | None]:
         """Run claude (real or dry) under the process-wide transcript lock.
 
-        Returns (exec_result, transcript_path, error_msg, errored). Mirrors the
-        exec critical section of _claim_and_exec exactly, differing ONLY by the
-        argv (Decision A). Persists grant-resolution audit rows
-        (``autofix.grant_resolved`` / ``autofix.egress_unenforced`` on success;
-        ``autofix.grant_failed`` on failure) BEFORE exec. Does NOT persist run
-        completion or exec outcome — caller persists those.
+        Returns (exec_result, transcript_path, error_msg, errored,
+        feedback_items). Mirrors the exec critical section of _claim_and_exec
+        exactly, differing ONLY by the argv (Decision A). Persists
+        grant-resolution audit rows (``autofix.grant_resolved`` /
+        ``autofix.egress_unenforced`` on success; ``autofix.grant_failed`` on
+        failure) BEFORE exec. Does NOT persist run completion or exec outcome
+        — caller persists those. Feedback sentinel scan + parse happens HERE,
+        inside self._transcript_lock, to prevent cross-run misattribution.
         """
         api_key = await self._secrets_repo.get("ANTHROPIC_API_KEY")
         env: dict[str, str] = {}
@@ -401,6 +418,7 @@ class AutoFixOrchestrator:
                     None,
                     exc.detail,
                     True,
+                    None,
                 )
             async with self._db.transaction() as conn:
                 await insert_audit(
@@ -476,7 +494,11 @@ class AutoFixOrchestrator:
             transcript_path = self._resolve_transcript(
                 transcript_dir, before, started=exec_started, ended=exec_ended
             )
-        return exec_result, transcript_path, error_msg, errored
+            feedback_items: list[ParsedFeedbackItem] | None = None
+            sentinel = scan_transcript_dir_for_feedback(transcript_dir, before)
+            if sentinel is not None:
+                feedback_items = parse_feedback_file(sentinel)
+        return exec_result, transcript_path, error_msg, errored, feedback_items
 
     async def _claim_and_exec(
         self,
@@ -576,9 +598,13 @@ class AutoFixOrchestrator:
 
             # --- Exec (real). Serialized process-wide for transcript-dir
             #     attribution safety (Important #4). ---
-            exec_result, transcript_path, error_msg, errored = await self._exec_claude(
-                record=record, alert=alert, run_id=run_id, dry=False
-            )
+            (
+                exec_result,
+                transcript_path,
+                error_msg,
+                errored,
+                feedback_items,
+            ) = await self._exec_claude(record=record, alert=alert, run_id=run_id, dry=False)
 
         # Lock(s) released. Persist completion + exec.log + outcome + audit.
         exec_log_path = self._write_exec_log(
@@ -610,6 +636,14 @@ class AutoFixOrchestrator:
                         "exec_log_path": exec_log_path,
                     },
                 )
+                await self._process_feedback(
+                    conn,
+                    run_id=run_id,
+                    alert=alert,
+                    record=record,
+                    feedback_items=feedback_items,
+                    now_iso=utc_now_iso(),
+                )
         else:
             # Exec succeeded: completion + autofix.ran audit + (exit 0) outcome,
             # all ONE txn (Important #2).
@@ -622,6 +656,7 @@ class AutoFixOrchestrator:
                 exec_log_path=exec_log_path,
                 host=host,
                 approving_principal=approving_principal,
+                feedback_items=feedback_items,
             )
 
         return RunResult(
@@ -713,9 +748,13 @@ class AutoFixOrchestrator:
                 )
 
             # --- Dry exec (plan-only). ---
-            exec_result, transcript_path, error_msg, errored = await self._exec_claude(
-                record=record, alert=alert, run_id=run_id, dry=True
-            )
+            (
+                exec_result,
+                transcript_path,
+                error_msg,
+                errored,
+                feedback_items,
+            ) = await self._exec_claude(record=record, alert=alert, run_id=run_id, dry=True)
 
         # Lock released. Persist completion + exec.log + PENDING approval + audit.
         exec_log_path = self._write_exec_log(
@@ -775,6 +814,14 @@ class AutoFixOrchestrator:
                         "host": host,
                     },
                 )
+            await self._process_feedback(
+                conn,
+                run_id=run_id,
+                alert=alert,
+                record=record,
+                feedback_items=feedback_items,
+                now_iso=utc_now_iso(),
+            )
 
         # A dry run NEVER writes alert_outcomes('auto_fixed'): a plan fixed nothing.
         return RunResult(
@@ -1329,6 +1376,7 @@ class AutoFixOrchestrator:
         transcript_path: str | None,
         exec_log_path: str,
         host: str,
+        feedback_items: list[ParsedFeedbackItem] | None,
         approving_principal: str | None = None,
     ) -> None:
         """Persist completion + audit + (exit 0) outcome in ONE txn (Important #2).
@@ -1366,11 +1414,76 @@ class AutoFixOrchestrator:
             )
             # Record the auto_fixed outcome only on a clean exit, INLINE in this txn
             # so completion + audit + outcome are atomic (Important #2). SQL idiom
-            # copied from AlertRepository.insert_outcome.
+            # copied from AlertRepository.insert_outcome. Deliberately BEFORE
+            # _process_feedback: if feedback persistence raises and is swallowed,
+            # the txn's SQLAlchemy connection can be left needing a rollback — any
+            # subsequent await (e.g. this insert) would then raise
+            # PendingRollbackError and revert mark_completed_conn + autofix.ran too.
+            # Running the primary audit trail first means it survives even if
+            # feedback (best-effort telemetry) fails.
             if exec_result.exit_code == 0:
                 await self._insert_outcome_conn(
                     conn, alert_id=alert.id, outcome=AlertOutcome.AUTO_FIXED
                 )
+            await self._process_feedback(
+                conn,
+                run_id=run_id,
+                alert=alert,
+                record=record,
+                feedback_items=feedback_items,
+                now_iso=utc_now_iso(),
+            )
+
+    async def _process_feedback(  # noqa: PLR0913 -- keyword-only feedback context
+        self,
+        conn: AsyncConnection,
+        *,
+        run_id: str,
+        alert: Alert,
+        record: RunbookRecord,
+        feedback_items: list[ParsedFeedbackItem] | None,
+        now_iso: str,
+    ) -> None:
+        """Persist already-parsed feedback items (scan/parse happened in
+        ``_exec_claude``, inside ``self._transcript_lock``, to prevent
+        cross-run misattribution — see feedback_parser.py docstring).
+
+        No-op if ``self._feedback_repo`` is None (production wiring will
+        pass one; unit tests may omit it) or ``feedback_items`` is None/empty.
+        Runs inside the caller's txn so completion + audit + feedback rows
+        land atomically. Any exception from persist is logged and swallowed —
+        feedback must never fail the parent txn (Decision 3D: feedback is
+        best-effort telemetry).
+        """
+        if self._feedback_repo is None or not feedback_items:
+            return
+        try:
+            for item in feedback_items:
+                await self._feedback_repo.insert_conn(
+                    conn,
+                    runbook_run_id=run_id,
+                    item=item,
+                    feedback_id=self._feedback_id_provider(),
+                    created_at=now_iso,
+                )
+                if item.kind is FeedbackKind.PARSE_ERROR:
+                    await insert_audit(
+                        conn,
+                        who="system:autofix",
+                        what="autofix.feedback_parse_error",
+                        after={
+                            "runbook_id": record.id,
+                            "alert_id": alert.id,
+                            "run_id": run_id,
+                            "detail": item.suggestion_text[:512],
+                        },
+                    )
+        except Exception:
+            self._log.exception(
+                "autofix_feedback_processing_failed",
+                run_id=run_id,
+                runbook_id=record.id,
+            )
 
     async def _insert_outcome_conn(
         self, conn: AsyncConnection, *, alert_id: str, outcome: AlertOutcome

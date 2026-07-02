@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import Final
 
 
 class DenialReason(StrEnum):
@@ -82,4 +84,55 @@ class GrantResolutionError(Exception):
     def __init__(self, reason: str, detail: str) -> None:
         super().__init__(detail)
         self.reason = reason
+        self.detail = detail
+
+
+class FeedbackKind(StrEnum):
+    """Category of a Claude→user improvement feedback row (STAGE-009-009).
+
+    Locked value set (Design Decision 2B). Unknown wire values are down-
+    graded to ``OTHER`` at parse time for forward-compat; ``PARSE_ERROR`` is
+    reserved for the parser's synthetic-row fallback and is never emitted
+    by claude itself.
+    """
+
+    MISSING_CAPABILITY = "missing_capability"
+    CONFIG_CHANGE = "config_change"
+    RUNBOOK_GAP = "runbook_gap"
+    BLOCKED = "blocked"
+    WORKED_AROUND = "worked_around"
+    OTHER = "other"
+    PARSE_ERROR = "parse_error"
+
+
+# Bound at persist time; a single feedback item cannot exceed this many
+# characters of suggestion_text. Longer input is truncated with
+# ``TRUNCATION_SUFFIX`` appended (STAGE-009-009 Decision 2B / 3C).
+SUGGESTION_TEXT_MAX: Final[int] = 4096
+TRUNCATION_SUFFIX: Final[str] = "\n...[truncated]"
+
+
+@dataclass(frozen=True, slots=True)
+class RunbookRunFeedback:
+    """A hydrated ``runbook_run_feedback`` row."""
+
+    id: str
+    runbook_run_id: str
+    kind: FeedbackKind
+    suggestion_text: str
+    structured_hint: Mapping[str, object] | None
+    created_at: str
+
+
+class FeedbackParseError(Exception):
+    """Raised inside ``feedback_parser`` when the sentinel file's content
+    is invalid JSON, wrong top-level shape, or violates required-key rules.
+
+    Caller (orchestrator) catches this and persists a synthetic
+    ``FeedbackKind.PARSE_ERROR`` row + emits an
+    ``autofix.feedback_parse_error`` audit event.
+    """
+
+    def __init__(self, detail: str) -> None:
+        super().__init__(detail)
         self.detail = detail

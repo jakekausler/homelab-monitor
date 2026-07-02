@@ -1541,6 +1541,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
         from homelab_monitor.kernel.autofix.approvals_repository import (  # noqa: PLC0415
             RunbookRunApprovalsRepository,
         )
+        from homelab_monitor.kernel.autofix.feedback_repository import (  # noqa: PLC0415
+            RunbookRunFeedbackRepository,
+        )
         from homelab_monitor.kernel.autofix.runs_repository import (  # noqa: PLC0415
             RunbookRunsRepository,
         )
@@ -1560,6 +1563,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
             db=repo,
             runs_repo=RunbookRunsRepository(repo),
             approvals_repo=RunbookRunApprovalsRepository(repo),
+            feedback_repo=RunbookRunFeedbackRepository(repo),
             config=load_fixer_runner_config(),
             log=log.bind(component="autofix"),
             ssh_target_ids_provider=lambda: frozenset(load_ssh_target_configs().keys()),

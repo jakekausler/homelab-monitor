@@ -5141,7 +5141,7 @@ async def test_exec_claude_clears_current_run_on_docker_socket_error(
     docker = _FakeDockerClient(raises=DockerSocketConnectionError("boom"))
     orch = _make_orchestrator(repo, secrets_repo_fixture, docker, transcript_dir=transcript_dir)
 
-    exec_result, _transcript, error_msg, errored = await orch._exec_claude(  # pyright: ignore[reportPrivateUsage]
+    exec_result, _transcript, error_msg, errored, _snapshot = await orch._exec_claude(  # pyright: ignore[reportPrivateUsage]
         record=rb, alert=alert, run_id="r1", dry=False
     )
 
@@ -5165,7 +5165,7 @@ async def test_exec_claude_clears_current_run_on_timeout(
     docker = _FakeDockerClient(raises=DockerExecTimeoutError("timed out"))
     orch = _make_orchestrator(repo, secrets_repo_fixture, docker, transcript_dir=transcript_dir)
 
-    exec_result, _transcript, error_msg, errored = await orch._exec_claude(  # pyright: ignore[reportPrivateUsage]
+    exec_result, _transcript, error_msg, errored, _snapshot = await orch._exec_claude(  # pyright: ignore[reportPrivateUsage]
         record=rb, alert=alert, run_id="r1", dry=False
     )
 
@@ -5302,7 +5302,7 @@ scoped_capabilities:
         ssh_target_ids_provider=lambda: frozenset({"udm"}),
     )
 
-    exec_result, _transcript_path, error_msg, errored = await orch._exec_claude(  # pyright: ignore[reportPrivateUsage]
+    exec_result, _transcript_path, error_msg, errored, _snapshot = await orch._exec_claude(  # pyright: ignore[reportPrivateUsage]
         record=rb, alert=alert, run_id="r1", dry=False
     )
 
@@ -5358,7 +5358,7 @@ async def test_grant_resolution_missing_runbook_yaml(
     docker = _FakeDockerClient(result=ExecResult(exit_code=0, stdout="", stderr=""))
     orch = _make_orchestrator(repo, secrets_repo_fixture, docker, transcript_dir=transcript_dir)
 
-    exec_result, transcript_path, error_msg, errored = await orch._exec_claude(  # pyright: ignore[reportPrivateUsage]
+    exec_result, transcript_path, error_msg, errored, _snapshot = await orch._exec_claude(  # pyright: ignore[reportPrivateUsage]
         record=rb, alert=alert, run_id="r1", dry=False
     )
 
@@ -5414,7 +5414,7 @@ scoped_capabilities:
     docker = _FakeDockerClient(result=ExecResult(exit_code=0, stdout="", stderr=""))
     orch = _make_orchestrator(repo, secrets_repo_fixture, docker, transcript_dir=transcript_dir)
 
-    exec_result, transcript_path, error_msg, errored = await orch._exec_claude(  # pyright: ignore[reportPrivateUsage]
+    exec_result, transcript_path, error_msg, errored, _snapshot = await orch._exec_claude(  # pyright: ignore[reportPrivateUsage]
         record=rb, alert=alert, run_id="r1", dry=False
     )
 
@@ -5472,7 +5472,7 @@ scoped_capabilities:
         ssh_target_ids_provider=lambda: frozenset({"udm", "synology"}),
     )
 
-    exec_result, transcript_path, error_msg, errored = await orch._exec_claude(  # pyright: ignore[reportPrivateUsage]
+    exec_result, transcript_path, error_msg, errored, _snapshot = await orch._exec_claude(  # pyright: ignore[reportPrivateUsage]
         record=rb, alert=alert, run_id="r1", dry=False
     )
 
@@ -5538,7 +5538,7 @@ scoped_capabilities:
         ssh_target_ids_provider=_failing_provider,
     )
 
-    exec_result, transcript_path, error_msg, errored = await orch._exec_claude(  # pyright: ignore[reportPrivateUsage]
+    exec_result, transcript_path, error_msg, errored, _snapshot = await orch._exec_claude(  # pyright: ignore[reportPrivateUsage]
         record=rb, alert=alert, run_id="r1", dry=False
     )
 
@@ -5592,7 +5592,7 @@ async def test_grant_resolution_audit_failure_swallowed_and_returned(
         raise RuntimeError("simulated audit-write failure")
 
     with patch.object(orch_module, "insert_audit", side_effect=_raising_insert_audit):
-        exec_result, transcript_path, error_msg, errored = await orch._exec_claude(  # pyright: ignore[reportPrivateUsage]
+        exec_result, transcript_path, error_msg, errored, _snapshot = await orch._exec_claude(  # pyright: ignore[reportPrivateUsage]
             record=rb, alert=alert, run_id="r1", dry=False
         )
 
@@ -5671,7 +5671,7 @@ scoped_capabilities:
         ssh_target_ids_provider=lambda: frozenset({"udm"}),
     )
 
-    exec_result, _transcript_path, error_msg, errored = await orch._exec_claude(  # pyright: ignore[reportPrivateUsage]
+    exec_result, _transcript_path, error_msg, errored, _snapshot = await orch._exec_claude(  # pyright: ignore[reportPrivateUsage]
         record=rb, alert=alert, run_id="r1", dry=True
     )
 
@@ -5731,7 +5731,7 @@ scoped_capabilities:
     docker = _FakeDockerClient(result=ExecResult(exit_code=0, stdout="", stderr=""))
     orch = _make_orchestrator(repo, secrets_repo_fixture, docker, transcript_dir=transcript_dir)
 
-    exec_result, _transcript_path, _error_msg, errored = await orch._exec_claude(  # pyright: ignore[reportPrivateUsage]
+    exec_result, _transcript_path, _error_msg, errored, _snapshot = await orch._exec_claude(  # pyright: ignore[reportPrivateUsage]
         record=rb, alert=alert, run_id="r1", dry=False
     )
 
@@ -5790,7 +5790,7 @@ scoped_capabilities:
     docker = _FakeDockerClient(result=ExecResult(exit_code=0, stdout="", stderr=""))
     orch = _make_orchestrator(repo, secrets_repo_fixture, docker, transcript_dir=transcript_dir)
 
-    exec_result, _transcript_path, _error_msg, errored = await orch._exec_claude(  # pyright: ignore[reportPrivateUsage]
+    exec_result, _transcript_path, _error_msg, errored, _snapshot = await orch._exec_claude(  # pyright: ignore[reportPrivateUsage]
         record=rb, alert=alert, run_id="r1", dry=False
     )
 
@@ -5853,7 +5853,7 @@ scoped_capabilities:
         ssh_target_ids_provider=lambda: frozenset({"udm"}),
     )
 
-    exec_result, _transcript_path, _error_msg, errored = await orch._exec_claude(  # pyright: ignore[reportPrivateUsage]
+    exec_result, _transcript_path, _error_msg, errored, _snapshot = await orch._exec_claude(  # pyright: ignore[reportPrivateUsage]
         record=rb, alert=alert, run_id="r1", dry=False
     )
 
@@ -5897,7 +5897,7 @@ async def test_grant_resolution_invalid_yaml_schema_valueerror(
     docker = _FakeDockerClient(result=ExecResult(exit_code=0, stdout="", stderr=""))
     orch = _make_orchestrator(repo, secrets_repo_fixture, docker, transcript_dir=transcript_dir)
 
-    exec_result, transcript_path, error_msg, errored = await orch._exec_claude(  # pyright: ignore[reportPrivateUsage]
+    exec_result, transcript_path, error_msg, errored, _snapshot = await orch._exec_claude(  # pyright: ignore[reportPrivateUsage]
         record=rb, alert=alert, run_id="r1", dry=False
     )
 
@@ -5945,7 +5945,7 @@ async def test_grant_resolution_failure_never_publishes_current_run(
     assert orch._current_run is None  # pyright: ignore[reportPrivateUsage]
 
     # Call _exec_claude in non-dry mode with a grant failure setup.
-    _exec_result, transcript_path, _error_msg, errored = await orch._exec_claude(  # pyright: ignore[reportPrivateUsage]
+    _exec_result, transcript_path, _error_msg, errored, _snapshot = await orch._exec_claude(  # pyright: ignore[reportPrivateUsage]
         record=rb, alert=alert, run_id="r1", dry=False
     )
 

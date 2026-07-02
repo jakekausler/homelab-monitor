@@ -11,8 +11,13 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from homelab_monitor.kernel.autofix.feedback_repository import (
+    RunbookRunFeedbackRepository,
+)
 from homelab_monitor.kernel.autofix.types import (
     DenialReason,
+    FeedbackKind,
+    RunbookRunFeedback,
     RunOutcome,
     RunResult,
 )
@@ -34,6 +39,9 @@ def __getattr__(name: str) -> object:
 __all__ = [
     "AutoFixOrchestrator",
     "DenialReason",
+    "FeedbackKind",
     "RunOutcome",
     "RunResult",
+    "RunbookRunFeedback",
+    "RunbookRunFeedbackRepository",
 ]
