@@ -9,12 +9,27 @@ never called in CI.
 
 from __future__ import annotations
 
-from homelab_monitor.kernel.autofix.orchestrator import AutoFixOrchestrator
+from typing import TYPE_CHECKING
+
 from homelab_monitor.kernel.autofix.types import (
     DenialReason,
     RunOutcome,
     RunResult,
 )
+
+if TYPE_CHECKING:
+    from homelab_monitor.kernel.autofix.orchestrator import AutoFixOrchestrator
+
+
+def __getattr__(name: str) -> object:
+    if name == "AutoFixOrchestrator":
+        from homelab_monitor.kernel.autofix.orchestrator import (  # noqa: PLC0415
+            AutoFixOrchestrator as _AutoFixOrchestrator,
+        )
+
+        return _AutoFixOrchestrator
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 __all__ = [
     "AutoFixOrchestrator",

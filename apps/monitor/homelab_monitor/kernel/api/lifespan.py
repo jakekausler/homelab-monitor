@@ -69,7 +69,7 @@ from homelab_monitor.kernel.secrets.master_key import MasterKeyError, load_maste
 from homelab_monitor.kernel.secrets.repository import AsyncSecretsRepository
 from homelab_monitor.kernel.secrets.ttl_resolver import TtlCachingSecretsResolver
 from homelab_monitor.kernel.ssh.client import AsyncSshClientFactory
-from homelab_monitor.kernel.ssh.config import load_ssh_targets
+from homelab_monitor.kernel.ssh.config import load_ssh_target_configs, load_ssh_targets
 from homelab_monitor.kernel.synology.client import SynologyRestClient
 from homelab_monitor.kernel.unifi.client import UnifiRestClient
 from homelab_monitor.plugins.collectors.builtin.log_error_rate import (
@@ -1562,6 +1562,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
             approvals_repo=RunbookRunApprovalsRepository(repo),
             config=load_fixer_runner_config(),
             log=log.bind(component="autofix"),
+            ssh_target_ids_provider=lambda: frozenset(load_ssh_target_configs().keys()),
         )
     else:
         app.state.autofix_orchestrator = None

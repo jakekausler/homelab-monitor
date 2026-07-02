@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import dataclasses
 import json
 import os
 import time
@@ -41,8 +42,10 @@ import pytest_asyncio
 import structlog
 from sqlalchemy import text
 
+from homelab_monitor.kernel import autofix as autofix_pkg
 from homelab_monitor.kernel.alerts.repository import AlertRepository
 from homelab_monitor.kernel.alerts.types import Alert, AlertStatus, Severity
+from homelab_monitor.kernel.autofix import orchestrator as orch_module
 from homelab_monitor.kernel.autofix.approvals_repository import (
     RunbookRunApprovalsRepository,
 )
@@ -77,6 +80,7 @@ from homelab_monitor.kernel.docker.socket_client import (
     ExecResult,
 )
 from homelab_monitor.kernel.runbooks.config import AlertMatcher
+from homelab_monitor.kernel.runbooks.loader import RUNBOOK_CONFIG_FILENAME
 from homelab_monitor.kernel.runbooks.repository import RunbookRecord, RunbookRepo
 from homelab_monitor.kernel.secrets.repository import AsyncSecretsRepository
 
@@ -147,6 +151,33 @@ class _FakeDockerClient:
             raise self.kill_raises
 
 
+def _write_valid_runbook_yaml(runbook_dir: Path, *, dry_run_required: bool = False) -> None:
+    """Write a minimal-but-valid runbook.yaml declaring a docker-only scope.
+
+    STAGE-009-008: _resolve_grants reads this file fresh at exec-start.
+    ScopedCapabilities requires at least one of docker/ssh; docker-only avoids
+    the extra ssh_target_ids_provider dependency.
+    """
+    runbook_dir.mkdir(parents=True, exist_ok=True)
+    (runbook_dir / RUNBOOK_CONFIG_FILENAME).write_text(
+        f"""\
+name: test-runbook
+match_patterns:
+  - alertname: TestAlert
+    labels: {{}}
+risk_tag: safe
+dry_run_required: {str(dry_run_required).lower()}
+rate_limit_per_hour: 100
+cooldown_seconds: 0
+scoped_capabilities:
+  docker:
+    container: "test-container"
+    allowed_actions:
+      - "restart"
+"""
+    )
+
+
 def _make_runbook_record(  # noqa: PLR0913
     *,
     runbook_id: str | None = None,
@@ -157,11 +188,15 @@ def _make_runbook_record(  # noqa: PLR0913
     rate_limit_per_hour: int | None = None,
     cooldown_seconds: int | None = None,
     content_hash: str | None = "abc123",
+    runbook_dir: Path | None = None,
 ) -> RunbookRecord:
     patterns: list[dict[str, Any]] = [{"alertname": alertname, "labels": {}}]
+    if runbook_dir is not None:
+        _write_valid_runbook_yaml(runbook_dir, dry_run_required=dry_run_required)
+    path = str(runbook_dir) if runbook_dir is not None else "/runbooks/test-runbook"
     return RunbookRecord(
         id=runbook_id or uuid7(),
-        path="/runbooks/test-runbook",
+        path=path,
         created_at=utc_now_iso(),
         alert_match_patterns=patterns,
         risk_tag="safe",
@@ -256,6 +291,7 @@ def _make_orchestrator(  # noqa: PLR0913
     transcript_dir: str = "/tmp/transcripts-unit-test",
     exec_log_dir: str = "/tmp/exec-logs-unit-test",
     exec_timeout_seconds: float = 60.0,
+    ssh_target_ids_provider: Callable[[], frozenset[str]] | None = None,
 ) -> AutoFixOrchestrator:
     log = structlog.get_logger()
     config = FixerRunnerConfig(
@@ -276,6 +312,7 @@ def _make_orchestrator(  # noqa: PLR0913
         approvals_repo=RunbookRunApprovalsRepository(repo),
         config=config,
         log=log,
+        ssh_target_ids_provider=ssh_target_ids_provider or frozenset,
     )
 
 
@@ -861,7 +898,12 @@ async def test_dry_store_risky_gates_pass_stores_plan_and_pending_approval(
     repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """T1: Risky runbook with all gates pass → dry-run stored + PENDING approval."""
-    rb = _make_runbook_record(alertname="TestAlert", dry_run_required=True, content_hash="hash-v1")
+    rb = _make_runbook_record(
+        alertname="TestAlert",
+        dry_run_required=True,
+        content_hash="hash-v1",
+        runbook_dir=tmp_path / "runbook",
+    )
     await _insert_runbook(repo, rb)
     alert = _make_alert(alertname="TestAlert")
     await _insert_alert(repo, alert)
@@ -1215,7 +1257,7 @@ async def test_exec_success_exit_0_all_persisted(
     repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """Branch 15: exec exit 0 → runbook_runs completed, alert_outcomes auto_fixed, audit."""
-    rb = _make_runbook_record(alertname="TestAlert")
+    rb = _make_runbook_record(alertname="TestAlert", runbook_dir=tmp_path / "runbook")
     await _insert_runbook(repo, rb)
     alert = _make_alert(alertname="TestAlert")
     await _insert_alert(repo, alert)
@@ -1283,7 +1325,7 @@ async def test_exec_nonzero_exit_no_auto_fixed_outcome(
     repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """Branch 16: exec exit_code != 0 → no auto_fixed outcome, but audit.ran present."""
-    rb = _make_runbook_record(alertname="TestAlert")
+    rb = _make_runbook_record(alertname="TestAlert", runbook_dir=tmp_path / "runbook")
     await _insert_runbook(repo, rb)
     alert = _make_alert(alertname="TestAlert")
     await _insert_alert(repo, alert)
@@ -1331,7 +1373,7 @@ async def test_exec_timeout_sentinel_124(
     repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """Branch 17: DockerExecTimeoutError → exit_code=124, completion+audit written."""
-    rb = _make_runbook_record(alertname="TestAlert")
+    rb = _make_runbook_record(alertname="TestAlert", runbook_dir=tmp_path / "runbook")
     await _insert_runbook(repo, rb)
     alert = _make_alert(alertname="TestAlert")
     await _insert_alert(repo, alert)
@@ -1424,7 +1466,7 @@ async def test_exec_generic_exception_propagates(
     repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """Branch 19: non-DockerSocketError exception from exec_capture propagates."""
-    rb = _make_runbook_record(alertname="TestAlert")
+    rb = _make_runbook_record(alertname="TestAlert", runbook_dir=tmp_path / "runbook")
     await _insert_runbook(repo, rb)
     alert = _make_alert(alertname="TestAlert")
     await _insert_alert(repo, alert)
@@ -1459,7 +1501,7 @@ async def test_resolve_transcript_file_within_window(
     repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """Branch 20a: .transcript file created within [started, ended] mtime → picked."""
-    rb = _make_runbook_record(alertname="TestAlert")
+    rb = _make_runbook_record(alertname="TestAlert", runbook_dir=tmp_path / "runbook")
     await _insert_runbook(repo, rb)
     alert = _make_alert(alertname="TestAlert")
     await _insert_alert(repo, alert)
@@ -1657,7 +1699,7 @@ async def test_anthropic_api_key_present_injected_in_env(
     repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """Branch 21a: ANTHROPIC_API_KEY in secrets → exec env includes it."""
-    rb = _make_runbook_record(alertname="TestAlert")
+    rb = _make_runbook_record(alertname="TestAlert", runbook_dir=tmp_path / "runbook")
     await _insert_runbook(repo, rb)
     alert = _make_alert(alertname="TestAlert")
     await _insert_alert(repo, alert)
@@ -1928,7 +1970,7 @@ async def test_maintenance_window_passthrough(
     repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """_maintenance_window is a pass-through seam — exec runs inside it."""
-    rb = _make_runbook_record(alertname="TestAlert")
+    rb = _make_runbook_record(alertname="TestAlert", runbook_dir=tmp_path / "runbook")
     await _insert_runbook(repo, rb)
     alert = _make_alert(alertname="TestAlert")
     await _insert_alert(repo, alert)
@@ -2494,7 +2536,7 @@ async def test_secret_api_key_not_leaked_to_persisted_artifacts(
     """
     _SENTINEL = "sk-SENTINEL-DO-NOT-LEAK-abc123"
 
-    rb = _make_runbook_record(alertname="TestAlert")
+    rb = _make_runbook_record(alertname="TestAlert", runbook_dir=tmp_path / "runbook")
     await _insert_runbook(repo, rb)
     alert = _make_alert(alertname="TestAlert")
     await _insert_alert(repo, alert)
@@ -2578,7 +2620,7 @@ async def test_persist_outcome_rollback_on_audit_failure(
 
     The exception is expected to propagate out of handle_alert.
     """
-    rb = _make_runbook_record(alertname="TestAlert")
+    rb = _make_runbook_record(alertname="TestAlert", runbook_dir=tmp_path / "runbook")
     await _insert_runbook(repo, rb)
     alert = _make_alert(alertname="TestAlert")
     await _insert_alert(repo, alert)
@@ -2766,7 +2808,9 @@ async def test_safe_runbook_runs_real_directly_unchanged(
     repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """T2: Safe runbook (dry_run_required=False) runs real, no approval."""
-    rb = _make_runbook_record(alertname="TestAlert", dry_run_required=False)
+    rb = _make_runbook_record(
+        alertname="TestAlert", dry_run_required=False, runbook_dir=tmp_path / "runbook"
+    )
     await _insert_runbook(repo, rb)
     alert = _make_alert(alertname="TestAlert")
     await _insert_alert(repo, alert)
@@ -2911,7 +2955,12 @@ async def test_execute_approved_happy_fires_real_and_sets_real_run_id(
     repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """T5: execute_approved on pending approval → real exec fires, real_run_id set."""
-    rb = _make_runbook_record(alertname="TestAlert", dry_run_required=True, content_hash="hash-v1")
+    rb = _make_runbook_record(
+        alertname="TestAlert",
+        dry_run_required=True,
+        content_hash="hash-v1",
+        runbook_dir=tmp_path / "runbook",
+    )
     await _insert_runbook(repo, rb)
     alert = _make_alert(alertname="TestAlert")
     await _insert_alert(repo, alert)
@@ -3003,7 +3052,12 @@ async def test_execute_approved_ran_audit_includes_approving_principal(
     approving_principal so the audit chain (autofix.approved by <alice> →
     autofix.ran by system:autofix) is linked by more than approval_id alone.
     """
-    rb = _make_runbook_record(alertname="TestAlert", dry_run_required=True, content_hash="hash-v1")
+    rb = _make_runbook_record(
+        alertname="TestAlert",
+        dry_run_required=True,
+        content_hash="hash-v1",
+        runbook_dir=tmp_path / "runbook",
+    )
     await _insert_runbook(repo, rb)
     alert = _make_alert(alertname="TestAlert")
     await _insert_alert(repo, alert)
@@ -3063,7 +3117,9 @@ async def test_handle_alert_ran_audit_omits_approving_principal(
     write an approving_principal key on the autofix.ran audit — there is no
     human approver on that path.
     """
-    rb = _make_runbook_record(alertname="TestAlert")  # safe by default: dry_run_required=False
+    rb = _make_runbook_record(
+        alertname="TestAlert", runbook_dir=tmp_path / "runbook"
+    )  # safe by default: dry_run_required=False
     await _insert_runbook(repo, rb)
     alert = _make_alert(alertname="TestAlert")
     await _insert_alert(repo, alert)
@@ -3120,7 +3176,12 @@ async def test_execute_approved_claim_denies_no_real_run_id_set(
     at claim time), the returned RunResult has run_id=None, so
     set_real_run_id_conn must NOT be called and approval.real_run_id must stay None.
     """
-    rb = _make_runbook_record(alertname="TestAlert", dry_run_required=True, content_hash="hash-v1")
+    rb = _make_runbook_record(
+        alertname="TestAlert",
+        dry_run_required=True,
+        content_hash="hash-v1",
+        runbook_dir=tmp_path / "runbook",
+    )
     await _insert_runbook(repo, rb)
     alert = _make_alert(alertname="TestAlert")
     await _insert_alert(repo, alert)
@@ -3215,7 +3276,12 @@ async def test_execute_approved_alert_present_id_but_row_missing_uses_original_i
     alerts row is kept in the DB so the runbook_runs.alert_id FK on the real-run
     insert still passes; only get_alert_by_id is monkey-patched to return None.
     """
-    rb = _make_runbook_record(alertname="TestAlert", dry_run_required=True, content_hash="hash-v1")
+    rb = _make_runbook_record(
+        alertname="TestAlert",
+        dry_run_required=True,
+        content_hash="hash-v1",
+        runbook_dir=tmp_path / "runbook",
+    )
     await _insert_runbook(repo, rb)
     alert = _make_alert(alertname="TestAlert")
     await _insert_alert(repo, alert)
@@ -3316,7 +3382,12 @@ async def test_execute_approved_race_only_one_wins(
 
     Key assertion: exactly one runbook_runs row with mode='real' exists.
     """
-    rb = _make_runbook_record(alertname="TestAlert", dry_run_required=True, content_hash="hash-v1")
+    rb = _make_runbook_record(
+        alertname="TestAlert",
+        dry_run_required=True,
+        content_hash="hash-v1",
+        runbook_dir=tmp_path / "runbook",
+    )
     await _insert_runbook(repo, rb)
     alert = _make_alert(alertname="TestAlert")
     await _insert_alert(repo, alert)
@@ -3412,7 +3483,12 @@ async def test_execute_approved_sql_guard_zero_rowcount_denies_approval_not_pend
       * Approval row is untouched — status stays 'pending' (mocked UPDATE was
         a no-op, so no state change happened in the DB).
     """
-    rb = _make_runbook_record(alertname="TestAlert", dry_run_required=True, content_hash="hash-v1")
+    rb = _make_runbook_record(
+        alertname="TestAlert",
+        dry_run_required=True,
+        content_hash="hash-v1",
+        runbook_dir=tmp_path / "runbook",
+    )
     await _insert_runbook(repo, rb)
     alert = _make_alert(alertname="TestAlert")
     await _insert_alert(repo, alert)
@@ -3508,7 +3584,12 @@ async def test_execute_approved_second_call_denies_after_first_succeeded(
     approval_id must return outcome=DENIED with APPROVAL_NOT_PENDING. This test
     exercises the read-based pre-check happy fast-path, not the SQL guard.
     """
-    rb = _make_runbook_record(alertname="TestAlert", dry_run_required=True, content_hash="hash-v1")
+    rb = _make_runbook_record(
+        alertname="TestAlert",
+        dry_run_required=True,
+        content_hash="hash-v1",
+        runbook_dir=tmp_path / "runbook",
+    )
     await _insert_runbook(repo, rb)
     alert = _make_alert(alertname="TestAlert")
     await _insert_alert(repo, alert)
@@ -3571,7 +3652,12 @@ async def test_execute_approved_revert_race_safe(
     returns rowcount=0. Verify the code takes the warning-only branch (no
     audit_reverted row written, no exception) — exercised via a mock.
     """
-    rb = _make_runbook_record(alertname="TestAlert", dry_run_required=True, content_hash="hash-v1")
+    rb = _make_runbook_record(
+        alertname="TestAlert",
+        dry_run_required=True,
+        content_hash="hash-v1",
+        runbook_dir=tmp_path / "runbook",
+    )
     await _insert_runbook(repo, rb)
     alert = _make_alert(alertname="TestAlert")
     await _insert_alert(repo, alert)
@@ -3639,7 +3725,12 @@ async def test_execute_approved_drift_rejects_no_exec(
     repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """T6: Runbook hash changed since plan → rejection, no exec, no real run."""
-    rb = _make_runbook_record(alertname="TestAlert", dry_run_required=True, content_hash="hash-v1")
+    rb = _make_runbook_record(
+        alertname="TestAlert",
+        dry_run_required=True,
+        content_hash="hash-v1",
+        runbook_dir=tmp_path / "runbook",
+    )
     await _insert_runbook(repo, rb)
     alert = _make_alert(alertname="TestAlert")
     await _insert_alert(repo, alert)
@@ -3730,7 +3821,12 @@ async def test_execute_approved_runbook_missing_returns_runbook_missing_denial(
     denial_reason=RUNBOOK_MISSING, audit gate='runbook_missing' with
     runbook_deleted=True (distinct from RUNBOOK_CHANGED which is a hash mutation).
     """
-    rb = _make_runbook_record(alertname="TestAlert", dry_run_required=True, content_hash="hash-v1")
+    rb = _make_runbook_record(
+        alertname="TestAlert",
+        dry_run_required=True,
+        content_hash="hash-v1",
+        runbook_dir=tmp_path / "runbook",
+    )
     await _insert_runbook(repo, rb)
     alert = _make_alert(alertname="TestAlert")
     await _insert_alert(repo, alert)
@@ -3828,7 +3924,9 @@ async def test_execute_approved_not_pending_denies(
     repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """T7: Approval not pending → APPROVAL_NOT_PENDING denial, no exec."""
-    rb = _make_runbook_record(alertname="TestAlert", dry_run_required=True)
+    rb = _make_runbook_record(
+        alertname="TestAlert", dry_run_required=True, runbook_dir=tmp_path / "runbook"
+    )
     await _insert_runbook(repo, rb)
     alert = _make_alert(alertname="TestAlert")
     await _insert_alert(repo, alert)
@@ -3915,7 +4013,12 @@ async def test_execute_approved_gate_deny_on_approve(
     repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """T9: Operational gate (kill-switch flipped) denies after plan."""
-    rb = _make_runbook_record(alertname="TestAlert", dry_run_required=True, content_hash="hash-v1")
+    rb = _make_runbook_record(
+        alertname="TestAlert",
+        dry_run_required=True,
+        content_hash="hash-v1",
+        runbook_dir=tmp_path / "runbook",
+    )
     await _insert_runbook(repo, rb)
     alert = _make_alert(alertname="TestAlert")
     await _insert_alert(repo, alert)
@@ -3978,7 +4081,12 @@ async def test_execute_approved_missing_alert_reconstructs(
     repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """T10: Alert missing → reconstructed minimal Alert, real exec fires."""
-    rb = _make_runbook_record(alertname="TestAlert", dry_run_required=True, content_hash="hash-v1")
+    rb = _make_runbook_record(
+        alertname="TestAlert",
+        dry_run_required=True,
+        content_hash="hash-v1",
+        runbook_dir=tmp_path / "runbook",
+    )
     await _insert_runbook(repo, rb)
     alert = _make_alert(alertname="TestAlert")
     await _insert_alert(repo, alert)
@@ -4076,7 +4184,12 @@ async def test_execute_approved_alert_id_none_placeholder(
     repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """T11: Approval alert_id is None → uses minimal placeholder Alert."""
-    rb = _make_runbook_record(alertname="TestAlert", dry_run_required=True, content_hash="hash-v1")
+    rb = _make_runbook_record(
+        alertname="TestAlert",
+        dry_run_required=True,
+        content_hash="hash-v1",
+        runbook_dir=tmp_path / "runbook",
+    )
     await _insert_runbook(repo, rb)
     alert = _make_alert(alertname="TestAlert")
     await _insert_alert(repo, alert)
@@ -4971,7 +5084,7 @@ async def test_exec_claude_publishes_and_clears_current_run_on_success(
     repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """dry=False success: _current_run set during exec, cleared after (finally)."""
-    rb = _make_runbook_record(alertname="TestAlert")
+    rb = _make_runbook_record(alertname="TestAlert", runbook_dir=tmp_path / "runbook")
     alert = _make_alert(alertname="TestAlert")
 
     transcript_dir = str(tmp_path / "transcripts")
@@ -5043,7 +5156,7 @@ async def test_exec_claude_clears_current_run_on_timeout(
     repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """dry=False, exec_capture raises DockerExecTimeoutError -> exit 124, cleared after."""
-    rb = _make_runbook_record(alertname="TestAlert")
+    rb = _make_runbook_record(alertname="TestAlert", runbook_dir=tmp_path / "runbook")
     alert = _make_alert(alertname="TestAlert")
 
     transcript_dir = str(tmp_path / "transcripts")
@@ -5135,3 +5248,715 @@ async def test_pre_run_gate_denial_latency_under_100ms(
         assert denial == DenialReason.KILL_SWITCH
 
     assert max_delta < 0.100  # noqa: PLR2004
+
+
+# ---------------------------------------------------------------------------
+# STAGE-009-008: scoped capability grant resolution
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_grant_resolution_happy_path_docker_ssh_egress(
+    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+) -> None:
+    """T1: docker + ssh + egress declared; real run -> grants resolved and egress audited."""
+    rb_dir = tmp_path / "test-runbook"
+    rb_dir.mkdir()
+    runbook_yaml = rb_dir / "runbook.yaml"
+    runbook_yaml.write_text(
+        """\
+name: test-runbook
+match_patterns:
+  - alertname: TestAlert
+    labels: {}
+rate_limit_per_hour: 100
+cooldown_seconds: 0
+scoped_capabilities:
+  docker:
+    container: "foo"
+    allowed_actions:
+      - "restart"
+  ssh:
+    target_id: "udm"
+  egress:
+    - "1.2.3.4:443"
+"""
+    )
+
+    rb = _make_runbook_record(alertname="TestAlert")
+    rb = dataclasses.replace(rb, path=str(rb_dir))
+    await _insert_runbook(repo, rb)
+
+    alert = _make_alert(alertname="TestAlert")
+    await _insert_alert(repo, alert)
+
+    transcript_dir = str(tmp_path / "transcripts")
+    os.makedirs(transcript_dir, exist_ok=True)
+
+    docker = _FakeDockerClient(result=ExecResult(exit_code=0, stdout="", stderr=""))
+    orch = _make_orchestrator(
+        repo,
+        secrets_repo_fixture,
+        docker,
+        transcript_dir=transcript_dir,
+        ssh_target_ids_provider=lambda: frozenset({"udm"}),
+    )
+
+    exec_result, _transcript_path, error_msg, errored = await orch._exec_claude(  # pyright: ignore[reportPrivateUsage]
+        record=rb, alert=alert, run_id="r1", dry=False
+    )
+
+    # Should proceed to exec (no early return on grant failure).
+    assert exec_result.exit_code == 0
+    assert error_msg is None
+    assert errored is False
+
+    # Check audit rows.
+    audit_rows = await repo.execute(
+        text(
+            "SELECT what, after_json FROM audit_log "
+            "WHERE what IN ('autofix.grant_resolved', 'autofix.egress_unenforced') "
+            "ORDER BY rowid"
+        )
+    )
+    rows = audit_rows.fetchall()
+    assert len(rows) == 2  # noqa: PLR2004
+
+    resolved_row, egress_row = rows
+    assert resolved_row[0] == "autofix.grant_resolved"
+    resolved_after = json.loads(resolved_row[1])
+    assert resolved_after["docker_container"] == "foo"
+    assert resolved_after["docker_allowed_actions"] == ["restart"]
+    assert resolved_after["ssh_target_id"] == "udm"
+    assert resolved_after["egress"] == ["1.2.3.4:443"]
+
+    assert egress_row[0] == "autofix.egress_unenforced"
+    egress_after = json.loads(egress_row[1])
+    assert egress_after["egress"] == ["1.2.3.4:443"]
+
+
+@pytest.mark.asyncio
+async def test_grant_resolution_missing_runbook_yaml(
+    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+) -> None:
+    """T2: runbook.yaml missing -> grant_failed audit, early return,
+    _current_run never published."""
+    rb_dir = tmp_path / "test-runbook"
+    rb_dir.mkdir()
+    # No runbook.yaml file
+
+    rb = _make_runbook_record(alertname="TestAlert")
+    rb = dataclasses.replace(rb, path=str(rb_dir))
+    await _insert_runbook(repo, rb)
+
+    alert = _make_alert(alertname="TestAlert")
+    await _insert_alert(repo, alert)
+
+    transcript_dir = str(tmp_path / "transcripts")
+    os.makedirs(transcript_dir, exist_ok=True)
+
+    docker = _FakeDockerClient(result=ExecResult(exit_code=0, stdout="", stderr=""))
+    orch = _make_orchestrator(repo, secrets_repo_fixture, docker, transcript_dir=transcript_dir)
+
+    exec_result, transcript_path, error_msg, errored = await orch._exec_claude(  # pyright: ignore[reportPrivateUsage]
+        record=rb, alert=alert, run_id="r1", dry=False
+    )
+
+    # Should return early (grant failure).
+    assert exec_result.exit_code == 1
+    assert transcript_path is None
+    assert error_msg is not None
+    assert "runbook config unavailable" in error_msg
+    assert errored is True
+
+    # _current_run should never have been set (grant failure is before the publish).
+    assert orch._current_run is None  # pyright: ignore[reportPrivateUsage]
+
+    # Check audit row.
+    audit_rows = await repo.execute(
+        text("SELECT what, after_json FROM audit_log WHERE what = 'autofix.grant_failed'")
+    )
+    rows = audit_rows.fetchall()
+    assert len(rows) == 1
+    assert rows[0][0] == "autofix.grant_failed"
+    after_data = json.loads(rows[0][1])
+    assert after_data["reason"] == "scoped_capabilities_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_grant_resolution_malformed_yaml(
+    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+) -> None:
+    """T3: malformed YAML -> grant_failed audit, no exec attempted."""
+    rb_dir = tmp_path / "test-runbook"
+    rb_dir.mkdir()
+    runbook_yaml = rb_dir / "runbook.yaml"
+    runbook_yaml.write_text(
+        """\
+scoped_capabilities:
+  docker:
+    container: "foo"
+    allowed_actions: [
+      # unbalanced bracket
+"""
+    )
+
+    rb = _make_runbook_record(alertname="TestAlert")
+    rb = dataclasses.replace(rb, path=str(rb_dir))
+    await _insert_runbook(repo, rb)
+
+    alert = _make_alert(alertname="TestAlert")
+    await _insert_alert(repo, alert)
+
+    transcript_dir = str(tmp_path / "transcripts")
+    os.makedirs(transcript_dir, exist_ok=True)
+
+    docker = _FakeDockerClient(result=ExecResult(exit_code=0, stdout="", stderr=""))
+    orch = _make_orchestrator(repo, secrets_repo_fixture, docker, transcript_dir=transcript_dir)
+
+    exec_result, transcript_path, error_msg, errored = await orch._exec_claude(  # pyright: ignore[reportPrivateUsage]
+        record=rb, alert=alert, run_id="r1", dry=False
+    )
+
+    # Should return early on malformed YAML.
+    assert exec_result.exit_code == 1
+    assert transcript_path is None
+    assert errored is True
+    assert error_msg is not None and "malformed YAML" in error_msg
+
+    # Docker should never have been called.
+    assert docker.last_call_cmd is None
+
+    # _current_run should never have been published
+    assert orch._current_run is None  # pyright: ignore[reportPrivateUsage]
+
+
+@pytest.mark.asyncio
+async def test_grant_resolution_unknown_ssh_target_id(
+    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+) -> None:
+    """T4: ssh.target_id unknown -> grant_failed with reason='unknown_ssh_target_id'."""
+    rb_dir = tmp_path / "test-runbook"
+    rb_dir.mkdir()
+    runbook_yaml = rb_dir / "runbook.yaml"
+    runbook_yaml.write_text(
+        """\
+name: test-runbook
+match_patterns:
+  - alertname: TestAlert
+    labels: {}
+rate_limit_per_hour: 100
+cooldown_seconds: 0
+scoped_capabilities:
+  ssh:
+    target_id: "nonexistent"
+"""
+    )
+
+    rb = _make_runbook_record(alertname="TestAlert")
+    rb = dataclasses.replace(rb, path=str(rb_dir))
+    await _insert_runbook(repo, rb)
+
+    alert = _make_alert(alertname="TestAlert")
+    await _insert_alert(repo, alert)
+
+    transcript_dir = str(tmp_path / "transcripts")
+    os.makedirs(transcript_dir, exist_ok=True)
+
+    docker = _FakeDockerClient(result=ExecResult(exit_code=0, stdout="", stderr=""))
+    orch = _make_orchestrator(
+        repo,
+        secrets_repo_fixture,
+        docker,
+        transcript_dir=transcript_dir,
+        ssh_target_ids_provider=lambda: frozenset({"udm", "synology"}),
+    )
+
+    exec_result, transcript_path, error_msg, errored = await orch._exec_claude(  # pyright: ignore[reportPrivateUsage]
+        record=rb, alert=alert, run_id="r1", dry=False
+    )
+
+    # Should return early on unknown SSH target.
+    assert exec_result.exit_code == 1
+    assert transcript_path is None
+    assert errored is True
+    assert error_msg is not None and "not a known SSH target" in error_msg
+
+    # _current_run never published.
+    assert orch._current_run is None  # pyright: ignore[reportPrivateUsage]
+
+    # Check audit row.
+    audit_rows = await repo.execute(
+        text("SELECT after_json FROM audit_log WHERE what = 'autofix.grant_failed'")
+    )
+    rows = audit_rows.fetchall()
+    assert len(rows) == 1
+    after_data = json.loads(rows[0][0])
+    assert after_data["reason"] == "unknown_ssh_target_id"
+
+
+@pytest.mark.asyncio
+async def test_grant_resolution_ssh_provider_raises_maps_to_grant_failed(
+    repo: SqliteRepository,
+    secrets_repo_fixture: AsyncSecretsRepository,
+    tmp_path: Path,
+) -> None:
+    """Test: ssh_target_ids_provider() raising an exception is caught and mapped
+    to GrantResolutionError(reason='scoped_capabilities_unavailable')."""
+    rb_dir = tmp_path / "runbook"
+    rb_dir.mkdir(parents=True, exist_ok=True)
+    (rb_dir / RUNBOOK_CONFIG_FILENAME).write_text(
+        """\
+name: test-runbook
+match_patterns:
+  - alertname: TestAlert
+    labels: {}
+rate_limit_per_hour: 100
+cooldown_seconds: 0
+scoped_capabilities:
+  ssh:
+    target_id: udm
+"""
+    )
+
+    rb = _make_runbook_record(alertname="TestAlert")
+    rb = dataclasses.replace(rb, path=str(rb_dir))
+    alert = _make_alert(alertname="TestAlert")
+
+    docker = _FakeDockerClient(result=ExecResult(exit_code=0, stdout="", stderr=""))
+    transcript_dir = str(tmp_path / "transcripts")
+    os.makedirs(transcript_dir, exist_ok=True)
+
+    def _failing_provider() -> frozenset[str]:
+        raise ValueError("simulated ssh_targets registry read failure")
+
+    orch = _make_orchestrator(
+        repo,
+        secrets_repo_fixture,
+        docker,
+        transcript_dir=transcript_dir,
+        ssh_target_ids_provider=_failing_provider,
+    )
+
+    exec_result, transcript_path, error_msg, errored = await orch._exec_claude(  # pyright: ignore[reportPrivateUsage]
+        record=rb, alert=alert, run_id="r1", dry=False
+    )
+
+    assert exec_result.exit_code == 1
+    assert errored is True
+    assert transcript_path is None
+    assert error_msg is not None
+    assert "ssh target registry unreadable" in error_msg
+    assert orch._current_run is None  # pyright: ignore[reportPrivateUsage]
+
+    audit_rows = await repo.execute(
+        text("SELECT what, after_json FROM audit_log WHERE what = 'autofix.grant_failed'")
+    )
+    rows = audit_rows.fetchall()
+    assert len(rows) == 1
+    assert rows[0][0] == "autofix.grant_failed"
+    grant_failed_after = json.loads(rows[0][1])
+    assert grant_failed_after["reason"] == "scoped_capabilities_unavailable"
+    assert "ssh target registry" in grant_failed_after["detail"]
+
+
+@pytest.mark.asyncio
+async def test_grant_resolution_audit_failure_swallowed_and_returned(
+    repo: SqliteRepository,
+    secrets_repo_fixture: AsyncSecretsRepository,
+    tmp_path: Path,
+) -> None:
+    """Test: if the autofix.grant_failed audit-write itself raises, the exception
+    is logged and swallowed; _exec_claude still returns the errored failure tuple."""
+    # Use a fixture that will trigger GrantResolutionError (missing yaml).
+    rb_dir = tmp_path / "runbook"
+    rb_dir.mkdir(parents=True, exist_ok=True)
+    # Do NOT write runbook.yaml -> triggers OSError branch in _resolve_grants.
+
+    rb = _make_runbook_record(alertname="TestAlert")
+    rb = dataclasses.replace(rb, path=str(rb_dir))
+    alert = _make_alert(alertname="TestAlert")
+
+    docker = _FakeDockerClient(result=ExecResult(exit_code=0, stdout="", stderr=""))
+    transcript_dir = str(tmp_path / "transcripts")
+    os.makedirs(transcript_dir, exist_ok=True)
+
+    orch = _make_orchestrator(
+        repo,
+        secrets_repo_fixture,
+        docker,
+        transcript_dir=transcript_dir,
+    )
+
+    async def _raising_insert_audit(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("simulated audit-write failure")
+
+    with patch.object(orch_module, "insert_audit", side_effect=_raising_insert_audit):
+        exec_result, transcript_path, error_msg, errored = await orch._exec_claude(  # pyright: ignore[reportPrivateUsage]
+            record=rb, alert=alert, run_id="r1", dry=False
+        )
+
+    # Failure tuple returned, exception NOT propagated.
+    assert exec_result.exit_code == 1
+    assert errored is True
+    assert transcript_path is None
+    assert error_msg is not None
+
+    # NO grant_failed audit row lands (because insert_audit raised).
+    audit_rows = await repo.execute(
+        text("SELECT what FROM audit_log WHERE what = 'autofix.grant_failed'")
+    )
+    rows = audit_rows.fetchall()
+    assert len(rows) == 0
+
+    # _current_run still None (kill-switch coexistence preserved even on audit failure).
+    assert orch._current_run is None  # pyright: ignore[reportPrivateUsage]
+
+
+def test_autofix_package_lazy_getattr_raises_on_unknown_attribute() -> None:
+    """Test: autofix package's __getattr__ raises AttributeError for unknown names."""
+    with pytest.raises(AttributeError):
+        _ = autofix_pkg.NonExistentAttribute  # type: ignore[attr-defined]
+
+
+def test_autofix_package_lazy_getattr_returns_autofix_orchestrator() -> None:
+    """Test: autofix package's __getattr__ correctly returns AutoFixOrchestrator via lazy import."""
+    assert autofix_pkg.AutoFixOrchestrator is AutoFixOrchestrator
+
+
+@pytest.mark.asyncio
+async def test_grant_resolution_dry_run_suppresses_egress_unenforced(
+    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+) -> None:
+    """T5: dry=True -> grant_resolved present, egress_unenforced absent."""
+    rb_dir = tmp_path / "test-runbook"
+    rb_dir.mkdir()
+    runbook_yaml = rb_dir / "runbook.yaml"
+    runbook_yaml.write_text(
+        """\
+name: test-runbook
+match_patterns:
+  - alertname: TestAlert
+    labels: {}
+rate_limit_per_hour: 100
+cooldown_seconds: 0
+scoped_capabilities:
+  docker:
+    container: "foo"
+    allowed_actions:
+      - "restart"
+  ssh:
+    target_id: "udm"
+  egress:
+    - "1.2.3.4:443"
+"""
+    )
+
+    rb = _make_runbook_record(alertname="TestAlert")
+    rb = dataclasses.replace(rb, path=str(rb_dir))
+    await _insert_runbook(repo, rb)
+
+    alert = _make_alert(alertname="TestAlert")
+    await _insert_alert(repo, alert)
+
+    transcript_dir = str(tmp_path / "transcripts")
+    os.makedirs(transcript_dir, exist_ok=True)
+
+    docker = _FakeDockerClient(result=ExecResult(exit_code=0, stdout="plan", stderr=""))
+    orch = _make_orchestrator(
+        repo,
+        secrets_repo_fixture,
+        docker,
+        transcript_dir=transcript_dir,
+        ssh_target_ids_provider=lambda: frozenset({"udm"}),
+    )
+
+    exec_result, _transcript_path, error_msg, errored = await orch._exec_claude(  # pyright: ignore[reportPrivateUsage]
+        record=rb, alert=alert, run_id="r1", dry=True
+    )
+
+    # Dry run should proceed normally.
+    assert exec_result.exit_code == 0
+    assert error_msg is None
+    assert errored is False
+
+    # Check that grant_resolved is present but egress_unenforced is NOT.
+    audit_rows = await repo.execute(
+        text(
+            "SELECT what FROM audit_log "
+            "WHERE what IN ('autofix.grant_resolved', 'autofix.egress_unenforced')"
+        )
+    )
+    rows = audit_rows.fetchall()
+    whats = [row[0] for row in rows]
+    assert "autofix.grant_resolved" in whats
+    assert "autofix.egress_unenforced" not in whats
+
+
+@pytest.mark.asyncio
+async def test_grant_resolution_empty_egress_suppresses_unenforced(
+    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+) -> None:
+    """T6: egress: [] (empty) -> grant_resolved present, egress_unenforced absent."""
+    rb_dir = tmp_path / "test-runbook"
+    rb_dir.mkdir()
+    runbook_yaml = rb_dir / "runbook.yaml"
+    runbook_yaml.write_text(
+        """\
+name: test-runbook
+match_patterns:
+  - alertname: TestAlert
+    labels: {}
+rate_limit_per_hour: 100
+cooldown_seconds: 0
+scoped_capabilities:
+  docker:
+    container: "foo"
+    allowed_actions:
+      - "restart"
+  egress: []
+"""
+    )
+
+    rb = _make_runbook_record(alertname="TestAlert")
+    rb = dataclasses.replace(rb, path=str(rb_dir))
+    await _insert_runbook(repo, rb)
+
+    alert = _make_alert(alertname="TestAlert")
+    await _insert_alert(repo, alert)
+
+    transcript_dir = str(tmp_path / "transcripts")
+    os.makedirs(transcript_dir, exist_ok=True)
+
+    docker = _FakeDockerClient(result=ExecResult(exit_code=0, stdout="", stderr=""))
+    orch = _make_orchestrator(repo, secrets_repo_fixture, docker, transcript_dir=transcript_dir)
+
+    exec_result, _transcript_path, _error_msg, errored = await orch._exec_claude(  # pyright: ignore[reportPrivateUsage]
+        record=rb, alert=alert, run_id="r1", dry=False
+    )
+
+    # Should proceed normally.
+    assert exec_result.exit_code == 0
+    assert errored is False
+
+    # Check audit rows: grant_resolved present, egress_unenforced absent.
+    audit_rows = await repo.execute(
+        text(
+            "SELECT what FROM audit_log "
+            "WHERE what IN ('autofix.grant_resolved', 'autofix.egress_unenforced')"
+        )
+    )
+    rows = audit_rows.fetchall()
+    whats = [row[0] for row in rows]
+    assert "autofix.grant_resolved" in whats
+    assert "autofix.egress_unenforced" not in whats
+
+
+@pytest.mark.asyncio
+async def test_grant_resolution_default_egress_when_key_missing(
+    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+) -> None:
+    """Test: egress key missing (default) -> grant_resolved present,
+    egress_unenforced absent, egress=[]."""
+    rb_dir = tmp_path / "test-runbook"
+    rb_dir.mkdir()
+    runbook_yaml = rb_dir / "runbook.yaml"
+    runbook_yaml.write_text(
+        """\
+name: test-runbook
+match_patterns:
+  - alertname: TestAlert
+    labels: {}
+rate_limit_per_hour: 100
+cooldown_seconds: 0
+scoped_capabilities:
+  docker:
+    container: "foo"
+    allowed_actions:
+      - "restart"
+"""
+    )
+
+    rb = _make_runbook_record(alertname="TestAlert")
+    rb = dataclasses.replace(rb, path=str(rb_dir))
+    await _insert_runbook(repo, rb)
+
+    alert = _make_alert(alertname="TestAlert")
+    await _insert_alert(repo, alert)
+
+    transcript_dir = str(tmp_path / "transcripts")
+    os.makedirs(transcript_dir, exist_ok=True)
+
+    docker = _FakeDockerClient(result=ExecResult(exit_code=0, stdout="", stderr=""))
+    orch = _make_orchestrator(repo, secrets_repo_fixture, docker, transcript_dir=transcript_dir)
+
+    exec_result, _transcript_path, _error_msg, errored = await orch._exec_claude(  # pyright: ignore[reportPrivateUsage]
+        record=rb, alert=alert, run_id="r1", dry=False
+    )
+
+    # Should proceed normally.
+    assert exec_result.exit_code == 0
+    assert errored is False
+
+    # Check audit rows: grant_resolved present, egress_unenforced absent.
+    audit_rows = await repo.execute(
+        text(
+            "SELECT what FROM audit_log "
+            "WHERE what IN ('autofix.grant_resolved', 'autofix.egress_unenforced')"
+        )
+    )
+    rows = audit_rows.fetchall()
+    whats = [row[0] for row in rows]
+    assert "autofix.grant_resolved" in whats
+    assert "autofix.egress_unenforced" not in whats
+
+
+@pytest.mark.asyncio
+async def test_grant_resolution_ssh_only_no_docker(
+    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+) -> None:
+    """T7: ssh-only (no docker) -> grants resolved with
+    docker_container=None, docker_allowed_actions=[]."""
+    rb_dir = tmp_path / "test-runbook"
+    rb_dir.mkdir()
+    runbook_yaml = rb_dir / "runbook.yaml"
+    runbook_yaml.write_text(
+        """\
+name: test-runbook
+match_patterns:
+  - alertname: TestAlert
+    labels: {}
+rate_limit_per_hour: 100
+cooldown_seconds: 0
+scoped_capabilities:
+  ssh:
+    target_id: "udm"
+"""
+    )
+
+    rb = _make_runbook_record(alertname="TestAlert")
+    rb = dataclasses.replace(rb, path=str(rb_dir))
+    await _insert_runbook(repo, rb)
+
+    alert = _make_alert(alertname="TestAlert")
+    await _insert_alert(repo, alert)
+
+    transcript_dir = str(tmp_path / "transcripts")
+    os.makedirs(transcript_dir, exist_ok=True)
+
+    docker = _FakeDockerClient(result=ExecResult(exit_code=0, stdout="", stderr=""))
+    orch = _make_orchestrator(
+        repo,
+        secrets_repo_fixture,
+        docker,
+        transcript_dir=transcript_dir,
+        ssh_target_ids_provider=lambda: frozenset({"udm"}),
+    )
+
+    exec_result, _transcript_path, _error_msg, errored = await orch._exec_claude(  # pyright: ignore[reportPrivateUsage]
+        record=rb, alert=alert, run_id="r1", dry=False
+    )
+
+    # Should proceed normally.
+    assert exec_result.exit_code == 0
+    assert errored is False
+
+    # Check grant_resolved audit row.
+    audit_rows = await repo.execute(
+        text("SELECT after_json FROM audit_log WHERE what = 'autofix.grant_resolved'")
+    )
+    rows = audit_rows.fetchall()
+    assert len(rows) == 1
+    after_data = json.loads(rows[0][0])
+    assert after_data["docker_container"] is None
+    assert after_data["docker_allowed_actions"] == []
+    assert after_data["ssh_target_id"] == "udm"
+
+
+@pytest.mark.asyncio
+async def test_grant_resolution_invalid_yaml_schema_valueerror(
+    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+) -> None:
+    """T9: syntactically valid YAML that is a list (not a mapping) -> ValueError branch."""
+    rb_dir = tmp_path / "test-runbook"
+    rb_dir.mkdir()
+    # A syntactically valid YAML list (not a mapping) — RunbookConfig.load_from_path
+    # wraps this as ValueError, which _resolve_grants catches.
+    (rb_dir / RUNBOOK_CONFIG_FILENAME).write_text("- item1\n- item2\n")
+
+    rb = _make_runbook_record(alertname="TestAlert")
+    rb = dataclasses.replace(rb, path=str(rb_dir))
+    await _insert_runbook(repo, rb)
+
+    alert = _make_alert(alertname="TestAlert")
+    await _insert_alert(repo, alert)
+
+    transcript_dir = str(tmp_path / "transcripts")
+    os.makedirs(transcript_dir, exist_ok=True)
+
+    docker = _FakeDockerClient(result=ExecResult(exit_code=0, stdout="", stderr=""))
+    orch = _make_orchestrator(repo, secrets_repo_fixture, docker, transcript_dir=transcript_dir)
+
+    exec_result, transcript_path, error_msg, errored = await orch._exec_claude(  # pyright: ignore[reportPrivateUsage]
+        record=rb, alert=alert, run_id="r1", dry=False
+    )
+
+    assert exec_result.exit_code == 1
+    assert errored is True
+    assert transcript_path is None
+    assert error_msg is not None
+    # ValueError wraps the mapping/validation error into the
+    # "scoped_capabilities_unavailable" reason; detail wraps the original message.
+    audit_rows = await repo.execute(
+        text("SELECT after_json FROM audit_log WHERE what = 'autofix.grant_failed'")
+    )
+    rows = audit_rows.fetchall()
+    assert len(rows) == 1
+    after_data = json.loads(rows[0][0])
+    assert after_data["reason"] == "scoped_capabilities_unavailable"
+
+    # _current_run should never have been published
+    assert orch._current_run is None  # pyright: ignore[reportPrivateUsage]
+
+
+@pytest.mark.asyncio
+async def test_grant_resolution_failure_never_publishes_current_run(
+    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+) -> None:
+    """T8: grant failure (real/non-dry) never publishes _current_run; kill_inflight sees no-op."""
+    rb_dir = tmp_path / "test-runbook"
+    rb_dir.mkdir()
+    # No runbook.yaml to trigger grant failure
+
+    rb = _make_runbook_record(alertname="TestAlert")
+    rb = dataclasses.replace(rb, path=str(rb_dir))
+    await _insert_runbook(repo, rb)
+
+    alert = _make_alert(alertname="TestAlert")
+    await _insert_alert(repo, alert)
+
+    transcript_dir = str(tmp_path / "transcripts")
+    os.makedirs(transcript_dir, exist_ok=True)
+
+    docker = _FakeDockerClient(result=ExecResult(exit_code=0, stdout="", stderr=""))
+    orch = _make_orchestrator(repo, secrets_repo_fixture, docker, transcript_dir=transcript_dir)
+
+    # _current_run should be None before the call.
+    assert orch._current_run is None  # pyright: ignore[reportPrivateUsage]
+
+    # Call _exec_claude in non-dry mode with a grant failure setup.
+    _exec_result, transcript_path, _error_msg, errored = await orch._exec_claude(  # pyright: ignore[reportPrivateUsage]
+        record=rb, alert=alert, run_id="r1", dry=False
+    )
+
+    # Should have failed with a grant error.
+    assert errored is True
+    assert transcript_path is None
+
+    # _current_run should STILL be None (never published during grant failure).
+    assert orch._current_run is None  # pyright: ignore[reportPrivateUsage]
+
+    # kill_inflight called with no in-flight run should be a no-op (not running).
+    kill_result = await orch.kill_inflight(reason="test", killed_by="test-user")
+    assert kill_result.killed is False
+    assert kill_result.error == "no_inflight_run"

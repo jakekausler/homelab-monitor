@@ -6,12 +6,14 @@ import asyncio
 import os
 import socket
 import time
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Final
 
+import yaml
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
 from structlog.stdlib import BoundLogger
@@ -28,7 +30,14 @@ from homelab_monitor.kernel.autofix.approvals_repository import (
 )
 from homelab_monitor.kernel.autofix.matcher import matching_runbooks
 from homelab_monitor.kernel.autofix.runs_repository import RunbookRunsRepository
-from homelab_monitor.kernel.autofix.types import DenialReason, RunMode, RunOutcome, RunResult
+from homelab_monitor.kernel.autofix.types import (
+    DenialReason,
+    GrantResolutionError,
+    ResolvedGrants,
+    RunMode,
+    RunOutcome,
+    RunResult,
+)
 from homelab_monitor.kernel.config import FixerRunnerConfig
 from homelab_monitor.kernel.db.audit import insert_audit
 from homelab_monitor.kernel.db.ids import uuid7
@@ -43,6 +52,8 @@ from homelab_monitor.kernel.docker.socket_client import (
     DockerSocketError,
     ExecResult,
 )
+from homelab_monitor.kernel.runbooks.config import RunbookConfig
+from homelab_monitor.kernel.runbooks.loader import RUNBOOK_CONFIG_FILENAME
 from homelab_monitor.kernel.runbooks.repository import RunbookRecord, RunbookRepo
 from homelab_monitor.kernel.secrets.repository import AsyncSecretsRepository
 
@@ -109,6 +120,7 @@ class AutoFixOrchestrator:
         approvals_repo: RunbookRunApprovalsRepository,
         config: FixerRunnerConfig,
         log: BoundLogger,
+        ssh_target_ids_provider: Callable[[], frozenset[str]] = frozenset,
     ) -> None:
         self._runbook_repo = runbook_repo
         self._alert_repo = alert_repo
@@ -120,6 +132,7 @@ class AutoFixOrchestrator:
         self._approvals = approvals_repo
         self._config = config
         self._log = log
+        self._ssh_target_ids_provider = ssh_target_ids_provider
         self._locks: dict[str, asyncio.Lock] = {}
         # Process-wide lock serializing the transcript snapshot->exec->resolve
         # critical section across ALL runbooks. The per-runbook lock cannot
@@ -269,6 +282,71 @@ class AutoFixOrchestrator:
             return ["claude", "-p", record.path, "--permission-mode", "plan"]
         return ["claude", "-p", record.path, "--dangerously-skip-permissions"]
 
+    async def _resolve_grants(self, *, record: RunbookRecord) -> ResolvedGrants:
+        """Re-read the runbook's YAML config fresh at exec-start and resolve
+        its declared scoped capabilities (STAGE-009-008, Decision 1B).
+
+        Raises:
+            GrantResolutionError: config file missing/unreadable, malformed
+                YAML, fails model validation, or declares an SSH target_id
+                that is not present in the current known SSH target ids
+                (fail-closed per Decision 4D).
+        """
+        config_path = Path(record.path) / RUNBOOK_CONFIG_FILENAME
+        try:
+            cfg = RunbookConfig.load_from_path(config_path)
+        except OSError as exc:
+            raise GrantResolutionError(
+                reason="scoped_capabilities_unavailable",
+                detail=f"runbook config unavailable at {config_path}: {exc}",
+            ) from exc
+        except yaml.YAMLError as exc:
+            raise GrantResolutionError(
+                reason="scoped_capabilities_unavailable",
+                detail=f"runbook config at {config_path} is malformed YAML: {exc}",
+            ) from exc
+        except ValueError as exc:
+            # RunbookConfig.load_from_path wraps ValidationError (and the
+            # non-mapping-root case) in ValueError with file-path context.
+            raise GrantResolutionError(
+                reason="scoped_capabilities_unavailable",
+                detail=str(exc),
+            ) from exc
+
+        scoped = cfg.scoped_capabilities
+
+        docker_container: str | None = None
+        docker_allowed_actions: tuple[str, ...] = ()
+        if scoped.docker is not None:
+            docker_container = scoped.docker.container
+            docker_allowed_actions = tuple(scoped.docker.allowed_actions)
+
+        ssh_target_id: str | None = None
+        if scoped.ssh is not None:
+            ssh_target_id = scoped.ssh.target_id
+            try:
+                known_ids = self._ssh_target_ids_provider()
+            except Exception as exc:
+                raise GrantResolutionError(
+                    reason="scoped_capabilities_unavailable",
+                    detail=f"ssh target registry unreadable: {exc}",
+                ) from exc
+            if ssh_target_id not in known_ids:
+                raise GrantResolutionError(
+                    reason="unknown_ssh_target_id",
+                    detail=(
+                        f"runbook {record.id} declares ssh target_id "
+                        f"{ssh_target_id!r} which is not a known SSH target"
+                    ),
+                )
+
+        return ResolvedGrants(
+            docker_container=docker_container,
+            docker_allowed_actions=docker_allowed_actions,
+            ssh_target_id=ssh_target_id,
+            egress=tuple(scoped.egress),
+        )
+
     async def _exec_claude(
         self, *, record: RunbookRecord, alert: Alert, run_id: str, dry: bool
     ) -> tuple[ExecResult, str | None, str | None, bool]:
@@ -276,7 +354,10 @@ class AutoFixOrchestrator:
 
         Returns (exec_result, transcript_path, error_msg, errored). Mirrors the
         exec critical section of _claim_and_exec exactly, differing ONLY by the
-        argv (Decision A). Does NOT persist — caller persists.
+        argv (Decision A). Persists grant-resolution audit rows
+        (``autofix.grant_resolved`` / ``autofix.egress_unenforced`` on success;
+        ``autofix.grant_failed`` on failure) BEFORE exec. Does NOT persist run
+        completion or exec outcome — caller persists those.
         """
         api_key = await self._secrets_repo.get("ANTHROPIC_API_KEY")
         env: dict[str, str] = {}
@@ -289,6 +370,70 @@ class AutoFixOrchestrator:
         error_msg: str | None = None
         cmd = self._build_claude_cmd(record, dry=dry)
         async with self._transcript_lock:
+            # STAGE-009-008: resolve scoped capability grants fresh (file-
+            # authoritative) before any exec or kill-switch publish. A
+            # failure here must never publish _current_run.
+            try:
+                grants = await self._resolve_grants(record=record)
+            except GrantResolutionError as exc:
+                try:
+                    async with self._db.transaction() as conn:
+                        await insert_audit(
+                            conn,
+                            who="system:autofix",
+                            what="autofix.grant_failed",
+                            after={
+                                "runbook_id": record.id,
+                                "alert_id": alert.id,
+                                "run_id": run_id,
+                                "reason": exc.reason,
+                                "detail": exc.detail,
+                            },
+                        )
+                except Exception:
+                    self._log.exception(
+                        "autofix_grant_failed_audit_failed",
+                        runbook_id=record.id,
+                        run_id=run_id,
+                    )
+                return (
+                    ExecResult(exit_code=1, stdout="", stderr=""),
+                    None,
+                    exc.detail,
+                    True,
+                )
+            async with self._db.transaction() as conn:
+                await insert_audit(
+                    conn,
+                    who="system:autofix",
+                    what="autofix.grant_resolved",
+                    after={
+                        "runbook_id": record.id,
+                        "alert_id": alert.id,
+                        "run_id": run_id,
+                        "docker_container": grants.docker_container,
+                        "docker_allowed_actions": list(grants.docker_allowed_actions),
+                        "ssh_target_id": grants.ssh_target_id,
+                        "egress": list(grants.egress),
+                    },
+                )
+                if not dry and grants.egress:
+                    await insert_audit(
+                        conn,
+                        who="system:autofix",
+                        what="autofix.egress_unenforced",
+                        after={
+                            "runbook_id": record.id,
+                            "alert_id": alert.id,
+                            "run_id": run_id,
+                            "egress": list(grants.egress),
+                            "detail": (
+                                "egress declared but not enforced by the "
+                                "fixer-runner network layer (STAGE-009-015)"
+                            ),
+                        },
+                    )
+
             before = self._snapshot_dir(transcript_dir)
             exec_started = datetime.now(tz=UTC)
             # STAGE-009-007: publish the in-flight handle so kill_inflight can

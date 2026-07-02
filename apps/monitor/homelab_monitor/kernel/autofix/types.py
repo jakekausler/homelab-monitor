@@ -51,3 +51,35 @@ class RunResult:
     exit_code: int | None
     denial_reason: DenialReason | None
     approval_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedGrants:
+    """Runtime-resolved scoped capabilities for a single exec (STAGE-009-008).
+
+    Re-read fresh from the runbook's YAML config at exec-start (file-
+    authoritative per Decision 1B) rather than cached from the DB
+    RunbookRecord. Docker capability is POLICY-ONLY this stage (Decision
+    2E-lite) — no actual docker access is granted to the fixer. Egress is
+    declared-but-unenforced (Decision 3E).
+    """
+
+    docker_container: str | None
+    docker_allowed_actions: tuple[str, ...]
+    ssh_target_id: str | None
+    egress: tuple[str, ...]
+
+
+class GrantResolutionError(Exception):
+    """Raised by ``_resolve_grants`` when scoped capabilities cannot be
+    resolved or validated for a runbook at exec-start.
+
+    ``reason`` is a short machine-stable token used as the audit ``after``
+    payload's ``reason`` field (mirrors ``DenialReason`` string-token style,
+    but kept as a plain str since this isn't a gate-denial enum member).
+    """
+
+    def __init__(self, reason: str, detail: str) -> None:
+        super().__init__(detail)
+        self.reason = reason
+        self.detail = detail

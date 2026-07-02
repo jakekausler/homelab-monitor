@@ -391,7 +391,12 @@ async def test_approve_happy(
     tmp_path: Path,
 ) -> None:
     """R6: POST /approve happy path → real exec fires."""
-    rb = _make_runbook_record(alertname="Test", dry_run_required=True, content_hash="hash-v1")
+    rb = _make_runbook_record(
+        alertname="Test",
+        dry_run_required=True,
+        content_hash="hash-v1",
+        runbook_dir=tmp_path / "runbook",
+    )
     await _insert_runbook(repo, rb)
 
     app_settings = AppSettingsRepository(repo)
@@ -554,7 +559,12 @@ async def test_approve_drift_conflict_and_rejects(
     now the enriched orchestrator shape: {approval_id, runbook_id,
     gate='runbook_changed', pinned_runbook_hash, current_runbook_hash}.
     """
-    rb = _make_runbook_record(alertname="Test", dry_run_required=True, content_hash="hash-v1")
+    rb = _make_runbook_record(
+        alertname="Test",
+        dry_run_required=True,
+        content_hash="hash-v1",
+        runbook_dir=tmp_path / "runbook",
+    )
     await _insert_runbook(repo, rb)
 
     app_settings = AppSettingsRepository(repo)
@@ -642,7 +652,12 @@ async def test_router_approve_runbook_missing_returns_409_with_specific_code(
     so the UI/operator can distinguish "runbook was deleted, re-author it" from
     "runbook was edited, re-plan against the new content".
     """
-    rb = _make_runbook_record(alertname="Test", dry_run_required=True, content_hash="hash-v1")
+    rb = _make_runbook_record(
+        alertname="Test",
+        dry_run_required=True,
+        content_hash="hash-v1",
+        runbook_dir=tmp_path / "runbook",
+    )
     await _insert_runbook(repo, rb)
 
     app_settings = AppSettingsRepository(repo)
