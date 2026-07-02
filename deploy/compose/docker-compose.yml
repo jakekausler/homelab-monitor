@@ -84,6 +84,13 @@ services:
       # runner writes inherit monitor-readable (rX) + fixer-writable (rwX) perms.
       # The fixer-runner's OWN rw mount of this dir is added in STAGE-009-003.
       - ${HM_FIXER_TRANSCRIPTS_SRC:-/var/lib/homelab-monitor/runbook-transcripts}:/data/runbook-transcripts:ro
+      # EPIC-009 / STAGE-009-010 (discovered during Refinement): runbook registry root
+      # bind-mount. The backend defaults HOMELAB_MONITOR_RUNBOOKS_DIR to the in-container
+      # path /runbooks; STAGE-009-004 shipped the registry code but no compose mount
+      # was ever added. STAGE-009-010's UI surfaces the resulting "runbooks root
+      # /runbooks is not a directory" error. Read-only: the loader only reads
+      # runbook folder configs; runbook edits happen on the host filesystem.
+      - ${HM_RUNBOOKS_SRC:-../../runbooks}:/runbooks:ro
       - data_vm:/var/vm-data:ro
       - data_vl:/var/vl-data:ro
       - data_backup:/storage/backup/homelab-monitor

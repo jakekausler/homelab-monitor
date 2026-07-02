@@ -47,7 +47,7 @@ const NAV_ITEMS: NavItem[] = [
   { label: 'Unifi', to: '/integrations/unifi', icon: Router, indent: true },
   { label: 'Logs', to: '/logs', icon: ScrollText },
   { label: 'Metrics', to: '/metrics', icon: Gauge },
-  { label: 'Runbooks', icon: FileText, disabledNote: 'Coming soon' },
+  { label: 'Runbooks', to: '/runbooks', icon: FileText },
   { label: 'Auto-fix history', icon: Wand2, disabledNote: 'Coming soon' },
   {
     label: 'Discovery & suggestions',
@@ -77,7 +77,7 @@ export function SidebarNav({
     <nav
       aria-label={ariaLabel}
       className={cn(
-        'flex h-full flex-col gap-1 border-r border-border bg-sidebar p-2 transition-[width]',
+        'flex h-full flex-col gap-1 overflow-y-auto border-r border-border bg-sidebar p-2 transition-[width]',
         collapsed ? 'w-14' : 'w-64',
       )}
     >

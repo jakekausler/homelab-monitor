@@ -65,6 +65,7 @@ import { SilenceAllowlistTab } from '@/routes/logs/SilenceAllowlistTab'
 import { SettingsLayout } from '@/routes/settings/SettingsLayout'
 import { SettingsLogsPage } from '@/routes/settings/SettingsLogsPage'
 import { SettingsAutofixPage } from '@/routes/settings/SettingsAutofixPage'
+import { RunbooksPage } from '@/routes/runbooks/RunbooksPage'
 import { AppShell } from '@/components/AppShell'
 import { ErrorDisplay } from '@/components/ErrorDisplay'
 
@@ -459,6 +460,12 @@ const settingsAutofixRoute = createRoute({
   component: SettingsAutofixPage,
 })
 
+const runbooksRoute = createRoute({
+  getParentRoute: () => protectedLayoutRoute,
+  path: '/runbooks',
+  component: RunbooksPage,
+})
+
 const dockerIntegrationRoute = createRoute({
   getParentRoute: () => protectedLayoutRoute,
   path: '/integrations/docker',
@@ -732,6 +739,7 @@ const routeTree = rootRoute.addChildren([
       logsModelsDebugRoute,
     ]),
     settingsLayoutRoute.addChildren([settingsIndexRoute, settingsLogsRoute, settingsAutofixRoute]),
+    runbooksRoute,
     dockerIntegrationRoute,
     cronsListRoute,
     cronDetailRoute,
