@@ -1,6 +1,6 @@
 # EPIC-009: Auto-fix subsystem
 
-## Status: In Progress (7/13 stages — STAGE-009-001..013; decomposed 2026-06-29)
+## Status: In Progress (8/15 stages — STAGE-009-001..015; STAGE-009-014/015 added 2026-07-02 during STAGE-009-008 Design as owned deferrals; decomposed 2026-06-29)
 
 ## Overview
 
@@ -69,6 +69,8 @@ Ship with auto-trigger **entirely OFF, ZERO enabled runbooks**. The `pihole-rest
 | STAGE-009-011 | Auto-fix history UI: filterable runbook_runs table + transcript viewer (full Claude session) + exit codes/durations/mode + improvement-feedback display | FRONTEND |
 | STAGE-009-012 | Audit immutability + runbook_hash enrichment + transcript rotation: runbook_runs/audit rows not API-deletable; runbook_hash per run (detect runbook changed between runs); transcript rotation per §10.2 (keep last N=100, max age 365d, prune-not-silently-delete, audit row retained even after transcript file gone) | BACKEND |
 | STAGE-009-013 | `pihole-restart-loop` example runbook (folder: markdown + config declaring docker capability for `pihole-unbound` action `restart`, `risk_tag: risky`), shipped in `runbooks/_examples/` NOT registered/enabled; end-to-end pipeline validation against the fake claude. **Epic-closing stage** | BACKEND/CONTENT |
+| STAGE-009-014 | Docker intent gateway: fixer emits `docker-intent.json` → orchestrator parses post-exec → validates against STAGE-009-008's `DockerCapability` envelope → executes via existing `DockerClient` → audits `autofix.intent_executed` / `autofix.intent_denied`. Enforces non-negotiable #2 (docker dimension) at execution time. Fixer holds no docker socket — enforcement runs in monitor process | BACKEND |
+| STAGE-009-015 | fixer-runner egress enforcement: HTTPS proxy sidecar on `fixer-egress` network + host iptables/nftables DROP for non-proxy outbound; proxy enforces STAGE-009-008's `granted_egress` allow-list + baseline Anthropic API. Enforces non-negotiable #2 (egress dimension) at network layer. Transitions `autofix.egress_unenforced` warning to `autofix.egress_enforced` informational | BACKEND/DEPLOY |
 
 ## Dependency ordering rationale
 
@@ -116,6 +118,7 @@ Same as EPIC-001 plus:
 
 ## Notes
 
+- **Late-added stages (2026-07-02):** STAGE-009-014 and STAGE-009-015 were added during STAGE-009-008 Design phase as owned deferrals per the no-silent-deferral workflow rule. STAGE-009-008 chose to split policy (grant declaration + audit — owned by 008) from mechanism (docker execution — owned by 014; egress enforcement — owned by 015). Stage-order-of-execution: 008 → 009 → 010 → 011 → 012 → 014 → 015 → 013 (STAGE-009-013 depends on 014 for real docker execution).
 - The first built-in example runbook (`pihole-restart-loop`) is intentionally simple. Real auto-fix runbooks live in the user's `homelab-monitor-overrides` repo. The public release ships exemplars only (Decision 4).
 - Claude's runtime cost matters: each runbook execution invokes the Anthropic API. Rate-limit defaults are conservative (e.g., 5 runs/hour globally) to prevent runaway costs.
 - "Risky" tagging is at the runbook author's discretion. The default for any new runbook is `risky=true` — it must be explicitly downgraded to `safe` in the runbook's own config after sufficient hands-on validation. Bias toward dry-run.
