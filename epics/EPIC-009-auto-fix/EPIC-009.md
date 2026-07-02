@@ -1,6 +1,6 @@
 # EPIC-009: Auto-fix subsystem
 
-## Status: In Progress (8/15 stages — STAGE-009-001..015; STAGE-009-014/015 added 2026-07-02 during STAGE-009-008 Design as owned deferrals; decomposed 2026-06-29)
+## Status: In Progress (9/15 stages — STAGE-009-001..015; STAGE-009-014/015 added 2026-07-02 during STAGE-009-008 Design as owned deferrals; decomposed 2026-06-29)
 
 ## Overview
 
