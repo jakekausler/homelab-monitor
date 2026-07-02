@@ -74,3 +74,17 @@
   - Markdown/whole-folder drift detection → STAGE-009-012 (006's drift check is CONFIG-hash-only).
   - Session-PIN confirm-on-destructive → STAGE-009-010/011 (006 ships typed `confirm_phrase` only).
   - Approval UI (list pending, view plan, approve/reject buttons) → STAGE-009-010/011 (006 is API-only).
+
+## STAGE-009-007 (Kill switch — pre-run gate + mid-run kill + dashboard control)
+
+Per-stage regression checks. Run these when suspecting any regression that touches the auto-fix kill switch:
+
+- **Kill-switch toggle audit**: hit `POST /api/settings/autofix/kill-switch` with the correct confirm phrase; assert an `audit_log` row with `what="autofix.kill_switch_toggled"` was written.
+- **Confirm-on-destructive enforcement**: hit the same endpoint without a phrase or with a wrong phrase; assert HTTP 400 and no state change.
+- **Case-insensitive confirm phrase**: hit the endpoint with `"DISABLE AUTO-FIX"` or `"  disable auto-fix  "`; both should succeed.
+- **Pre-run gate ordering**: verify `_check_operational_gates` still evaluates `autofix_enabled` FIRST. Trace the code path (`orchestrator.py:142-171`) or grep for `DenialReason.KILL_SWITCH`; the first check must be against `app_settings.autofix_enabled`.
+- **Mid-run kill against fake claude**: run `make uv ARGS="--directory apps/monitor pytest tests/integration/test_fixer_runner.py::test_docker_kill_terminates_inflight_exec -v -m 'integration or not integration' --no-cov"` on the host (docker daemon required). Expected: PASS in <10s.
+- **`runbook_runs.killed_at` column**: verify migration 0048 has NOT been reverted — `killed_at TEXT NULL` must be present in the `runbook_runs` schema (grep migrations or run `sqlite3 <db> 'PRAGMA table_info(runbook_runs)'`).
+- **`DockerSocketClient.kill_container` idempotency**: assert 409 (container already stopped) is treated as success (idempotent), not raised.
+- **Kill-switch endpoint auth**: unauth GET/POST → 401; missing CSRF header on POST → 403.
+- **UI sub-nav route**: `/settings/logs` still redirects/serves; `/settings/autofix` serves the page; both `NavLink`s highlight correctly.
