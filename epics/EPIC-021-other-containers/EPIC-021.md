@@ -85,6 +85,15 @@ the EPIC-021 candidates are the custom-built apps below. **The user confirmed: e
 
 ## Stage decomposition (7 stages, parallelizable)
 
+> **⚠️ TENTATIVE / PROSPECTIVE — DO NOT TREAT AS COMMITTED.**
+>
+> The stages/pillars listed below are a first-pass sketch from the initial epic bootstrap. They
+> are PROSPECTIVE only and are expected to change substantially. Before this epic begins, the
+> entire decomposition MUST be **re-done from scratch with the user** during the epic's Design
+> phase — re-scope, re-order, split, merge, add, remove — using the latest project reality and
+> whatever downstream epics/stages have already taught us. Do NOT begin any stage below without
+> that re-decomposition and explicit user sign-off.
+
 Each active-app stage = configure the EPIC-003 container probe (HTTP health + label/config), add a
 log-pattern vmalert-logs rule for that app's known error shapes, wire any dependency check, and add a
 regression entry. Stages are independent and MAY be reordered. The disabled-apps stage is grouped

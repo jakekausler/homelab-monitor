@@ -20,6 +20,15 @@ The user explicitly requested (2026-06-16):
 
 ## Five pillars (decompose into stages during this epic's Design phase)
 
+> **⚠️ TENTATIVE / PROSPECTIVE — DO NOT TREAT AS COMMITTED.**
+>
+> The stages/pillars listed below are a first-pass sketch from the initial epic bootstrap. They
+> are PROSPECTIVE only and are expected to change substantially. Before this epic begins, the
+> entire decomposition MUST be **re-done from scratch with the user** during the epic's Design
+> phase — re-scope, re-order, split, merge, add, remove — using the latest project reality and
+> whatever downstream epics/stages have already taught us. Do NOT begin any stage below without
+> that re-decomposition and explicit user sign-off.
+
 1. **Per-subdomain reachability probes.** Read `sites-config.yaml` (read-only) — currently ~22 sites
    (`podcast/dw/jakekausler.com/plex/udo/kingmaker/foundry/library/deadlands/bills/grocy/billsdev/
    frigate/teacherinsights/languagetutor/campaign/blog.jakekausler.com`, etc.). For each enabled site,

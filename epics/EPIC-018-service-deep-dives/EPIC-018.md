@@ -15,6 +15,15 @@ The list of services is open-ended and grows over time. Each service is a small 
 
 ## Candidate stages (each is one service; not exhaustive)
 
+> **⚠️ TENTATIVE / PROSPECTIVE — DO NOT TREAT AS COMMITTED.**
+>
+> The stages/pillars listed below are a first-pass sketch from the initial epic bootstrap. They
+> are PROSPECTIVE only and are expected to change substantially. Before this epic begins, the
+> entire decomposition MUST be **re-done from scratch with the user** during the epic's Design
+> phase — re-scope, re-order, split, merge, add, remove — using the latest project reality and
+> whatever downstream epics/stages have already taught us. Do NOT begin any stage below without
+> that re-decomposition and explicit user sign-off.
+
 | Likely stage | Service / theme |
 |---|---|
 | STAGE-018-001 | Mosquitto (MQTT broker) — broker uptime, connected clients, message rate, topic subscription health |

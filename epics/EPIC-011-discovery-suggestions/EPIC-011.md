@@ -59,6 +59,15 @@ When EPIC-011's Design phase begins, it MUST explicitly resolve these three carr
 
 ## Stages (to decompose during epic Design phase)
 
+> **⚠️ TENTATIVE / PROSPECTIVE — DO NOT TREAT AS COMMITTED.**
+>
+> The stages/pillars listed below are a first-pass sketch from the initial epic bootstrap. They
+> are PROSPECTIVE only and are expected to change substantially. Before this epic begins, the
+> entire decomposition MUST be **re-done from scratch with the user** during the epic's Design
+> phase — re-scope, re-order, split, merge, add, remove — using the latest project reality and
+> whatever downstream epics/stages have already taught us. Do NOT begin any stage below without
+> that re-decomposition and explicit user sign-off.
+
 | Likely stage | Theme |
 |---|---|
 | STAGE-011-001 | Discoverer plugin contract — refines the `Discoverer` plugin kind from STAGE-001-006's types: declares `interval`, returns a list of `Discovery` records with stable identity hashes |

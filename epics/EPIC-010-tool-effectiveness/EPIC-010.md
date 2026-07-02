@@ -14,6 +14,15 @@ This epic operationalizes the user's instruction (Q17 → option D) to know whic
 
 ## Stages (to decompose during epic Design phase)
 
+> **⚠️ TENTATIVE / PROSPECTIVE — DO NOT TREAT AS COMMITTED.**
+>
+> The stages/pillars listed below are a first-pass sketch from the initial epic bootstrap. They
+> are PROSPECTIVE only and are expected to change substantially. Before this epic begins, the
+> entire decomposition MUST be **re-done from scratch with the user** during the epic's Design
+> phase — re-scope, re-order, split, merge, add, remove — using the latest project reality and
+> whatever downstream epics/stages have already taught us. Do NOT begin any stage below without
+> that re-decomposition and explicit user sign-off.
+
 | Likely stage | Theme |
 |---|---|
 | STAGE-010-001 | Outcome capture: ensure every alert ingested in EPIC-001 onward gets an outcome row when the user acks/dismisses, when auto-fix runs, or when the alert auto-resolves. The `alert_outcomes` table from STAGE-001-013 already exists; this stage tightens the writes |

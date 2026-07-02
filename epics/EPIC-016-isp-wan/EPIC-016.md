@@ -12,6 +12,15 @@ Build the dedicated ISP/WAN-side monitoring per spec §2 Q21. All listed signals
 
 ## Stages (to decompose during epic Design phase)
 
+> **⚠️ TENTATIVE / PROSPECTIVE — DO NOT TREAT AS COMMITTED.**
+>
+> The stages/pillars listed below are a first-pass sketch from the initial epic bootstrap. They
+> are PROSPECTIVE only and are expected to change substantially. Before this epic begins, the
+> entire decomposition MUST be **re-done from scratch with the user** during the epic's Design
+> phase — re-scope, re-order, split, merge, add, remove — using the latest project reality and
+> whatever downstream epics/stages have already taught us. Do NOT begin any stage below without
+> that re-decomposition and explicit user sign-off.
+
 | Likely stage | Theme |
 |---|---|
 | STAGE-016-001 | WAN reachability collector: ping (ICMP) and HTTP probe of well-known endpoints (1.1.1.1, 8.8.8.8, google.com, cloudflare.com); separate metrics per endpoint |

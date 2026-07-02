@@ -15,6 +15,15 @@ Cert/domain expiry monitoring also lands here (it's spiritually a "self-knowledg
 
 ## Stages (to decompose during epic Design phase)
 
+> **⚠️ TENTATIVE / PROSPECTIVE — DO NOT TREAT AS COMMITTED.**
+>
+> The stages/pillars listed below are a first-pass sketch from the initial epic bootstrap. They
+> are PROSPECTIVE only and are expected to change substantially. Before this epic begins, the
+> entire decomposition MUST be **re-done from scratch with the user** during the epic's Design
+> phase — re-scope, re-order, split, merge, add, remove — using the latest project reality and
+> whatever downstream epics/stages have already taught us. Do NOT begin any stage below without
+> that re-decomposition and explicit user sign-off.
+
 | Likely stage | Theme |
 |---|---|
 | STAGE-014-001 | Cert-expiry collector: walks `/etc/letsencrypt/live/*` (read-only mount); emits `homelab_cert_expires_seconds{domain}`; default rules at 30d / 14d / 7d thresholds |
