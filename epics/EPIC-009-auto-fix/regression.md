@@ -120,3 +120,29 @@ Per-stage regression checks. Run these when suspecting any regression that touch
 - [ ] Production wiring: `apps/monitor/homelab_monitor/kernel/api/lifespan.py` passes `feedback_repo=RunbookRunFeedbackRepository(repo)` to the `AutoFixOrchestrator` constructor. Backward compat verified: `feedback_repo=None` default preserves existing behavior (test: `test_feedback_repo_none_no_crash_orchestrator_continues`).
 - [ ] `runbook_run_feedback` is a SIBLING table — `runbook_runs` schema unchanged. `audit_log` writes for `autofix.ran` / `autofix.exec_error` / `autofix.dry_run_stored` unchanged. `autofix.feedback_parse_error` is additive telemetry, not a replacement. Seven non-negotiables (allow-list trigger, scoped runbook, homelab-fixer identity, audit trail, dry-run + approval, rate-limit + cooldown, kill switch): all PASS-verified by code-reviewer pass 2.
 - [ ] UI + list endpoint deferred to STAGE-009-011 (tracked existing stage; Deliverable #3 explicitly reads "Show the runbook_run_feedback items (STAGE-009-009) for the selected run"). Feedback rows are queryable via SQLite CLI in the interim.
+
+## STAGE-009-010 (Build + Refinement — completed 2026-07-02)
+
+**Design decisions (locked 2026-07-02):**
+
+- Deferred: manual-trigger endpoint + Run-fix button → **STAGE-009-010A** (new stage, owns backend + UI). Rationale: non-negotiable #1 (Trigger allow-list) requires a properly-designed operator-initiated trigger endpoint with its own regression surface.
+- Deferred: backend defense-in-depth rejection of `PATCH auto_trigger=true` on `risky` runbooks → **STAGE-009-010A** (bundled). Rationale: today's backend safety net for risky is exec-time only (`dry_run_required` routes to approval); the PATCH itself is permitted. UI enforces the semantic; backend should mirror it.
+- Deferred: session-PIN confirm-on-destructive → **STAGE-009-010B** (new stage, replaces typed-phrase across all destructive auto-fix actions). Rationale: STAGE-009-006 regression note; ships as UX polish, not safety-critical.
+- Deferred: last-run + success-rate + run-count on catalog cards → **STAGE-009-011** (extended). STAGE-009-011 card updated with a new §3.5 "Runs aggregation endpoint" deliverable feeding both history table and 010 catalog cards.
+- Deferred: general-purpose transcript viewer for all runs (dry + real) → **STAGE-009-011** (already in card §2). 010's approval Dialog shows only the plan_text via existing `GET /api/autofix/approvals/{id}/plan`.
+
+**Build + Refinement regression items (2026-07-02):**
+
+### Discovered during Refinement (2026-07-02)
+
+- **Bug (STAGE-009-004 infra gap):** `deploy/compose/docker-compose.yml` monitor service was missing the `/runbooks` bind-mount that the STAGE-009-004 registry loader (`HOMELAB_MONITOR_RUNBOOKS_DIR` default) requires. Fixed in STAGE-009-010 Refinement — added `${HM_RUNBOOKS_SRC:-../../runbooks}:/runbooks:ro`. Symptom: `POST /api/runbooks/refresh` returns `errors: [{path: "/runbooks", message: "runbooks root /runbooks is not a directory"}]`. Origin: STAGE-009-004 shipped without a compose mount; not caught because no earlier stage consumed the endpoint end-to-end. Regression test: ensure `docker exec homelab-monitor ls /runbooks` succeeds after `make dev-prod`.
+
+- **Bug (STAGE-009-004 design gap):** `POST /api/runbooks/refresh` does NOT prune DB rows whose disk folders have been deleted. The refresh implementation iterates disk folders and reconciles them but never inspects DB rows for orphaned entries. Effect: a deleted runbook folder's registry row lingers in the DB (inert — `enabled=false`, `auto_trigger=false`, and the loader can't load it — but visible in `GET /api/runbooks`). Not blocking for STAGE-009-010 sign-off (user approved with knowledge of this behavior). **Owner: file a follow-up in EPIC-009 backlog** — potentially bundled with STAGE-009-012 (audit immutability + rotation) since row pruning has audit implications, OR ship as a small STAGE-009-004 back-patch. Regression test: create runbook folder, POST refresh, delete folder, POST refresh again, confirm GET /api/runbooks no longer lists the deleted runbook.
+
+- **Bug (project-wide):** `apps/ui/src/components/SidebarNav.tsx`'s root `<nav>` had `h-full flex-col` but no `overflow-y-auto`, causing nav items to clip at the bottom of tall lists (both mobile drawer and any short-height desktop viewport). Fixed in STAGE-009-010 Refinement. Regression test: mobile-viewport screenshot with many nav items visible confirms scrollability; and unit test can `render` SidebarNav in a small container and assert the nav element has `overflow-y-auto`.
+
+- **UI coverage flake:** `apps/ui/src/components/crons/CronsToolbar.tsx`'s 250ms `setTimeout` debounce callback flakily contributes ± 1 function to vitest coverage totals depending on wall-clock timing between test render and cleanup, threshold-sensitive at the 80.00% functions boundary. Not fixed in STAGE-009-010 (out of scope). Owner: file a follow-up to add `vi.useFakeTimers()` + explicit timer-advance in `CronsToolbar.test.tsx`. Mitigated in STAGE-009-010 by adding margin via new runbook-file tests.
+
+- **Observation (not a bug):** the amber kill-switch banner on `/runbooks` uses an `AlertTriangle` icon and can be visually confused with an error card by a first-time user. Current wording ("Auto-fix is disabled. Enable it in Settings → Auto-fix to toggle runbooks or approve runs.") is accurate; consider whether an info/warning icon (rather than triangle) would reduce the false-error read. Not blocking. Owner: potential UX polish stage.
+
+- **Regression: the risky-runbook auto-trigger info tooltip.** Verify per Refinement sign-off that hover on the info icon renders the tooltip text "Auto-trigger produces a pending approval (not a real run). Approve to execute." for risky runbooks ONLY (not safe). Vitest test in `__tests__/RunbookCard.test.tsx` covers presence/absence of the info-icon element by risk_tag.

@@ -1,6 +1,6 @@
 # EPIC-009: Auto-fix subsystem
 
-## Status: In Progress (9/15 stages — STAGE-009-001..015; STAGE-009-014/015 added 2026-07-02 during STAGE-009-008 Design as owned deferrals; decomposed 2026-06-29)
+## Status: In Progress (10/17 stages — STAGE-009-001..015 + STAGE-009-010A/010B; STAGE-009-014/015 added 2026-07-02 during STAGE-009-008 Design as owned deferrals; STAGE-009-010A/010B added 2026-07-02 during STAGE-009-010 Design as owned deferrals; decomposed 2026-06-29)
 
 ## Overview
 
@@ -66,6 +66,8 @@ Ship with auto-trigger **entirely OFF, ZERO enabled runbooks**. The `pihole-rest
 | STAGE-009-008 | Per-runbook scoped-capability granting + fixer-runner egress control: how the config's declared capabilities (docker socket / bind-mounts / SSH target_id read-ref / egress allow-list) are actually granted to the fixer container at exec time; inbound denied, outbound allow-listed (Anthropic API always) | BACKEND/DEPLOY |
 | STAGE-009-009 | Claude→user improvement-feedback channel: structured feedback output contract + `runbook_run_feedback` sibling table + UI review surface | BACKEND + FRONTEND |
 | STAGE-009-010 | Auto-fix UI: Runbooks screen (replaces the 'Coming soon' nav placeholder; catalog cards) + manual "Run fix" trigger surface (no alert drawer exists — create the surface; dry-vs-real toggle, forced-dry for risky, confirm-on-destructive for real) | FRONTEND |
+| STAGE-009-010A | Auto-fix UI: manual "Run fix" trigger — `POST /api/runbooks/{id}/trigger` (operator-initiated; honors allow-list, rate-limit, cooldown, kill-switch, and routes risky→dry-run+approval); per-card Run-fix button + Dialog modal (dry-vs-real toggle, forced-dry for risky, confirm-on-destructive for real); backend defense-in-depth rejection of `PATCH auto_trigger=true` on risky runbooks (added during STAGE-009-010 Design as owned deferral) | BACKEND + FRONTEND |
+| STAGE-009-010B | Auto-fix UI: session-PIN confirm-on-destructive — replaces typed-phrase confirm across kill-switch, approve, and 010A's real-run trigger (from STAGE-009-006 regression note; added during STAGE-009-010 Design as owned deferral) | BACKEND + FRONTEND |
 | STAGE-009-011 | Auto-fix history UI: filterable runbook_runs table + transcript viewer (full Claude session) + exit codes/durations/mode + improvement-feedback display | FRONTEND |
 | STAGE-009-012 | Audit immutability + runbook_hash enrichment + transcript rotation: runbook_runs/audit rows not API-deletable; runbook_hash per run (detect runbook changed between runs); transcript rotation per §10.2 (keep last N=100, max age 365d, prune-not-silently-delete, audit row retained even after transcript file gone) | BACKEND |
 | STAGE-009-013 | `pihole-restart-loop` example runbook (folder: markdown + config declaring docker capability for `pihole-unbound` action `restart`, `risk_tag: risky`), shipped in `runbooks/_examples/` NOT registered/enabled; end-to-end pipeline validation against the fake claude. **Epic-closing stage** | BACKEND/CONTENT |
@@ -83,7 +85,10 @@ Dependencies flow upward (lower number = earlier):
 - **006 (dry-run)**, **007 (kill switch)** layer safety gates onto the 005 orchestrator.
 - **008 (capability granting + egress)** makes the scoped-capabilities the orchestrator grants actually real at exec time; depends on 003 (container) + 005 (orchestrator exec path).
 - **009 (feedback)** depends on 005 (a run to attach feedback to) + the transcript contract.
-- **010 + 011 (UI)** depend on the backend surfaces (registry API, orchestrator, runbook_runs, feedback) being present.
+- **010 (UI catalog + approval-review)** depends on the backend surfaces (registry API, orchestrator, approvals) being present.
+- **010A (manual-trigger endpoint + button)** depends on 010 (the button lands on 010's cards) and 005/006 (orchestrator + approval flow).
+- **010B (session-PIN confirm)** depends on 010A (adds a third destructive surface — the manual real-run) but is otherwise UI polish.
+- **011 (history + transcript viewer)** depends on the backend surfaces (runbook_runs, feedback); its aggregation endpoint also feeds 010's catalog card summary (per STAGE-009-010 Design deferral).
 - **012 (audit immutability + rotation)** hardens the audit/transcript surface 005 writes.
 - **013 (example runbook)** validates the whole pipeline end-to-end and closes the epic.
 
@@ -118,7 +123,7 @@ Same as EPIC-001 plus:
 
 ## Notes
 
-- **Late-added stages (2026-07-02):** STAGE-009-014 and STAGE-009-015 were added during STAGE-009-008 Design phase as owned deferrals per the no-silent-deferral workflow rule. STAGE-009-008 chose to split policy (grant declaration + audit — owned by 008) from mechanism (docker execution — owned by 014; egress enforcement — owned by 015). Stage-order-of-execution: 008 → 009 → 010 → 011 → 012 → 014 → 015 → 013 (STAGE-009-013 depends on 014 for real docker execution).
+- **Late-added stages (2026-07-02):** STAGE-009-014 and STAGE-009-015 were added during STAGE-009-008 Design phase as owned deferrals per the no-silent-deferral workflow rule. STAGE-009-008 chose to split policy (grant declaration + audit — owned by 008) from mechanism (docker execution — owned by 014; egress enforcement — owned by 015). STAGE-009-010A and STAGE-009-010B were added 2026-07-02 during STAGE-009-010 Design as owned deferrals: 010 focuses on the catalog + approval-review surfaces (approval-review must land with 010 because non-negotiable #5 requires a review surface for pending approvals from real alerts); the manual-trigger endpoint + UI (010A) is a distinct backend + frontend concern deserving its own stage per non-negotiable #1; session-PIN (010B) replaces the typed-phrase confirm-on-destructive as UX polish (regression item from STAGE-009-006). Stage-order-of-execution: 008 → 009 → 010 → 010A → 010B → 011 → 012 → 014 → 015 → 013 (STAGE-009-013 depends on 014 for real docker execution).
 - The first built-in example runbook (`pihole-restart-loop`) is intentionally simple. Real auto-fix runbooks live in the user's `homelab-monitor-overrides` repo. The public release ships exemplars only (Decision 4).
 - Claude's runtime cost matters: each runbook execution invokes the Anthropic API. Rate-limit defaults are conservative (e.g., 5 runs/hour globally) to prevent runaway costs.
 - "Risky" tagging is at the runbook author's discretion. The default for any new runbook is `risky=true` — it must be explicitly downgraded to `safe` in the runbook's own config after sufficient hands-on validation. Bias toward dry-run.
