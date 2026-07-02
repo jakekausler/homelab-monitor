@@ -42,6 +42,9 @@ from sqlalchemy import text
 
 from homelab_monitor.kernel.alerts.repository import AlertRepository
 from homelab_monitor.kernel.alerts.types import Alert, AlertStatus, Severity
+from homelab_monitor.kernel.autofix.approvals_repository import (
+    RunbookRunApprovalsRepository,
+)
 from homelab_monitor.kernel.autofix.matcher import (
     _matcher_matches,  # pyright: ignore[reportPrivateUsage]
     _runbook_matches,  # pyright: ignore[reportPrivateUsage]
@@ -84,13 +87,15 @@ class _FakeDockerClient:
     """Minimal DockerSocketClient-shaped stub.
 
     Set `result` to the ExecResult to return, or `raises` to the exception
-    to raise from exec_capture.
+    to raise from exec_capture. If `transcript_to_write` is set, write a
+    .transcript file there on exec (to support _resolve_transcript finding it).
     """
 
     result: ExecResult = field(
         default_factory=lambda: ExecResult(exit_code=0, stdout="ok", stderr="")
     )
     raises: BaseException | None = None
+    transcript_to_write: str | None = None  # if set, write a .transcript here on exec
     # Records the last call arguments for assertion
     last_call_container_id: str = ""
     last_call_cmd: list[str] | None = None
@@ -112,6 +117,9 @@ class _FakeDockerClient:
         self.last_call_env = env
         if self.raises is not None:
             raise self.raises
+        if self.transcript_to_write is not None:
+            with open(self.transcript_to_write, "w", encoding="utf-8") as fh:
+                fh.write("fake-claude-transcript\n")
         return self.result
 
 
@@ -241,6 +249,7 @@ def _make_orchestrator(  # noqa: PLR0913
         docker_client=docker_client,  # type: ignore[arg-type]
         db=repo,
         runs_repo=RunbookRunsRepository(repo),
+        approvals_repo=RunbookRunApprovalsRepository(repo),
         config=config,
         log=log,
     )
@@ -819,16 +828,16 @@ async def test_cooldown_elapsed_passes_gate(
 
 
 # ---------------------------------------------------------------------------
-# _check_gates: risky_blocked
+# T1: dry_store_risky_gates_pass_stores_plan_and_pending_approval
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_risky_blocked_dry_run_required_denies(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository
+async def test_dry_store_risky_gates_pass_stores_plan_and_pending_approval(
+    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
-    """Branch 8: dry_run_required=True → DENY risky_blocked."""
-    rb = _make_runbook_record(alertname="TestAlert", dry_run_required=True)
+    """T1: Risky runbook with all gates pass → dry-run stored + PENDING approval."""
+    rb = _make_runbook_record(alertname="TestAlert", dry_run_required=True, content_hash="hash-v1")
     await _insert_runbook(repo, rb)
     alert = _make_alert(alertname="TestAlert")
     await _insert_alert(repo, alert)
@@ -836,15 +845,71 @@ async def test_risky_blocked_dry_run_required_denies(
     app_settings = AppSettingsRepository(repo)
     await app_settings.set("autofix_enabled", "true")
 
-    docker = _FakeDockerClient()
-    orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+    transcript_dir = str(tmp_path / "transcripts")
+    os.makedirs(transcript_dir, exist_ok=True)
+    exec_log_dir = str(tmp_path / "exec-logs")
+    os.makedirs(exec_log_dir, exist_ok=True)
 
-    result = await orch.handle_alert(alert)
+    # Create a fake docker that writes a transcript file so _resolve_transcript finds it
+    docker = _FakeDockerClient(
+        result=ExecResult(exit_code=0, stdout="plan output", stderr=""),
+        transcript_to_write=f"{transcript_dir}/plan-{uuid7()}.transcript",
+    )
+    orch = _make_orchestrator(
+        repo,
+        secrets_repo_fixture,
+        docker,
+        transcript_dir=transcript_dir,
+        exec_log_dir=exec_log_dir,
+    )
+
+    with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
+        result = await orch.handle_alert(alert)
+
+    # Verify result
     assert result is not None
-    assert result.denial_reason == DenialReason.RISKY_BLOCKED
+    assert result.ran is True
+    assert result.outcome == RunOutcome.DRY_RUN_STORED
+    assert result.approval_id is not None
+    assert result.denial_reason is None
 
-    runs = await repo.fetch_all(text("SELECT id FROM runbook_runs"), {})
-    assert runs == []
+    # Verify dry-run row exists with dry_run mode
+    runs = await repo.fetch_all(
+        text("SELECT id, mode, ended_at FROM runbook_runs WHERE id = :id"),
+        {"id": result.run_id},
+    )
+    assert len(runs) == 1
+    assert runs[0].mode == RunMode.DRY_RUN.value
+    assert runs[0].ended_at is not None
+
+    # Verify command was dry (--permission-mode plan, NO --dangerously-skip-permissions)
+    assert docker.last_call_cmd is not None
+    assert "--permission-mode" in docker.last_call_cmd
+    assert "plan" in docker.last_call_cmd
+    assert "--dangerously-skip-permissions" not in docker.last_call_cmd
+
+    # Verify PENDING approval row exists
+    approvals = await repo.fetch_all(
+        text("SELECT id, status, pinned_runbook_hash FROM runbook_run_approvals WHERE id = :id"),
+        {"id": result.approval_id},
+    )
+    assert len(approvals) == 1
+    assert approvals[0].status == "pending"
+    assert approvals[0].pinned_runbook_hash == "hash-v1"
+
+    # Verify NO auto_fixed alert outcome (dry run doesn't fix)
+    outcomes = await repo.fetch_all(
+        text("SELECT id FROM alert_outcomes WHERE alert_id = :alert_id AND outcome = 'auto_fixed'"),
+        {"alert_id": alert.id},
+    )
+    assert outcomes == []
+
+    # Verify audit entry for dry_run_stored
+    audits = await repo.fetch_all(
+        text("SELECT what FROM audit_log WHERE what = 'autofix.dry_run_stored'"),
+        {},
+    )
+    assert len(audits) >= 1
 
 
 # ---------------------------------------------------------------------------
@@ -2251,13 +2316,12 @@ async def test_exec_capture_timeout_raises_docker_exec_timeout_error() -> None:
         "allow_list",
         "rate_limit",
         "cooldown",
-        "risky_blocked",
         "ambiguous_match",
         "already_running",
         "claim_error",
     ],
 )
-async def test_denial_paths_never_call_exec(  # noqa: PLR0915 -- one parametrized body covers all 8 denial paths
+async def test_denial_paths_never_call_exec(  # noqa: PLR0915 -- one parametrized body covers all denial paths
     denial_label: str,
     repo: SqliteRepository,
     secrets_repo_fixture: AsyncSecretsRepository,
@@ -2344,16 +2408,6 @@ async def test_denial_paths_never_call_exec(  # noqa: PLR0915 -- one parametrize
                 mode=RunMode.REAL,
             )
         await runs_repo.mark_completed(run_id=run_id_pre, exit_code=0, transcript_path=None)
-        orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
-        result = await orch.handle_alert(alert)
-
-    elif denial_label == "risky_blocked":
-        rb = _make_runbook_record(alertname="TestAlert", dry_run_required=True)
-        await _insert_runbook(repo, rb)
-        alert = _make_alert(alertname="TestAlert")
-        await _insert_alert(repo, alert)
-        app_settings = AppSettingsRepository(repo)
-        await app_settings.set("autofix_enabled", "true")
         orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
         result = await orch.handle_alert(alert)
 
@@ -2676,3 +2730,1807 @@ async def test_concurrent_same_runbook_serialized_by_lock(
     # Exactly ONE runbook_runs row must exist
     rows = await repo.fetch_all(text("SELECT id FROM runbook_runs"), {})
     assert len(rows) == 1, f"Expected exactly 1 runbook_runs row, got {len(rows)}"
+
+
+# ---------------------------------------------------------------------------
+# T2: safe_runbook_runs_real_directly_unchanged
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_safe_runbook_runs_real_directly_unchanged(
+    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+) -> None:
+    """T2: Safe runbook (dry_run_required=False) runs real, no approval."""
+    rb = _make_runbook_record(alertname="TestAlert", dry_run_required=False)
+    await _insert_runbook(repo, rb)
+    alert = _make_alert(alertname="TestAlert")
+    await _insert_alert(repo, alert)
+
+    app_settings = AppSettingsRepository(repo)
+    await app_settings.set("autofix_enabled", "true")
+
+    transcript_dir = str(tmp_path / "transcripts")
+    os.makedirs(transcript_dir, exist_ok=True)
+    exec_log_dir = str(tmp_path / "exec-logs")
+    os.makedirs(exec_log_dir, exist_ok=True)
+
+    docker = _FakeDockerClient(
+        result=ExecResult(exit_code=0, stdout="fixed", stderr=""),
+        transcript_to_write=f"{transcript_dir}/real-{uuid7()}.transcript",
+    )
+    orch = _make_orchestrator(
+        repo,
+        secrets_repo_fixture,
+        docker,
+        transcript_dir=transcript_dir,
+        exec_log_dir=exec_log_dir,
+    )
+
+    with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
+        result = await orch.handle_alert(alert)
+
+    assert result is not None
+    assert result.outcome == RunOutcome.RAN
+    assert result.ran is True
+
+    # Verify command was real (contains --dangerously-skip-permissions)
+    assert docker.last_call_cmd is not None
+    assert "--dangerously-skip-permissions" in docker.last_call_cmd
+    assert "--permission-mode" not in docker.last_call_cmd
+
+    # Verify auto_fixed outcome exists
+    outcomes = await repo.fetch_all(
+        text("SELECT id FROM alert_outcomes WHERE alert_id = :alert_id AND outcome = 'auto_fixed'"),
+        {"alert_id": alert.id},
+    )
+    assert len(outcomes) >= 1
+
+    # Verify NO approval row created
+    approvals = await repo.fetch_all(text("SELECT id FROM runbook_run_approvals"), {})
+    assert approvals == []
+
+
+# ---------------------------------------------------------------------------
+# T3: operational_deny_preempts_dry
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_operational_deny_preempts_dry(
+    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository
+) -> None:
+    """T3: Operational gate (kill-switch) denies risky runbook before dry branch."""
+    rb = _make_runbook_record(alertname="TestAlert", dry_run_required=True)
+    await _insert_runbook(repo, rb)
+    alert = _make_alert(alertname="TestAlert")
+    await _insert_alert(repo, alert)
+
+    # Do NOT set autofix_enabled → kill-switch denies
+    docker = _FakeDockerClient()
+    orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+
+    result = await orch.handle_alert(alert)
+
+    assert result is not None
+    assert result.denial_reason == DenialReason.KILL_SWITCH
+    assert result.ran is False
+
+    # No run row, no approval row
+    runs = await repo.fetch_all(text("SELECT id FROM runbook_runs"), {})
+    assert runs == []
+
+    approvals = await repo.fetch_all(text("SELECT id FROM runbook_run_approvals"), {})
+    assert approvals == []
+
+
+# ---------------------------------------------------------------------------
+# T4: dry_exec_error_stores_run_no_approval
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_dry_exec_error_stores_run_no_approval(
+    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+) -> None:
+    """T4: Dry exec errors → run stored, approval NOT created."""
+    rb = _make_runbook_record(alertname="TestAlert", dry_run_required=True, content_hash="hash-v1")
+    await _insert_runbook(repo, rb)
+    alert = _make_alert(alertname="TestAlert")
+    await _insert_alert(repo, alert)
+
+    app_settings = AppSettingsRepository(repo)
+    await app_settings.set("autofix_enabled", "true")
+
+    transcript_dir = str(tmp_path / "transcripts")
+    os.makedirs(transcript_dir, exist_ok=True)
+    exec_log_dir = str(tmp_path / "exec-logs")
+    os.makedirs(exec_log_dir, exist_ok=True)
+
+    docker = _FakeDockerClient(raises=DockerSocketConnectionError("connection failed"))
+    orch = _make_orchestrator(
+        repo,
+        secrets_repo_fixture,
+        docker,
+        transcript_dir=transcript_dir,
+        exec_log_dir=exec_log_dir,
+    )
+
+    with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
+        result = await orch.handle_alert(alert)
+
+    assert result is not None
+    assert result.outcome == RunOutcome.DRY_RUN_STORED
+    assert result.ran is True
+    assert result.approval_id is None  # No approval on exec error
+    assert result.exit_code == 1  # Sentinel error exit code
+
+    # Verify NO approval row (exec failed)
+    approvals = await repo.fetch_all(text("SELECT id FROM runbook_run_approvals"), {})
+    assert approvals == []
+
+    # Verify exec_error audit
+    audits = await repo.fetch_all(
+        text("SELECT what FROM audit_log WHERE what = 'autofix.exec_error'"),
+        {},
+    )
+    assert len(audits) >= 1
+
+
+# ---------------------------------------------------------------------------
+# T5: execute_approved_happy_fires_real_and_sets_real_run_id
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_execute_approved_happy_fires_real_and_sets_real_run_id(
+    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+) -> None:
+    """T5: execute_approved on pending approval → real exec fires, real_run_id set."""
+    rb = _make_runbook_record(alertname="TestAlert", dry_run_required=True, content_hash="hash-v1")
+    await _insert_runbook(repo, rb)
+    alert = _make_alert(alertname="TestAlert")
+    await _insert_alert(repo, alert)
+
+    app_settings = AppSettingsRepository(repo)
+    await app_settings.set("autofix_enabled", "true")
+
+    transcript_dir = str(tmp_path / "transcripts")
+    os.makedirs(transcript_dir, exist_ok=True)
+    exec_log_dir = str(tmp_path / "exec-logs")
+    os.makedirs(exec_log_dir, exist_ok=True)
+
+    # First: create a dry run + approval via the handle_alert path
+    docker = _FakeDockerClient(
+        result=ExecResult(exit_code=0, stdout="plan", stderr=""),
+        transcript_to_write=f"{transcript_dir}/dry-{uuid7()}.transcript",
+    )
+    orch = _make_orchestrator(
+        repo,
+        secrets_repo_fixture,
+        docker,
+        transcript_dir=transcript_dir,
+        exec_log_dir=exec_log_dir,
+    )
+
+    with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
+        dry_result = await orch.handle_alert(alert)
+
+    assert dry_result is not None
+    assert dry_result.approval_id is not None
+    approval_id = dry_result.approval_id
+
+    # Now approve it with a real exec
+    docker.result = ExecResult(exit_code=0, stdout="fixed", stderr="")
+    docker.transcript_to_write = f"{transcript_dir}/real-{uuid7()}.transcript"
+
+    with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
+        result = await orch.execute_approved(approval_id, principal="admin", ip="1.2.3.4")
+
+    assert result is not None
+    assert result.ran is True
+    assert result.outcome == RunOutcome.RAN
+    assert result.run_id is not None
+
+    # Verify approval row updated
+    approvals = await repo.fetch_all(
+        text(
+            "SELECT status, approved_by, decided_at, real_run_id "
+            "FROM runbook_run_approvals WHERE id = :id"
+        ),
+        {"id": approval_id},
+    )
+    assert len(approvals) == 1
+    assert approvals[0].status == "approved"
+    assert approvals[0].approved_by == "admin"
+    assert approvals[0].decided_at is not None
+    assert approvals[0].real_run_id == result.run_id
+
+    # Verify real command was used
+    assert docker.last_call_cmd is not None
+    assert "--dangerously-skip-permissions" in docker.last_call_cmd
+
+    # Verify auto_fixed outcome
+    outcomes = await repo.fetch_all(
+        text("SELECT id FROM alert_outcomes WHERE alert_id = :alert_id AND outcome = 'auto_fixed'"),
+        {"alert_id": alert.id},
+    )
+    assert len(outcomes) >= 1
+
+    # Verify audit for approved
+    audits = await repo.fetch_all(
+        text("SELECT what FROM audit_log WHERE what = 'autofix.approved'"),
+        {},
+    )
+    assert len(audits) >= 1
+
+
+# ---------------------------------------------------------------------------
+# Fix M1: execute_approved threads the approving principal into the
+# autofix.ran audit for forensic clarity (auto-triggered path leaves it None).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_execute_approved_ran_audit_includes_approving_principal(
+    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+) -> None:
+    """Fix M1: on a human-approved real run, autofix.ran.after_json carries
+    approving_principal so the audit chain (autofix.approved by <alice> →
+    autofix.ran by system:autofix) is linked by more than approval_id alone.
+    """
+    rb = _make_runbook_record(alertname="TestAlert", dry_run_required=True, content_hash="hash-v1")
+    await _insert_runbook(repo, rb)
+    alert = _make_alert(alertname="TestAlert")
+    await _insert_alert(repo, alert)
+
+    app_settings = AppSettingsRepository(repo)
+    await app_settings.set("autofix_enabled", "true")
+
+    transcript_dir = str(tmp_path / "transcripts")
+    os.makedirs(transcript_dir, exist_ok=True)
+    exec_log_dir = str(tmp_path / "exec-logs")
+    os.makedirs(exec_log_dir, exist_ok=True)
+
+    docker = _FakeDockerClient(
+        result=ExecResult(exit_code=0, stdout="plan", stderr=""),
+        transcript_to_write=f"{transcript_dir}/dry-{uuid7()}.transcript",
+    )
+    orch = _make_orchestrator(
+        repo,
+        secrets_repo_fixture,
+        docker,
+        transcript_dir=transcript_dir,
+        exec_log_dir=exec_log_dir,
+    )
+
+    with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
+        dry_result = await orch.handle_alert(alert)
+    assert dry_result is not None
+    approval_id = dry_result.approval_id
+    assert approval_id is not None
+
+    docker.result = ExecResult(exit_code=0, stdout="fixed", stderr="")
+    docker.transcript_to_write = f"{transcript_dir}/real-{uuid7()}.transcript"
+
+    with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
+        result = await orch.execute_approved(approval_id, principal="alice", ip="1.2.3.4")
+
+    assert result.ran is True
+    assert result.run_id is not None
+
+    ran_audit = await repo.fetch_one(
+        text(
+            "SELECT after_json FROM audit_log WHERE what = 'autofix.ran' "
+            "AND json_extract(after_json, '$.run_id') = :rid"
+        ),
+        {"rid": result.run_id},
+    )
+    assert ran_audit is not None
+    after = json.loads(str(ran_audit[0]))
+    assert after.get("approving_principal") == "alice"
+
+
+@pytest.mark.asyncio
+async def test_handle_alert_ran_audit_omits_approving_principal(
+    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+) -> None:
+    """Fix M1 inverse: auto-triggered handle_alert (safe runbook) MUST NOT
+    write an approving_principal key on the autofix.ran audit — there is no
+    human approver on that path.
+    """
+    rb = _make_runbook_record(alertname="TestAlert")  # safe by default: dry_run_required=False
+    await _insert_runbook(repo, rb)
+    alert = _make_alert(alertname="TestAlert")
+    await _insert_alert(repo, alert)
+
+    app_settings = AppSettingsRepository(repo)
+    await app_settings.set("autofix_enabled", "true")
+
+    transcript_dir = str(tmp_path / "transcripts")
+    os.makedirs(transcript_dir, exist_ok=True)
+    exec_log_dir = str(tmp_path / "exec-logs")
+    os.makedirs(exec_log_dir, exist_ok=True)
+
+    docker = _FakeDockerClient(result=ExecResult(exit_code=0, stdout="done", stderr=""))
+    orch = _make_orchestrator(
+        repo,
+        secrets_repo_fixture,
+        docker,
+        transcript_dir=transcript_dir,
+        exec_log_dir=exec_log_dir,
+    )
+
+    with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
+        result = await orch.handle_alert(alert)
+
+    assert result is not None
+    assert result.ran is True
+    assert result.run_id is not None
+
+    ran_audit = await repo.fetch_one(
+        text(
+            "SELECT after_json FROM audit_log WHERE what = 'autofix.ran' "
+            "AND json_extract(after_json, '$.run_id') = :rid"
+        ),
+        {"rid": result.run_id},
+    )
+    assert ran_audit is not None
+    after = json.loads(str(ran_audit[0]))
+    assert "approving_principal" not in after
+
+
+# ---------------------------------------------------------------------------
+# T5b: execute_approved — _claim_and_exec in-lock re-check denies (run_id=None
+#      false leg of the `if result.run_id is not None` set_real_run_id branch)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_execute_approved_claim_denies_no_real_run_id_set(
+    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+) -> None:
+    """Covers execute_approved's FALSE leg of `if result.run_id is not None`.
+
+    When _claim_and_exec's in-lock gate re-check denies (e.g. count_inflight>0
+    at claim time), the returned RunResult has run_id=None, so
+    set_real_run_id_conn must NOT be called and approval.real_run_id must stay None.
+    """
+    rb = _make_runbook_record(alertname="TestAlert", dry_run_required=True, content_hash="hash-v1")
+    await _insert_runbook(repo, rb)
+    alert = _make_alert(alertname="TestAlert")
+    await _insert_alert(repo, alert)
+
+    app_settings = AppSettingsRepository(repo)
+    await app_settings.set("autofix_enabled", "true")
+
+    transcript_dir = str(tmp_path / "transcripts")
+    os.makedirs(transcript_dir, exist_ok=True)
+    exec_log_dir = str(tmp_path / "exec-logs")
+    os.makedirs(exec_log_dir, exist_ok=True)
+
+    # Stage 1: seed the dry run + PENDING approval via handle_alert.
+    docker = _FakeDockerClient(
+        result=ExecResult(exit_code=0, stdout="plan", stderr=""),
+        transcript_to_write=f"{transcript_dir}/dry-{uuid7()}.transcript",
+    )
+    orch = _make_orchestrator(
+        repo,
+        secrets_repo_fixture,
+        docker,
+        transcript_dir=transcript_dir,
+        exec_log_dir=exec_log_dir,
+    )
+
+    with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
+        dry_result = await orch.handle_alert(alert)
+
+    assert dry_result is not None
+    approval_id = dry_result.approval_id
+    assert approval_id is not None
+
+    # Reset docker state so we can detect whether the REAL exec was reached.
+    docker.last_call_cmd = None
+    docker.last_call_container_id = ""
+    docker.last_call_user = None
+    docker.last_call_env = None
+
+    # Stage 2: approve, but force _claim_and_exec's in-lock inflight re-check to
+    # deny (count_inflight > 0). _claim_and_exec then returns run_id=None +
+    # denial_reason=ALREADY_RUNNING, and execute_approved's set_real_run_id
+    # branch must skip.
+    with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=5)):
+        result = await orch.execute_approved(approval_id, principal="admin", ip="1.2.3.4")
+
+    assert result is not None
+    assert result.ran is False
+    assert result.run_id is None
+    assert result.denial_reason == DenialReason.ALREADY_RUNNING
+
+    # Docker exec must NOT have been reached (in-lock gate blocked before exec).
+    assert docker.last_call_cmd is None
+
+    # The FALSE-leg assertion: approval.real_run_id stays None because run_id was
+    # None and set_real_run_id_conn was NOT called.
+    #
+    # Fix I2 (added later): to avoid orphaning the approval in status='approved'
+    # with real_run_id NULL forever, execute_approved now REVERTS the approval
+    # back to pending on the claim-denied branch and audits an
+    # 'autofix.approval_reverted' event. Assert the revert side effects.
+    approvals_repo = RunbookRunApprovalsRepository(repo)
+    approval = await approvals_repo.get(approval_id)
+    assert approval is not None
+    assert approval.real_run_id is None
+    assert approval.status == "pending"
+    assert approval.approved_by is None
+    assert approval.decided_at is None
+
+    revert_audits = await repo.fetch_all(
+        text("SELECT what FROM audit_log WHERE what = 'autofix.approval_reverted'"),
+        {},
+    )
+    assert len(revert_audits) >= 1
+
+
+# ---------------------------------------------------------------------------
+# T5c: _load_alert_for_exec — alert_id present but row missing (false leg of
+#      inner `if loaded is not None`; uses ORIGINAL alert_id as placeholder,
+#      not the "unknown" fallback)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_execute_approved_alert_present_id_but_row_missing_uses_original_id(
+    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+) -> None:
+    """Covers _load_alert_for_exec's FALSE leg of `if loaded is not None`.
+
+    Distinct from T10 (`alert_id is None` on the approval → placeholder id="unknown"):
+    here alert_id is NOT None but AlertRepository.get_alert_by_id returns None,
+    so the placeholder must use the ORIGINAL alert_id (not "unknown"). The
+    alerts row is kept in the DB so the runbook_runs.alert_id FK on the real-run
+    insert still passes; only get_alert_by_id is monkey-patched to return None.
+    """
+    rb = _make_runbook_record(alertname="TestAlert", dry_run_required=True, content_hash="hash-v1")
+    await _insert_runbook(repo, rb)
+    alert = _make_alert(alertname="TestAlert")
+    await _insert_alert(repo, alert)
+
+    app_settings = AppSettingsRepository(repo)
+    await app_settings.set("autofix_enabled", "true")
+
+    transcript_dir = str(tmp_path / "transcripts")
+    os.makedirs(transcript_dir, exist_ok=True)
+    exec_log_dir = str(tmp_path / "exec-logs")
+    os.makedirs(exec_log_dir, exist_ok=True)
+
+    # Stage 1: seed the dry run + PENDING approval via handle_alert.
+    docker = _FakeDockerClient(
+        result=ExecResult(exit_code=0, stdout="plan", stderr=""),
+        transcript_to_write=f"{transcript_dir}/dry-{uuid7()}.transcript",
+    )
+    orch = _make_orchestrator(
+        repo,
+        secrets_repo_fixture,
+        docker,
+        transcript_dir=transcript_dir,
+        exec_log_dir=exec_log_dir,
+    )
+
+    with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
+        dry_result = await orch.handle_alert(alert)
+
+    assert dry_result is not None
+    approval_id = dry_result.approval_id
+    assert approval_id is not None
+
+    # Confirm the approval preserved the original alert_id (this is the
+    # `alert_id is not None` premise of the branch we're covering).
+    approvals_repo = RunbookRunApprovalsRepository(repo)
+    approval_before = await approvals_repo.get(approval_id)
+    assert approval_before is not None
+    assert approval_before.alert_id == alert.id
+
+    # Reset docker state before the real run.
+    docker.last_call_cmd = None
+    docker.last_call_container_id = ""
+    docker.last_call_user = None
+    docker.last_call_env = None
+
+    # Stage 2: approve. Force AlertRepository.get_alert_by_id to return None so
+    # _load_alert_for_exec's `loaded is not None` check fails and it falls
+    # through to the placeholder using ORIGINAL alert_id.  The alerts row
+    # stays in the DB so runbook_runs.alert_id FK is satisfied on the real run.
+    docker.result = ExecResult(exit_code=0, stdout="fixed", stderr="")
+    docker.transcript_to_write = f"{transcript_dir}/real-{uuid7()}.transcript"
+
+    with (
+        patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)),
+        patch.object(AlertRepository, "get_alert_by_id", new=AsyncMock(return_value=None)),
+    ):
+        result = await orch.execute_approved(approval_id, principal="admin", ip="1.2.3.4")
+
+    assert result is not None
+    assert result.ran is True
+    assert result.outcome == RunOutcome.RAN
+    assert result.run_id is not None
+
+    # Real exec fired.
+    assert docker.last_call_cmd is not None
+    assert "--dangerously-skip-permissions" in docker.last_call_cmd
+
+    # Prove the placeholder used the ORIGINAL alert_id (not "unknown"): the new
+    # real runbook_runs row's alert_id column must equal alert.id, since
+    # _claim_and_exec calls insert_started(alert_id=alert.id) with the Alert
+    # returned by _load_alert_for_exec.
+    real_run_row = await repo.fetch_one(
+        text("SELECT alert_id FROM runbook_runs WHERE id = :id"),
+        {"id": result.run_id},
+    )
+    assert real_run_row is not None
+    assert str(real_run_row[0]) == alert.id
+
+
+# ---------------------------------------------------------------------------
+# I1: execute_approved concurrent-approve race — SQL guard ensures only one wins
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_execute_approved_race_only_one_wins(
+    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+) -> None:
+    """Two concurrent execute_approved calls on the same approval: exactly ONE
+    produces a real run (mode='real') and the OTHER is denied with
+    APPROVAL_NOT_PENDING (via the ``AND status='pending'`` SQL guard on the
+    approve UPDATE).
+
+    Because the per-runbook asyncio.Lock in _claim_and_exec also serializes real
+    exec, both callers cross ``mark_approved`` before either enters
+    _claim_and_exec — so the losing caller is the one whose ``mark_approved_conn``
+    UPDATE returns rowcount=0.
+
+    Key assertion: exactly one runbook_runs row with mode='real' exists.
+    """
+    rb = _make_runbook_record(alertname="TestAlert", dry_run_required=True, content_hash="hash-v1")
+    await _insert_runbook(repo, rb)
+    alert = _make_alert(alertname="TestAlert")
+    await _insert_alert(repo, alert)
+
+    app_settings = AppSettingsRepository(repo)
+    await app_settings.set("autofix_enabled", "true")
+
+    transcript_dir = str(tmp_path / "transcripts")
+    os.makedirs(transcript_dir, exist_ok=True)
+    exec_log_dir = str(tmp_path / "exec-logs")
+    os.makedirs(exec_log_dir, exist_ok=True)
+
+    # Stage 1: seed the dry run + PENDING approval via handle_alert.
+    docker = _FakeDockerClient(
+        result=ExecResult(exit_code=0, stdout="plan", stderr=""),
+        transcript_to_write=f"{transcript_dir}/dry-{uuid7()}.transcript",
+    )
+    orch = _make_orchestrator(
+        repo,
+        secrets_repo_fixture,
+        docker,
+        transcript_dir=transcript_dir,
+        exec_log_dir=exec_log_dir,
+    )
+
+    with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
+        dry_result = await orch.handle_alert(alert)
+
+    assert dry_result is not None
+    approval_id = dry_result.approval_id
+    assert approval_id is not None
+
+    # Reset docker state — the next successful exec must be REAL.
+    docker.result = ExecResult(exit_code=0, stdout="fixed", stderr="")
+    docker.transcript_to_write = f"{transcript_dir}/real-{uuid7()}.transcript"
+    docker.last_call_cmd = None
+
+    # Stage 2: fire two concurrent execute_approved calls. Both cross the read
+    # pre-check while status is still 'pending' (nothing suspends between the
+    # read and the UPDATE from either caller's perspective — asyncio.gather
+    # interleaves them). Exactly one mark_approved_conn UPDATE lands (rowcount=1),
+    # the other returns rowcount=0 and gets APPROVAL_NOT_PENDING.
+    with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
+        result_a, result_b = await asyncio.gather(
+            orch.execute_approved(approval_id, principal="admin-a", ip="1.2.3.4"),
+            orch.execute_approved(approval_id, principal="admin-b", ip="1.2.3.5"),
+        )
+
+    results = [result_a, result_b]
+    ran_results = [r for r in results if r.outcome == RunOutcome.RAN]
+    denied_results = [
+        r
+        for r in results
+        if r.outcome == RunOutcome.DENIED and r.denial_reason == DenialReason.APPROVAL_NOT_PENDING
+    ]
+
+    assert len(ran_results) == 1, (
+        f"Expected exactly 1 RAN, got {len(ran_results)}. "
+        f"Results: {[(r.outcome, r.denial_reason) for r in results]}"
+    )
+    assert len(denied_results) == 1, (
+        f"Expected exactly 1 DENIED/APPROVAL_NOT_PENDING, got {len(denied_results)}. "
+        f"Results: {[(r.outcome, r.denial_reason) for r in results]}"
+    )
+
+    # KEY assertion: exactly ONE runbook_runs row with mode='real' exists.
+    real_runs = await repo.fetch_all(
+        text("SELECT id FROM runbook_runs WHERE mode = :mode"),
+        {"mode": RunMode.REAL.value},
+    )
+    assert len(real_runs) == 1, f"Expected exactly 1 real runbook_runs row, got {len(real_runs)}"
+
+
+@pytest.mark.asyncio
+async def test_execute_approved_sql_guard_zero_rowcount_denies_approval_not_pending(
+    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+) -> None:
+    """Deterministic coverage for Fix I1's rowcount==0 branch (orchestrator.py:747).
+
+    The concurrent-approve race test above uses ``asyncio.gather`` and does not
+    reliably exercise the ``mark_approved_conn`` UPDATE returning 0. This test
+    FORCES that branch by monkey-patching
+    ``RunbookRunApprovalsRepository.mark_approved_conn`` to return 0, simulating a
+    concurrent caller having already decided this approval between our read
+    pre-check and our UPDATE.
+
+    Asserts the full contract of the race safety-net branch:
+      * RunResult: ran=False, outcome=DENIED, denial_reason=APPROVAL_NOT_PENDING,
+        approval_id preserved.
+      * No real exec fires (docker.last_call_cmd stays None post-reset).
+      * autofix.denied audit row with gate='approval_not_pending' AND
+        detail='approval was decided by another caller (race)' in after_json.
+      * Approval row is untouched — status stays 'pending' (mocked UPDATE was
+        a no-op, so no state change happened in the DB).
+    """
+    rb = _make_runbook_record(alertname="TestAlert", dry_run_required=True, content_hash="hash-v1")
+    await _insert_runbook(repo, rb)
+    alert = _make_alert(alertname="TestAlert")
+    await _insert_alert(repo, alert)
+
+    app_settings = AppSettingsRepository(repo)
+    await app_settings.set("autofix_enabled", "true")
+
+    transcript_dir = str(tmp_path / "transcripts")
+    os.makedirs(transcript_dir, exist_ok=True)
+    exec_log_dir = str(tmp_path / "exec-logs")
+    os.makedirs(exec_log_dir, exist_ok=True)
+
+    # Stage 1: seed the dry run + PENDING approval via handle_alert.
+    docker = _FakeDockerClient(
+        result=ExecResult(exit_code=0, stdout="plan", stderr=""),
+        transcript_to_write=f"{transcript_dir}/dry-{uuid7()}.transcript",
+    )
+    orch = _make_orchestrator(
+        repo,
+        secrets_repo_fixture,
+        docker,
+        transcript_dir=transcript_dir,
+        exec_log_dir=exec_log_dir,
+    )
+
+    with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
+        dry_result = await orch.handle_alert(alert)
+
+    assert dry_result is not None
+    approval_id = dry_result.approval_id
+    assert approval_id is not None
+
+    # Reset docker state so any subsequent exec call is detectable — the setup
+    # handle_alert dry-run left last_call_cmd populated with the plan cmd.
+    docker.last_call_cmd = None
+    docker.last_call_container_id = ""
+    docker.last_call_user = None
+    docker.last_call_env = None
+
+    # Stage 2: force the SQL guard rowcount=0 branch by mocking the UPDATE to
+    # return 0. This simulates a concurrent caller having flipped status between
+    # our read pre-check and our UPDATE. count_inflight is patched to 0 so the
+    # in-lock inflight check would NOT be the reason for denial — we're isolating
+    # the SQL guard branch.
+    with (
+        patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)),
+        patch.object(
+            RunbookRunApprovalsRepository,
+            "mark_approved_conn",
+            new=AsyncMock(return_value=0),
+        ),
+    ):
+        result = await orch.execute_approved(approval_id, principal="alice", ip="1.2.3.4")
+
+    assert result.ran is False
+    assert result.outcome == RunOutcome.DENIED
+    assert result.denial_reason == DenialReason.APPROVAL_NOT_PENDING
+    assert result.approval_id == approval_id
+
+    # No real exec fired — the SQL guard denial preempts _claim_and_exec entirely.
+    assert docker.last_call_cmd is None
+
+    # The autofix.denied audit row for THIS branch specifically carries
+    # gate='approval_not_pending' and the exact race-detail string.
+    denied_row = await repo.fetch_one(
+        text(
+            "SELECT after_json FROM audit_log "
+            "WHERE what = 'autofix.denied' "
+            "AND json_extract(after_json, '$.approval_id') = :aid "
+            "AND json_extract(after_json, '$.gate') = 'approval_not_pending'"
+        ),
+        {"aid": approval_id},
+    )
+    assert denied_row is not None
+    after = json.loads(str(denied_row[0]))
+    assert after.get("gate") == "approval_not_pending"
+    assert after.get("detail") == "approval was decided by another caller (race)"
+
+    # Since mark_approved_conn was mocked to return 0 (no rows written), the
+    # real approval row in the DB is untouched — status stays 'pending'.
+    approvals_repo = RunbookRunApprovalsRepository(repo)
+    approval_after = await approvals_repo.get(approval_id)
+    assert approval_after is not None
+    assert approval_after.status == "pending"
+
+
+@pytest.mark.asyncio
+async def test_execute_approved_second_call_denies_after_first_succeeded(
+    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+) -> None:
+    """Sequential: after a successful execute_approved the approval status is
+    'approved' (with a real_run_id). A second execute_approved on the same
+    approval_id must return outcome=DENIED with APPROVAL_NOT_PENDING. This test
+    exercises the read-based pre-check happy fast-path, not the SQL guard.
+    """
+    rb = _make_runbook_record(alertname="TestAlert", dry_run_required=True, content_hash="hash-v1")
+    await _insert_runbook(repo, rb)
+    alert = _make_alert(alertname="TestAlert")
+    await _insert_alert(repo, alert)
+
+    app_settings = AppSettingsRepository(repo)
+    await app_settings.set("autofix_enabled", "true")
+
+    transcript_dir = str(tmp_path / "transcripts")
+    os.makedirs(transcript_dir, exist_ok=True)
+    exec_log_dir = str(tmp_path / "exec-logs")
+    os.makedirs(exec_log_dir, exist_ok=True)
+
+    docker = _FakeDockerClient(
+        result=ExecResult(exit_code=0, stdout="plan", stderr=""),
+        transcript_to_write=f"{transcript_dir}/dry-{uuid7()}.transcript",
+    )
+    orch = _make_orchestrator(
+        repo,
+        secrets_repo_fixture,
+        docker,
+        transcript_dir=transcript_dir,
+        exec_log_dir=exec_log_dir,
+    )
+
+    with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
+        dry_result = await orch.handle_alert(alert)
+
+    assert dry_result is not None
+    approval_id = dry_result.approval_id
+    assert approval_id is not None
+
+    # First call: succeeds → status='approved', real_run_id set.
+    docker.result = ExecResult(exit_code=0, stdout="fixed", stderr="")
+    docker.transcript_to_write = f"{transcript_dir}/real-{uuid7()}.transcript"
+    with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
+        result_first = await orch.execute_approved(approval_id, principal="admin", ip="1.2.3.4")
+    assert result_first.outcome == RunOutcome.RAN
+    assert result_first.run_id is not None
+
+    # Second call: pre-check sees status='approved' → APPROVAL_NOT_PENDING, no exec.
+    docker.last_call_cmd = None
+    result_second = await orch.execute_approved(approval_id, principal="admin", ip="1.2.3.4")
+    assert result_second.outcome == RunOutcome.DENIED
+    assert result_second.denial_reason == DenialReason.APPROVAL_NOT_PENDING
+    # Docker was not re-invoked for the second call.
+    assert docker.last_call_cmd is None
+
+
+# ---------------------------------------------------------------------------
+# I2: revert-to-pending on claim denial — race-safe (rowcount=0 branch)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_execute_approved_revert_race_safe(
+    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+) -> None:
+    """Corner case for Fix I2: between "we noticed claim denied" and "we run
+    revert", something ELSE modified the approval so ``revert_to_pending_conn``
+    returns rowcount=0. Verify the code takes the warning-only branch (no
+    audit_reverted row written, no exception) — exercised via a mock.
+    """
+    rb = _make_runbook_record(alertname="TestAlert", dry_run_required=True, content_hash="hash-v1")
+    await _insert_runbook(repo, rb)
+    alert = _make_alert(alertname="TestAlert")
+    await _insert_alert(repo, alert)
+
+    app_settings = AppSettingsRepository(repo)
+    await app_settings.set("autofix_enabled", "true")
+
+    transcript_dir = str(tmp_path / "transcripts")
+    os.makedirs(transcript_dir, exist_ok=True)
+    exec_log_dir = str(tmp_path / "exec-logs")
+    os.makedirs(exec_log_dir, exist_ok=True)
+
+    docker = _FakeDockerClient(
+        result=ExecResult(exit_code=0, stdout="plan", stderr=""),
+        transcript_to_write=f"{transcript_dir}/dry-{uuid7()}.transcript",
+    )
+    orch = _make_orchestrator(
+        repo,
+        secrets_repo_fixture,
+        docker,
+        transcript_dir=transcript_dir,
+        exec_log_dir=exec_log_dir,
+    )
+
+    with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
+        dry_result = await orch.handle_alert(alert)
+
+    assert dry_result is not None
+    approval_id = dry_result.approval_id
+    assert approval_id is not None
+
+    docker.last_call_cmd = None
+
+    # Force _claim_and_exec's in-lock inflight check to deny (run_id=None) AND
+    # mock revert_to_pending_conn to return 0 (someone else won the race).
+    with (
+        patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=5)),
+        patch.object(
+            RunbookRunApprovalsRepository,
+            "revert_to_pending_conn",
+            new=AsyncMock(return_value=0),
+        ),
+    ):
+        result = await orch.execute_approved(approval_id, principal="admin", ip="1.2.3.4")
+
+    assert result.outcome == RunOutcome.DENIED
+    assert result.run_id is None
+    assert result.denial_reason == DenialReason.ALREADY_RUNNING
+
+    # No revert audit written (rowcount=0 branch takes the warning path only).
+    revert_audits = await repo.fetch_all(
+        text("SELECT what FROM audit_log WHERE what = 'autofix.approval_reverted'"),
+        {},
+    )
+    assert revert_audits == []
+
+
+# ---------------------------------------------------------------------------
+# T6: execute_approved_drift_rejects_no_exec
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_execute_approved_drift_rejects_no_exec(
+    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+) -> None:
+    """T6: Runbook hash changed since plan → rejection, no exec, no real run."""
+    rb = _make_runbook_record(alertname="TestAlert", dry_run_required=True, content_hash="hash-v1")
+    await _insert_runbook(repo, rb)
+    alert = _make_alert(alertname="TestAlert")
+    await _insert_alert(repo, alert)
+
+    app_settings = AppSettingsRepository(repo)
+    await app_settings.set("autofix_enabled", "true")
+
+    transcript_dir = str(tmp_path / "transcripts")
+    os.makedirs(transcript_dir, exist_ok=True)
+    exec_log_dir = str(tmp_path / "exec-logs")
+    os.makedirs(exec_log_dir, exist_ok=True)
+
+    # Create dry run with pinned hash
+    docker = _FakeDockerClient(
+        result=ExecResult(exit_code=0, stdout="plan", stderr=""),
+        transcript_to_write=f"{transcript_dir}/dry-{uuid7()}.transcript",
+    )
+    orch = _make_orchestrator(
+        repo,
+        secrets_repo_fixture,
+        docker,
+        transcript_dir=transcript_dir,
+        exec_log_dir=exec_log_dir,
+    )
+
+    with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
+        dry_result = await orch.handle_alert(alert)
+
+    assert dry_result is not None
+    approval_id = dry_result.approval_id
+    assert approval_id is not None
+
+    # Now change runbook hash (drift)
+    async with repo.transaction() as conn:
+        await conn.execute(
+            text("UPDATE runbooks SET content_hash = :hash WHERE id = :id"),
+            {"id": rb.id, "hash": "hash-v2"},
+        )
+
+    # Reset docker state so we can assert execute_approved does NOT exec.
+    docker.last_call_cmd = None
+    docker.last_call_container_id = ""
+    docker.last_call_user = None
+    docker.last_call_env = None
+
+    # Approve should reject due to drift
+    result = await orch.execute_approved(approval_id, principal="admin", ip="1.2.3.4")
+
+    assert result is not None
+    assert result.ran is False
+    assert result.outcome == RunOutcome.DENIED
+    assert result.denial_reason == DenialReason.RUNBOOK_CHANGED
+    assert result.run_id is None
+
+    # Verify approval rejected
+    approvals = await repo.fetch_all(
+        text("SELECT status, approved_by FROM runbook_run_approvals WHERE id = :id"),
+        {"id": approval_id},
+    )
+    assert len(approvals) == 1
+    assert approvals[0].status == "rejected"
+    assert approvals[0].approved_by == "admin"
+
+    # Verify NO new real run
+    runs = await repo.fetch_all(
+        text("SELECT mode FROM runbook_runs ORDER BY created_at DESC LIMIT 1"),
+        {},
+    )
+    assert len(runs) == 1
+    assert runs[0].mode == RunMode.DRY_RUN.value  # Only the initial dry run
+
+    # Verify docker never called
+    assert docker.last_call_cmd is None
+
+
+# ---------------------------------------------------------------------------
+# Fix M2: execute_approved distinguishes RUNBOOK_MISSING (deleted) from
+# RUNBOOK_CHANGED (hash-mutated). Different operator responses require
+# distinct denial reasons + audit shapes.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_execute_approved_runbook_missing_returns_runbook_missing_denial(
+    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+) -> None:
+    """Fix M2: runbook DELETED between plan and approve →
+    denial_reason=RUNBOOK_MISSING, audit gate='runbook_missing' with
+    runbook_deleted=True (distinct from RUNBOOK_CHANGED which is a hash mutation).
+    """
+    rb = _make_runbook_record(alertname="TestAlert", dry_run_required=True, content_hash="hash-v1")
+    await _insert_runbook(repo, rb)
+    alert = _make_alert(alertname="TestAlert")
+    await _insert_alert(repo, alert)
+
+    app_settings = AppSettingsRepository(repo)
+    await app_settings.set("autofix_enabled", "true")
+
+    transcript_dir = str(tmp_path / "transcripts")
+    os.makedirs(transcript_dir, exist_ok=True)
+    exec_log_dir = str(tmp_path / "exec-logs")
+    os.makedirs(exec_log_dir, exist_ok=True)
+
+    docker = _FakeDockerClient(
+        result=ExecResult(exit_code=0, stdout="plan", stderr=""),
+        transcript_to_write=f"{transcript_dir}/dry-{uuid7()}.transcript",
+    )
+    orch = _make_orchestrator(
+        repo,
+        secrets_repo_fixture,
+        docker,
+        transcript_dir=transcript_dir,
+        exec_log_dir=exec_log_dir,
+    )
+
+    with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
+        dry_result = await orch.handle_alert(alert)
+    assert dry_result is not None
+    approval_id = dry_result.approval_id
+    assert approval_id is not None
+
+    # Simulate runbook DELETED between plan and approve. We can't actually
+    # DELETE the runbook row (FK from runbook_runs.runbook_id blocks it), so
+    # patch RunbookRepo.get_runbook to return None — which is precisely what
+    # execute_approved's drift check sees when the row is gone.
+    #
+    # Reset docker state so we can assert execute_approved does NOT exec.
+    docker.last_call_cmd = None
+    docker.last_call_container_id = ""
+    docker.last_call_user = None
+    docker.last_call_env = None
+
+    with patch.object(RunbookRepo, "get_runbook", new=AsyncMock(return_value=None)):
+        result = await orch.execute_approved(approval_id, principal="admin", ip="1.2.3.4")
+
+    assert result.ran is False
+    assert result.outcome == RunOutcome.DENIED
+    assert result.denial_reason == DenialReason.RUNBOOK_MISSING
+    assert result.run_id is None
+
+    # Approval rejected with correct approver
+    approvals = await repo.fetch_all(
+        text("SELECT status, approved_by FROM runbook_run_approvals WHERE id = :id"),
+        {"id": approval_id},
+    )
+    assert len(approvals) == 1
+    assert approvals[0].status == "rejected"
+    assert approvals[0].approved_by == "admin"
+
+    # Audit gate='runbook_missing' with runbook_deleted=True (not the mutated shape)
+    audit = await repo.fetch_one(
+        text(
+            "SELECT after_json FROM audit_log WHERE what = 'autofix.rejected' "
+            "AND json_extract(after_json, '$.approval_id') = :aid"
+        ),
+        {"aid": approval_id},
+    )
+    assert audit is not None
+    after = json.loads(str(audit[0]))
+    assert after.get("gate") == "runbook_missing"
+    assert after.get("runbook_deleted") is True
+    assert after.get("pinned_runbook_hash") == "hash-v1"
+    # RUNBOOK_MISSING audit uses `runbook_deleted=True` in place of the
+    # `current_runbook_hash` field the RUNBOOK_CHANGED audit uses; deleted
+    # runbooks have no current hash, and None would be indistinguishable from a
+    # genuine None hash on a mutated runbook.
+    assert "current_runbook_hash" not in after
+
+    # No real exec happened
+    assert docker.last_call_cmd is None
+    runs = await repo.fetch_all(
+        text("SELECT mode FROM runbook_runs ORDER BY created_at DESC LIMIT 1"),
+        {},
+    )
+    assert len(runs) == 1
+    assert runs[0].mode == RunMode.DRY_RUN.value
+
+
+# ---------------------------------------------------------------------------
+# T7: execute_approved_not_pending_denies
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_execute_approved_not_pending_denies(
+    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+) -> None:
+    """T7: Approval not pending → APPROVAL_NOT_PENDING denial, no exec."""
+    rb = _make_runbook_record(alertname="TestAlert", dry_run_required=True)
+    await _insert_runbook(repo, rb)
+    alert = _make_alert(alertname="TestAlert")
+    await _insert_alert(repo, alert)
+
+    app_settings = AppSettingsRepository(repo)
+    await app_settings.set("autofix_enabled", "true")
+
+    transcript_dir = str(tmp_path / "transcripts")
+    os.makedirs(transcript_dir, exist_ok=True)
+    exec_log_dir = str(tmp_path / "exec-logs")
+    os.makedirs(exec_log_dir, exist_ok=True)
+
+    # Create dry run + approval
+    docker = _FakeDockerClient(
+        result=ExecResult(exit_code=0, stdout="plan", stderr=""),
+        transcript_to_write=f"{transcript_dir}/dry-{uuid7()}.transcript",
+    )
+    orch = _make_orchestrator(
+        repo,
+        secrets_repo_fixture,
+        docker,
+        transcript_dir=transcript_dir,
+        exec_log_dir=exec_log_dir,
+    )
+
+    with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
+        dry_result = await orch.handle_alert(alert)
+
+    assert dry_result is not None
+    approval_id = dry_result.approval_id
+    assert approval_id is not None
+
+    # Mark approval as already approved
+    async with repo.transaction() as conn:
+        await conn.execute(
+            text("UPDATE runbook_run_approvals SET status = 'approved' WHERE id = :id"),
+            {"id": approval_id},
+        )
+
+    # Reset docker state so we can assert execute_approved does NOT exec.
+    docker.last_call_cmd = None
+    docker.last_call_container_id = ""
+    docker.last_call_user = None
+    docker.last_call_env = None
+
+    # Try to approve again
+    result = await orch.execute_approved(approval_id, principal="admin", ip="1.2.3.4")
+
+    assert result is not None
+    assert result.denial_reason == DenialReason.APPROVAL_NOT_PENDING
+    assert result.ran is False
+
+    # Verify docker never called
+    assert docker.last_call_cmd is None
+
+
+# ---------------------------------------------------------------------------
+# T8: execute_approved_missing_approval_denies
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_execute_approved_missing_approval_denies(
+    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository
+) -> None:
+    """T8: Approval does not exist → APPROVAL_NOT_PENDING denial."""
+    docker = _FakeDockerClient()
+    orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+
+    result = await orch.execute_approved("nonexistent-id", principal="admin", ip="1.2.3.4")
+
+    assert result is not None
+    assert result.denial_reason == DenialReason.APPROVAL_NOT_PENDING
+    assert result.runbook_id is None  # approval was None
+
+
+# ---------------------------------------------------------------------------
+# T9: execute_approved_gate_deny_on_approve
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_execute_approved_gate_deny_on_approve(
+    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+) -> None:
+    """T9: Operational gate (kill-switch flipped) denies after plan."""
+    rb = _make_runbook_record(alertname="TestAlert", dry_run_required=True, content_hash="hash-v1")
+    await _insert_runbook(repo, rb)
+    alert = _make_alert(alertname="TestAlert")
+    await _insert_alert(repo, alert)
+
+    app_settings = AppSettingsRepository(repo)
+    await app_settings.set("autofix_enabled", "true")
+
+    transcript_dir = str(tmp_path / "transcripts")
+    os.makedirs(transcript_dir, exist_ok=True)
+    exec_log_dir = str(tmp_path / "exec-logs")
+    os.makedirs(exec_log_dir, exist_ok=True)
+
+    # Create dry run
+    docker = _FakeDockerClient(
+        result=ExecResult(exit_code=0, stdout="plan", stderr=""),
+        transcript_to_write=f"{transcript_dir}/dry-{uuid7()}.transcript",
+    )
+    orch = _make_orchestrator(
+        repo,
+        secrets_repo_fixture,
+        docker,
+        transcript_dir=transcript_dir,
+        exec_log_dir=exec_log_dir,
+    )
+
+    with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
+        dry_result = await orch.handle_alert(alert)
+
+    assert dry_result is not None
+    approval_id = dry_result.approval_id
+    assert approval_id is not None
+
+    # Flip kill-switch
+    await app_settings.set("autofix_enabled", "false")
+
+    # Reset docker state so we can assert execute_approved does NOT exec.
+    docker.last_call_cmd = None
+    docker.last_call_container_id = ""
+    docker.last_call_user = None
+    docker.last_call_env = None
+
+    # Approve should deny on operational gate
+    result = await orch.execute_approved(approval_id, principal="admin", ip="1.2.3.4")
+
+    assert result is not None
+    assert result.denial_reason == DenialReason.KILL_SWITCH
+    assert result.ran is False
+
+    # Verify docker never called
+    assert docker.last_call_cmd is None
+
+
+# ---------------------------------------------------------------------------
+# T10: execute_approved_missing_alert_reconstructs
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_execute_approved_missing_alert_reconstructs(
+    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+) -> None:
+    """T10: Alert missing → reconstructed minimal Alert, real exec fires."""
+    rb = _make_runbook_record(alertname="TestAlert", dry_run_required=True, content_hash="hash-v1")
+    await _insert_runbook(repo, rb)
+    alert = _make_alert(alertname="TestAlert")
+    await _insert_alert(repo, alert)
+
+    app_settings = AppSettingsRepository(repo)
+    await app_settings.set("autofix_enabled", "true")
+
+    transcript_dir = str(tmp_path / "transcripts")
+    os.makedirs(transcript_dir, exist_ok=True)
+    exec_log_dir = str(tmp_path / "exec-logs")
+    os.makedirs(exec_log_dir, exist_ok=True)
+
+    # Create dry run
+    docker = _FakeDockerClient(
+        result=ExecResult(exit_code=0, stdout="plan", stderr=""),
+        transcript_to_write=f"{transcript_dir}/dry-{uuid7()}.transcript",
+    )
+    orch = _make_orchestrator(
+        repo,
+        secrets_repo_fixture,
+        docker,
+        transcript_dir=transcript_dir,
+        exec_log_dir=exec_log_dir,
+    )
+
+    with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
+        dry_result = await orch.handle_alert(alert)
+
+    assert dry_result is not None
+    approval_id = dry_result.approval_id
+    assert approval_id is not None
+
+    # Simulate "alert row is gone" so _load_alert_for_exec falls through to the
+    # placeholder-Alert branch. Must:
+    #   (a) NULL the approval.alert_id so _load_alert_for_exec receives None and
+    #       builds placeholder with id="unknown" (not the vanished real id);
+    #   (b) NULL the dry-run's runbook_runs.alert_id + delete any alert_outcomes
+    #       so the DELETE FROM alerts doesn't fail FK enforcement;
+    #   (c) seed an alerts row with id="unknown" so the subsequent real-run
+    #       insert_started(alert_id="unknown") FK succeeds.
+    async with repo.transaction() as conn:
+        await conn.execute(
+            text("UPDATE runbook_run_approvals SET alert_id = NULL WHERE id = :id"),
+            {"id": approval_id},
+        )
+        await conn.execute(
+            text("UPDATE runbook_runs SET alert_id = NULL WHERE alert_id = :id"),
+            {"id": alert.id},
+        )
+        await conn.execute(
+            text("DELETE FROM alert_outcomes WHERE alert_id = :id"),
+            {"id": alert.id},
+        )
+        await conn.execute(
+            text("DELETE FROM alerts WHERE id = :id"),
+            {"id": alert.id},
+        )
+    unknown_alert = Alert(
+        id="unknown",
+        fingerprint="fp-unknown",
+        source_tool="autofix-approval",
+        severity=Severity.WARNING,
+        status=AlertStatus.FIRING,
+        opened_at=utc_now_iso(),
+        last_seen_at=utc_now_iso(),
+        payload={},
+        labels={},
+        annotations={},
+    )
+    await _insert_alert(repo, unknown_alert)
+
+    # Approve should still work with reconstructed alert
+    docker.result = ExecResult(exit_code=0, stdout="fixed", stderr="")
+    docker.transcript_to_write = f"{transcript_dir}/real-{uuid7()}.transcript"
+
+    with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
+        result = await orch.execute_approved(approval_id, principal="admin", ip="1.2.3.4")
+
+    assert result is not None
+    assert result.ran is True
+    assert result.outcome == RunOutcome.RAN
+
+    # Verify docker was called (real exec fired)
+    assert docker.last_call_cmd is not None
+    assert "--dangerously-skip-permissions" in docker.last_call_cmd
+
+
+# ---------------------------------------------------------------------------
+# T11: execute_approved_alert_id_none_placeholder
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_execute_approved_alert_id_none_placeholder(
+    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+) -> None:
+    """T11: Approval alert_id is None → uses minimal placeholder Alert."""
+    rb = _make_runbook_record(alertname="TestAlert", dry_run_required=True, content_hash="hash-v1")
+    await _insert_runbook(repo, rb)
+    alert = _make_alert(alertname="TestAlert")
+    await _insert_alert(repo, alert)
+
+    app_settings = AppSettingsRepository(repo)
+    await app_settings.set("autofix_enabled", "true")
+
+    transcript_dir = str(tmp_path / "transcripts")
+    os.makedirs(transcript_dir, exist_ok=True)
+    exec_log_dir = str(tmp_path / "exec-logs")
+    os.makedirs(exec_log_dir, exist_ok=True)
+
+    # Create dry run
+    docker = _FakeDockerClient(
+        result=ExecResult(exit_code=0, stdout="plan", stderr=""),
+        transcript_to_write=f"{transcript_dir}/dry-{uuid7()}.transcript",
+    )
+    orch = _make_orchestrator(
+        repo,
+        secrets_repo_fixture,
+        docker,
+        transcript_dir=transcript_dir,
+        exec_log_dir=exec_log_dir,
+    )
+
+    with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
+        dry_result = await orch.handle_alert(alert)
+
+    assert dry_result is not None
+    approval_id = dry_result.approval_id
+    assert approval_id is not None
+
+    # Manually set alert_id to None in approval
+    async with repo.transaction() as conn:
+        await conn.execute(
+            text("UPDATE runbook_run_approvals SET alert_id = NULL WHERE id = :id"),
+            {"id": approval_id},
+        )
+
+    # _load_alert_for_exec builds a placeholder Alert with id="unknown" when
+    # approval.alert_id is None. The subsequent runbook_runs INSERT FKs alert_id
+    # → alerts.id, so seed an "unknown" alert row so the FK passes.
+    unknown_alert = Alert(
+        id="unknown",
+        fingerprint="fp-unknown",
+        source_tool="autofix-approval",
+        severity=Severity.WARNING,
+        status=AlertStatus.FIRING,
+        opened_at=utc_now_iso(),
+        last_seen_at=utc_now_iso(),
+        payload={},
+        labels={},
+        annotations={},
+    )
+    await _insert_alert(repo, unknown_alert)
+
+    # Approve should work
+    docker.result = ExecResult(exit_code=0, stdout="fixed", stderr="")
+    docker.transcript_to_write = f"{transcript_dir}/real-{uuid7()}.transcript"
+
+    with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
+        result = await orch.execute_approved(approval_id, principal="admin", ip="1.2.3.4")
+
+    assert result is not None
+    assert result.ran is True
+    assert result.outcome == RunOutcome.RAN
+
+
+# ---------------------------------------------------------------------------
+# T12-T15: read_dry_plan tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_read_dry_plan_happy(
+    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+) -> None:
+    """T12: read_dry_plan success → plan_text from file."""
+    transcript_dir = str(tmp_path / "transcripts")
+    os.makedirs(transcript_dir, exist_ok=True)
+
+    # runbook_runs.runbook_id FKs to runbooks.id (NOT NULL, enforced): seed a parent.
+    rb = _make_runbook_record(alertname="TestAlert")
+    await _insert_runbook(repo, rb)
+
+    # Create a dry run directly
+    plan_content = "This is the plan content\n"
+    transcript_path = f"{transcript_dir}/test-plan.transcript"
+    with open(transcript_path, "w", encoding="utf-8") as fh:
+        fh.write(plan_content)
+
+    run_id = uuid7()
+    async with repo.transaction() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO runbook_runs "
+                "(id, runbook_id, created_at, alert_id, mode, prompt, started_at, "
+                " ended_at, fixer_user, host, runbook_hash, transcript_path, exit_code) "
+                "VALUES (:id, :rb_id, :ca, :alert_id, :mode, :prompt, :started, "
+                " :ended, :fixer, :host, :hash, :transcript, :exit)"
+            ),
+            {
+                "id": run_id,
+                "rb_id": rb.id,
+                "ca": utc_now_iso(),
+                "alert_id": None,
+                "mode": RunMode.DRY_RUN.value,
+                "prompt": "/test",
+                "started": utc_now_iso(),
+                "ended": utc_now_iso(),
+                "fixer": "test-fixer",
+                "host": "test-host",
+                "hash": "hash-v1",
+                "transcript": transcript_path,
+                "exit": 0,
+            },
+        )
+
+    docker = _FakeDockerClient()
+    orch = _make_orchestrator(repo, secrets_repo_fixture, docker, transcript_dir=transcript_dir)
+
+    plan = await orch.read_dry_plan(run_id)
+
+    assert plan is not None
+    assert plan.plan_text == plan_content
+    assert plan.exit_code == 0
+    assert plan.transcript_path == transcript_path
+
+
+@pytest.mark.asyncio
+async def test_read_dry_plan_missing_run(
+    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository
+) -> None:
+    """T13: read_dry_plan run not found → None."""
+    docker = _FakeDockerClient()
+    orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+
+    plan = await orch.read_dry_plan("nonexistent-id")
+    assert plan is None
+
+
+@pytest.mark.asyncio
+async def test_read_dry_plan_no_transcript_path(
+    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+) -> None:
+    """T14: read_dry_plan transcript_path NULL → None."""
+    # runbook_runs.runbook_id FKs to runbooks.id (NOT NULL, enforced): seed a parent.
+    rb = _make_runbook_record(alertname="TestAlert")
+    await _insert_runbook(repo, rb)
+
+    run_id = uuid7()
+    async with repo.transaction() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO runbook_runs "
+                "(id, runbook_id, created_at, alert_id, mode, prompt, started_at, "
+                " ended_at, fixer_user, host, runbook_hash, transcript_path, exit_code) "
+                "VALUES (:id, :rb_id, :ca, :alert_id, :mode, :prompt, :started, "
+                " :ended, :fixer, :host, :hash, :transcript, :exit)"
+            ),
+            {
+                "id": run_id,
+                "rb_id": rb.id,
+                "ca": utc_now_iso(),
+                "alert_id": None,
+                "mode": RunMode.DRY_RUN.value,
+                "prompt": "/test",
+                "started": utc_now_iso(),
+                "ended": utc_now_iso(),
+                "fixer": "test-fixer",
+                "host": "test-host",
+                "hash": "hash-v1",
+                "transcript": None,
+                "exit": 0,
+            },
+        )
+
+    docker = _FakeDockerClient()
+    orch = _make_orchestrator(
+        repo, secrets_repo_fixture, docker, transcript_dir=str(tmp_path / "transcripts")
+    )
+
+    plan = await orch.read_dry_plan(run_id)
+    assert plan is None
+
+
+@pytest.mark.asyncio
+async def test_read_dry_plan_file_unreadable(
+    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+) -> None:
+    """T15: read_dry_plan file missing → None."""
+    # runbook_runs.runbook_id FKs to runbooks.id (NOT NULL, enforced): seed a parent.
+    rb = _make_runbook_record(alertname="TestAlert")
+    await _insert_runbook(repo, rb)
+
+    run_id = uuid7()
+    transcript_path = str(tmp_path / "nonexistent" / "plan.transcript")
+
+    async with repo.transaction() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO runbook_runs "
+                "(id, runbook_id, created_at, alert_id, mode, prompt, started_at, "
+                " ended_at, fixer_user, host, runbook_hash, transcript_path, exit_code) "
+                "VALUES (:id, :rb_id, :ca, :alert_id, :mode, :prompt, :started, "
+                " :ended, :fixer, :host, :hash, :transcript, :exit)"
+            ),
+            {
+                "id": run_id,
+                "rb_id": rb.id,
+                "ca": utc_now_iso(),
+                "alert_id": None,
+                "mode": RunMode.DRY_RUN.value,
+                "prompt": "/test",
+                "started": utc_now_iso(),
+                "ended": utc_now_iso(),
+                "fixer": "test-fixer",
+                "host": "test-host",
+                "hash": "hash-v1",
+                "transcript": transcript_path,
+                "exit": 0,
+            },
+        )
+
+    docker = _FakeDockerClient()
+    orch = _make_orchestrator(
+        repo, secrets_repo_fixture, docker, transcript_dir=str(tmp_path / "transcripts")
+    )
+
+    plan = await orch.read_dry_plan(run_id)
+    assert plan is None
+
+
+# ---------------------------------------------------------------------------
+# T16: approvals_repo_insert_get_list_and_transitions
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_approvals_repo_insert_get_list_and_transitions(
+    repo: SqliteRepository,
+) -> None:
+    """T16: Approvals repo methods.
+
+    Covers: insert, get, list, mark_approved_conn, mark_rejected_conn,
+    set_real_run_id_conn, own-txn mark_rejected.
+    """
+    approvals_repo = RunbookRunApprovalsRepository(repo)
+
+    # Insert a pending approval. dry_run_id/real_run_id FK runbook_runs.id, and
+    # runbook_runs.runbook_id FKs runbooks.id + runbook_runs.alert_id FKs alerts.id,
+    # so seed the full chain first.
+    rb = _make_runbook_record(alertname="TestAlert")
+    await _insert_runbook(repo, rb)
+    alert = _make_alert(alertname="TestAlert")
+    await _insert_alert(repo, alert)
+
+    runs_repo = RunbookRunsRepository(repo)
+    async with repo.transaction() as conn:
+        dry_run_id = await runs_repo.insert_started(
+            conn,
+            runbook_id=rb.id,
+            alert_id=alert.id,
+            prompt=rb.path,
+            fixer_user="homelab-fixer",
+            host="testhost",
+            runbook_hash=rb.content_hash,
+            mode=RunMode.DRY_RUN,
+        )
+    runbook_id = rb.id
+    alert_id = alert.id
+    pinned_hash = "hash-v1"
+
+    async with repo.transaction() as conn:
+        approval_id = await approvals_repo.insert_pending(
+            conn,
+            dry_run_id=dry_run_id,
+            runbook_id=runbook_id,
+            alert_id=alert_id,
+            pinned_runbook_hash=pinned_hash,
+        )
+
+    assert approval_id is not None
+
+    # Get the approval
+    approval = await approvals_repo.get(approval_id)
+    assert approval is not None
+    assert approval.id == approval_id
+    assert approval.status == "pending"
+    assert approval.dry_run_id == dry_run_id
+    assert approval.runbook_id == runbook_id
+    assert approval.alert_id == alert_id
+    assert approval.pinned_runbook_hash == pinned_hash
+
+    # List pending approvals
+    approvals = await approvals_repo.list_by_status("pending")
+    assert len(approvals) >= 1
+    assert any(a.id == approval_id for a in approvals)
+
+    # Mark approved
+    async with repo.transaction() as conn:
+        await approvals_repo.mark_approved_conn(
+            conn,
+            approval_id=approval_id,
+            approved_by="admin",
+            when=utc_now_iso(),
+        )
+
+    approval = await approvals_repo.get(approval_id)
+    assert approval is not None
+    assert approval.status == "approved"
+    assert approval.approved_by == "admin"
+
+    # Set real_run_id (FK → runbook_runs.id): seed a real run first.
+    async with repo.transaction() as conn:
+        real_run_id = await runs_repo.insert_started(
+            conn,
+            runbook_id=rb.id,
+            alert_id=alert.id,
+            prompt=rb.path,
+            fixer_user="homelab-fixer",
+            host="testhost",
+            runbook_hash=rb.content_hash,
+            mode=RunMode.REAL,
+        )
+        await approvals_repo.set_real_run_id_conn(
+            conn,
+            approval_id=approval_id,
+            real_run_id=real_run_id,
+        )
+
+    approval = await approvals_repo.get(approval_id)
+    assert approval is not None
+    assert approval.real_run_id == real_run_id
+
+    # Create another approval for rejection test — seed another dry run first (FK).
+    approval_id_2: str | None = None
+    async with repo.transaction() as conn:
+        dry_run_id_2 = await runs_repo.insert_started(
+            conn,
+            runbook_id=rb.id,
+            alert_id=alert.id,
+            prompt=rb.path,
+            fixer_user="homelab-fixer",
+            host="testhost",
+            runbook_hash=rb.content_hash,
+            mode=RunMode.DRY_RUN,
+        )
+        approval_id_2 = await approvals_repo.insert_pending(
+            conn,
+            dry_run_id=dry_run_id_2,
+            runbook_id=rb.id,
+            alert_id=None,
+            pinned_runbook_hash="hash-v2",
+        )
+
+    assert approval_id_2 is not None
+
+    # Own-txn mark_rejected (includes audit)
+    await approvals_repo.mark_rejected(
+        approval_id=approval_id_2,
+        approved_by="admin",
+        when=None,
+        ip="1.2.3.4",
+    )
+
+    approval = await approvals_repo.get(approval_id_2)
+    assert approval is not None
+    assert approval.status == "rejected"
+    assert approval.approved_by == "admin"
+
+    # Verify audit written
+    audits = await repo.fetch_all(
+        text("SELECT what FROM audit_log WHERE what = 'autofix.rejected'"),
+        {},
+    )
+    assert len(audits) >= 1
+
+
+# ---------------------------------------------------------------------------
+# T17: build_claude_cmd_dry_and_real
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_build_claude_cmd_dry_and_real(
+    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository
+) -> None:
+    """T17: _build_claude_cmd dry vs real branches."""
+    rb = _make_runbook_record(alertname="Test")
+    orch = _make_orchestrator(repo, secrets_repo_fixture, _FakeDockerClient())
+
+    # Dry cmd
+    dry_cmd = orch._build_claude_cmd(rb, dry=True)  # pyright: ignore[reportPrivateUsage]
+    assert dry_cmd == ["claude", "-p", rb.path, "--permission-mode", "plan"]
+    assert "--dangerously-skip-permissions" not in dry_cmd
+
+    # Real cmd
+    real_cmd = orch._build_claude_cmd(rb, dry=False)  # pyright: ignore[reportPrivateUsage]
+    assert real_cmd == ["claude", "-p", rb.path, "--dangerously-skip-permissions"]
+    assert "--permission-mode" not in real_cmd
+
+
+# ---------------------------------------------------------------------------
+# T18: dry_in_lock_inflight_denies
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_dry_in_lock_inflight_denies(
+    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository
+) -> None:
+    """T18: Dry exec path, in-lock inflight check denies (ALREADY_RUNNING)."""
+    rb = _make_runbook_record(alertname="TestAlert", dry_run_required=True, content_hash="hash-v1")
+    await _insert_runbook(repo, rb)
+    alert = _make_alert(alertname="TestAlert")
+    await _insert_alert(repo, alert)
+
+    app_settings = AppSettingsRepository(repo)
+    await app_settings.set("autofix_enabled", "true")
+
+    docker = _FakeDockerClient()
+    orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+
+    with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=1)):
+        result = await orch.handle_alert(alert)
+
+    assert result is not None
+    assert result.denial_reason == DenialReason.ALREADY_RUNNING
+    assert result.ran is False
+
+    # No run, no approval
+    runs = await repo.fetch_all(text("SELECT id FROM runbook_runs"), {})
+    assert runs == []
+
+    approvals = await repo.fetch_all(text("SELECT id FROM runbook_run_approvals"), {})
+    assert approvals == []
+
+
+# ---------------------------------------------------------------------------
+# T19: dry_claim_error_audited
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_dry_claim_error_audited(
+    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository
+) -> None:
+    """T19: Dry exec path, insert_started raises → CLAIM_ERROR, audit written."""
+    rb = _make_runbook_record(alertname="TestAlert", dry_run_required=True, content_hash="hash-v1")
+    await _insert_runbook(repo, rb)
+    alert = _make_alert(alertname="TestAlert")
+    await _insert_alert(repo, alert)
+
+    app_settings = AppSettingsRepository(repo)
+    await app_settings.set("autofix_enabled", "true")
+
+    docker = _FakeDockerClient()
+    orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+
+    # Mock insert_started to raise
+    with (
+        patch.object(
+            RunbookRunsRepository,
+            "insert_started",
+            side_effect=Exception("DB error"),
+        ),
+        patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)),
+    ):
+        result = await orch.handle_alert(alert)
+
+    assert result is not None
+    assert result.denial_reason == DenialReason.CLAIM_ERROR
+    assert result.ran is False
+
+    # Verify audit
+    audits = await repo.fetch_all(
+        text("SELECT what FROM audit_log WHERE what = 'autofix.claim_error'"),
+        {},
+    )
+    assert len(audits) >= 1

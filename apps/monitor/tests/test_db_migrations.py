@@ -36,6 +36,7 @@ EXPECTED_TABLES = {
     "alert_outcomes",
     "runbooks",
     "runbook_runs",
+    "runbook_run_approvals",
     "secrets",
     "channels",
     "routing_rules",

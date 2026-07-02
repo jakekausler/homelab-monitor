@@ -15,8 +15,10 @@ class DenialReason(StrEnum):
     COOLDOWN = "cooldown"
     AMBIGUOUS_MATCH = "ambiguous_match"
     ALREADY_RUNNING = "already_running"
-    RISKY_BLOCKED = "risky_blocked"
     CLAIM_ERROR = "claim_error"
+    APPROVAL_NOT_PENDING = "approval_not_pending"
+    RUNBOOK_CHANGED = "runbook_changed"
+    RUNBOOK_MISSING = "runbook_missing"
 
 
 class RunOutcome(StrEnum):
@@ -24,6 +26,7 @@ class RunOutcome(StrEnum):
 
     RAN = "ran"  # exec actually fired (exit code captured; may be non-zero)
     DENIED = "denied"  # a gate denied before exec
+    DRY_RUN_STORED = "dry_run_stored"  # risky runbook: plan captured, approval pending, HALT
 
 
 class RunMode(StrEnum):
@@ -47,3 +50,4 @@ class RunResult:
     run_id: str | None
     exit_code: int | None
     denial_reason: DenialReason | None
+    approval_id: str | None = None

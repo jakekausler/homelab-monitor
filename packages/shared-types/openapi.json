@@ -402,6 +402,193 @@
         "title": "AnnotationResponse",
         "type": "object"
       },
+      "ApprovalListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ApprovalOut"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "ApprovalListResponse",
+        "type": "object"
+      },
+      "ApprovalOut": {
+        "properties": {
+          "alert_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Alert Id"
+          },
+          "approved_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approved By"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "decided_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decided At"
+          },
+          "drift_detected": {
+            "title": "Drift Detected",
+            "type": "boolean"
+          },
+          "dry_run_id": {
+            "title": "Dry Run Id",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "pinned_runbook_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pinned Runbook Hash"
+          },
+          "real_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Real Run Id"
+          },
+          "runbook_id": {
+            "title": "Runbook Id",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "dry_run_id",
+          "runbook_id",
+          "alert_id",
+          "pinned_runbook_hash",
+          "status",
+          "approved_by",
+          "decided_at",
+          "real_run_id",
+          "created_at",
+          "drift_detected"
+        ],
+        "title": "ApprovalOut",
+        "type": "object"
+      },
+      "ApproveRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "confirm_phrase": {
+            "title": "Confirm Phrase",
+            "type": "string"
+          }
+        },
+        "required": [
+          "confirm_phrase"
+        ],
+        "title": "ApproveRequest",
+        "type": "object"
+      },
+      "ApproveResponse": {
+        "properties": {
+          "approval_id": {
+            "title": "Approval Id",
+            "type": "string"
+          },
+          "denial_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Denial Reason"
+          },
+          "exit_code": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exit Code"
+          },
+          "outcome": {
+            "title": "Outcome",
+            "type": "string"
+          },
+          "ran": {
+            "title": "Ran",
+            "type": "boolean"
+          },
+          "real_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Real Run Id"
+          }
+        },
+        "required": [
+          "approval_id",
+          "ran",
+          "outcome",
+          "real_run_id",
+          "exit_code",
+          "denial_reason"
+        ],
+        "title": "ApproveResponse",
+        "type": "object"
+      },
       "BackupResponse": {
         "additionalProperties": false,
         "description": "Response shape for POST /api/admin/backup.\n\nNote: errors is a list[str] (best-effort partial-success pattern)\nrather than the standard ErrorEnvelope. Backups proceed even when\none component (SQLite or VM) fails; the errors list captures\ncomponent-specific failures while still returning the partial\npaths that succeeded.",
@@ -6063,6 +6250,51 @@
         "title": "PiholeVersionInfo",
         "type": "object"
       },
+      "PlanResponse": {
+        "properties": {
+          "approval_id": {
+            "title": "Approval Id",
+            "type": "string"
+          },
+          "dry_run_id": {
+            "title": "Dry Run Id",
+            "type": "string"
+          },
+          "exit_code": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exit Code"
+          },
+          "plan_text": {
+            "title": "Plan Text",
+            "type": "string"
+          },
+          "runbook_id": {
+            "title": "Runbook Id",
+            "type": "string"
+          },
+          "transcript_path": {
+            "title": "Transcript Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "approval_id",
+          "dry_run_id",
+          "runbook_id",
+          "transcript_path",
+          "plan_text",
+          "exit_code"
+        ],
+        "title": "PlanResponse",
+        "type": "object"
+      },
       "PoolRow": {
         "properties": {
           "pool": {
@@ -6525,6 +6757,30 @@
           "command"
         ],
         "title": "RegisterCronBody",
+        "type": "object"
+      },
+      "RejectRequest": {
+        "additionalProperties": false,
+        "properties": {},
+        "title": "RejectRequest",
+        "type": "object"
+      },
+      "RejectResponse": {
+        "properties": {
+          "approval_id": {
+            "title": "Approval Id",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "approval_id",
+          "status"
+        ],
+        "title": "RejectResponse",
         "type": "object"
       },
       "ReplicationRow": {
@@ -10376,6 +10632,200 @@
         "summary": "Me",
         "tags": [
           "auth"
+        ]
+      }
+    },
+    "/api/autofix/approvals": {
+      "get": {
+        "operationId": "list_approvals_api_autofix_approvals_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "status_filter",
+            "required": false,
+            "schema": {
+              "default": "pending",
+              "enum": [
+                "pending",
+                "approved",
+                "rejected"
+              ],
+              "title": "Status Filter",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Approvals",
+        "tags": [
+          "autofix"
+        ]
+      }
+    },
+    "/api/autofix/approvals/{approval_id}/approve": {
+      "post": {
+        "operationId": "approve_api_autofix_approvals__approval_id__approve_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "approval_id",
+            "required": true,
+            "schema": {
+              "title": "Approval Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApproveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApproveResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Approve",
+        "tags": [
+          "autofix"
+        ]
+      }
+    },
+    "/api/autofix/approvals/{approval_id}/plan": {
+      "get": {
+        "operationId": "get_plan_api_autofix_approvals__approval_id__plan_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "approval_id",
+            "required": true,
+            "schema": {
+              "title": "Approval Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Plan",
+        "tags": [
+          "autofix"
+        ]
+      }
+    },
+    "/api/autofix/approvals/{approval_id}/reject": {
+      "post": {
+        "operationId": "reject_api_autofix_approvals__approval_id__reject_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "approval_id",
+            "required": true,
+            "schema": {
+              "title": "Approval Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RejectRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RejectResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Reject",
+        "tags": [
+          "autofix"
         ]
       }
     },

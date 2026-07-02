@@ -1538,6 +1538,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
     docker_client = getattr(app.state, "docker_socket_client", None)
     if docker_client is not None:
         from homelab_monitor.kernel.autofix import AutoFixOrchestrator  # noqa: PLC0415
+        from homelab_monitor.kernel.autofix.approvals_repository import (  # noqa: PLC0415
+            RunbookRunApprovalsRepository,
+        )
         from homelab_monitor.kernel.autofix.runs_repository import (  # noqa: PLC0415
             RunbookRunsRepository,
         )
@@ -1556,6 +1559,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
             docker_client=docker_client,
             db=repo,
             runs_repo=RunbookRunsRepository(repo),
+            approvals_repo=RunbookRunApprovalsRepository(repo),
             config=load_fixer_runner_config(),
             log=log.bind(component="autofix"),
         )

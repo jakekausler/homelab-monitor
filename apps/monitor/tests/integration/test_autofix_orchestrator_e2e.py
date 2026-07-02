@@ -41,9 +41,12 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from homelab_monitor.kernel.alerts.repository import AlertRepository
 from homelab_monitor.kernel.alerts.types import Alert, AlertStatus, Severity
+from homelab_monitor.kernel.autofix.approvals_repository import (
+    RunbookRunApprovalsRepository,
+)
 from homelab_monitor.kernel.autofix.orchestrator import AutoFixOrchestrator
 from homelab_monitor.kernel.autofix.runs_repository import RunbookRunsRepository
-from homelab_monitor.kernel.autofix.types import RunOutcome
+from homelab_monitor.kernel.autofix.types import DenialReason, RunOutcome
 from homelab_monitor.kernel.config import FixerRunnerConfig
 from homelab_monitor.kernel.db.engine import get_engine
 from homelab_monitor.kernel.db.ids import uuid7
@@ -221,16 +224,20 @@ def _make_orchestrator(  # noqa: PLR0913
         docker_client=docker_client,
         db=repo,
         runs_repo=RunbookRunsRepository(repo),
+        approvals_repo=RunbookRunApprovalsRepository(repo),
         config=config,
         log=log,
     )
 
 
-async def _insert_test_runbook(
+async def _insert_test_runbook(  # noqa: PLR0913 -- keyword-only test-fixture insert
     repo: SqliteRepository,
     *,
     runbook_path: str,
     rate_limit_per_hour: int | None = 1,
+    risk_tag: str = "safe",
+    dry_run_required: bool = False,
+    content_hash: str = "test-content-hash-abc123",
 ) -> str:
     """Directly insert a runbook row ready for the orchestrator."""
     runbook_id = uuid7()
@@ -250,13 +257,13 @@ async def _insert_test_runbook(
                 "path": runbook_path,
                 "created_at": utc_now_iso(),
                 "patterns": json.dumps(matcher),
-                "risk_tag": "safe",
-                "dry_run": 0,
+                "risk_tag": risk_tag,
+                "dry_run": 1 if dry_run_required else 0,
                 "rate_limit": rate_limit_per_hour,
                 "cooldown": 0,
                 "enabled": 1,
                 "auto_trigger": 1,
-                "hash": "test-content-hash-abc123",
+                "hash": content_hash,
             },
         )
     return runbook_id
@@ -467,6 +474,317 @@ async def test_autofix_orchestrator_real_exec_e2e(  # noqa: PLR0915
         )
         assert len(denied_audit) >= 1, (
             f"No audit_log row with what='autofix.denied' for alert {alert.id}"
+        )
+
+    finally:
+        await docker_client.aclose()
+
+
+# ---------------------------------------------------------------------------
+# STAGE-009-006: dry-run -> approval -> real-run E2E pipeline
+# ---------------------------------------------------------------------------
+
+
+def _read_argv_files(transcript_dir: Path) -> list[list[str]]:
+    """Read every fake-claude-*.args file's argv (as a list of lines)."""
+    return [
+        f.read_text(encoding="utf-8").splitlines()
+        for f in sorted(transcript_dir.glob("fake-claude-*.args"))
+    ]
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_autofix_dry_run_approval_real_run_e2e_pipeline(  # noqa: PLR0915
+    running_container: tuple[str, Path, Path],
+    repo: SqliteRepository,
+    secrets_repo: AsyncSecretsRepository,
+) -> None:
+    """Full E2E: risky runbook -> dry-run stored -> approval -> real run.
+
+    Proves the STAGE-009-006 safety chain against a REAL fixer-runner
+    container: a risky runbook can never bypass dry-run, and only an
+    explicit execute_approved() call triggers the real
+    --dangerously-skip-permissions exec.
+    """
+    container_name, transcript_dir, exec_log_dir = running_container
+    runbook_path = "/data/runbook-transcripts"
+
+    app_settings_repo = AppSettingsRepository(repo)
+    await app_settings_repo.set("autofix_enabled", "true")
+
+    runbook_id = await _insert_test_runbook(
+        repo,
+        runbook_path=runbook_path,
+        rate_limit_per_hour=None,  # no rate limit — this test drives 2 real-ish attempts
+        risk_tag="risky",
+        dry_run_required=True,
+        content_hash="dry-run-pinned-hash-001",
+    )
+    alert = await _insert_test_alert(repo)
+
+    log = structlog.get_logger()
+    docker_client = DockerSocketClient(log=log)
+    try:
+        orchestrator = _make_orchestrator(
+            repo=repo,
+            secrets_repo=secrets_repo,
+            docker_client=docker_client,
+            container_name=container_name,
+            transcript_dir=transcript_dir,
+            exec_log_dir=exec_log_dir,
+            rate_limit_per_hour=None,
+        )
+
+        # ---- Phase 1: dry-run stored ----
+        result1 = await orchestrator.handle_alert(alert)
+        assert result1 is not None, "handle_alert returned None (no-match) — expected a match"
+        assert result1.ran is True, f"Expected ran=True for dry run, got: {result1}"
+        assert result1.outcome == RunOutcome.DRY_RUN_STORED, (
+            f"Expected outcome=DRY_RUN_STORED, got: {result1.outcome}"
+        )
+        approval_id = result1.approval_id
+        assert approval_id is not None, "approval_id must be set for a dry-run-stored result"
+        dry_run_id = result1.run_id
+        assert dry_run_id is not None, "run_id must be set for the dry run"
+
+        dry_runs_rows = await repo.fetch_all(
+            text("SELECT * FROM runbook_runs WHERE id = :id"),
+            {"id": dry_run_id},
+        )
+        assert len(dry_runs_rows) == 1, f"Expected 1 runbook_runs row for dry run {dry_run_id}"
+        dry_row = dry_runs_rows[0]
+        assert str(dry_row.mode) == "dry_run", f"mode must be 'dry_run', got {dry_row.mode}"
+        assert dry_row.transcript_path is not None, "dry run transcript_path must be set"
+
+        # Fake-claude was invoked with --permission-mode plan, WITHOUT
+        # --dangerously-skip-permissions.
+        argvs_after_phase1 = _read_argv_files(transcript_dir)
+        assert len(argvs_after_phase1) == 1, (
+            f"Expected exactly 1 fake-claude invocation after dry run, got "
+            f"{len(argvs_after_phase1)}"
+        )
+        dry_argv = argvs_after_phase1[0]
+        assert "--permission-mode" in dry_argv and "plan" in dry_argv, (
+            f"Expected --permission-mode plan in dry argv; got:\n{dry_argv}"
+        )
+        assert "--dangerously-skip-permissions" not in dry_argv, (
+            f"Dry run must NOT pass --dangerously-skip-permissions; got:\n{dry_argv}"
+        )
+
+        approval_rows = await repo.fetch_all(
+            text("SELECT * FROM runbook_run_approvals WHERE id = :id"),
+            {"id": approval_id},
+        )
+        assert len(approval_rows) == 1, f"Expected 1 approval row for {approval_id}"
+        approval_row = approval_rows[0]
+        assert str(approval_row.status) == "pending", (
+            f"Expected status='pending', got {approval_row.status}"
+        )
+        assert str(approval_row.pinned_runbook_hash) == "dry-run-pinned-hash-001", (
+            f"pinned_runbook_hash mismatch: {approval_row.pinned_runbook_hash}"
+        )
+
+        dry_stored_audit = await repo.fetch_all(
+            text(
+                "SELECT * FROM audit_log WHERE what = 'autofix.dry_run_stored' "
+                "AND json_extract(after_json, '$.run_id') = :run_id"
+            ),
+            {"run_id": dry_run_id},
+        )
+        assert len(dry_stored_audit) >= 1, (
+            f"No audit_log row with what='autofix.dry_run_stored' for run_id={dry_run_id}"
+        )
+
+        # ---- Phase 2: risky runbook can NEVER bypass dry-run ----
+        # No second runbook_runs row exists yet; only the dry invocation was recorded.
+        all_runs_after_phase1 = await repo.fetch_all(
+            text("SELECT id FROM runbook_runs WHERE runbook_id = :rbid"),
+            {"rbid": runbook_id},
+        )
+        assert len(all_runs_after_phase1) == 1, (
+            f"Expected exactly 1 runbook_runs row before approval, got {len(all_runs_after_phase1)}"
+        )
+        real_exec_argvs = [a for a in argvs_after_phase1 if "--dangerously-skip-permissions" in a]
+        assert len(real_exec_argvs) == 0, (
+            "No real (--dangerously-skip-permissions) exec should have happened yet"
+        )
+
+        # ---- Phase 3: explicit approval -> real run ----
+        result3 = await orchestrator.execute_approved(
+            approval_id, principal="test-user", ip="127.0.0.1"
+        )
+        assert result3.ran is True, f"Expected ran=True for approved real run, got: {result3}"
+        assert result3.outcome == RunOutcome.RAN, (
+            f"Expected outcome=RAN for approved real run, got: {result3.outcome}"
+        )
+        real_run_id = result3.run_id
+        assert real_run_id is not None, "run_id must be set for the real run"
+        assert real_run_id != dry_run_id, "real run_id must be distinct from the dry run_id"
+
+        real_runs_rows = await repo.fetch_all(
+            text("SELECT * FROM runbook_runs WHERE id = :id"),
+            {"id": real_run_id},
+        )
+        assert len(real_runs_rows) == 1, f"Expected 1 runbook_runs row for real run {real_run_id}"
+        real_row = real_runs_rows[0]
+        assert str(real_row.mode) == "real", f"mode must be 'real', got {real_row.mode}"
+        assert real_row.transcript_path is not None, "real run transcript_path must be set"
+        assert str(real_row.transcript_path) != str(dry_row.transcript_path), (
+            "real run must have its own distinct transcript_path"
+        )
+
+        # Fake-claude was invoked with --dangerously-skip-permissions for the real run.
+        argvs_after_phase3 = _read_argv_files(transcript_dir)
+        assert len(argvs_after_phase3) == 2, (  # noqa: PLR2004 -- exactly one dry + one real = 2
+            f"Expected exactly 2 fake-claude invocations total, got {len(argvs_after_phase3)}"
+        )
+        real_argv_candidates = [
+            a for a in argvs_after_phase3 if "--dangerously-skip-permissions" in a
+        ]
+        assert len(real_argv_candidates) == 1, (
+            f"Expected exactly 1 real (--dangerously-skip-permissions) argv, got:\n"
+            f"{argvs_after_phase3}"
+        )
+
+        approval_rows_final = await repo.fetch_all(
+            text("SELECT * FROM runbook_run_approvals WHERE id = :id"),
+            {"id": approval_id},
+        )
+        assert len(approval_rows_final) == 1
+        approval_final = approval_rows_final[0]
+        assert str(approval_final.status) == "approved", (
+            f"Expected status='approved', got {approval_final.status}"
+        )
+        assert approval_final.decided_at is not None, "decided_at must be set after approval"
+        assert str(approval_final.real_run_id) == real_run_id, (
+            f"real_run_id mismatch: {approval_final.real_run_id} != {real_run_id}"
+        )
+
+        approved_audit = await repo.fetch_all(
+            text(
+                "SELECT * FROM audit_log WHERE what = 'autofix.approved' "
+                "AND json_extract(after_json, '$.approval_id') = :approval_id"
+            ),
+            {"approval_id": approval_id},
+        )
+        assert len(approved_audit) >= 1, (
+            f"No audit_log row with what='autofix.approved' for approval_id={approval_id}"
+        )
+
+        ran_audit = await repo.fetch_all(
+            text(
+                "SELECT * FROM audit_log WHERE what = 'autofix.ran' "
+                "AND json_extract(after_json, '$.run_id') = :run_id"
+            ),
+            {"run_id": real_run_id},
+        )
+        assert len(ran_audit) >= 1, (
+            f"No audit_log row with what='autofix.ran' for run_id={real_run_id}"
+        )
+
+    finally:
+        await docker_client.aclose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_autofix_approval_drift_invalidates_e2e(
+    running_container: tuple[str, Path, Path],
+    repo: SqliteRepository,
+    secrets_repo: AsyncSecretsRepository,
+) -> None:
+    """A runbook content_hash change between dry-run and approval must
+    invalidate the pending approval (RUNBOOK_CHANGED) and skip the real exec.
+    """
+    container_name, transcript_dir, exec_log_dir = running_container
+    runbook_path = "/data/runbook-transcripts"
+
+    app_settings_repo = AppSettingsRepository(repo)
+    await app_settings_repo.set("autofix_enabled", "true")
+
+    runbook_id = await _insert_test_runbook(
+        repo,
+        runbook_path=runbook_path,
+        rate_limit_per_hour=None,
+        risk_tag="risky",
+        dry_run_required=True,
+        content_hash="drift-original-hash-001",
+    )
+    alert = await _insert_test_alert(repo)
+
+    log = structlog.get_logger()
+    docker_client = DockerSocketClient(log=log)
+    try:
+        orchestrator = _make_orchestrator(
+            repo=repo,
+            secrets_repo=secrets_repo,
+            docker_client=docker_client,
+            container_name=container_name,
+            transcript_dir=transcript_dir,
+            exec_log_dir=exec_log_dir,
+            rate_limit_per_hour=None,
+        )
+
+        # Produce a pending approval via a dry run.
+        result1 = await orchestrator.handle_alert(alert)
+        assert result1 is not None
+        assert result1.outcome == RunOutcome.DRY_RUN_STORED, (
+            f"Expected DRY_RUN_STORED, got: {result1.outcome}"
+        )
+        approval_id = result1.approval_id
+        assert approval_id is not None
+
+        argvs_before = _read_argv_files(transcript_dir)
+        assert len(argvs_before) == 1, "Expected exactly 1 dry-claude invocation so far"
+
+        # Simulate a config change post-plan: mutate the runbook's content_hash.
+        async with repo.transaction() as conn:
+            await conn.execute(
+                text("UPDATE runbooks SET content_hash = :hash WHERE id = :id"),
+                {"hash": "drift-mutated-hash-002", "id": runbook_id},
+            )
+
+        result2 = await orchestrator.execute_approved(
+            approval_id, principal="test-user", ip="127.0.0.1"
+        )
+        assert result2.ran is False, f"Expected ran=False on drift, got: {result2}"
+        assert result2.denial_reason == DenialReason.RUNBOOK_CHANGED, (
+            f"Expected denial_reason=RUNBOOK_CHANGED, got: {result2.denial_reason}"
+        )
+
+        approval_rows = await repo.fetch_all(
+            text("SELECT * FROM runbook_run_approvals WHERE id = :id"),
+            {"id": approval_id},
+        )
+        assert len(approval_rows) == 1
+        assert str(approval_rows[0].status) == "rejected", (
+            f"Expected status='rejected' after drift, got {approval_rows[0].status}"
+        )
+
+        # No real exec happened: still only the original dry-claude invocation,
+        # and no runbook_runs row with mode='real'.
+        argvs_after = _read_argv_files(transcript_dir)
+        assert len(argvs_after) == 1, (
+            f"No new fake-claude invocation should have happened on drift; got {len(argvs_after)}"
+        )
+        real_mode_runs = await repo.fetch_all(
+            text("SELECT id FROM runbook_runs WHERE runbook_id = :rbid AND mode = 'real'"),
+            {"rbid": runbook_id},
+        )
+        assert len(real_mode_runs) == 0, (
+            f"Expected NO mode='real' runbook_runs row after drift, got {len(real_mode_runs)}"
+        )
+
+        rejected_audit = await repo.fetch_all(
+            text(
+                "SELECT * FROM audit_log WHERE what = 'autofix.rejected' "
+                "AND json_extract(after_json, '$.approval_id') = :approval_id"
+            ),
+            {"approval_id": approval_id},
+        )
+        assert len(rejected_audit) >= 1, (
+            f"No audit_log row with what='autofix.rejected' for approval_id={approval_id}"
         )
 
     finally:

@@ -19,6 +19,7 @@ from homelab_monitor.kernel.alerts.types import Alert, AlertStatus, Severity
 from homelab_monitor.kernel.api.routers.alerts import (
     _dispatch_autofix,  # pyright: ignore[reportPrivateUsage]
 )
+from homelab_monitor.kernel.autofix.approvals_repository import RunbookRunApprovalsRepository
 from homelab_monitor.kernel.autofix.orchestrator import AutoFixOrchestrator
 from homelab_monitor.kernel.autofix.runs_repository import RunbookRunsRepository
 from homelab_monitor.kernel.config import FixerRunnerConfig
@@ -138,6 +139,7 @@ async def test_dispatch_autofix_real_orchestrator_handle_alert_called(
         docker_client=MagicMock(),  # type: ignore[arg-type]
         db=repo,
         runs_repo=RunbookRunsRepository(repo),
+        approvals_repo=RunbookRunApprovalsRepository(repo),
         config=config,
         log=structlog.get_logger(),
     )

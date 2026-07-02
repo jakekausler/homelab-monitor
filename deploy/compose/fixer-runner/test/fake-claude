@@ -27,6 +27,32 @@ for a in "$@"; do
     printf '%s\n' "$a" >>"${ARGS_FILE}"
 done
 
+# (2b) Detect plan-only (dry-run) invocation: `--permission-mode plan`.
+#      In plan mode we record a marker and emit a PLAN transcript, and we do
+#      NOT simulate execution (no hang, no side effects).
+IS_PLAN=0
+prev=""
+for a in "$@"; do
+    if [ "$prev" = "--permission-mode" ] && [ "$a" = "plan" ]; then
+        IS_PLAN=1
+    fi
+    prev="$a"
+done
+
+if [ "${IS_PLAN}" = "1" ]; then
+    PLAN_MARKER="${TRANSCRIPT_DIR}/${PREFIX}.plan"
+    : >"${PLAN_MARKER}"
+    PLAN_TRANSCRIPT="${TRANSCRIPT_DIR}/${PREFIX}.transcript"
+    {
+        printf 'fake-claude PLAN transcript\n'
+        printf 'mode=plan\n'
+        printf 'timestamp=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        printf 'argv=%s\n' "$*"
+        printf 'PLAN: (dry-run) no changes would be made; steps: [simulated]\n'
+    } >"${PLAN_TRANSCRIPT}"
+    exit 0
+fi
+
 # (3) Write a transcript file (proves the RW mount + ownership). Include a
 #     timestamp so concurrent invocations don't clobber, and echo the API key
 #     PRESENCE (never the value) so the test can assert it is empty under fake.

@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from sqlalchemy import text
+from sqlalchemy.engine import Row
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from homelab_monitor.kernel.autofix.types import RunMode
@@ -40,6 +43,12 @@ _LATEST_ENDED_SQL = text(
     "SELECT ended_at FROM runbook_runs "
     "WHERE runbook_id = :runbook_id AND ended_at IS NOT NULL "
     "ORDER BY ended_at DESC LIMIT 1"
+)
+
+_SELECT_RUN_BY_ID_SQL = text(
+    "SELECT id, runbook_id, created_at, alert_id, mode, prompt, started_at, "
+    "ended_at, fixer_user, host, runbook_hash, transcript_path, exit_code "
+    "FROM runbook_runs WHERE id = :id"
 )
 
 
@@ -134,6 +143,10 @@ class RunbookRunsRepository:
             return None
         value = row[0]
         return None if value is None else str(value)
+
+    async def get(self, run_id: str) -> Row[Any] | None:
+        """Return the full runbook_runs row for ``run_id`` (or None)."""
+        return await self._db.fetch_one(_SELECT_RUN_BY_ID_SQL, {"id": run_id})
 
     async def count_started_since_conn(
         self, conn: AsyncConnection, runbook_id: str, threshold_iso: str
