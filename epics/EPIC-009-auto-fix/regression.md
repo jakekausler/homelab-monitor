@@ -158,3 +158,37 @@ Added at Refinement 2026-07-02. All items derived from STAGE-009-010A Design Not
 5. **STAGE-009-011 direct consumer of `initiated_by`** — `initiated_by` column is a first-class schema contract. STAGE-009-011 (history UI) must USE this column directly to filter/display initiator (not synthesize it from audit_log). Filed as a design note on STAGE-009-011.
 6. **Principal audit for `dry_run_stored`** — operator-initiated dry runs MUST log `who=<principal>` in the `autofix.dry_run_stored` audit (not `who='system:autofix'`). Verified at Build: `_claim_and_store_dry` now threads `principal` through into `audit_who` selection. Regression check for any future refactor that touches this helper.
 7. **Frontend cache invalidation on trigger** — after a successful operator trigger the UI invalidates `runbooksKeys.all` AND `approvalsKeys.pending` (for dry_run_stored outcomes). On real-run outcomes, also invalidate any future stats query STAGE-009-011 adds. If STAGE-009-011 adds new query keys under the runbooks namespace, `useTriggerRunbook`'s `onSuccess` invalidation set must be extended.
+
+## STAGE-009-010B — Session-PIN confirm-on-destructive
+
+**Backend regression items:**
+
+1. **Rate-limiter time-based lockout** — `InProcessPinRateLimiter.check()` compares elapsed time since last failure against the curve tier's `lockout_seconds`. After the tier duration elapses, `check()` returns None even though failures stay in the 15-min sliding window (they still count toward the next tier). Regression test: `tests/test_security_pin.py::test_rate_limiter_check_clears_after_lockout_elapses`. Do NOT revert to "failure-count-in-window" semantics.
+
+2. **Post-cooldown failure escalation** — After a 5s lockout elapses, a 4th consecutive failure jumps directly to the 30s tier. Regression test: `tests/test_security_pin.py::test_rate_limiter_next_failure_after_lockout_escalates_tier`.
+
+3. **HTTPException.headers propagation** — `_handle_http_exception` in `apps/monitor/homelab_monitor/kernel/api/errors.py` copies `exc.headers` onto the response. This is required for `Retry-After` to reach clients on 429s. Any future refactor of the error-envelope handler MUST preserve header forwarding.
+
+4. **Destructive-action audit `credential_type`** — every audit row for approve, kill-switch, trigger, and their orchestrator-side rejection paths MUST include `credential_type: "pin" | "phrase"` in `after={}` when a credential was supplied. dry_run trigger correctly omits (no credential). Regression tests: `test_approve_audit_includes_credential_type`, `test_kill_switch_audit_includes_credential_type`, `test_trigger_audit_includes_credential_type`.
+
+5. **Trigger endpoint server-side phrase gate** — `POST /api/runbooks/{id}/trigger` real-mode requires `confirm_phrase == basename(runbook.path)` (case-insensitive) OR a valid `confirm_pin`. This closed a 010A UI-only gap; direct-API bypass is no longer possible. Regression test: `test_trigger_real_without_credential_returns_400`.
+
+6. **PIN CRUD ceremony** — PIN set requires `current_password`. PIN rotate requires `current_pin` (ticks pin_limiter on failure). PIN delete requires `current_password`. All four write dedicated audit rows (`security.pin_set`, `security.pin_rotated`, `security.pin_verify_succeeded`, `security.pin_verify_failed`, `security.pin_locked`, `security.pin_removed`).
+
+7. **Existence endpoint safety** — `GET /api/settings/security/pin` returns ONLY `{set: bool}`. Never leaks the hash or per-user state. Any future extension MUST NOT return failure count / lockout state / user identity.
+
+**Frontend regression items:**
+
+8. **Unified 429 copy** — `ConfirmPinDialog` renders EXACTLY ONE line during lockout: "Too many wrong attempts. Please wait Ns before trying again." (destructive/red). The errorMessage prop is HIDDEN during countdown (not stacked amber+red). Vitest: `hides errorMessage and shows only the countdown message while retryAfterSeconds > 0`.
+
+9. **Countdown interval cleanup** — `ConfirmPinDialog`'s countdown effect clears its setInterval when the counter reaches 0 (previously ticked forever, causing input to auto-clear every second). Uses `wasLockedRef` for locked→unlocked transition detection. Same fix on `SettingsSecurityPage.tsx` Rotate dialog.
+
+10. **`showError` gate** — after countdown expires naturally, the errorMessage line is suppressed until a NEW submission arrives (prevents stale "too_many_requests" from flashing after cooldown ends). Local state `showError` resets to true on any new `errorMessage` prop value.
+
+11. **RunFixDialog stays open on 429** — the confirm dialog does NOT close when the mutation returns 429; the countdown remains visible. Non-429 errors still close the dialog + show sonner toast (existing behavior).
+
+12. **Trigger endpoint now sends phrase** — `useTriggerRunbook` phrase-branch now sends `confirm_phrase: runbookName` in the request body (was UI-only in 010A). This matches the new server-side gate — do not remove.
+
+13. **`friendlyApproveError` handles `too_many_requests`** — returns empty string for that code to avoid raw backend text leaking through `ConfirmPinDialog.errorMessage`. `ConfirmPinDialog`'s unified copy handles it.
+
+14. **`_per_test_db` conftest re-wire** — `apps/monitor/tests/conftest.py::_per_test_db` MUST re-wire `state.pin_rate_limiter` and `state.app_settings_repo` on every test. Manual mirror of lifespan. Any future stage that adds `app.state.*` must extend this fixture. Without it, endpoint tests return 503 across the board.
