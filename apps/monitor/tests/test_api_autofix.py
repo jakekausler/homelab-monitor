@@ -79,6 +79,7 @@ async def _seed_dry_run_chain(
             host="testhost",
             runbook_hash=rb.content_hash,
             mode=RunMode.DRY_RUN,
+            initiated_by="alert",
         )
     return rb.id, alert.id, dry_run_id
 
@@ -119,6 +120,7 @@ async def test_list_approvals_pending_drift_flags(
             host="testhost",
             runbook_hash=rb1.content_hash,
             mode=RunMode.DRY_RUN,
+            initiated_by="alert",
         )
         run_id_2 = await runs_repo.insert_started(
             conn,
@@ -129,6 +131,7 @@ async def test_list_approvals_pending_drift_flags(
             host="testhost",
             runbook_hash=rb2.content_hash,
             mode=RunMode.DRY_RUN,
+            initiated_by="alert",
         )
         approval_id_1 = await approvals_repo.insert_pending(
             conn,
@@ -261,9 +264,10 @@ async def test_get_plan_happy(
             text(
                 "INSERT INTO runbook_runs "
                 "(id, runbook_id, created_at, alert_id, mode, prompt, started_at, "
-                " ended_at, fixer_user, host, runbook_hash, transcript_path, exit_code) "
+                " ended_at, fixer_user, host, runbook_hash, transcript_path,"
+                " exit_code, initiated_by) "
                 "VALUES (:id, :rb_id, :ca, :alert_id, :mode, :prompt, :started, "
-                " :ended, :fixer, :host, :hash, :transcript, :exit)"
+                " :ended, :fixer, :host, :hash, :transcript, :exit, :initiated_by)"
             ),
             {
                 "id": run_id,
@@ -279,6 +283,7 @@ async def test_get_plan_happy(
                 "hash": "hash-v1",
                 "transcript": transcript_path,
                 "exit": 0,
+                "initiated_by": "alert",
             },
         )
 
@@ -348,9 +353,10 @@ async def test_get_plan_transcript_missing(
             text(
                 "INSERT INTO runbook_runs "
                 "(id, runbook_id, created_at, alert_id, mode, prompt, started_at, "
-                " ended_at, fixer_user, host, runbook_hash, transcript_path, exit_code) "
+                " ended_at, fixer_user, host, runbook_hash, transcript_path,"
+                " exit_code, initiated_by) "
                 "VALUES (:id, :rb_id, :ca, :alert_id, :mode, :prompt, :started, "
-                " :ended, :fixer, :host, :hash, :transcript, :exit)"
+                " :ended, :fixer, :host, :hash, :transcript, :exit, :initiated_by)"
             ),
             {
                 "id": run_id,
@@ -366,6 +372,7 @@ async def test_get_plan_transcript_missing(
                 "hash": "hash-v1",
                 "transcript": None,
                 "exit": 0,
+                "initiated_by": "alert",
             },
         )
 

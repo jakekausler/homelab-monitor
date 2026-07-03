@@ -8516,6 +8516,76 @@
         "title": "SynologyUps",
         "type": "object"
       },
+      "TriggerRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "mode": {
+            "enum": [
+              "dry_run",
+              "real"
+            ],
+            "title": "Mode",
+            "type": "string"
+          }
+        },
+        "required": [
+          "mode"
+        ],
+        "title": "TriggerRequest",
+        "type": "object"
+      },
+      "TriggerResponse": {
+        "properties": {
+          "approval_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approval Id"
+          },
+          "denial_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Denial Reason"
+          },
+          "outcome": {
+            "enum": [
+              "ran",
+              "denied",
+              "dry_run_stored"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          }
+        },
+        "required": [
+          "run_id",
+          "outcome"
+        ],
+        "title": "TriggerResponse",
+        "type": "object"
+      },
       "UnifiApiTook": {
         "properties": {
           "endpoint": {
@@ -16623,6 +16693,68 @@
           }
         },
         "summary": "Patch Runbook Gates",
+        "tags": [
+          "runbooks"
+        ]
+      }
+    },
+    "/api/runbooks/{runbook_id}/trigger": {
+      "post": {
+        "description": "Manually trigger a runbook (operator-initiated).\n\nSkips MATCH + auto_trigger allow-list; enforces every other safety gate.",
+        "operationId": "trigger_runbook_api_runbooks__runbook_id__trigger_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "runbook_id",
+            "required": true,
+            "schema": {
+              "title": "Runbook Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TriggerRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TriggerResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "description": "Bad request (e.g., risky runbook rejected for real mode)"
+          },
+          "404": {
+            "description": "Runbook not found"
+          },
+          "409": {
+            "description": "Denied by an operational gate"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Trigger Runbook",
         "tags": [
           "runbooks"
         ]

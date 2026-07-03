@@ -63,6 +63,8 @@ from homelab_monitor.kernel.autofix.orchestrator import (
 from homelab_monitor.kernel.autofix.runs_repository import RunbookRunsRepository
 from homelab_monitor.kernel.autofix.types import (
     DenialReason,
+    DryRunRequiredForRiskyError,
+    RunbookNotFoundError,
     RunMode,
     RunOutcome,
 )
@@ -709,6 +711,7 @@ async def test_rate_limit_exceeded_denies(
             host="testhost",
             runbook_hash=rb.content_hash,
             mode=RunMode.REAL,
+            initiated_by="alert",
         )
         # Complete it so it shows in count_started_since
     await runs_repo.mark_completed(
@@ -824,6 +827,7 @@ async def test_cooldown_within_window_denies(
             host="testhost",
             runbook_hash=rb.content_hash,
             mode=RunMode.REAL,
+            initiated_by="alert",
         )
     await runs_repo.mark_completed(run_id=run_id, exit_code=0, transcript_path=None)
 
@@ -864,6 +868,7 @@ async def test_cooldown_elapsed_passes_gate(
             host="testhost",
             runbook_hash=rb.content_hash,
             mode=RunMode.REAL,
+            initiated_by="alert",
         )
     # Manually update ended_at to far past
     async with repo.transaction() as conn:
@@ -1093,6 +1098,7 @@ async def test_in_lock_rate_limit_recheck_denies(
             host="testhost",
             runbook_hash=rb.content_hash,
             mode=RunMode.REAL,
+            initiated_by="alert",
         )
     await runs_repo.mark_completed(run_id=run_id, exit_code=0, transcript_path=None)
 
@@ -1146,6 +1152,7 @@ async def test_in_lock_cooldown_recheck_denies(
             host="testhost",
             runbook_hash=rb.content_hash,
             mode=RunMode.REAL,
+            initiated_by="alert",
         )
     await runs_repo.mark_completed(run_id=run_id, exit_code=0, transcript_path=None)
 
@@ -1782,6 +1789,7 @@ async def test_runs_repo_count_inflight_fresh_vs_stale(repo: SqliteRepository) -
             host="testhost",
             runbook_hash=rb.content_hash,
             mode=RunMode.REAL,
+            initiated_by="alert",
         )
 
     stale_threshold = (datetime.now(tz=UTC) - timedelta(hours=1)).isoformat()
@@ -1826,6 +1834,7 @@ async def test_runs_repo_latest_ended_at_returns_most_recent(repo: SqliteReposit
             host="testhost",
             runbook_hash=rb.content_hash,
             mode=RunMode.REAL,
+            initiated_by="alert",
         )
     await runs_repo.mark_completed(run_id=run_id, exit_code=0, transcript_path=None)
 
@@ -1860,6 +1869,7 @@ async def test_runs_repo_count_started_since_boundary(repo: SqliteRepository) ->
             host="testhost",
             runbook_hash=rb.content_hash,
             mode=RunMode.REAL,
+            initiated_by="alert",
         )
 
     count_after = await runs_repo.count_started_since(rb.id, threshold)
@@ -1885,6 +1895,7 @@ async def test_runs_repo_mark_completed_own_txn(repo: SqliteRepository) -> None:
             host="testhost",
             runbook_hash=rb.content_hash,
             mode=RunMode.REAL,
+            initiated_by="alert",
         )
 
     await runs_repo.mark_completed(run_id=run_id, exit_code=42, transcript_path="/path/to/t")
@@ -1923,6 +1934,7 @@ async def test_runs_repo_latest_ended_at_conn(repo: SqliteRepository) -> None:
             host="testhost",
             runbook_hash=rb.content_hash,
             mode=RunMode.REAL,
+            initiated_by="alert",
         )
         await runs_repo.mark_completed_conn(conn, run_id=run_id, exit_code=0, transcript_path=None)
 
@@ -1954,6 +1966,7 @@ async def test_runs_repo_count_started_since_conn(repo: SqliteRepository) -> Non
             host="testhost",
             runbook_hash=rb.content_hash,
             mode=RunMode.REAL,
+            initiated_by="alert",
         )
 
         count_after = await runs_repo.count_started_since_conn(conn, rb.id, threshold)
@@ -2448,6 +2461,7 @@ async def test_denial_paths_never_call_exec(  # noqa: PLR0915 -- one parametrize
                 host="testhost",
                 runbook_hash=rb.content_hash,
                 mode=RunMode.REAL,
+                initiated_by="alert",
             )
         await runs_repo.mark_completed(run_id=run_id_pre, exit_code=0, transcript_path=None)
         orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
@@ -2472,6 +2486,7 @@ async def test_denial_paths_never_call_exec(  # noqa: PLR0915 -- one parametrize
                 host="testhost",
                 runbook_hash=rb.content_hash,
                 mode=RunMode.REAL,
+                initiated_by="alert",
             )
         await runs_repo.mark_completed(run_id=run_id_pre, exit_code=0, transcript_path=None)
         orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
@@ -2649,10 +2664,17 @@ async def test_persist_outcome_rollback_on_audit_failure(
         "homelab_monitor.kernel.db.audit", fromlist=["insert_audit"]
     ).insert_audit
 
-    async def _failing_insert_audit(conn: object, *, who: str, what: str, after: object) -> None:
+    async def _failing_insert_audit(
+        conn: object,
+        *,
+        who: str,
+        what: str,
+        after: object,
+        ip: object = None,
+    ) -> None:
         if what == "autofix.ran":
             raise RuntimeError("Simulated audit failure in _persist_outcome")
-        await _original_insert_audit(conn, who=who, what=what, after=after)
+        await _original_insert_audit(conn, who=who, what=what, after=after, ip=ip)
 
     with (
         patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)),
@@ -4287,9 +4309,10 @@ async def test_read_dry_plan_happy(
             text(
                 "INSERT INTO runbook_runs "
                 "(id, runbook_id, created_at, alert_id, mode, prompt, started_at, "
-                " ended_at, fixer_user, host, runbook_hash, transcript_path, exit_code) "
+                " ended_at, fixer_user, host, runbook_hash, transcript_path,"
+                " exit_code, initiated_by) "
                 "VALUES (:id, :rb_id, :ca, :alert_id, :mode, :prompt, :started, "
-                " :ended, :fixer, :host, :hash, :transcript, :exit)"
+                " :ended, :fixer, :host, :hash, :transcript, :exit, :initiated_by)"
             ),
             {
                 "id": run_id,
@@ -4305,6 +4328,7 @@ async def test_read_dry_plan_happy(
                 "hash": "hash-v1",
                 "transcript": transcript_path,
                 "exit": 0,
+                "initiated_by": "alert",
             },
         )
 
@@ -4346,9 +4370,10 @@ async def test_read_dry_plan_no_transcript_path(
             text(
                 "INSERT INTO runbook_runs "
                 "(id, runbook_id, created_at, alert_id, mode, prompt, started_at, "
-                " ended_at, fixer_user, host, runbook_hash, transcript_path, exit_code) "
+                " ended_at, fixer_user, host, runbook_hash, transcript_path,"
+                " exit_code, initiated_by) "
                 "VALUES (:id, :rb_id, :ca, :alert_id, :mode, :prompt, :started, "
-                " :ended, :fixer, :host, :hash, :transcript, :exit)"
+                " :ended, :fixer, :host, :hash, :transcript, :exit, :initiated_by)"
             ),
             {
                 "id": run_id,
@@ -4364,6 +4389,7 @@ async def test_read_dry_plan_no_transcript_path(
                 "hash": "hash-v1",
                 "transcript": None,
                 "exit": 0,
+                "initiated_by": "alert",
             },
         )
 
@@ -4393,9 +4419,10 @@ async def test_read_dry_plan_file_unreadable(
             text(
                 "INSERT INTO runbook_runs "
                 "(id, runbook_id, created_at, alert_id, mode, prompt, started_at, "
-                " ended_at, fixer_user, host, runbook_hash, transcript_path, exit_code) "
+                " ended_at, fixer_user, host, runbook_hash, transcript_path,"
+                " exit_code, initiated_by) "
                 "VALUES (:id, :rb_id, :ca, :alert_id, :mode, :prompt, :started, "
-                " :ended, :fixer, :host, :hash, :transcript, :exit)"
+                " :ended, :fixer, :host, :hash, :transcript, :exit, :initiated_by)"
             ),
             {
                 "id": run_id,
@@ -4411,6 +4438,7 @@ async def test_read_dry_plan_file_unreadable(
                 "hash": "hash-v1",
                 "transcript": transcript_path,
                 "exit": 0,
+                "initiated_by": "alert",
             },
         )
 
@@ -4458,6 +4486,7 @@ async def test_approvals_repo_insert_get_list_and_transitions(
             host="testhost",
             runbook_hash=rb.content_hash,
             mode=RunMode.DRY_RUN,
+            initiated_by="alert",
         )
     runbook_id = rb.id
     alert_id = alert.id
@@ -4514,6 +4543,7 @@ async def test_approvals_repo_insert_get_list_and_transitions(
             host="testhost",
             runbook_hash=rb.content_hash,
             mode=RunMode.REAL,
+            initiated_by="alert",
         )
         await approvals_repo.set_real_run_id_conn(
             conn,
@@ -4537,6 +4567,7 @@ async def test_approvals_repo_insert_get_list_and_transitions(
             host="testhost",
             runbook_hash=rb.content_hash,
             mode=RunMode.DRY_RUN,
+            initiated_by="alert",
         )
         approval_id_2 = await approvals_repo.insert_pending(
             conn,
@@ -4728,6 +4759,7 @@ async def test_kill_inflight_success_stamps_killed_at_and_audits_killed(
             host="testhost",
             runbook_hash=rb.content_hash,
             mode=RunMode.REAL,
+            initiated_by="alert",
         )
 
     docker = _FakeDockerClient()
@@ -4827,6 +4859,7 @@ async def test_kill_inflight_unwind_deadline_exceeded_returns_warning(
             host="testhost",
             runbook_hash=rb.content_hash,
             mode=RunMode.REAL,
+            initiated_by="alert",
         )
 
     docker = _FakeDockerClient()
@@ -4875,6 +4908,7 @@ async def test_kill_inflight_unwind_observed_returns_no_warning(
             host="testhost",
             runbook_hash=rb.content_hash,
             mode=RunMode.REAL,
+            initiated_by="alert",
         )
 
     docker = _FakeDockerClient()
@@ -4930,6 +4964,7 @@ async def test_kill_inflight_current_run_already_none_at_post_snapshot_skips_pol
             host="testhost",
             runbook_hash=rb.content_hash,
             mode=RunMode.REAL,
+            initiated_by="alert",
         )
 
     docker = _FakeDockerClient()
@@ -4977,6 +5012,7 @@ async def test_kill_inflight_wrong_run_race_audits_and_skips_stamp(
             host="testhost",
             runbook_hash=rb.content_hash,
             mode=RunMode.REAL,
+            initiated_by="alert",
         )
 
     docker = _FakeDockerClient()
@@ -5960,3 +5996,586 @@ async def test_grant_resolution_failure_never_publishes_current_run(
     kill_result = await orch.kill_inflight(reason="test", killed_by="test-user")
     assert kill_result.killed is False
     assert kill_result.error == "no_inflight_run"
+
+
+# ---------------------------------------------------------------------------
+# handle_operator_trigger (STAGE-009-010A)
+# ---------------------------------------------------------------------------
+
+
+def _make_risky_runbook_record(  # noqa: PLR0913 -- test factory params
+    *,
+    runbook_id: str | None = None,
+    alertname: str = "TestAlert",
+    enabled: bool = True,
+    rate_limit_per_hour: int | None = None,
+    cooldown_seconds: int | None = None,
+    content_hash: str | None = "risky-hash",
+    runbook_dir: Path | None = None,
+) -> RunbookRecord:
+    """Like _make_runbook_record but risk_tag='risky', dry_run_required=True."""
+    patterns: list[dict[str, Any]] = [{"alertname": alertname, "labels": {}}]
+    if runbook_dir is not None:
+        _write_valid_runbook_yaml(runbook_dir, dry_run_required=True)
+    path = str(runbook_dir) if runbook_dir is not None else "/runbooks/risky-runbook"
+    return RunbookRecord(
+        id=runbook_id or uuid7(),
+        path=path,
+        created_at=utc_now_iso(),
+        alert_match_patterns=patterns,
+        risk_tag="risky",
+        dry_run_required=True,
+        rate_limit_per_hour=rate_limit_per_hour,
+        cooldown_seconds=cooldown_seconds,
+        enabled=enabled,
+        auto_trigger=False,
+        content_hash=content_hash,
+    )
+
+
+@pytest.mark.asyncio
+async def test_operator_trigger_dry_run_success(
+    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+) -> None:
+    """Safe runbook, dry mode -> DRY_RUN_STORED, run_id + approval_id set."""
+    rb = _make_runbook_record(alertname="TestAlert", runbook_dir=tmp_path / "runbook")
+    await _insert_runbook(repo, rb)
+
+    app_settings = AppSettingsRepository(repo)
+    await app_settings.set("autofix_enabled", "true")
+
+    transcript_dir = str(tmp_path / "transcripts")
+    os.makedirs(transcript_dir, exist_ok=True)
+    exec_log_dir = str(tmp_path / "exec-logs")
+    os.makedirs(exec_log_dir, exist_ok=True)
+
+    docker = _FakeDockerClient(result=ExecResult(exit_code=0, stdout="plan", stderr=""))
+    orch = _make_orchestrator(
+        repo, secrets_repo_fixture, docker, transcript_dir=transcript_dir, exec_log_dir=exec_log_dir
+    )
+
+    with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
+        result = await orch.handle_operator_trigger(
+            rb.id, RunMode.DRY_RUN, principal="alice", ip="10.0.0.1"
+        )
+
+    assert result.ran is True
+    assert result.outcome == RunOutcome.DRY_RUN_STORED
+    assert result.run_id is not None
+    assert result.approval_id is not None
+
+
+@pytest.mark.asyncio
+async def test_operator_trigger_real_success_on_safe(
+    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+) -> None:
+    """Safe runbook (dry_run_required=False), real mode -> RAN, run_id set."""
+    rb = _make_runbook_record(alertname="TestAlert", runbook_dir=tmp_path / "runbook")
+    await _insert_runbook(repo, rb)
+
+    app_settings = AppSettingsRepository(repo)
+    await app_settings.set("autofix_enabled", "true")
+
+    transcript_dir = str(tmp_path / "transcripts")
+    os.makedirs(transcript_dir, exist_ok=True)
+    exec_log_dir = str(tmp_path / "exec-logs")
+    os.makedirs(exec_log_dir, exist_ok=True)
+
+    docker = _FakeDockerClient(result=ExecResult(exit_code=0, stdout="done", stderr=""))
+    orch = _make_orchestrator(
+        repo, secrets_repo_fixture, docker, transcript_dir=transcript_dir, exec_log_dir=exec_log_dir
+    )
+
+    with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
+        result = await orch.handle_operator_trigger(
+            rb.id, RunMode.REAL, principal="alice", ip="10.0.0.1"
+        )
+
+    assert result.ran is True
+    assert result.outcome == RunOutcome.RAN
+    assert result.run_id is not None
+
+
+@pytest.mark.asyncio
+async def test_operator_trigger_real_on_risky_raises(
+    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository
+) -> None:
+    """Risky runbook, real mode -> DryRunRequiredForRiskyError; no run row; audit."""
+    rb = _make_risky_runbook_record(alertname="TestAlert")
+    await _insert_runbook(repo, rb)
+
+    app_settings = AppSettingsRepository(repo)
+    await app_settings.set("autofix_enabled", "true")
+
+    docker = _FakeDockerClient()
+    orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+
+    with pytest.raises(DryRunRequiredForRiskyError):
+        await orch.handle_operator_trigger(rb.id, RunMode.REAL, principal="alice", ip="10.0.0.1")
+
+    runs = await repo.fetch_all(
+        text("SELECT id FROM runbook_runs WHERE runbook_id = :rid"), {"rid": rb.id}
+    )
+    assert runs == []
+
+    audit = await repo.fetch_one(
+        text("SELECT after_json FROM audit_log WHERE what = 'autofix.trigger_rejected'"), {}
+    )
+    assert audit is not None
+    after = json.loads(str(audit[0]))
+    assert after["reason"] == "dry_run_required_for_risky"
+    assert after["initiated_by"] == "operator"
+    assert after["mode"] == "real"
+
+    who_row = await repo.fetch_one(
+        text("SELECT who FROM audit_log WHERE what = 'autofix.trigger_rejected'"), {}
+    )
+    assert who_row is not None
+    assert str(who_row[0]) == "alice"
+
+
+@pytest.mark.asyncio
+async def test_operator_trigger_kill_switch_denied(
+    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository
+) -> None:
+    """Kill-switch engaged (unset) -> DENIED, KILL_SWITCH; audit who=principal."""
+    rb = _make_runbook_record(alertname="TestAlert")
+    await _insert_runbook(repo, rb)
+
+    docker = _FakeDockerClient()
+    orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+
+    result = await orch.handle_operator_trigger(
+        rb.id, RunMode.DRY_RUN, principal="alice", ip="10.0.0.1"
+    )
+    assert result.outcome == RunOutcome.DENIED
+    assert result.denial_reason == DenialReason.KILL_SWITCH
+
+    audit = await repo.fetch_one(
+        text("SELECT who, after_json FROM audit_log WHERE what = 'autofix.denied'"), {}
+    )
+    assert audit is not None
+    assert str(audit[0]) == "alice"
+    after = json.loads(str(audit[1]))
+    assert after["initiated_by"] == "operator"
+
+
+@pytest.mark.asyncio
+async def test_operator_trigger_disabled_runbook(
+    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository
+) -> None:
+    """enabled=False -> DENIED, ALLOW_LIST."""
+    rb = _make_runbook_record(alertname="TestAlert", enabled=False)
+    await _insert_runbook(repo, rb)
+
+    app_settings = AppSettingsRepository(repo)
+    await app_settings.set("autofix_enabled", "true")
+
+    docker = _FakeDockerClient()
+    orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+
+    result = await orch.handle_operator_trigger(
+        rb.id, RunMode.DRY_RUN, principal="alice", ip="10.0.0.1"
+    )
+    assert result.outcome == RunOutcome.DENIED
+    assert result.denial_reason == DenialReason.ALLOW_LIST
+
+
+@pytest.mark.asyncio
+async def test_operator_trigger_rate_limited(
+    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository
+) -> None:
+    """Rate-limit tripped -> DENIED, RATE_LIMIT."""
+    rb = _make_runbook_record(alertname="TestAlert", rate_limit_per_hour=1)
+    await _insert_runbook(repo, rb)
+
+    app_settings = AppSettingsRepository(repo)
+    await app_settings.set("autofix_enabled", "true")
+
+    docker = _FakeDockerClient()
+    orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+
+    with patch.object(RunbookRunsRepository, "count_started_since", new=AsyncMock(return_value=1)):
+        result = await orch.handle_operator_trigger(
+            rb.id, RunMode.DRY_RUN, principal="alice", ip="10.0.0.1"
+        )
+    assert result.outcome == RunOutcome.DENIED
+    assert result.denial_reason == DenialReason.RATE_LIMIT
+
+
+@pytest.mark.asyncio
+async def test_operator_trigger_cooldown(
+    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository
+) -> None:
+    """Cooldown active -> DENIED, COOLDOWN."""
+    rb = _make_runbook_record(alertname="TestAlert", cooldown_seconds=3600)
+    await _insert_runbook(repo, rb)
+
+    app_settings = AppSettingsRepository(repo)
+    await app_settings.set("autofix_enabled", "true")
+
+    docker = _FakeDockerClient()
+    orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+
+    with patch.object(
+        RunbookRunsRepository,
+        "latest_ended_at",
+        new=AsyncMock(return_value=utc_now_iso()),
+    ):
+        result = await orch.handle_operator_trigger(
+            rb.id, RunMode.DRY_RUN, principal="alice", ip="10.0.0.1"
+        )
+    assert result.outcome == RunOutcome.DENIED
+    assert result.denial_reason == DenialReason.COOLDOWN
+
+
+@pytest.mark.asyncio
+async def test_operator_trigger_already_running(
+    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository
+) -> None:
+    """Per-runbook lock already held -> DENIED, ALREADY_RUNNING (fast-path, no deadlock)."""
+    rb = _make_runbook_record(alertname="TestAlert")
+    await _insert_runbook(repo, rb)
+
+    app_settings = AppSettingsRepository(repo)
+    await app_settings.set("autofix_enabled", "true")
+
+    docker = _FakeDockerClient()
+    orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+
+    lock = orch._lock_for(rb.id)  # pyright: ignore[reportPrivateUsage]
+    await lock.acquire()
+    try:
+        result = await orch.handle_operator_trigger(
+            rb.id, RunMode.DRY_RUN, principal="alice", ip="10.0.0.1"
+        )
+    finally:
+        lock.release()
+
+    assert result.outcome == RunOutcome.DENIED
+    assert result.denial_reason == DenialReason.ALREADY_RUNNING
+
+
+@pytest.mark.asyncio
+async def test_operator_trigger_runbook_not_found(
+    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository
+) -> None:
+    """Nonexistent runbook_id -> RunbookNotFoundError."""
+    docker = _FakeDockerClient()
+    orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+
+    with pytest.raises(RunbookNotFoundError):
+        await orch.handle_operator_trigger(
+            "does-not-exist", RunMode.DRY_RUN, principal="alice", ip="10.0.0.1"
+        )
+
+
+@pytest.mark.asyncio
+async def test_operator_trigger_initiated_by_column_dry(
+    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+) -> None:
+    """After a dry operator trigger, runbook_runs.initiated_by == 'operator'."""
+    rb = _make_runbook_record(alertname="TestAlert", runbook_dir=tmp_path / "runbook")
+    await _insert_runbook(repo, rb)
+
+    app_settings = AppSettingsRepository(repo)
+    await app_settings.set("autofix_enabled", "true")
+
+    transcript_dir = str(tmp_path / "transcripts")
+    os.makedirs(transcript_dir, exist_ok=True)
+    exec_log_dir = str(tmp_path / "exec-logs")
+    os.makedirs(exec_log_dir, exist_ok=True)
+
+    docker = _FakeDockerClient(result=ExecResult(exit_code=0, stdout="plan", stderr=""))
+    orch = _make_orchestrator(
+        repo, secrets_repo_fixture, docker, transcript_dir=transcript_dir, exec_log_dir=exec_log_dir
+    )
+
+    with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
+        result = await orch.handle_operator_trigger(
+            rb.id, RunMode.DRY_RUN, principal="alice", ip="10.0.0.1"
+        )
+
+    assert result.run_id is not None
+    row = await repo.fetch_one(
+        text("SELECT initiated_by FROM runbook_runs WHERE id = :id"), {"id": result.run_id}
+    )
+    assert row is not None
+    assert str(row[0]) == "operator"
+
+
+@pytest.mark.asyncio
+async def test_operator_trigger_initiated_by_column_real(
+    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+) -> None:
+    """After a real operator trigger on a safe runbook, initiated_by == 'operator'."""
+    rb = _make_runbook_record(alertname="TestAlert", runbook_dir=tmp_path / "runbook")
+    await _insert_runbook(repo, rb)
+
+    app_settings = AppSettingsRepository(repo)
+    await app_settings.set("autofix_enabled", "true")
+
+    transcript_dir = str(tmp_path / "transcripts")
+    os.makedirs(transcript_dir, exist_ok=True)
+    exec_log_dir = str(tmp_path / "exec-logs")
+    os.makedirs(exec_log_dir, exist_ok=True)
+
+    docker = _FakeDockerClient(result=ExecResult(exit_code=0, stdout="done", stderr=""))
+    orch = _make_orchestrator(
+        repo, secrets_repo_fixture, docker, transcript_dir=transcript_dir, exec_log_dir=exec_log_dir
+    )
+
+    with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
+        result = await orch.handle_operator_trigger(
+            rb.id, RunMode.REAL, principal="alice", ip="10.0.0.1"
+        )
+
+    assert result.run_id is not None
+    row = await repo.fetch_one(
+        text("SELECT initiated_by FROM runbook_runs WHERE id = :id"), {"id": result.run_id}
+    )
+    assert row is not None
+    assert str(row[0]) == "operator"
+
+
+@pytest.mark.asyncio
+async def test_alert_path_still_writes_initiated_by_alert(
+    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+) -> None:
+    """Existing alert path (handle_alert) still results in initiated_by == 'alert'."""
+    rb = _make_runbook_record(alertname="TestAlert", runbook_dir=tmp_path / "runbook")
+    await _insert_runbook(repo, rb)
+    alert = _make_alert(alertname="TestAlert")
+    await _insert_alert(repo, alert)
+
+    app_settings = AppSettingsRepository(repo)
+    await app_settings.set("autofix_enabled", "true")
+
+    transcript_dir = str(tmp_path / "transcripts")
+    os.makedirs(transcript_dir, exist_ok=True)
+    exec_log_dir = str(tmp_path / "exec-logs")
+    os.makedirs(exec_log_dir, exist_ok=True)
+
+    docker = _FakeDockerClient(result=ExecResult(exit_code=0, stdout="done", stderr=""))
+    orch = _make_orchestrator(
+        repo, secrets_repo_fixture, docker, transcript_dir=transcript_dir, exec_log_dir=exec_log_dir
+    )
+
+    with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
+        result = await orch.handle_alert(alert)
+
+    assert result is not None
+    assert result.run_id is not None
+    row = await repo.fetch_one(
+        text("SELECT initiated_by FROM runbook_runs WHERE id = :id"), {"id": result.run_id}
+    )
+    assert row is not None
+    assert str(row[0]) == "alert"
+
+
+@pytest.mark.asyncio
+async def test_audit_ran_after_json_contains_initiated_by(
+    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+) -> None:
+    """After a real operator run, autofix.ran's after_json includes initiated_by=operator."""
+    rb = _make_runbook_record(alertname="TestAlert", runbook_dir=tmp_path / "runbook")
+    await _insert_runbook(repo, rb)
+
+    app_settings = AppSettingsRepository(repo)
+    await app_settings.set("autofix_enabled", "true")
+
+    transcript_dir = str(tmp_path / "transcripts")
+    os.makedirs(transcript_dir, exist_ok=True)
+    exec_log_dir = str(tmp_path / "exec-logs")
+    os.makedirs(exec_log_dir, exist_ok=True)
+
+    docker = _FakeDockerClient(result=ExecResult(exit_code=0, stdout="done", stderr=""))
+    orch = _make_orchestrator(
+        repo, secrets_repo_fixture, docker, transcript_dir=transcript_dir, exec_log_dir=exec_log_dir
+    )
+
+    with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
+        await orch.handle_operator_trigger(rb.id, RunMode.REAL, principal="alice", ip="10.0.0.1")
+
+    audit = await repo.fetch_one(
+        text("SELECT after_json FROM audit_log WHERE what = 'autofix.ran'"), {}
+    )
+    assert audit is not None
+    after = json.loads(str(audit[0]))
+    assert after["initiated_by"] == "operator"
+
+
+@pytest.mark.asyncio
+async def test_audit_dry_run_stored_after_json_contains_initiated_by(
+    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+) -> None:
+    """After a dry operator run, autofix.dry_run_stored's after_json includes initiated_by.
+
+    As of STAGE-009-010 Finding I1, the orchestrator's _claim_and_store_dry
+    method includes initiated_by in the after_json dict for autofix.dry_run_stored
+    audit entries. This test verifies that the DB row's initiated_by column is
+    correctly set and matches the audit trail.
+    """
+    rb = _make_runbook_record(alertname="TestAlert", runbook_dir=tmp_path / "runbook")
+    await _insert_runbook(repo, rb)
+
+    app_settings = AppSettingsRepository(repo)
+    await app_settings.set("autofix_enabled", "true")
+
+    transcript_dir = str(tmp_path / "transcripts")
+    os.makedirs(transcript_dir, exist_ok=True)
+    exec_log_dir = str(tmp_path / "exec-logs")
+    os.makedirs(exec_log_dir, exist_ok=True)
+
+    docker = _FakeDockerClient(result=ExecResult(exit_code=0, stdout="plan", stderr=""))
+    orch = _make_orchestrator(
+        repo, secrets_repo_fixture, docker, transcript_dir=transcript_dir, exec_log_dir=exec_log_dir
+    )
+
+    with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
+        result = await orch.handle_operator_trigger(
+            rb.id, RunMode.DRY_RUN, principal="alice", ip="10.0.0.1"
+        )
+
+    audit = await repo.fetch_one(
+        text("SELECT after_json FROM audit_log WHERE what = 'autofix.dry_run_stored'"), {}
+    )
+    assert audit is not None
+    after = json.loads(str(audit[0]))
+    assert after["initiated_by"] == "operator"
+    assert result.run_id is not None
+    row = await repo.fetch_one(
+        text("SELECT initiated_by FROM runbook_runs WHERE id = :id"), {"id": result.run_id}
+    )
+    assert row is not None
+    assert str(row[0]) == "operator"
+
+
+@pytest.mark.asyncio
+async def test_operator_trigger_shares_rate_limit_bucket_with_alert(
+    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+) -> None:
+    """Real run via alert path, then operator trigger within rate window -> RATE_LIMIT."""
+    rb = _make_runbook_record(
+        alertname="TestAlert", rate_limit_per_hour=1, runbook_dir=tmp_path / "runbook"
+    )
+    await _insert_runbook(repo, rb)
+    alert = _make_alert(alertname="TestAlert")
+    await _insert_alert(repo, alert)
+
+    app_settings = AppSettingsRepository(repo)
+    await app_settings.set("autofix_enabled", "true")
+
+    transcript_dir = str(tmp_path / "transcripts")
+    os.makedirs(transcript_dir, exist_ok=True)
+    exec_log_dir = str(tmp_path / "exec-logs")
+    os.makedirs(exec_log_dir, exist_ok=True)
+
+    docker = _FakeDockerClient(result=ExecResult(exit_code=0, stdout="done", stderr=""))
+    orch = _make_orchestrator(
+        repo, secrets_repo_fixture, docker, transcript_dir=transcript_dir, exec_log_dir=exec_log_dir
+    )
+
+    with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
+        first = await orch.handle_alert(alert)
+        assert first is not None
+        assert first.outcome == RunOutcome.RAN
+
+        second = await orch.handle_operator_trigger(
+            rb.id, RunMode.DRY_RUN, principal="alice", ip="10.0.0.1"
+        )
+    assert second.outcome == RunOutcome.DENIED
+    assert second.denial_reason == DenialReason.RATE_LIMIT
+
+
+@pytest.mark.asyncio
+async def test_operator_trigger_shares_cooldown_bucket_with_alert(
+    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+) -> None:
+    """Real run via alert path, then operator trigger within cooldown window -> COOLDOWN."""
+    rb = _make_runbook_record(
+        alertname="TestAlert", cooldown_seconds=3600, runbook_dir=tmp_path / "runbook"
+    )
+    await _insert_runbook(repo, rb)
+    alert = _make_alert(alertname="TestAlert")
+    await _insert_alert(repo, alert)
+
+    app_settings = AppSettingsRepository(repo)
+    await app_settings.set("autofix_enabled", "true")
+
+    transcript_dir = str(tmp_path / "transcripts")
+    os.makedirs(transcript_dir, exist_ok=True)
+    exec_log_dir = str(tmp_path / "exec-logs")
+    os.makedirs(exec_log_dir, exist_ok=True)
+
+    docker = _FakeDockerClient(result=ExecResult(exit_code=0, stdout="done", stderr=""))
+    orch = _make_orchestrator(
+        repo, secrets_repo_fixture, docker, transcript_dir=transcript_dir, exec_log_dir=exec_log_dir
+    )
+
+    with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
+        first = await orch.handle_alert(alert)
+        assert first is not None
+        assert first.outcome == RunOutcome.RAN
+
+        second = await orch.handle_operator_trigger(
+            rb.id, RunMode.DRY_RUN, principal="alice", ip="10.0.0.1"
+        )
+    assert second.outcome == RunOutcome.DENIED
+    assert second.denial_reason == DenialReason.COOLDOWN
+
+
+@pytest.mark.asyncio
+async def test_operator_trigger_denial_audit_who_is_principal(
+    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository
+) -> None:
+    """Denial audit who = principal, NOT 'system:autofix'."""
+    rb = _make_runbook_record(alertname="TestAlert", enabled=False)
+    await _insert_runbook(repo, rb)
+
+    app_settings = AppSettingsRepository(repo)
+    await app_settings.set("autofix_enabled", "true")
+
+    docker = _FakeDockerClient()
+    orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+
+    result = await orch.handle_operator_trigger(
+        rb.id, RunMode.DRY_RUN, principal="bob", ip="10.0.0.1"
+    )
+    assert result.outcome == RunOutcome.DENIED
+
+    audit = await repo.fetch_one(
+        text("SELECT who FROM audit_log WHERE what = 'autofix.denied'"), {}
+    )
+    assert audit is not None
+    assert str(audit[0]) == "bob"
+    assert str(audit[0]) != "system:autofix"
+
+
+@pytest.mark.asyncio
+async def test_operator_trigger_ran_audit_who_is_principal(
+    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+) -> None:
+    """autofix.ran audit who = principal on the operator path."""
+    rb = _make_runbook_record(alertname="TestAlert", runbook_dir=tmp_path / "runbook")
+    await _insert_runbook(repo, rb)
+
+    app_settings = AppSettingsRepository(repo)
+    await app_settings.set("autofix_enabled", "true")
+
+    transcript_dir = str(tmp_path / "transcripts")
+    os.makedirs(transcript_dir, exist_ok=True)
+    exec_log_dir = str(tmp_path / "exec-logs")
+    os.makedirs(exec_log_dir, exist_ok=True)
+
+    docker = _FakeDockerClient(result=ExecResult(exit_code=0, stdout="done", stderr=""))
+    orch = _make_orchestrator(
+        repo, secrets_repo_fixture, docker, transcript_dir=transcript_dir, exec_log_dir=exec_log_dir
+    )
+
+    with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
+        await orch.handle_operator_trigger(rb.id, RunMode.REAL, principal="carol", ip="10.0.0.1")
+
+    audit = await repo.fetch_one(text("SELECT who FROM audit_log WHERE what = 'autofix.ran'"), {})
+    assert audit is not None
+    assert str(audit[0]) == "carol"

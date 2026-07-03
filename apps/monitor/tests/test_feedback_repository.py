@@ -124,6 +124,7 @@ async def _make_run(repo: SqliteRepository) -> str:
             host="testhost",
             runbook_hash=rb.content_hash,
             mode=RunMode.REAL,
+            initiated_by="alert",
         )
     return run_id
 

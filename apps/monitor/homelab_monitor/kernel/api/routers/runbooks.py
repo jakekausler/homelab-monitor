@@ -7,14 +7,23 @@ transaction as the data write (via the repository).
 
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, ConfigDict
 
 from homelab_monitor.kernel.api.dependencies import get_repo, require_session
-from homelab_monitor.kernel.api.errors import NotFoundProblem
+from homelab_monitor.kernel.api.errors import ConflictProblem, HttpProblem, NotFoundProblem
+from homelab_monitor.kernel.api.routers.autofix import get_orchestrator
 from homelab_monitor.kernel.auth.models import User
+from homelab_monitor.kernel.autofix.orchestrator import AutoFixOrchestrator
+from homelab_monitor.kernel.autofix.types import (
+    DenialReason,
+    DryRunRequiredForRiskyError,
+    RunbookNotFoundError,
+    RunMode,
+    RunOutcome,
+)
 from homelab_monitor.kernel.config import get_runbooks_dir
 from homelab_monitor.kernel.db.repository import SqliteRepository
 from homelab_monitor.kernel.runbooks.loader import scan_runbooks
@@ -79,6 +88,19 @@ class RunbookGatesPatch(BaseModel):
     auto_trigger: bool | None = None
 
 
+class TriggerRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["dry_run", "real"]
+
+
+class TriggerResponse(BaseModel):
+    run_id: str | None
+    outcome: Literal["ran", "denied", "dry_run_stored"]
+    denial_reason: str | None = None
+    approval_id: str | None = None
+
+
 def _record_to_out(rec: RunbookRecord) -> RunbookOut:
     return RunbookOut(
         id=rec.id,
@@ -93,6 +115,22 @@ def _record_to_out(rec: RunbookRecord) -> RunbookOut:
         auto_trigger=rec.auto_trigger,
         content_hash=rec.content_hash,
     )
+
+
+def _denial_reason_to_code(reason: DenialReason) -> str:
+    """Map DenialReason -> HTTP error code string (409 Conflict payload)."""
+    return {
+        DenialReason.KILL_SWITCH: "kill_switch",
+        DenialReason.ALLOW_LIST: "runbook_disabled",
+        DenialReason.RATE_LIMIT: "rate_limit",
+        DenialReason.COOLDOWN: "cooldown",
+        DenialReason.ALREADY_RUNNING: "already_running",
+        DenialReason.CLAIM_ERROR: "claim_error",
+        DenialReason.APPROVAL_NOT_PENDING: "approval_not_pending",
+        DenialReason.RUNBOOK_CHANGED: "runbook_changed",
+        DenialReason.RUNBOOK_MISSING: "runbook_missing",
+        DenialReason.AMBIGUOUS_MATCH: "ambiguous_match",
+    }[reason]
 
 
 # ---- routes ----
@@ -131,6 +169,24 @@ async def patch_runbook_gates(
     user: Annotated[User, Depends(require_session())],
     repo: Annotated[RunbookRepo, Depends(get_runbooks_repo)],
 ) -> RunbookOut:
+    # Defense-in-depth: risky runbooks cannot be armed for auto-trigger via PATCH.
+    # UI already hides the auto_trigger switch on risky cards, but a curl/API misuse
+    # or a UI bug would otherwise silently arm a high-blast-radius runbook.
+    if payload.auto_trigger is True:
+        record = await repo.get_runbook(runbook_id)
+        if record is None:
+            raise NotFoundProblem(message=f"runbook {runbook_id} not found")
+        if record.risk_tag == "risky":
+            raise HttpProblem(
+                status_code=400,
+                code="risky_auto_trigger_denied",
+                message=(
+                    f"cannot enable auto_trigger on risky runbook {runbook_id}; "
+                    "flip risk_tag first or use the approval flow"
+                ),
+                details={"runbook_id": runbook_id, "risk_tag": record.risk_tag},
+            )
+
     try:
         rec = await repo.patch_gates(
             runbook_id,
@@ -142,3 +198,56 @@ async def patch_runbook_gates(
     except LookupError as exc:
         raise NotFoundProblem(message=str(exc)) from exc
     return _record_to_out(rec)
+
+
+@router.post(
+    "/{runbook_id}/trigger",
+    response_model=TriggerResponse,
+    responses={
+        400: {"description": "Bad request (e.g., risky runbook rejected for real mode)"},
+        404: {"description": "Runbook not found"},
+        409: {"description": "Denied by an operational gate"},
+    },
+)
+async def trigger_runbook(
+    runbook_id: str,
+    payload: TriggerRequest,
+    request: Request,
+    user: Annotated[User, Depends(require_session())],
+    orchestrator: Annotated[AutoFixOrchestrator, Depends(get_orchestrator)],
+) -> TriggerResponse:
+    """Manually trigger a runbook (operator-initiated).
+
+    Skips MATCH + auto_trigger allow-list; enforces every other safety gate.
+    """
+    try:
+        result = await orchestrator.handle_operator_trigger(
+            runbook_id=runbook_id,
+            mode=RunMode(payload.mode),
+            principal=user.username,
+            ip=_client_ip(request),
+        )
+    except RunbookNotFoundError as exc:
+        raise NotFoundProblem(message=str(exc)) from exc
+    except DryRunRequiredForRiskyError as exc:
+        raise HttpProblem(
+            status_code=400,
+            code="dry_run_required_for_risky",
+            message=str(exc),
+            details={"runbook_id": runbook_id},
+        ) from exc
+
+    if result.outcome == RunOutcome.DENIED:
+        assert result.denial_reason is not None
+        code = _denial_reason_to_code(result.denial_reason)
+        raise ConflictProblem(
+            message=f"runbook {runbook_id} denied: {result.denial_reason.value}",
+            code=code,
+        )
+
+    return TriggerResponse(
+        run_id=result.run_id,
+        outcome=result.outcome.value,
+        denial_reason=None,
+        approval_id=result.approval_id,
+    )

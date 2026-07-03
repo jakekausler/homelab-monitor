@@ -64,9 +64,9 @@ async def _seed_real_run(repo: SqliteRepository, *, run_id: str) -> None:
             text(
                 "INSERT INTO runbook_runs "
                 "(id, runbook_id, created_at, alert_id, mode, prompt, started_at, "
-                " ended_at, fixer_user, host, runbook_hash) "
+                " ended_at, fixer_user, host, runbook_hash, initiated_by) "
                 "VALUES (:id, :rb_id, :ca, :alert_id, :mode, :prompt, :started, "
-                " NULL, :fixer, :host, :hash)"
+                " NULL, :fixer, :host, :hash, :initiated_by)"
             ),
             {
                 "id": run_id,
@@ -79,6 +79,7 @@ async def _seed_real_run(repo: SqliteRepository, *, run_id: str) -> None:
                 "fixer": "homelab-fixer",
                 "host": "testhost",
                 "hash": rb.content_hash,
+                "initiated_by": "alert",
             },
         )
     _ = runs_repo  # constructed to mirror pattern; direct SQL used for a known id

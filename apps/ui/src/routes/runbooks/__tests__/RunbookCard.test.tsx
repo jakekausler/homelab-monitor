@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { UseMutationResult } from '@tanstack/react-query'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
@@ -6,11 +6,19 @@ import React from 'react'
 
 import { RunbookCard } from '../RunbookCard'
 import type { Runbook } from '@/api/runbooks'
-import { useToggleRunbook } from '@/api/runbooks'
+import { useToggleRunbook, useTriggerRunbook } from '@/api/runbooks'
 import type { ApiError } from '@/api/client'
 
 vi.mock('@/api/runbooks', () => ({
   useToggleRunbook: vi.fn(),
+  useTriggerRunbook: vi.fn(),
+}))
+
+vi.mock('sonner', () => ({
+  toast: {
+    success: vi.fn(),
+    error: vi.fn(),
+  },
 }))
 
 function mockMutation<TData = unknown, TVariables = unknown>(
@@ -65,6 +73,12 @@ function makeWrapper() {
     return React.createElement(QueryClientProvider, { client }, children)
   }
 }
+
+beforeEach(() => {
+  // RunbookCard always renders a RunFixDialog child, which calls useTriggerRunbook.
+  // Give every test a default mock so tests not exercising the trigger flow don't crash.
+  vi.mocked(useTriggerRunbook).mockReturnValue(mockMutation())
+})
 
 afterEach(() => {
   cleanup()
@@ -141,5 +155,40 @@ describe('RunbookCard', () => {
       wrapper: makeWrapper(),
     })
     expect(screen.queryByText(/\/\s*hr/i)).not.toBeInTheDocument()
+  })
+
+  it('"Run fix" button visible on the card', () => {
+    vi.mocked(useToggleRunbook).mockReturnValue(mockMutation())
+    render(<RunbookCard runbook={SAFE_RUNBOOK} killSwitchEnabled={true} />, {
+      wrapper: makeWrapper(),
+    })
+    expect(screen.getByTestId('runbook-run-fix-runbook-safe')).toBeInTheDocument()
+  })
+
+  it('Run fix button disabled when kill switch is engaged (killSwitchEnabled=false)', () => {
+    vi.mocked(useToggleRunbook).mockReturnValue(mockMutation())
+    render(<RunbookCard runbook={SAFE_RUNBOOK} killSwitchEnabled={false} />, {
+      wrapper: makeWrapper(),
+    })
+    expect(screen.getByTestId('runbook-run-fix-runbook-safe')).toBeDisabled()
+  })
+
+  it('Run fix button disabled when runbook.enabled is false', () => {
+    vi.mocked(useToggleRunbook).mockReturnValue(mockMutation())
+    render(<RunbookCard runbook={RISKY_RUNBOOK} killSwitchEnabled={true} />, {
+      wrapper: makeWrapper(),
+    })
+    // RISKY_RUNBOOK has enabled: false
+    expect(screen.getByTestId('runbook-run-fix-runbook-risky')).toBeDisabled()
+  })
+
+  it('clicking Run fix opens the RunFixDialog', () => {
+    vi.mocked(useToggleRunbook).mockReturnValue(mockMutation())
+    render(<RunbookCard runbook={SAFE_RUNBOOK} killSwitchEnabled={true} />, {
+      wrapper: makeWrapper(),
+    })
+    expect(screen.queryByTestId('run-fix-dialog')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByTestId('runbook-run-fix-runbook-safe'))
+    expect(screen.getByTestId('run-fix-dialog')).toBeInTheDocument()
   })
 })

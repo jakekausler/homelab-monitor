@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Final
+from typing import Any, Final
 
 import yaml
 from sqlalchemy import text
@@ -40,9 +40,12 @@ from homelab_monitor.kernel.autofix.matcher import matching_runbooks
 from homelab_monitor.kernel.autofix.runs_repository import RunbookRunsRepository
 from homelab_monitor.kernel.autofix.types import (
     DenialReason,
+    DryRunRequiredForRiskyError,
     FeedbackKind,
     GrantResolutionError,
+    InitiatedBy,
     ResolvedGrants,
+    RunbookNotFoundError,
     RunMode,
     RunOutcome,
     RunResult,
@@ -202,30 +205,44 @@ class AutoFixOrchestrator:
 
         # Phase 3: risky → dry-run + approval (HALT); safe → real exec.
         if record.dry_run_required:
-            return await self._claim_and_store_dry(alert=alert, record=record)
-        return await self._claim_and_exec(alert=alert, record=record)
+            return await self._claim_and_store_dry(alert=alert, record=record, initiated_by="alert")
+        return await self._claim_and_exec(alert=alert, record=record, initiated_by="alert")
 
-    async def _check_operational_gates(self, record: RunbookRecord) -> DenialReason | None:
-        """Check operational gates in strict order (kill-switch, allow-list,
-        rate-limit, cooldown). Returns denial reason or None if all pass.
+    async def _check_operational_gates(
+        self,
+        record: RunbookRecord,
+        *,
+        require_auto_trigger: bool = True,
+    ) -> DenialReason | None:
+        """Check operational gates in strict order (kill-switch, enabled,
+        auto_trigger, rate-limit, cooldown). Returns denial reason or None if all pass.
 
         The dry-run/risky decision is NOT an operational gate; handle_alert and
         execute_approved branch on record.dry_run_required themselves.
+
+        If require_auto_trigger=False (operator path), skip the auto_trigger check.
         """
-        # 1. kill switch
+        # 1. kill switch (unchanged, ALWAYS first — non-negotiable #7)
         flag = await self._app_settings_repo.get("autofix_enabled")
         if not _is_truthy(flag):
             return DenialReason.KILL_SWITCH
-        # 2. allow list
-        if not (record.enabled and record.auto_trigger):
+
+        # 2. Enabled check — always enforced
+        if not record.enabled:
             return DenialReason.ALLOW_LIST
-        # 3. rate limit (sliding 1h window over started_at)
+
+        # 3. auto_trigger check — only when require_auto_trigger=True
+        if require_auto_trigger and not record.auto_trigger:
+            return DenialReason.ALLOW_LIST
+
+        # 4. Rate-limit (unchanged; shared bucket between alert + operator paths)
         if record.rate_limit_per_hour is not None:
             threshold = (datetime.now(tz=UTC) - timedelta(hours=1)).isoformat()
             count = await self._runs.count_started_since(record.id, threshold)
             if count >= record.rate_limit_per_hour:
                 return DenialReason.RATE_LIMIT
-        # 4. cooldown
+
+        # 5. Cooldown (unchanged; same shared bucket)
         if record.cooldown_seconds is not None and record.cooldown_seconds > 0:
             last_ended = await self._runs.latest_ended_at(record.id)
             if last_ended is not None:
@@ -234,6 +251,7 @@ class AutoFixOrchestrator:
                 ).total_seconds()
                 if elapsed < record.cooldown_seconds:
                     return DenialReason.COOLDOWN
+
         return None
 
     def _gate_detail(self, record: RunbookRecord, reason: DenialReason) -> str:
@@ -363,7 +381,7 @@ class AutoFixOrchestrator:
         )
 
     async def _exec_claude(
-        self, *, record: RunbookRecord, alert: Alert, run_id: str, dry: bool
+        self, *, record: RunbookRecord, alert: Alert | None, run_id: str, dry: bool
     ) -> tuple[ExecResult, str | None, str | None, bool, list[ParsedFeedbackItem] | None]:
         """Run claude (real or dry) under the process-wide transcript lock.
 
@@ -401,7 +419,7 @@ class AutoFixOrchestrator:
                             what="autofix.grant_failed",
                             after={
                                 "runbook_id": record.id,
-                                "alert_id": alert.id,
+                                "alert_id": alert.id if alert is not None else None,
                                 "run_id": run_id,
                                 "reason": exc.reason,
                                 "detail": exc.detail,
@@ -427,7 +445,7 @@ class AutoFixOrchestrator:
                     what="autofix.grant_resolved",
                     after={
                         "runbook_id": record.id,
-                        "alert_id": alert.id,
+                        "alert_id": alert.id if alert is not None else None,
                         "run_id": run_id,
                         "docker_container": grants.docker_container,
                         "docker_allowed_actions": list(grants.docker_allowed_actions),
@@ -442,7 +460,7 @@ class AutoFixOrchestrator:
                         what="autofix.egress_unenforced",
                         after={
                             "runbook_id": record.id,
-                            "alert_id": alert.id,
+                            "alert_id": alert.id if alert is not None else None,
                             "run_id": run_id,
                             "egress": list(grants.egress),
                             "detail": (
@@ -500,21 +518,34 @@ class AutoFixOrchestrator:
                 feedback_items = parse_feedback_file(sentinel)
         return exec_result, transcript_path, error_msg, errored, feedback_items
 
-    async def _claim_and_exec(
+    async def _claim_and_exec(  # noqa: PLR0913 -- keyword-only claim/exec parameters (safety-model traceability)
         self,
         *,
-        alert: Alert,
+        alert: Alert | None,
         record: RunbookRecord,
+        initiated_by: InitiatedBy,
+        principal: str | None = None,
         approving_principal: str | None = None,
+        ip: str | None = None,
     ) -> RunResult:
         """Durable claim, exec, and persist. Always returns a RunResult (ran=True or False).
 
+        ``initiated_by`` — "alert" (automatic) or "operator" (manual trigger).
+        ``principal`` — operator username (required when initiated_by="operator").
         ``approving_principal`` — if set (execute_approved path), the username of
         the approving human. Threaded into the ``autofix.ran`` audit for forensic
-        clarity so the ``autofix.approved by alice`` -> ``autofix.ran by
-        system:autofix`` chain is not linked by ``approval_id`` alone. The
-        auto-triggered ``handle_alert`` path leaves this None.
+        clarity. Only relevant when initiated_by="alert".
         """
+        # Compute audit_who at start of method per §4.2
+        if initiated_by == "operator":
+            assert principal is not None, "operator path must provide principal"
+            audit_who = principal
+        elif approving_principal is not None:
+            audit_who = approving_principal
+        else:
+            audit_who = "system:autofix"
+
+        alert_id = alert.id if alert is not None else None
         host = socket.gethostname()  # computed ONCE; threaded into row + audit (Minor #5)
         prompt = record.path  # claude -p <runbook.path>
         now = datetime.now(tz=UTC)
@@ -540,13 +571,14 @@ class AutoFixOrchestrator:
                     if in_lock_denial is not None:
                         await insert_audit(
                             conn,
-                            who="system:autofix",
+                            who=audit_who,
                             what="autofix.denied",
                             after={
                                 "runbook_id": record.id,
-                                "alert_id": alert.id,
+                                "alert_id": alert_id,
                                 "gate": in_lock_denial.value,
                                 "detail": self._in_lock_detail(record, in_lock_denial),
+                                "initiated_by": initiated_by,
                             },
                         )
                         return RunResult(
@@ -564,25 +596,26 @@ class AutoFixOrchestrator:
                     run_id = await self._runs.insert_started(
                         conn,
                         runbook_id=record.id,
-                        alert_id=alert.id,
+                        alert_id=alert_id,
                         prompt=prompt,
                         fixer_user=self._config.fixer_user,
                         host=host,
                         runbook_hash=record.content_hash,
                         mode=RunMode.REAL,
+                        initiated_by=initiated_by,
                     )
             except Exception as exc:  # claim/insert DB failure must be audited, not dropped
                 # Critical #2: the attempt must NOT be silently dropped. Audit in a
                 # FRESH txn and return a coherent DENIED/claim_error result.
-                self._log.exception("autofix_claim_error", runbook_id=record.id, alert_id=alert.id)
+                self._log.exception("autofix_claim_error", runbook_id=record.id, alert_id=alert_id)
                 async with self._db.transaction() as conn:
                     await insert_audit(
                         conn,
-                        who="system:autofix",
+                        who=audit_who,
                         what="autofix.claim_error",
                         after={
                             "runbook_id": record.id,
-                            "alert_id": alert.id,
+                            "alert_id": alert_id,
                             "gate": DenialReason.CLAIM_ERROR.value,
                             "error": str(exc),
                         },
@@ -626,11 +659,11 @@ class AutoFixOrchestrator:
                 )
                 await insert_audit(
                     conn,
-                    who="system:autofix",
+                    who=audit_who,
                     what="autofix.exec_error",
                     after={
                         "runbook_id": record.id,
-                        "alert_id": alert.id,
+                        "alert_id": alert_id,
                         "run_id": run_id,
                         "error": error_msg,
                         "exec_log_path": exec_log_path,
@@ -657,6 +690,9 @@ class AutoFixOrchestrator:
                 host=host,
                 approving_principal=approving_principal,
                 feedback_items=feedback_items,
+                initiated_by=initiated_by,
+                audit_who=audit_who,
+                ip=ip,
             )
 
         return RunResult(
@@ -668,7 +704,15 @@ class AutoFixOrchestrator:
             denial_reason=None,
         )
 
-    async def _claim_and_store_dry(self, *, alert: Alert, record: RunbookRecord) -> RunResult:
+    async def _claim_and_store_dry(
+        self,
+        *,
+        alert: Alert | None,
+        record: RunbookRecord,
+        initiated_by: InitiatedBy,
+        principal: str | None = None,
+        ip: str | None = None,
+    ) -> RunResult:
         """Risky runbook: claim under lock, run claude PLAN-ONLY, store a
         DRY_RUN run + a PENDING approval, and HALT (no real exec, no auto_fixed).
 
@@ -677,6 +721,14 @@ class AutoFixOrchestrator:
         inserts a PENDING approval (pinned to record.content_hash) in the SAME
         completion txn.
         """
+        # Compute audit_who per §4.3
+        if initiated_by == "operator":
+            assert principal is not None, "operator path must provide principal"
+            audit_who = principal
+        else:
+            audit_who = "system:autofix"
+
+        alert_id = alert.id if alert is not None else None
         host = socket.gethostname()
         prompt = record.path
         now = datetime.now(tz=UTC)
@@ -697,13 +749,14 @@ class AutoFixOrchestrator:
                     if in_lock_denial is not None:
                         await insert_audit(
                             conn,
-                            who="system:autofix",
+                            who=audit_who,
                             what="autofix.denied",
                             after={
                                 "runbook_id": record.id,
-                                "alert_id": alert.id,
+                                "alert_id": alert_id,
                                 "gate": in_lock_denial.value,
                                 "detail": self._in_lock_detail(record, in_lock_denial),
+                                "initiated_by": initiated_by,
                             },
                         )
                         return RunResult(
@@ -717,23 +770,24 @@ class AutoFixOrchestrator:
                     run_id = await self._runs.insert_started(
                         conn,
                         runbook_id=record.id,
-                        alert_id=alert.id,
+                        alert_id=alert_id,
                         prompt=prompt,
                         fixer_user=self._config.fixer_user,
                         host=host,
                         runbook_hash=record.content_hash,
                         mode=RunMode.DRY_RUN,
+                        initiated_by=initiated_by,
                     )
             except Exception as exc:
-                self._log.exception("autofix_claim_error", runbook_id=record.id, alert_id=alert.id)
+                self._log.exception("autofix_claim_error", runbook_id=record.id, alert_id=alert_id)
                 async with self._db.transaction() as conn:
                     await insert_audit(
                         conn,
-                        who="system:autofix",
+                        who=audit_who,
                         what="autofix.claim_error",
                         after={
                             "runbook_id": record.id,
-                            "alert_id": alert.id,
+                            "alert_id": alert_id,
                             "gate": DenialReason.CLAIM_ERROR.value,
                             "error": str(exc),
                         },
@@ -777,11 +831,12 @@ class AutoFixOrchestrator:
                 # Dry exec failed: record error audit, NO approval (nothing to approve).
                 await insert_audit(
                     conn,
-                    who="system:autofix",
+                    who=audit_who,
+                    ip=ip,
                     what="autofix.exec_error",
                     after={
                         "runbook_id": record.id,
-                        "alert_id": alert.id,
+                        "alert_id": alert_id,
                         "run_id": run_id,
                         "error": error_msg,
                         "exec_log_path": exec_log_path,
@@ -794,17 +849,18 @@ class AutoFixOrchestrator:
                     conn,
                     dry_run_id=run_id,
                     runbook_id=record.id,
-                    alert_id=alert.id,
+                    alert_id=alert_id,
                     pinned_runbook_hash=record.content_hash,
                 )
                 await insert_audit(
                     conn,
-                    who="system:autofix",
+                    who=audit_who,
+                    ip=ip,
                     what="autofix.dry_run_stored",
                     after={
                         "runbook_id": record.id,
                         "runbook_path": record.path,
-                        "alert_id": alert.id,
+                        "alert_id": alert_id,
                         "run_id": run_id,
                         "approval_id": approval_id,
                         "transcript_path": transcript_path,
@@ -812,6 +868,7 @@ class AutoFixOrchestrator:
                         "exit_code": exec_result.exit_code,
                         "runbook_hash": record.content_hash,
                         "host": host,
+                        "initiated_by": initiated_by,
                     },
                 )
             await self._process_feedback(
@@ -1023,7 +1080,7 @@ class AutoFixOrchestrator:
         # `autofix.approved by <alice>` -> `autofix.ran by system:autofix` chain
         # is linked by more than approval_id alone).
         result = await self._claim_and_exec(
-            alert=alert, record=record, approving_principal=principal
+            alert=alert, record=record, initiated_by="alert", approving_principal=principal, ip=ip
         )
 
         # Pin the resulting real run to the approval (if it actually ran/claimed).
@@ -1073,6 +1130,85 @@ class AutoFixOrchestrator:
             exit_code=result.exit_code,
             denial_reason=result.denial_reason,
             approval_id=approval_id,
+        )
+
+    async def handle_operator_trigger(
+        self,
+        runbook_id: str,
+        mode: RunMode,
+        *,
+        principal: str,
+        ip: str | None,
+    ) -> RunResult:
+        """Operator-initiated trigger.
+
+        Skips MATCH phase and skips the auto_trigger allow-list gate.
+        Enforces every other safety gate (kill-switch, enabled, rate-limit,
+        cooldown, dry-run-required-for-risky, per-runbook lock).
+
+        Raises:
+            RunbookNotFoundError: runbook_id not found.
+            DryRunRequiredForRiskyError: mode='real' on a runbook with dry_run_required=True.
+        """
+        # 1. Load record (single fetch — cheap; the repo has get_runbook)
+        record = await self._runbook_repo.get_runbook(runbook_id)
+        if record is None:
+            raise RunbookNotFoundError(runbook_id)
+
+        # 2. Risky→real early rejection (Decision B). Audit + raise BEFORE any lock or exec.
+        if record.dry_run_required and mode == RunMode.REAL:
+            await self._audit_trigger_rejected(
+                record=record,
+                principal=principal,
+                ip=ip,
+                reason="dry_run_required_for_risky",
+                mode=mode,
+            )
+            raise DryRunRequiredForRiskyError(runbook_id)
+
+        # 3. Fast-reject if already running (per-runbook lock is held).
+        #    Avoids the router waiting for the lock; returns 409 immediately.
+        # Fast-reject if a run is currently in-flight for this runbook.
+        # NOTE: check is non-atomic w.r.t. the subsequent claim; if the
+        # lock becomes held between here and the claim, the request will
+        # block on the lock rather than 409 immediately. The atomic
+        # in-lock re-gate (_in_lock_gate) still rejects concurrent claims,
+        # so safety is preserved; only the "fast 409" UX is best-effort.
+        if self._lock_for(runbook_id).locked():
+            return await self._deny_operator(
+                record=record,
+                reason=DenialReason.ALREADY_RUNNING,
+                principal=principal,
+                ip=ip,
+            )
+
+        # 4. Operational gates (auto_trigger check SKIPPED for operator path).
+        denial = await self._check_operational_gates(record, require_auto_trigger=False)
+        if denial is not None:
+            return await self._deny_operator(
+                record=record,
+                reason=denial,
+                principal=principal,
+                ip=ip,
+            )
+
+        # 5. Dispatch. Risky+real was rejected in step 2; here mode is either
+        #    'dry_run' (any runbook) or 'real' (safe runbook only).
+        if mode == RunMode.DRY_RUN:
+            # risky+real already rejected above
+            return await self._claim_and_store_dry(
+                alert=None,
+                record=record,
+                initiated_by="operator",
+                principal=principal,
+                ip=ip,
+            )
+        return await self._claim_and_exec(
+            alert=None,
+            record=record,
+            initiated_by="operator",
+            principal=principal,
+            ip=ip,
         )
 
     async def kill_inflight(
@@ -1342,7 +1478,7 @@ class AutoFixOrchestrator:
         self,
         *,
         run_id: str,
-        alert: Alert,
+        alert: Alert | None,
         record: RunbookRecord,
         exec_result: ExecResult,
         error: str | None = None,
@@ -1353,7 +1489,7 @@ class AutoFixOrchestrator:
         body = (
             f"run_id={run_id}\n"
             f"runbook_id={record.id}\n"
-            f"alert_id={alert.id}\n"
+            f"alert_id={alert.id if alert is not None else 'none (operator-initiated)'}\n"
             f"exit_code={exec_result.exit_code}\n"
             "--- stdout ---\n"
             f"{exec_result.stdout}\n"
@@ -1369,7 +1505,7 @@ class AutoFixOrchestrator:
     async def _persist_outcome(  # noqa: PLR0913 -- keyword-only persist fields
         self,
         *,
-        alert: Alert,
+        alert: Alert | None,
         record: RunbookRecord,
         run_id: str,
         exec_result: ExecResult,
@@ -1378,12 +1514,18 @@ class AutoFixOrchestrator:
         host: str,
         feedback_items: list[ParsedFeedbackItem] | None,
         approving_principal: str | None = None,
+        initiated_by: InitiatedBy = "alert",
+        audit_who: str = "system:autofix",
+        ip: str | None = None,
     ) -> None:
         """Persist completion + audit + (exit 0) outcome in ONE txn (Important #2).
 
         ``approving_principal`` is added to the ``autofix.ran`` after_json ONLY
         when non-None (human-approved runs). Auto-triggered runs omit the key.
+        ``initiated_by`` tracks whether run was operator or alert triggered.
+        ``audit_who`` is the principal to write to the audit record.
         """
+        alert_id = alert.id if alert is not None else None
         async with self._db.transaction() as conn:
             await self._runs.mark_completed_conn(
                 conn,
@@ -1394,7 +1536,7 @@ class AutoFixOrchestrator:
             after_json: dict[str, object] = {
                 "runbook_id": record.id,
                 "runbook_path": record.path,
-                "alert_id": alert.id,
+                "alert_id": alert_id,
                 "run_id": run_id,
                 "prompt": record.path,
                 "transcript_path": transcript_path,
@@ -1403,14 +1545,16 @@ class AutoFixOrchestrator:
                 "runbook_hash": record.content_hash,
                 "fixer_user": self._config.fixer_user,
                 "host": host,
+                "initiated_by": initiated_by,
             }
             if approving_principal is not None:
                 after_json["approving_principal"] = approving_principal
             await insert_audit(
                 conn,
-                who="system:autofix",
+                who=audit_who,
                 what="autofix.ran",
                 after=after_json,
+                ip=ip,
             )
             # Record the auto_fixed outcome only on a clean exit, INLINE in this txn
             # so completion + audit + outcome are atomic (Important #2). SQL idiom
@@ -1421,7 +1565,7 @@ class AutoFixOrchestrator:
             # PendingRollbackError and revert mark_completed_conn + autofix.ran too.
             # Running the primary audit trail first means it survives even if
             # feedback (best-effort telemetry) fails.
-            if exec_result.exit_code == 0:
+            if exec_result.exit_code == 0 and alert is not None:
                 await self._insert_outcome_conn(
                     conn, alert_id=alert.id, outcome=AlertOutcome.AUTO_FIXED
                 )
@@ -1439,7 +1583,7 @@ class AutoFixOrchestrator:
         conn: AsyncConnection,
         *,
         run_id: str,
-        alert: Alert,
+        alert: Alert | None,
         record: RunbookRecord,
         feedback_items: list[ParsedFeedbackItem] | None,
         now_iso: str,
@@ -1473,7 +1617,7 @@ class AutoFixOrchestrator:
                         what="autofix.feedback_parse_error",
                         after={
                             "runbook_id": record.id,
-                            "alert_id": alert.id,
+                            "alert_id": alert.id if alert is not None else None,
                             "run_id": run_id,
                             "detail": item.suggestion_text[:512],
                         },
@@ -1545,9 +1689,74 @@ class AutoFixOrchestrator:
             denial_reason=reason,
         )
 
+    async def _deny_operator(
+        self,
+        *,
+        record: RunbookRecord,
+        reason: DenialReason,
+        principal: str,
+        ip: str | None,
+        **extra: Any,  # noqa: ANN401 -- audit_kwargs collector
+    ) -> RunResult:
+        """Operator-initiated denial. Audit who = principal (not 'system:autofix')."""
+        detail = self._gate_detail(record, reason)
+        async with self._db.transaction() as conn:
+            await insert_audit(
+                conn,
+                who=principal,
+                ip=ip,
+                what="autofix.denied",
+                before=None,
+                after={
+                    "runbook_id": record.id,
+                    "alert_id": None,
+                    "gate": reason.value,
+                    "detail": detail,
+                    "initiated_by": "operator",
+                    **extra,
+                },
+            )
+        return RunResult(
+            ran=False,
+            outcome=RunOutcome.DENIED,
+            runbook_id=record.id,
+            run_id=None,
+            exit_code=None,
+            denial_reason=reason,
+        )
+
+    async def _audit_trigger_rejected(
+        self,
+        *,
+        record: RunbookRecord,
+        principal: str,
+        ip: str | None,
+        reason: str,
+        mode: RunMode,
+    ) -> None:
+        """Audit an operator trigger that was rejected pre-lock (no runbook_runs row created).
+
+        Distinct from autofix.denied because there is no run and no gate — this is a
+        request-shape rejection at the router boundary.
+        """
+        async with self._db.transaction() as conn:
+            await insert_audit(
+                conn,
+                who=principal,
+                ip=ip,
+                what="autofix.trigger_rejected",
+                before=None,
+                after={
+                    "runbook_id": record.id,
+                    "reason": reason,
+                    "mode": mode.value,
+                    "initiated_by": "operator",
+                },
+            )
+
     @asynccontextmanager
     async def _maintenance_window(
-        self, _runbook: RunbookRecord, _alert: Alert
+        self, _runbook: RunbookRecord, _alert: Alert | None
     ) -> AsyncGenerator[None, None]:
         """SEAM (EPIC-012): open/close maintenance window around the fix; currently pass-through."""
         yield

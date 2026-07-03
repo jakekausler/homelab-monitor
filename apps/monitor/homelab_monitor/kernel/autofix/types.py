@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Final
+from typing import Final, Literal
 
 
 class DenialReason(StrEnum):
@@ -36,6 +36,29 @@ class RunMode(StrEnum):
 
     REAL = "real"  # real claude --dangerously-skip-permissions exec
     DRY_RUN = "dry_run"  # STAGE-009-006 will use this for dry-run/ack flow
+
+
+InitiatedBy = Literal["alert", "operator"]
+
+
+class RunbookNotFoundError(Exception):
+    """Raised by handle_operator_trigger when the runbook_id does not exist."""
+
+    def __init__(self, runbook_id: str) -> None:
+        super().__init__(f"runbook {runbook_id} not found")
+        self.runbook_id = runbook_id
+
+
+class DryRunRequiredForRiskyError(Exception):
+    """Raised when an operator requests mode='real' on a risky runbook (dry_run_required=True).
+
+    Server 400s this per Design Decision B — risky runbooks must go through the
+    dry-run + approval flow, even for manual triggers.
+    """
+
+    def __init__(self, runbook_id: str) -> None:
+        super().__init__(f"runbook {runbook_id} is risky; use dry_run mode")
+        self.runbook_id = runbook_id
 
 
 @dataclass(frozen=True, slots=True)

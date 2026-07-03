@@ -1,4 +1,5 @@
-import { Copy, Info } from 'lucide-react'
+import { Copy, Info, Play } from 'lucide-react'
+import { useState } from 'react'
 import type { JSX } from 'react'
 
 import { Badge } from '@/components/ui/badge'
@@ -13,6 +14,7 @@ import {
 } from '@/components/ui/card'
 import { cn } from '@/lib/utils'
 import { useToggleRunbook, type Runbook } from '@/api/runbooks'
+import { RunFixDialog } from './RunFixDialog'
 
 interface RunbookCardProps {
   runbook: Runbook
@@ -146,6 +148,7 @@ function ToggleSwitch({
 }
 
 export function RunbookCard({ runbook, killSwitchEnabled }: RunbookCardProps): JSX.Element {
+  const [runFixOpen, setRunFixOpen] = useState(false)
   const toggle = useToggleRunbook()
 
   const handleCopyPath = (): void => {
@@ -157,14 +160,14 @@ export function RunbookCard({ runbook, killSwitchEnabled }: RunbookCardProps): J
   }
 
   return (
-    <Card data-testid={`runbook-card-${runbook.id}`}>
+    <Card className="@container" data-testid={`runbook-card-${runbook.id}`}>
       <CardHeader>
-        <div className="flex items-start justify-between gap-2">
+        <div className="flex flex-col gap-2 @lg:flex-row @lg:items-start @lg:justify-between @lg:gap-4">
           <div className="min-w-0">
             <CardTitle className="text-base truncate">{basename(runbook.path)}</CardTitle>
             <CardDescription className="text-xs font-mono truncate">{runbook.path}</CardDescription>
           </div>
-          <div className="flex items-center gap-1.5 shrink-0">
+          <div className="flex flex-wrap items-center gap-1.5 @lg:shrink-0">
             <RiskBadge tag={runbook.risk_tag} />
             {runbook.dry_run_required && (
               <span
@@ -246,21 +249,45 @@ export function RunbookCard({ runbook, killSwitchEnabled }: RunbookCardProps): J
       </CardContent>
 
       <CardFooter className="text-xs text-muted-foreground">
-        <div className="flex w-full items-center justify-between gap-2">
-          <span className="truncate">
-            Config folder: <code className="text-xs">{runbook.path}</code>
-          </span>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={handleCopyPath}
-            data-testid={`runbook-copy-path-${runbook.id}`}
-          >
-            <Copy className="h-3.5 w-3.5" aria-hidden="true" />
-            <span className="sr-only">Copy config folder path</span>
-          </Button>
+        <div className="flex w-full flex-col gap-2 @md:flex-row @md:items-center @md:justify-between">
+          <p className="truncate text-xs text-muted-foreground" title={runbook.path}>
+            {runbook.path}
+          </p>
+          <div className="flex flex-col gap-2 @md:flex-row">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleCopyPath}
+              data-testid={`runbook-copy-path-${runbook.id}`}
+              className="w-full @md:w-auto"
+            >
+              <Copy className="mr-1 h-3.5 w-3.5" aria-hidden="true" />
+              <span className="sr-only">Copy config folder path</span>
+              Copy config folder path
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setRunFixOpen(true)}
+              disabled={!killSwitchEnabled || !runbook.enabled}
+              data-testid={`runbook-run-fix-${runbook.id}`}
+              title={
+                !killSwitchEnabled
+                  ? 'Kill switch is engaged'
+                  : !runbook.enabled
+                    ? 'Runbook is disabled'
+                    : 'Manually trigger this runbook'
+              }
+              className="w-full @md:w-auto"
+            >
+              <Play className="mr-1 h-3.5 w-3.5" aria-hidden="true" />
+              <span className="sr-only">Run fix</span>
+              Run fix
+            </Button>
+          </div>
         </div>
       </CardFooter>
+      <RunFixDialog runbook={runbook} open={runFixOpen} onOpenChange={setRunFixOpen} />
     </Card>
   )
 }

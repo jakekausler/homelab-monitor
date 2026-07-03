@@ -14,6 +14,7 @@ vi.mock('@tanstack/react-router', () => ({
 vi.mock('@/api/runbooks', () => ({
   useRunbooks: vi.fn(),
   useToggleRunbook: vi.fn(),
+  useTriggerRunbook: vi.fn(),
   useRefreshRunbooks: vi.fn(),
   usePendingApprovals: vi.fn(),
   useApprovalPlan: vi.fn(),
@@ -35,6 +36,7 @@ vi.mock('@/api/autofixSettings', () => ({
 import {
   useRunbooks,
   useToggleRunbook,
+  useTriggerRunbook,
   useRefreshRunbooks,
   usePendingApprovals,
   useApprovalPlan,
@@ -116,6 +118,7 @@ function setupDefaultMocks() {
     mockQuery({ data: { items: [SAFE_RUNBOOK, RISKY_RUNBOOK] } }),
   )
   vi.mocked(useToggleRunbook).mockReturnValue(mockMutation())
+  vi.mocked(useTriggerRunbook).mockReturnValue(mockMutation())
   vi.mocked(useRefreshRunbooks).mockReturnValue(mockMutation())
   vi.mocked(usePendingApprovals).mockReturnValue(mockQuery({ data: { items: [] } }))
   vi.mocked(useApprovalPlan).mockReturnValue(mockQuery() as never)

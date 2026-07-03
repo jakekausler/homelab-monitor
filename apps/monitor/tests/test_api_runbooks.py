@@ -3,16 +3,36 @@
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Mapping
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 import pytest
 import yaml
 from httpx import AsyncClient
 from sqlalchemy import text
 
+from homelab_monitor.kernel.autofix.orchestrator import AutoFixOrchestrator
+from homelab_monitor.kernel.autofix.runs_repository import RunbookRunsRepository
+from homelab_monitor.kernel.db.repositories.app_settings_repository import (
+    AppSettingsRepository,
+)
 from homelab_monitor.kernel.db.repository import SqliteRepository
+from homelab_monitor.kernel.db.time import utc_now_iso
+from homelab_monitor.kernel.docker.socket_client import ExecResult
 from homelab_monitor.kernel.runbooks.loader import RUNBOOK_CONFIG_FILENAME, RUNBOOK_PROMPT_FILENAME
+from homelab_monitor.kernel.secrets.repository import AsyncSecretsRepository
+
+# Reuse the underscore-private factories from the orchestrator test suite —
+# the codebase idiom for cross-test-file helper reuse (see test_api_autofix.py).
+from tests.test_autofix_orchestrator import (
+    _FakeDockerClient,  # pyright: ignore[reportPrivateUsage]
+    _insert_runbook,  # pyright: ignore[reportPrivateUsage]
+    _make_orchestrator,  # pyright: ignore[reportPrivateUsage]
+    _make_risky_runbook_record,  # pyright: ignore[reportPrivateUsage]
+    _make_runbook_record,  # pyright: ignore[reportPrivateUsage]
+)
 
 
 def _valid_config_dict(name: str = "test-runbook") -> dict[str, object]:
@@ -446,3 +466,480 @@ async def test_refresh_missing_root_reported_not_fatal(
     assert len(data["errors"]) == 1
     assert "is not a directory" in data["errors"][0]["message"]
     assert data["registered"] == []
+
+
+# ---------------------------------------------------------------------------
+# POST /runbooks/{runbook_id}/trigger (STAGE-009-010A)
+# ---------------------------------------------------------------------------
+
+
+def _wire_orchestrator(
+    authenticated_client: AsyncClient,
+    repo: SqliteRepository,
+    docker: object,
+    **kwargs: object,
+) -> AutoFixOrchestrator:
+    orch = _make_orchestrator(repo, kwargs.pop("secrets_repo"), docker, **kwargs)  # type: ignore[arg-type]
+    authenticated_client.app.state.autofix_orchestrator = orch  # type: ignore[attr-defined]
+    return orch
+
+
+@pytest.mark.asyncio
+async def test_trigger_endpoint_dry_success(
+    authenticated_client: AsyncClient,
+    repo: SqliteRepository,
+    secrets_repo: AsyncSecretsRepository,
+    tmp_path: Path,
+) -> None:
+    """POST trigger, mode='dry_run', safe runbook -> 200 dry_run_stored."""
+    rb = _make_runbook_record(alertname="TestAlert", runbook_dir=tmp_path / "runbook")
+    await _insert_runbook(repo, rb)
+
+    app_settings = AppSettingsRepository(repo)
+    await app_settings.set("autofix_enabled", "true")
+
+    transcript_dir = str(tmp_path / "transcripts")
+    os.makedirs(transcript_dir, exist_ok=True)
+    exec_log_dir = str(tmp_path / "exec-logs")
+    os.makedirs(exec_log_dir, exist_ok=True)
+
+    docker = _FakeDockerClient(result=ExecResult(exit_code=0, stdout="plan", stderr=""))
+    _wire_orchestrator(
+        authenticated_client,
+        repo,
+        docker,
+        secrets_repo=secrets_repo,
+        transcript_dir=transcript_dir,
+        exec_log_dir=exec_log_dir,
+    )
+
+    with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
+        resp = await authenticated_client.post(
+            f"/api/runbooks/{rb.id}/trigger",
+            json={"mode": "dry_run"},
+            headers=_csrf(authenticated_client),
+        )
+    assert resp.status_code == 200  # noqa: PLR2004
+    data = resp.json()
+    assert data["outcome"] == "dry_run_stored"
+    assert data["run_id"] is not None
+    assert data["approval_id"] is not None
+
+
+@pytest.mark.asyncio
+async def test_trigger_endpoint_real_success_on_safe(
+    authenticated_client: AsyncClient,
+    repo: SqliteRepository,
+    secrets_repo: AsyncSecretsRepository,
+    tmp_path: Path,
+) -> None:
+    """POST trigger, mode='real', safe runbook -> 200 outcome=ran."""
+    rb = _make_runbook_record(alertname="TestAlert", runbook_dir=tmp_path / "runbook")
+    await _insert_runbook(repo, rb)
+
+    app_settings = AppSettingsRepository(repo)
+    await app_settings.set("autofix_enabled", "true")
+
+    transcript_dir = str(tmp_path / "transcripts")
+    os.makedirs(transcript_dir, exist_ok=True)
+    exec_log_dir = str(tmp_path / "exec-logs")
+    os.makedirs(exec_log_dir, exist_ok=True)
+
+    docker = _FakeDockerClient(result=ExecResult(exit_code=0, stdout="done", stderr=""))
+    _wire_orchestrator(
+        authenticated_client,
+        repo,
+        docker,
+        secrets_repo=secrets_repo,
+        transcript_dir=transcript_dir,
+        exec_log_dir=exec_log_dir,
+    )
+
+    with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
+        resp = await authenticated_client.post(
+            f"/api/runbooks/{rb.id}/trigger",
+            json={"mode": "real"},
+            headers=_csrf(authenticated_client),
+        )
+    assert resp.status_code == 200  # noqa: PLR2004
+    assert resp.json()["outcome"] == "ran"
+
+
+@pytest.mark.asyncio
+async def test_trigger_endpoint_400_dry_run_required_for_risky(
+    authenticated_client: AsyncClient,
+    repo: SqliteRepository,
+    secrets_repo: AsyncSecretsRepository,
+) -> None:
+    """Risky runbook, mode='real' -> 400, code=dry_run_required_for_risky."""
+    rb = _make_risky_runbook_record(alertname="TestAlert")
+    await _insert_runbook(repo, rb)
+
+    app_settings = AppSettingsRepository(repo)
+    await app_settings.set("autofix_enabled", "true")
+
+    docker = _FakeDockerClient()
+    _wire_orchestrator(authenticated_client, repo, docker, secrets_repo=secrets_repo)
+
+    resp = await authenticated_client.post(
+        f"/api/runbooks/{rb.id}/trigger",
+        json={"mode": "real"},
+        headers=_csrf(authenticated_client),
+    )
+    assert resp.status_code == 400  # noqa: PLR2004
+    assert resp.json()["error"]["code"] == "dry_run_required_for_risky"
+
+
+@pytest.mark.asyncio
+async def test_trigger_endpoint_404_runbook_not_found(
+    authenticated_client: AsyncClient,
+    repo: SqliteRepository,
+    secrets_repo: AsyncSecretsRepository,
+) -> None:
+    """Unknown runbook_id -> 404, code=not_found."""
+    docker = _FakeDockerClient()
+    _wire_orchestrator(authenticated_client, repo, docker, secrets_repo=secrets_repo)
+
+    resp = await authenticated_client.post(
+        "/api/runbooks/does-not-exist/trigger",
+        json={"mode": "dry_run"},
+        headers=_csrf(authenticated_client),
+    )
+    assert resp.status_code == 404  # noqa: PLR2004
+
+
+@pytest.mark.asyncio
+async def test_trigger_endpoint_401_unauthenticated(
+    unauthenticated_client: AsyncClient,
+) -> None:
+    """No session cookie -> 401."""
+    resp = await unauthenticated_client.post(
+        "/api/runbooks/some-id/trigger", json={"mode": "dry_run"}
+    )
+    assert resp.status_code == 401  # noqa: PLR2004
+
+
+@pytest.mark.asyncio
+async def test_trigger_endpoint_403_csrf_missing(
+    authenticated_client: AsyncClient,
+    repo: SqliteRepository,
+    secrets_repo: AsyncSecretsRepository,
+) -> None:
+    """Session cookie present, CSRF header missing -> 403."""
+    rb = _make_runbook_record(alertname="TestAlert")
+    await _insert_runbook(repo, rb)
+
+    docker = _FakeDockerClient()
+    _wire_orchestrator(authenticated_client, repo, docker, secrets_repo=secrets_repo)
+
+    resp = await authenticated_client.post(
+        f"/api/runbooks/{rb.id}/trigger",
+        json={"mode": "dry_run"},
+    )
+    assert resp.status_code == 403  # noqa: PLR2004
+
+
+@pytest.mark.asyncio
+async def test_trigger_endpoint_409_kill_switch(
+    authenticated_client: AsyncClient,
+    repo: SqliteRepository,
+    secrets_repo: AsyncSecretsRepository,
+) -> None:
+    """Kill-switch engaged (unset) -> 409, code=kill_switch."""
+    rb = _make_runbook_record(alertname="TestAlert")
+    await _insert_runbook(repo, rb)
+
+    docker = _FakeDockerClient()
+    _wire_orchestrator(authenticated_client, repo, docker, secrets_repo=secrets_repo)
+
+    resp = await authenticated_client.post(
+        f"/api/runbooks/{rb.id}/trigger",
+        json={"mode": "dry_run"},
+        headers=_csrf(authenticated_client),
+    )
+    assert resp.status_code == 409  # noqa: PLR2004
+    assert resp.json()["error"]["code"] == "kill_switch"
+
+
+@pytest.mark.asyncio
+async def test_trigger_endpoint_409_runbook_disabled(
+    authenticated_client: AsyncClient,
+    repo: SqliteRepository,
+    secrets_repo: AsyncSecretsRepository,
+) -> None:
+    """enabled=False -> 409, code=runbook_disabled."""
+    rb = _make_runbook_record(alertname="TestAlert", enabled=False)
+    await _insert_runbook(repo, rb)
+
+    app_settings = AppSettingsRepository(repo)
+    await app_settings.set("autofix_enabled", "true")
+
+    docker = _FakeDockerClient()
+    _wire_orchestrator(authenticated_client, repo, docker, secrets_repo=secrets_repo)
+
+    resp = await authenticated_client.post(
+        f"/api/runbooks/{rb.id}/trigger",
+        json={"mode": "dry_run"},
+        headers=_csrf(authenticated_client),
+    )
+    assert resp.status_code == 409  # noqa: PLR2004
+    assert resp.json()["error"]["code"] == "runbook_disabled"
+
+
+@pytest.mark.asyncio
+async def test_trigger_endpoint_409_rate_limit(
+    authenticated_client: AsyncClient,
+    repo: SqliteRepository,
+    secrets_repo: AsyncSecretsRepository,
+) -> None:
+    """Rate limit tripped -> 409, code=rate_limit."""
+    rb = _make_runbook_record(alertname="TestAlert", rate_limit_per_hour=1)
+    await _insert_runbook(repo, rb)
+
+    app_settings = AppSettingsRepository(repo)
+    await app_settings.set("autofix_enabled", "true")
+
+    docker = _FakeDockerClient()
+    _wire_orchestrator(authenticated_client, repo, docker, secrets_repo=secrets_repo)
+
+    with patch.object(RunbookRunsRepository, "count_started_since", new=AsyncMock(return_value=1)):
+        resp = await authenticated_client.post(
+            f"/api/runbooks/{rb.id}/trigger",
+            json={"mode": "dry_run"},
+            headers=_csrf(authenticated_client),
+        )
+    assert resp.status_code == 409  # noqa: PLR2004
+    assert resp.json()["error"]["code"] == "rate_limit"
+
+
+@pytest.mark.asyncio
+async def test_trigger_endpoint_409_cooldown(
+    authenticated_client: AsyncClient,
+    repo: SqliteRepository,
+    secrets_repo: AsyncSecretsRepository,
+) -> None:
+    """Cooldown active -> 409, code=cooldown."""
+    rb = _make_runbook_record(alertname="TestAlert", cooldown_seconds=3600)
+    await _insert_runbook(repo, rb)
+
+    app_settings = AppSettingsRepository(repo)
+    await app_settings.set("autofix_enabled", "true")
+
+    docker = _FakeDockerClient()
+    _wire_orchestrator(authenticated_client, repo, docker, secrets_repo=secrets_repo)
+
+    with patch.object(
+        RunbookRunsRepository,
+        "latest_ended_at",
+        new=AsyncMock(return_value=utc_now_iso()),
+    ):
+        resp = await authenticated_client.post(
+            f"/api/runbooks/{rb.id}/trigger",
+            json={"mode": "dry_run"},
+            headers=_csrf(authenticated_client),
+        )
+    assert resp.status_code == 409  # noqa: PLR2004
+    assert resp.json()["error"]["code"] == "cooldown"
+
+
+@pytest.mark.asyncio
+async def test_trigger_endpoint_409_already_running(
+    authenticated_client: AsyncClient,
+    repo: SqliteRepository,
+    secrets_repo: AsyncSecretsRepository,
+) -> None:
+    """Per-runbook lock already held -> 409, code=already_running."""
+    rb = _make_runbook_record(alertname="TestAlert")
+    await _insert_runbook(repo, rb)
+
+    app_settings = AppSettingsRepository(repo)
+    await app_settings.set("autofix_enabled", "true")
+
+    docker = _FakeDockerClient()
+    orch = _wire_orchestrator(authenticated_client, repo, docker, secrets_repo=secrets_repo)
+
+    lock = orch._lock_for(rb.id)  # pyright: ignore[reportPrivateUsage]
+    await lock.acquire()
+    try:
+        resp = await authenticated_client.post(
+            f"/api/runbooks/{rb.id}/trigger",
+            json={"mode": "dry_run"},
+            headers=_csrf(authenticated_client),
+        )
+    finally:
+        lock.release()
+    assert resp.status_code == 409  # noqa: PLR2004
+    assert resp.json()["error"]["code"] == "already_running"
+
+
+@pytest.mark.asyncio
+async def test_trigger_endpoint_rejects_unknown_mode(
+    authenticated_client: AsyncClient,
+    repo: SqliteRepository,
+    secrets_repo: AsyncSecretsRepository,
+) -> None:
+    """mode='foo' -> 422 (pydantic Literal validation)."""
+    rb = _make_runbook_record(alertname="TestAlert")
+    await _insert_runbook(repo, rb)
+
+    docker = _FakeDockerClient()
+    _wire_orchestrator(authenticated_client, repo, docker, secrets_repo=secrets_repo)
+
+    resp = await authenticated_client.post(
+        f"/api/runbooks/{rb.id}/trigger",
+        json={"mode": "foo"},
+        headers=_csrf(authenticated_client),
+    )
+    assert resp.status_code == 422  # noqa: PLR2004
+
+
+@pytest.mark.asyncio
+async def test_trigger_endpoint_rejects_extra_fields(
+    authenticated_client: AsyncClient,
+    repo: SqliteRepository,
+    secrets_repo: AsyncSecretsRepository,
+) -> None:
+    """Extra field in body -> 422 (extra='forbid')."""
+    rb = _make_runbook_record(alertname="TestAlert")
+    await _insert_runbook(repo, rb)
+
+    docker = _FakeDockerClient()
+    _wire_orchestrator(authenticated_client, repo, docker, secrets_repo=secrets_repo)
+
+    resp = await authenticated_client.post(
+        f"/api/runbooks/{rb.id}/trigger",
+        json={"mode": "dry_run", "extra_field": True},
+        headers=_csrf(authenticated_client),
+    )
+    assert resp.status_code == 422  # noqa: PLR2004
+
+
+# ---------------------------------------------------------------------------
+# PATCH /runbooks/{runbook_id}: risky auto_trigger pre-check (STAGE-009-010A)
+# ---------------------------------------------------------------------------
+
+
+async def _register_risky_runbook(
+    authenticated_client: AsyncClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> str:
+    """Register a risk_tag='risky' runbook via refresh; returns its id."""
+    monkeypatch.setenv("HOMELAB_MONITOR_RUNBOOKS_DIR", str(tmp_path))
+    folder = tmp_path / "risky-runbook"
+    config = _valid_config_dict("risky-runbook")
+    config["risk_tag"] = "risky"
+    _write_runbook(folder, config=config)
+
+    await authenticated_client.post(
+        "/api/runbooks/refresh", json={}, headers=_csrf(authenticated_client)
+    )
+    list_resp = await authenticated_client.get("/api/runbooks")
+    items = list_resp.json()["items"]
+    for item in items:
+        if item["path"] == str(folder):
+            runbook_id: str = item["id"]
+            assert item["risk_tag"] == "risky"
+            return runbook_id
+    raise AssertionError("risky runbook not found after refresh")
+
+
+@pytest.mark.asyncio
+async def test_patch_risky_auto_trigger_true_returns_400(
+    authenticated_client: AsyncClient,
+    repo: SqliteRepository,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PATCH {auto_trigger: true} on risky runbook -> 400; no audit; auto_trigger stays False."""
+    runbook_id = await _register_risky_runbook(authenticated_client, tmp_path, monkeypatch)
+
+    resp = await authenticated_client.patch(
+        f"/api/runbooks/{runbook_id}",
+        json={"auto_trigger": True},
+        headers=_csrf(authenticated_client),
+    )
+    assert resp.status_code == 400  # noqa: PLR2004
+    assert resp.json()["error"]["code"] == "risky_auto_trigger_denied"
+
+    rows = await repo.fetch_all(
+        text("SELECT id FROM audit_log WHERE what = :w"), {"w": "runbook_gates_changed"}
+    )
+    assert rows == []
+
+    list_resp = await authenticated_client.get("/api/runbooks")
+    item = next(i for i in list_resp.json()["items"] if i["id"] == runbook_id)
+    assert item["auto_trigger"] is False
+
+
+@pytest.mark.asyncio
+async def test_patch_risky_enabled_toggle_still_works(
+    authenticated_client: AsyncClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PATCH {enabled: false} on risky runbook -> 200."""
+    runbook_id = await _register_risky_runbook(authenticated_client, tmp_path, monkeypatch)
+
+    resp = await authenticated_client.patch(
+        f"/api/runbooks/{runbook_id}",
+        json={"enabled": False},
+        headers=_csrf(authenticated_client),
+    )
+    assert resp.status_code == 200  # noqa: PLR2004
+    assert resp.json()["enabled"] is False
+
+
+@pytest.mark.asyncio
+async def test_patch_safe_auto_trigger_true_still_works(
+    authenticated_client: AsyncClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PATCH {auto_trigger: true} on safe runbook -> 200."""
+    monkeypatch.setenv("HOMELAB_MONITOR_RUNBOOKS_DIR", str(tmp_path))
+    folder = tmp_path / "safe-runbook"
+    _write_runbook(folder, config=_valid_config_dict("safe-runbook"))
+
+    await authenticated_client.post(
+        "/api/runbooks/refresh", json={}, headers=_csrf(authenticated_client)
+    )
+    list_resp = await authenticated_client.get("/api/runbooks")
+    runbook_id = list_resp.json()["items"][0]["id"]
+
+    resp = await authenticated_client.patch(
+        f"/api/runbooks/{runbook_id}",
+        json={"auto_trigger": True},
+        headers=_csrf(authenticated_client),
+    )
+    assert resp.status_code == 200  # noqa: PLR2004
+    assert resp.json()["auto_trigger"] is True
+
+
+@pytest.mark.asyncio
+async def test_patch_risky_auto_trigger_false_still_works(
+    authenticated_client: AsyncClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PATCH {auto_trigger: false} on risky runbook -> 200."""
+    runbook_id = await _register_risky_runbook(authenticated_client, tmp_path, monkeypatch)
+
+    resp = await authenticated_client.patch(
+        f"/api/runbooks/{runbook_id}",
+        json={"auto_trigger": False},
+        headers=_csrf(authenticated_client),
+    )
+    assert resp.status_code == 200  # noqa: PLR2004
+    assert resp.json()["auto_trigger"] is False
+
+
+@pytest.mark.asyncio
+async def test_patch_missing_runbook_returns_404(
+    authenticated_client: AsyncClient,
+) -> None:
+    """PATCH unknown id with auto_trigger:true -> 404 (record lookup happens first)."""
+    resp = await authenticated_client.patch(
+        "/api/runbooks/does-not-exist",
+        json={"auto_trigger": True},
+        headers=_csrf(authenticated_client),
+    )
+    assert resp.status_code == 404  # noqa: PLR2004

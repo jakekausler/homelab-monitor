@@ -148,3 +148,27 @@ export function useRejectApproval(): UseMutationResult<
     },
   })
 }
+
+export type TriggerResponse = Schema<'TriggerResponse'>
+
+/** POST /api/runbooks/{runbook_id}/trigger */
+export function useTriggerRunbook(): UseMutationResult<
+  TriggerResponse,
+  ApiError,
+  { id: string; mode: 'dry_run' | 'real' }
+> {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (variables: { id: string; mode: 'dry_run' | 'real' }) => {
+      const result = await apiClient.POST('/api/runbooks/{runbook_id}/trigger', {
+        params: { path: { runbook_id: variables.id } },
+        body: { mode: variables.mode },
+      })
+      return unwrap(result)
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: runbooksKeys.all })
+      void queryClient.invalidateQueries({ queryKey: approvalsKeys.pending })
+    },
+  })
+}

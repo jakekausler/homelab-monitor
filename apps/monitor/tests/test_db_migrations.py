@@ -1248,13 +1248,14 @@ async def test_migration_0049_round_trip(db_url: str) -> None:
             )
             await conn.execute(
                 text(
-                    "INSERT INTO runbook_runs (id, runbook_id, created_at) "
-                    "VALUES (:id, :rb_id, :ca)"
+                    "INSERT INTO runbook_runs (id, runbook_id, created_at, initiated_by) "
+                    "VALUES (:id, :rb_id, :ca, :initiated_by)"
                 ),
                 {
                     "id": runbook_run_id,
                     "rb_id": runbook_id,
                     "ca": "2026-07-02T14:00:00Z",
+                    "initiated_by": "alert",
                 },
             )
             await conn.execute(

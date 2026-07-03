@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from sqlalchemy import text
 from sqlalchemy.engine import Row
@@ -16,9 +16,9 @@ from homelab_monitor.kernel.db.time import utc_now_iso
 _INSERT_STARTED_SQL = text(
     "INSERT INTO runbook_runs "
     "(id, runbook_id, created_at, alert_id, mode, prompt, started_at, "
-    " ended_at, fixer_user, host, runbook_hash) "
+    " ended_at, fixer_user, host, runbook_hash, initiated_by) "
     "VALUES (:id, :runbook_id, :created_at, :alert_id, :mode, :prompt, "
-    " :started_at, NULL, :fixer_user, :host, :runbook_hash)"
+    " :started_at, NULL, :fixer_user, :host, :runbook_hash, :initiated_by)"
 )
 
 _COUNT_INFLIGHT_SQL = text(
@@ -51,7 +51,7 @@ _LATEST_ENDED_SQL = text(
 
 _SELECT_RUN_BY_ID_SQL = text(
     "SELECT id, runbook_id, created_at, alert_id, mode, prompt, started_at, "
-    "ended_at, fixer_user, host, runbook_hash, transcript_path, exit_code "
+    "ended_at, fixer_user, host, runbook_hash, transcript_path, exit_code, initiated_by "
     "FROM runbook_runs WHERE id = :id"
 )
 
@@ -86,12 +86,13 @@ class RunbookRunsRepository:
         conn: AsyncConnection,
         *,
         runbook_id: str,
-        alert_id: str,
+        alert_id: str | None,
         prompt: str,
         fixer_user: str,
         host: str,
         runbook_hash: str | None,
         mode: RunMode,
+        initiated_by: Literal["alert", "operator"],
     ) -> str:
         """INSERT a started (ended_at NULL) row on the given connection; return run id."""
         run_id = uuid7()
@@ -109,6 +110,7 @@ class RunbookRunsRepository:
                 "fixer_user": fixer_user,
                 "host": host,
                 "runbook_hash": runbook_hash,
+                "initiated_by": initiated_by,
             },
         )
         return run_id
