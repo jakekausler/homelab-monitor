@@ -3,9 +3,11 @@ import type { JSX } from 'react'
 
 import { useAutofixKillSwitch, useToggleAutofixKillSwitch } from '@/api/autofixSettings'
 import { ApiError } from '@/api/client'
+import { usePinStatus } from '@/api/security-pin'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { ConfirmPhraseDialog } from '@/components/ConfirmPhraseDialog'
+import { ConfirmPinDialog } from '@/components/ConfirmPinDialog'
 
 const DISABLE_PHRASE = 'disable auto-fix'
 const ENABLE_PHRASE = 'enable auto-fix'
@@ -13,6 +15,7 @@ const ENABLE_PHRASE = 'enable auto-fix'
 export function SettingsAutofixPage(): JSX.Element {
   const state = useAutofixKillSwitch()
   const toggle = useToggleAutofixKillSwitch()
+  const pinStatus = usePinStatus()
   const [dialogOpen, setDialogOpen] = useState<boolean>(false)
 
   if (state.isLoading) {
@@ -34,12 +37,26 @@ export function SettingsAutofixPage(): JSX.Element {
   const expectedPhrase = currentEnabled ? DISABLE_PHRASE : ENABLE_PHRASE
   const targetEnabled = !currentEnabled
   const buttonLabel = currentEnabled ? 'Disable auto-fix' : 'Enable auto-fix'
+  const pinIsSet = pinStatus.data?.set === true
 
   const errorMessage = toggle.error instanceof ApiError ? toggle.error.message : undefined
+  const toggleRetryAfterSeconds =
+    toggle.error instanceof ApiError ? toggle.error.retryAfterSeconds : null
 
-  const handleConfirm = (): void => {
+  const handleConfirmWithPhrase = (): void => {
     toggle.mutate(
       { enabled: targetEnabled, confirm_phrase: expectedPhrase },
+      {
+        onSuccess: () => {
+          setDialogOpen(false)
+        },
+      },
+    )
+  }
+
+  const handleConfirmWithPin = (pin: string): void => {
+    toggle.mutate(
+      { enabled: targetEnabled, confirm_pin: pin },
       {
         onSuccess: () => {
           setDialogOpen(false)
@@ -94,21 +111,39 @@ export function SettingsAutofixPage(): JSX.Element {
           ) : null}
         </CardContent>
       </Card>
-      <ConfirmPhraseDialog
-        open={dialogOpen}
-        onOpenChange={setDialogOpen}
-        title={buttonLabel}
-        body={
-          currentEnabled
-            ? 'Disabling auto-fix will SIGKILL any currently running fix and prevent new fixes from starting.'
-            : 'Enabling auto-fix will allow matching runbooks to run automatically against your homelab.'
-        }
-        expectedPhrase={expectedPhrase}
-        confirmLabel="I understand — proceed"
-        onConfirm={handleConfirm}
-        isPending={toggle.isPending}
-        errorMessage={errorMessage}
-      />
+      {pinIsSet ? (
+        <ConfirmPinDialog
+          open={dialogOpen}
+          onOpenChange={setDialogOpen}
+          title={buttonLabel}
+          body={
+            currentEnabled
+              ? 'Disabling auto-fix will SIGKILL any currently running fix and prevent new fixes from starting.'
+              : 'Enabling auto-fix will allow matching runbooks to run automatically against your homelab.'
+          }
+          confirmLabel="I understand — proceed"
+          onConfirm={handleConfirmWithPin}
+          isPending={toggle.isPending}
+          errorMessage={errorMessage}
+          retryAfterSeconds={toggleRetryAfterSeconds ?? undefined}
+        />
+      ) : (
+        <ConfirmPhraseDialog
+          open={dialogOpen}
+          onOpenChange={setDialogOpen}
+          title={buttonLabel}
+          body={
+            currentEnabled
+              ? 'Disabling auto-fix will SIGKILL any currently running fix and prevent new fixes from starting.'
+              : 'Enabling auto-fix will allow matching runbooks to run automatically against your homelab.'
+          }
+          expectedPhrase={expectedPhrase}
+          confirmLabel="I understand — proceed"
+          onConfirm={handleConfirmWithPhrase}
+          isPending={toggle.isPending}
+          errorMessage={errorMessage}
+        />
+      )}
     </div>
   )
 }

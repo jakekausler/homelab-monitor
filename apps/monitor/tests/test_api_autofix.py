@@ -15,7 +15,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from httpx import AsyncClient
+from httpx import AsyncClient, Response
 from sqlalchemy import text
 
 from homelab_monitor.kernel.autofix.approvals_repository import (
@@ -32,6 +32,7 @@ from homelab_monitor.kernel.db.time import utc_now_iso
 from homelab_monitor.kernel.docker.socket_client import ExecResult
 from homelab_monitor.kernel.runbooks.repository import RunbookRepo
 from homelab_monitor.kernel.secrets.repository import AsyncSecretsRepository
+from homelab_monitor.kernel.security.pin import PIN_HASH_KEY, hash_pin
 
 # Import test fixtures and helpers from orchestrator tests. These are underscore-
 # private factories shared across the autofix test suite; the codebase idiom for
@@ -1131,3 +1132,332 @@ async def test_approve_confirm_phrase_case_sensitive_rejects_uppercase(
         headers=_csrf(authenticated_client),
     )
     assert response.status_code == 400  # noqa: PLR2004
+
+
+# ---------------------------------------------------------------------------
+# STAGE-009-010B: confirm_pin as an alternative to confirm_phrase
+# ---------------------------------------------------------------------------
+
+
+async def _seed_pin(repo: SqliteRepository, pin: str = "1234") -> None:
+    """Seed a PIN hash directly via app_settings (bypassing the set endpoint)."""
+    app_settings = AppSettingsRepository(repo)
+    await app_settings.set(PIN_HASH_KEY, hash_pin(pin, cost=4))
+
+
+@pytest.mark.asyncio
+async def test_approve_with_confirm_pin_success(
+    authenticated_client: AsyncClient,
+    repo: SqliteRepository,
+    secrets_repo: AsyncSecretsRepository,
+    tmp_path: Path,
+) -> None:
+    """A PIN configured + correct confirm_pin succeeds; orchestrator invoked
+    with credential_type='pin' (asserted via the autofix.approved audit row's
+    after_json.credential_type, since the router passes credential_type
+    straight through to execute_approved)."""
+    await _seed_pin(repo, pin="1234")
+
+    rb = _make_runbook_record(
+        alertname="Test",
+        dry_run_required=True,
+        content_hash="hash-v1",
+        runbook_dir=tmp_path / "runbook",
+    )
+    await _insert_runbook(repo, rb)
+
+    app_settings = AppSettingsRepository(repo)
+    await app_settings.set("autofix_enabled", "true")
+
+    transcript_dir = str(tmp_path / "transcripts")
+    os.makedirs(transcript_dir, exist_ok=True)
+    exec_log_dir = str(tmp_path / "exec-logs")
+    os.makedirs(exec_log_dir, exist_ok=True)
+
+    docker = _FakeDockerClient(
+        result=ExecResult(exit_code=0, stdout="plan", stderr=""),
+        transcript_to_write=f"{transcript_dir}/dry-{uuid7()}.transcript",
+    )
+    orch = _make_orchestrator(
+        repo,
+        secrets_repo,
+        docker,
+        transcript_dir=transcript_dir,
+        exec_log_dir=exec_log_dir,
+    )
+    authenticated_client.app.state.autofix_orchestrator = orch  # type: ignore[attr-defined]
+
+    alert = _make_alert(alertname="Test")
+    await _insert_alert(repo, alert)
+
+    with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
+        dry_result = await orch.handle_alert(alert)
+    assert dry_result is not None
+    approval_id = dry_result.approval_id
+    assert approval_id is not None
+
+    docker.result = ExecResult(exit_code=0, stdout="fixed", stderr="")
+    docker.transcript_to_write = f"{transcript_dir}/real-{uuid7()}.transcript"
+
+    with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
+        response = await authenticated_client.post(
+            f"/api/autofix/approvals/{approval_id}/approve",
+            json={"confirm_pin": "1234"},
+            headers=_csrf(authenticated_client),
+        )
+    assert response.status_code == 200  # noqa: PLR2004
+    assert response.json()["ran"] is True
+
+    rows = await repo.fetch_all(
+        text("SELECT after_json FROM audit_log WHERE what = 'autofix.approved'"),
+        {},
+    )
+    assert len(rows) == 1
+    after = json.loads(rows[0][0])
+    assert after["credential_type"] == "pin"
+
+
+@pytest.mark.asyncio
+async def test_approve_wrong_pin_400_ticks_limiter(
+    authenticated_client: AsyncClient,
+    repo: SqliteRepository,
+    secrets_repo: AsyncSecretsRepository,
+) -> None:
+    """Wrong confirm_pin -> 400; the PIN rate limiter is ticked (verified by
+    repeating until lockout returns 429 within a few attempts)."""
+    await _seed_pin(repo, pin="1234")
+    rb_id, _alert_id, dry_run_id = await _seed_dry_run_chain(repo)
+
+    docker = _FakeDockerClient()
+    orch = _make_orchestrator(repo, secrets_repo, docker)
+    authenticated_client.app.state.autofix_orchestrator = orch  # type: ignore[attr-defined]
+
+    approvals_repo = RunbookRunApprovalsRepository(repo)
+    async with repo.transaction() as conn:
+        approval_id = await approvals_repo.insert_pending(
+            conn,
+            dry_run_id=dry_run_id,
+            runbook_id=rb_id,
+            alert_id=None,
+            pinned_runbook_hash="hash-v1",
+        )
+
+    response: Response | None = None
+    for _ in range(3):
+        response = await authenticated_client.post(
+            f"/api/autofix/approvals/{approval_id}/approve",
+            json={"confirm_pin": "9999"},
+            headers=_csrf(authenticated_client),
+        )
+        assert response.status_code == 400  # noqa: PLR2004
+    # 4th attempt: check() sees 3 fails → 5s lock → 429
+    response = await authenticated_client.post(
+        f"/api/autofix/approvals/{approval_id}/approve",
+        json={"confirm_pin": "9999"},
+        headers=_csrf(authenticated_client),
+    )
+    assert response.status_code == 429  # noqa: PLR2004
+
+
+@pytest.mark.asyncio
+async def test_approve_no_pin_configured_falls_back_to_phrase(
+    authenticated_client: AsyncClient,
+    repo: SqliteRepository,
+    secrets_repo: AsyncSecretsRepository,
+    tmp_path: Path,
+) -> None:
+    """No PIN row present; confirm_phrase still succeeds."""
+    rb = _make_runbook_record(
+        alertname="Test",
+        dry_run_required=True,
+        content_hash="hash-v1",
+        runbook_dir=tmp_path / "runbook",
+    )
+    await _insert_runbook(repo, rb)
+
+    app_settings = AppSettingsRepository(repo)
+    await app_settings.set("autofix_enabled", "true")
+
+    transcript_dir = str(tmp_path / "transcripts")
+    os.makedirs(transcript_dir, exist_ok=True)
+    exec_log_dir = str(tmp_path / "exec-logs")
+    os.makedirs(exec_log_dir, exist_ok=True)
+
+    docker = _FakeDockerClient(
+        result=ExecResult(exit_code=0, stdout="plan", stderr=""),
+        transcript_to_write=f"{transcript_dir}/dry-{uuid7()}.transcript",
+    )
+    orch = _make_orchestrator(
+        repo,
+        secrets_repo,
+        docker,
+        transcript_dir=transcript_dir,
+        exec_log_dir=exec_log_dir,
+    )
+    authenticated_client.app.state.autofix_orchestrator = orch  # type: ignore[attr-defined]
+
+    alert = _make_alert(alertname="Test")
+    await _insert_alert(repo, alert)
+
+    with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
+        dry_result = await orch.handle_alert(alert)
+    assert dry_result is not None
+    approval_id = dry_result.approval_id
+    assert approval_id is not None
+
+    docker.result = ExecResult(exit_code=0, stdout="fixed", stderr="")
+    docker.transcript_to_write = f"{transcript_dir}/real-{uuid7()}.transcript"
+
+    with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
+        response = await authenticated_client.post(
+            f"/api/autofix/approvals/{approval_id}/approve",
+            json={"confirm_phrase": "approve"},
+            headers=_csrf(authenticated_client),
+        )
+    assert response.status_code == 200  # noqa: PLR2004
+    assert response.json()["ran"] is True
+
+
+@pytest.mark.asyncio
+async def test_approve_both_credentials_400(
+    authenticated_client: AsyncClient,
+    repo: SqliteRepository,
+) -> None:
+    """Both confirm_pin and confirm_phrase supplied simultaneously -> 400."""
+    rb_id, _alert_id, dry_run_id = await _seed_dry_run_chain(repo)
+
+    approvals_repo = RunbookRunApprovalsRepository(repo)
+    async with repo.transaction() as conn:
+        approval_id = await approvals_repo.insert_pending(
+            conn,
+            dry_run_id=dry_run_id,
+            runbook_id=rb_id,
+            alert_id=None,
+            pinned_runbook_hash="hash-v1",
+        )
+
+    response = await authenticated_client.post(
+        f"/api/autofix/approvals/{approval_id}/approve",
+        json={"confirm_phrase": "approve", "confirm_pin": "1234"},
+        headers=_csrf(authenticated_client),
+    )
+    assert response.status_code == 400  # noqa: PLR2004
+
+
+@pytest.mark.asyncio
+async def test_approve_no_credentials_400(
+    authenticated_client: AsyncClient,
+    repo: SqliteRepository,
+) -> None:
+    """Neither confirm_pin nor confirm_phrase supplied -> 400."""
+    rb_id, _alert_id, dry_run_id = await _seed_dry_run_chain(repo)
+
+    approvals_repo = RunbookRunApprovalsRepository(repo)
+    async with repo.transaction() as conn:
+        approval_id = await approvals_repo.insert_pending(
+            conn,
+            dry_run_id=dry_run_id,
+            runbook_id=rb_id,
+            alert_id=None,
+            pinned_runbook_hash="hash-v1",
+        )
+
+    response = await authenticated_client.post(
+        f"/api/autofix/approvals/{approval_id}/approve",
+        json={},
+        headers=_csrf(authenticated_client),
+    )
+    assert response.status_code == 400  # noqa: PLR2004
+
+
+@pytest.mark.asyncio
+async def test_approve_audit_includes_credential_type(
+    authenticated_client: AsyncClient,
+    repo: SqliteRepository,
+    secrets_repo: AsyncSecretsRepository,
+    tmp_path: Path,
+) -> None:
+    """autofix.approved audit after_json.credential_type reflects the phrase
+    path ('phrase') and the pin path ('pin') respectively.
+
+    credential_type is now included in BOTH approval and trigger audit paths:
+    - autofix.approved (approve path): credential_type ('phrase' or 'pin')
+    - autofix.ran (trigger path): credential_type ('phrase' or 'pin')
+    - autofix.trigger_rejected (risky trigger rejection): credential_type
+    """
+
+    async def _run_one(credential_kwargs: dict[str, str], content_hash: str) -> str:
+        alertname = f"Test-{content_hash}"
+        rb = _make_runbook_record(
+            alertname=alertname,
+            dry_run_required=True,
+            content_hash=content_hash,
+            runbook_dir=tmp_path / f"runbook-{content_hash}",
+        )
+        await _insert_runbook(repo, rb)
+        app_settings = AppSettingsRepository(repo)
+        await app_settings.set("autofix_enabled", "true")
+
+        transcript_dir = str(tmp_path / f"transcripts-{content_hash}")
+        os.makedirs(transcript_dir, exist_ok=True)
+        exec_log_dir = str(tmp_path / f"exec-logs-{content_hash}")
+        os.makedirs(exec_log_dir, exist_ok=True)
+
+        docker = _FakeDockerClient(
+            result=ExecResult(exit_code=0, stdout="plan", stderr=""),
+            transcript_to_write=f"{transcript_dir}/dry-{uuid7()}.transcript",
+        )
+        orch = _make_orchestrator(
+            repo,
+            secrets_repo,
+            docker,
+            transcript_dir=transcript_dir,
+            exec_log_dir=exec_log_dir,
+        )
+        authenticated_client.app.state.autofix_orchestrator = orch  # type: ignore[attr-defined]
+
+        alert = _make_alert(alertname=alertname)
+        await _insert_alert(repo, alert)
+
+        with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
+            dry_result = await orch.handle_alert(alert)
+        assert dry_result is not None
+        approval_id = dry_result.approval_id
+        assert approval_id is not None
+
+        docker.result = ExecResult(exit_code=0, stdout="fixed", stderr="")
+        docker.transcript_to_write = f"{transcript_dir}/real-{uuid7()}.transcript"
+
+        with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
+            response = await authenticated_client.post(
+                f"/api/autofix/approvals/{approval_id}/approve",
+                json=credential_kwargs,
+                headers=_csrf(authenticated_client),
+            )
+        assert response.status_code == 200  # noqa: PLR2004
+        return approval_id
+
+    # Phrase path.
+    approval_phrase = await _run_one({"confirm_phrase": "approve"}, "hash-phrase")
+    rows_phrase = await repo.fetch_all(
+        text(
+            "SELECT after_json FROM audit_log WHERE what = 'autofix.approved' "
+            "AND after_json LIKE :like"
+        ),
+        {"like": f'%"approval_id": "{approval_phrase}"%'},
+    )
+    assert len(rows_phrase) == 1
+    assert json.loads(rows_phrase[0][0])["credential_type"] == "phrase"
+
+    # PIN path.
+    await _seed_pin(repo, pin="4321")
+    approval_pin = await _run_one({"confirm_pin": "4321"}, "hash-pin")
+    rows_pin = await repo.fetch_all(
+        text(
+            "SELECT after_json FROM audit_log WHERE what = 'autofix.approved' "
+            "AND after_json LIKE :like"
+        ),
+        {"like": f'%"approval_id": "{approval_pin}"%'},
+    )
+    assert len(rows_pin) == 1
+    assert json.loads(rows_pin[0][0])["credential_type"] == "pin"

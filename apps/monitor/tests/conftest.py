@@ -33,6 +33,7 @@ from homelab_monitor.kernel.cron.repository import CronRepo
 from homelab_monitor.kernel.cron.run_repository import CronRunRepository
 from homelab_monitor.kernel.db.engine import dispose_engine, get_engine
 from homelab_monitor.kernel.db.migrations import alembic_upgrade_head
+from homelab_monitor.kernel.db.repositories.app_settings_repository import AppSettingsRepository
 from homelab_monitor.kernel.db.repositories.compose_actions_repository import (
     ComposeActionsRepository,
 )
@@ -65,6 +66,7 @@ from homelab_monitor.kernel.scheduler.failure_budget import FailureBudget
 from homelab_monitor.kernel.scheduler.scheduler import Scheduler, SchedulerConfig
 from homelab_monitor.kernel.secrets.repository import AsyncSecretsRepository
 from homelab_monitor.kernel.secrets.ttl_resolver import TtlCachingSecretsResolver
+from homelab_monitor.kernel.security.pin import InProcessPinRateLimiter
 from homelab_monitor.plugins.collectors.builtin.log_stream_budget import LogStreamState
 from homelab_monitor.plugins.discoverers.cron_discoverer import CronDiscoverer
 
@@ -249,6 +251,8 @@ async def _per_test_db(  # noqa: PLR0915  # pyright: ignore[reportUnusedFunction
 
     # ---- mutable non-DB singletons (fresh per test) ----
     login_rate_limiter = InProcessLoginRateLimiter()
+    pin_rate_limiter = InProcessPinRateLimiter()
+    app_settings_repo = AppSettingsRepository(repo)
     in_memory_metrics_writer = MemoryRetainingMetricsWriter()
     prom_registry = CollectorRegistry()
     prom_writer = PrometheusRegistryWriter(prom_registry)
@@ -348,6 +352,8 @@ async def _per_test_db(  # noqa: PLR0915  # pyright: ignore[reportUnusedFunction
     state.docker_socket_client = socket_client
     # Mutable accumulating singletons (reset to fresh instances):
     state.login_rate_limiter = login_rate_limiter
+    state.pin_rate_limiter = pin_rate_limiter
+    state.app_settings_repo = app_settings_repo
     state.broker = broker
     state.in_memory_metrics_writer = in_memory_metrics_writer
     state.prom_registry = prom_registry

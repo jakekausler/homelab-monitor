@@ -11,6 +11,9 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { ConfirmPhraseDialog } from '@/components/ConfirmPhraseDialog'
+import { ConfirmPinDialog } from '@/components/ConfirmPinDialog'
+import { usePinStatus } from '@/api/security-pin'
+import { ApiError } from '@/api/client'
 import { useTriggerRunbook, type Runbook } from '@/api/runbooks'
 import { toast } from 'sonner'
 
@@ -40,19 +43,24 @@ export function RunFixDialog({ runbook, open, onOpenChange }: RunFixDialogProps)
   const [mode, setMode] = useState<'dry_run' | 'real'>('dry_run')
   const [confirmOpen, setConfirmOpen] = useState(false)
   const trigger = useTriggerRunbook()
+  const pinStatus = usePinStatus()
   const runbookName = basename(runbook.path)
   const isRisky = runbook.risk_tag === 'risky'
   const realDisabled = isRisky
+  const pinIsSet = pinStatus.data?.set === true
+  const triggerRetryAfterSeconds =
+    trigger.error instanceof ApiError ? trigger.error.retryAfterSeconds : null
+  const triggerErrorMessage = trigger.error instanceof ApiError ? trigger.error.message : null
 
   const handleSubmit = (): void => {
     if (mode === 'real') {
       setConfirmOpen(true)
       return
     }
-    doTrigger()
+    doTriggerDryRun()
   }
 
-  const doTrigger = (): void => {
+  const doTriggerDryRun = (): void => {
     trigger.mutate(
       { id: runbook.id, mode },
       {
@@ -69,8 +77,65 @@ export function RunFixDialog({ runbook, open, onOpenChange }: RunFixDialogProps)
           const apiErr = err
           const code = apiErr?.code
           const label = (code && DENIAL_REASON_LABELS[code]) ?? apiErr?.message ?? 'Trigger failed'
-          toast.error(label)
+          // Keep dialog open on 429 lockout so countdown is visible
+          if (!(err instanceof ApiError && err.retryAfterSeconds && err.retryAfterSeconds > 0)) {
+            toast.error(label)
+            setConfirmOpen(false)
+          }
+        },
+      },
+    )
+  }
+
+  const doTriggerWithPhrase = (): void => {
+    trigger.mutate(
+      { id: runbook.id, mode, confirm_phrase: runbookName },
+      {
+        onSuccess: (data) => {
+          if (data.outcome === 'dry_run_stored') {
+            toast.success(`Dry run stashed for approval (${data.approval_id ?? 'no id'})`)
+          } else if (data.outcome === 'ran') {
+            toast.success(`Real run started (${data.run_id ?? 'no id'})`)
+          }
           setConfirmOpen(false)
+          onOpenChange(false)
+        },
+        onError: (err) => {
+          const apiErr = err
+          const code = apiErr?.code
+          const label = (code && DENIAL_REASON_LABELS[code]) ?? apiErr?.message ?? 'Trigger failed'
+          // Keep dialog open on 429 lockout so countdown is visible
+          if (!(err instanceof ApiError && err.retryAfterSeconds && err.retryAfterSeconds > 0)) {
+            toast.error(label)
+            setConfirmOpen(false)
+          }
+        },
+      },
+    )
+  }
+
+  const doTriggerWithPin = (pin: string): void => {
+    trigger.mutate(
+      { id: runbook.id, mode, confirm_pin: pin },
+      {
+        onSuccess: (data) => {
+          if (data.outcome === 'dry_run_stored') {
+            toast.success(`Dry run stashed for approval (${data.approval_id ?? 'no id'})`)
+          } else if (data.outcome === 'ran') {
+            toast.success(`Real run started (${data.run_id ?? 'no id'})`)
+          }
+          setConfirmOpen(false)
+          onOpenChange(false)
+        },
+        onError: (err) => {
+          const apiErr = err
+          const code = apiErr?.code
+          const label = (code && DENIAL_REASON_LABELS[code]) ?? apiErr?.message ?? 'Trigger failed'
+          // Keep dialog open on 429 lockout so countdown is visible
+          if (!(err instanceof ApiError && err.retryAfterSeconds && err.retryAfterSeconds > 0)) {
+            toast.error(label)
+            setConfirmOpen(false)
+          }
         },
       },
     )
@@ -142,26 +207,48 @@ export function RunFixDialog({ runbook, open, onOpenChange }: RunFixDialogProps)
         </DialogContent>
       </Dialog>
 
-      <ConfirmPhraseDialog
-        open={confirmOpen}
-        onOpenChange={setConfirmOpen}
-        title={`Confirm real run of ${runbookName}`}
-        body={
-          <>
-            <p>
-              You are about to <strong>execute</strong> the runbook <code>{runbookName}</code>{' '}
-              against production.
-            </p>
-            <p>
-              Type <code>{runbookName}</code> below to confirm.
-            </p>
-          </>
-        }
-        expectedPhrase={runbookName}
-        confirmLabel="Run for real"
-        onConfirm={doTrigger}
-        isPending={trigger.isPending}
-      />
+      {pinIsSet ? (
+        <ConfirmPinDialog
+          open={confirmOpen}
+          onOpenChange={setConfirmOpen}
+          title={`Confirm real run of ${runbookName}`}
+          body={
+            <>
+              <p>
+                You are about to <strong>execute</strong> the runbook <code>{runbookName}</code>{' '}
+                against production.
+              </p>
+              <p>Enter your PIN below to confirm.</p>
+            </>
+          }
+          confirmLabel="Run for real"
+          onConfirm={doTriggerWithPin}
+          isPending={trigger.isPending}
+          errorMessage={triggerErrorMessage ?? undefined}
+          retryAfterSeconds={triggerRetryAfterSeconds ?? undefined}
+        />
+      ) : (
+        <ConfirmPhraseDialog
+          open={confirmOpen}
+          onOpenChange={setConfirmOpen}
+          title={`Confirm real run of ${runbookName}`}
+          body={
+            <>
+              <p>
+                You are about to <strong>execute</strong> the runbook <code>{runbookName}</code>{' '}
+                against production.
+              </p>
+              <p>
+                Type <code>{runbookName}</code> below to confirm.
+              </p>
+            </>
+          }
+          expectedPhrase={runbookName}
+          confirmLabel="Run for real"
+          onConfirm={doTriggerWithPhrase}
+          isPending={trigger.isPending}
+        />
+      )}
     </>
   )
 }

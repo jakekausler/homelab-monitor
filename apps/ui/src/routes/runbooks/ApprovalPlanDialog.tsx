@@ -11,7 +11,9 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { ConfirmPhraseDialog } from '@/components/ConfirmPhraseDialog'
+import { ConfirmPinDialog } from '@/components/ConfirmPinDialog'
 import { ApiError } from '@/api/client'
+import { usePinStatus } from '@/api/security-pin'
 import { useApprovalPlan, useApproveApproval, useRejectApproval } from '@/api/runbooks'
 
 interface ApprovalPlanDialogProps {
@@ -33,6 +35,8 @@ export function friendlyApproveError(err: unknown): string {
       return 'This approval is no longer pending.'
     case 'rate_limit':
       return 'reason: rate limit exceeded'
+    case 'too_many_requests':
+      return '' // ConfirmPinDialog renders its own friendly lockout copy
     case 'cooldown':
       return 'reason: cooldown active'
     case 'already_running':
@@ -57,6 +61,7 @@ export function ApprovalPlanDialog({
   const plan = useApprovalPlan(approvalId)
   const approve = useApproveApproval()
   const reject = useRejectApproval()
+  const pinStatus = usePinStatus()
 
   const handleReject = (): void => {
     if (approvalId === null) return
@@ -70,7 +75,7 @@ export function ApprovalPlanDialog({
     )
   }
 
-  const handleApproveConfirmed = (): void => {
+  const handleApproveWithPhrase = (): void => {
     if (approvalId === null) return
     approve.mutate(
       { approvalId, confirm_phrase: 'approve' },
@@ -83,9 +88,25 @@ export function ApprovalPlanDialog({
     )
   }
 
+  const handleApproveWithPin = (pin: string): void => {
+    if (approvalId === null) return
+    approve.mutate(
+      { approvalId, confirm_pin: pin },
+      {
+        onSuccess: () => {
+          setConfirmOpen(false)
+          onClose()
+        },
+      },
+    )
+  }
+
   const dialogOpen = approvalId !== null
   const rejectError = reject.error !== null ? friendlyApproveError(reject.error) : null
   const approveError = approve.error !== null ? friendlyApproveError(approve.error) : null
+  const pinIsSet = pinStatus.data?.set === true
+  const approveRetryAfterSeconds =
+    approve.error instanceof ApiError ? approve.error.retryAfterSeconds : null
 
   return (
     <>
@@ -198,17 +219,31 @@ export function ApprovalPlanDialog({
         </DialogContent>
       </Dialog>
 
-      <ConfirmPhraseDialog
-        open={confirmOpen}
-        onOpenChange={setConfirmOpen}
-        title="Approve auto-fix run"
-        body="This will execute the runbook against the real target. Type approve to confirm."
-        expectedPhrase="approve"
-        confirmLabel="Approve"
-        onConfirm={handleApproveConfirmed}
-        isPending={approve.isPending}
-        errorMessage={approveError ?? undefined}
-      />
+      {pinIsSet ? (
+        <ConfirmPinDialog
+          open={confirmOpen}
+          onOpenChange={setConfirmOpen}
+          title="Approve auto-fix run"
+          body="This will execute the runbook against the real target. Enter your PIN to confirm."
+          confirmLabel="Approve"
+          onConfirm={handleApproveWithPin}
+          isPending={approve.isPending}
+          errorMessage={approveError ?? undefined}
+          retryAfterSeconds={approveRetryAfterSeconds ?? undefined}
+        />
+      ) : (
+        <ConfirmPhraseDialog
+          open={confirmOpen}
+          onOpenChange={setConfirmOpen}
+          title="Approve auto-fix run"
+          body="This will execute the runbook against the real target. Type approve to confirm."
+          expectedPhrase="approve"
+          confirmLabel="Approve"
+          onConfirm={handleApproveWithPhrase}
+          isPending={approve.isPending}
+          errorMessage={approveError ?? undefined}
+        />
+      )}
     </>
   )
 }

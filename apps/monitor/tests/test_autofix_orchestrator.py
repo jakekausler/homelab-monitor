@@ -6161,6 +6161,40 @@ async def test_operator_trigger_kill_switch_denied(
 
 
 @pytest.mark.asyncio
+async def test_operator_trigger_kill_switch_denied_with_credential_type(
+    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository
+) -> None:
+    """Kill-switch denial audit includes credential_type when the caller passes one.
+
+    Mirrors test_operator_trigger_kill_switch_denied, but exercises the
+    `credential_type` conditional-add in _deny_operator (orchestrator.py
+    ~1750-1751) via a RunMode.REAL trigger with credential_type="phrase".
+    """
+    rb = _make_runbook_record(alertname="TestAlert")
+    await _insert_runbook(repo, rb)
+
+    docker = _FakeDockerClient()
+    orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+
+    result = await orch.handle_operator_trigger(
+        rb.id,
+        RunMode.REAL,
+        principal="alice",
+        ip="10.0.0.1",
+        credential_type="phrase",
+    )
+    assert result.outcome == RunOutcome.DENIED
+    assert result.denial_reason == DenialReason.KILL_SWITCH
+
+    audit = await repo.fetch_one(
+        text("SELECT after_json FROM audit_log WHERE what = 'autofix.denied'"), {}
+    )
+    assert audit is not None
+    after = json.loads(str(audit[0]))
+    assert after["credential_type"] == "phrase"
+
+
+@pytest.mark.asyncio
 async def test_operator_trigger_disabled_runbook(
     repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository
 ) -> None:
@@ -6227,6 +6261,49 @@ async def test_operator_trigger_cooldown(
         )
     assert result.outcome == RunOutcome.DENIED
     assert result.denial_reason == DenialReason.COOLDOWN
+
+
+@pytest.mark.asyncio
+async def test_operator_trigger_in_lock_denial_audit_includes_credential_type(
+    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository
+) -> None:
+    """In-lock ALREADY_RUNNING denial (_claim_and_exec, not the fast-path lock
+    check) audits credential_type when the operator trigger supplied one.
+
+    Forces the in-lock gate (not the fast `_lock_for(...).locked()` check used
+    by test_operator_trigger_already_running) by patching count_inflight, per
+    the pattern in test_execute_approved_claim_denies_no_real_run_id_set.
+    Exercises orchestrator.py's _claim_and_exec in_lock_denial branch
+    (~lines 580-581) where credential_type is conditionally added to
+    denied_after.
+    """
+    rb = _make_runbook_record(alertname="TestAlert")
+    await _insert_runbook(repo, rb)
+
+    app_settings = AppSettingsRepository(repo)
+    await app_settings.set("autofix_enabled", "true")
+
+    docker = _FakeDockerClient()
+    orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+
+    with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=5)):
+        result = await orch.handle_operator_trigger(
+            rb.id,
+            RunMode.REAL,
+            principal="alice",
+            ip="10.0.0.1",
+            credential_type="pin",
+        )
+
+    assert result.outcome == RunOutcome.DENIED
+    assert result.denial_reason == DenialReason.ALREADY_RUNNING
+
+    audit = await repo.fetch_one(
+        text("SELECT after_json FROM audit_log WHERE what = 'autofix.denied'"), {}
+    )
+    assert audit is not None
+    after = json.loads(str(audit[0]))
+    assert after["credential_type"] == "pin"
 
 
 @pytest.mark.asyncio
@@ -6579,3 +6656,246 @@ async def test_operator_trigger_ran_audit_who_is_principal(
     audit = await repo.fetch_one(text("SELECT who FROM audit_log WHERE what = 'autofix.ran'"), {})
     assert audit is not None
     assert str(audit[0]) == "carol"
+
+
+# ---------------------------------------------------------------------------
+# execute_approved: credential_type in audit (STAGE-009-010B)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_execute_approved_runbook_deleted_credential_type_in_audit(
+    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+) -> None:
+    """When executing an approval for a deleted runbook, audit row includes
+    credential_type that was used for the approve operation.
+
+    Covers orchestrator.py:962 branch (runbook_missing gate).
+    """
+    rb = _make_runbook_record(
+        alertname="TestAlert", runbook_dir=tmp_path / "runbook", content_hash="h-v1"
+    )
+    await _insert_runbook(repo, rb)
+    alert = _make_alert(alertname="TestAlert")
+    await _insert_alert(repo, alert)
+
+    docker = _FakeDockerClient(result=ExecResult(exit_code=0, stdout="plan", stderr=""))
+    orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+
+    # Create a dry run and approval.
+    runs_repo = RunbookRunsRepository(repo)
+    async with repo.transaction() as conn:
+        dry_run_id = await runs_repo.insert_started(
+            conn,
+            runbook_id=rb.id,
+            alert_id=alert.id,
+            prompt=rb.path,
+            fixer_user="homelab-fixer",
+            host="testhost",
+            runbook_hash=rb.content_hash,
+            mode=RunMode.DRY_RUN,
+            initiated_by="alert",
+        )
+
+    approvals_repo = RunbookRunApprovalsRepository(repo)
+    async with repo.transaction() as conn:
+        approval_id = await approvals_repo.insert_pending(
+            conn,
+            dry_run_id=dry_run_id,
+            runbook_id=rb.id,
+            alert_id=alert.id,
+            pinned_runbook_hash=rb.content_hash,
+        )
+
+    # Simulate runbook DELETED between plan and approve. We can't actually
+    # DELETE the runbook row (FK from runbook_runs blocks it), so patch
+    # RunbookRepo.get_runbook to return None — which is precisely what
+    # execute_approved's drift check sees when the row is gone.
+
+    # Execute with credential_type="pin".
+    with patch.object(RunbookRepo, "get_runbook", new=AsyncMock(return_value=None)):
+        await orch.execute_approved(
+            approval_id, principal="admin", ip="127.0.0.1", credential_type="pin"
+        )
+
+    # Check the audit row for credential_type and gate.
+    audit_rows = await repo.fetch_all(
+        text("SELECT after_json FROM audit_log WHERE what = :w"),
+        {"w": "autofix.rejected"},
+    )
+    assert len(audit_rows) >= 1
+    # Find the row matching this approval_id
+    for row in audit_rows:
+        after = json.loads(row[0])
+        if after.get("approval_id") == approval_id:
+            assert after["credential_type"] == "pin"
+            assert after["gate"] == "runbook_missing"
+            return
+    pytest.fail(f"No autofix.rejected audit row found for approval {approval_id}")
+
+
+@pytest.mark.asyncio
+async def test_execute_approved_runbook_changed_credential_type_in_audit(
+    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+) -> None:
+    """When executing an approval where the runbook's content_hash has changed,
+    audit row includes the credential_type used for the approve operation.
+
+    Covers orchestrator.py:996 branch (runbook_changed gate).
+    """
+    rb = _make_runbook_record(
+        alertname="TestAlert", runbook_dir=tmp_path / "runbook", content_hash="hash-a"
+    )
+    await _insert_runbook(repo, rb)
+    alert = _make_alert(alertname="TestAlert")
+    await _insert_alert(repo, alert)
+
+    docker = _FakeDockerClient(result=ExecResult(exit_code=0, stdout="plan", stderr=""))
+    orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+
+    # Create a dry run and approval with the original hash.
+    runs_repo = RunbookRunsRepository(repo)
+    async with repo.transaction() as conn:
+        dry_run_id = await runs_repo.insert_started(
+            conn,
+            runbook_id=rb.id,
+            alert_id=alert.id,
+            prompt=rb.path,
+            fixer_user="homelab-fixer",
+            host="testhost",
+            runbook_hash="hash-a",
+            mode=RunMode.DRY_RUN,
+            initiated_by="alert",
+        )
+
+    approvals_repo = RunbookRunApprovalsRepository(repo)
+    async with repo.transaction() as conn:
+        approval_id = await approvals_repo.insert_pending(
+            conn,
+            dry_run_id=dry_run_id,
+            runbook_id=rb.id,
+            alert_id=alert.id,
+            pinned_runbook_hash="hash-a",
+        )
+
+    # Update the runbook's content_hash to trigger the runbook_changed gate.
+    async with repo.transaction() as conn:
+        await conn.execute(
+            text("UPDATE runbooks SET content_hash = :hash WHERE id = :id"),
+            {"hash": "hash-b", "id": rb.id},
+        )
+
+    # Execute with credential_type="phrase".
+    await orch.execute_approved(
+        approval_id, principal="admin", ip="127.0.0.1", credential_type="phrase"
+    )
+
+    # Check the audit row for credential_type and gate.
+    audit_rows = await repo.fetch_all(
+        text("SELECT after_json FROM audit_log WHERE what = :w"),
+        {"w": "autofix.rejected"},
+    )
+    assert len(audit_rows) >= 1
+    # Find the row matching this approval_id
+    for row in audit_rows:
+        after = json.loads(row[0])
+        if after.get("approval_id") == approval_id:
+            assert after["credential_type"] == "phrase"
+            assert after["gate"] == "runbook_changed"
+            return
+    pytest.fail(f"No autofix.rejected audit row found for approval {approval_id}")
+
+
+@pytest.mark.asyncio
+async def test_execute_approved_happy_path_audit_includes_credential_type(
+    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+) -> None:
+    """Happy-path execute_approved with credential_type includes it in both
+    autofix.approved and autofix.ran audit rows.
+
+    Covers orchestrator.py:1084 (approval audit) and orchestrator.py:1583
+    (ran audit) on the success path where both branches execute.
+    """
+    rb = _make_runbook_record(
+        alertname="TestAlert",
+        dry_run_required=True,
+        content_hash="hash-v1",
+        runbook_dir=tmp_path / "runbook",
+    )
+    await _insert_runbook(repo, rb)
+    alert = _make_alert(alertname="TestAlert")
+    await _insert_alert(repo, alert)
+
+    app_settings = AppSettingsRepository(repo)
+    await app_settings.set("autofix_enabled", "true")
+
+    transcript_dir = str(tmp_path / "transcripts")
+    os.makedirs(transcript_dir, exist_ok=True)
+    exec_log_dir = str(tmp_path / "exec-logs")
+    os.makedirs(exec_log_dir, exist_ok=True)
+
+    docker = _FakeDockerClient(
+        result=ExecResult(exit_code=0, stdout="plan", stderr=""),
+        transcript_to_write=f"{transcript_dir}/dry-{uuid7()}.transcript",
+    )
+    orch = _make_orchestrator(
+        repo,
+        secrets_repo_fixture,
+        docker,
+        transcript_dir=transcript_dir,
+        exec_log_dir=exec_log_dir,
+    )
+
+    # Create a dry run and approval via handle_alert
+    with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
+        dry_result = await orch.handle_alert(alert)
+    assert dry_result is not None
+    approval_id = dry_result.approval_id
+    assert approval_id is not None
+
+    # Execute approved with credential_type="pin"
+    docker.result = ExecResult(exit_code=0, stdout="fixed", stderr="")
+    docker.transcript_to_write = f"{transcript_dir}/real-{uuid7()}.transcript"
+
+    with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
+        result = await orch.execute_approved(
+            approval_id, principal="admin", ip="1.2.3.4", credential_type="pin"
+        )
+
+    assert result is not None
+    assert result.ran is True
+    assert result.run_id is not None
+
+    # Check autofix.approved audit includes credential_type
+    approved_rows = await repo.fetch_all(
+        text("SELECT after_json FROM audit_log WHERE what = :w"),
+        {"w": "autofix.approved"},
+    )
+    assert len(approved_rows) >= 1
+    approved_found = False
+    for row in approved_rows:
+        after = json.loads(row[0])
+        if after.get("approval_id") == approval_id:
+            assert after["credential_type"] == "pin", (
+                f"Expected credential_type='pin' in autofix.approved audit, got {after}"
+            )
+            approved_found = True
+            break
+    assert approved_found, f"No autofix.approved audit found for approval {approval_id}"
+
+    # Check autofix.ran audit includes credential_type
+    ran_rows = await repo.fetch_all(
+        text("SELECT after_json FROM audit_log WHERE what = :w"),
+        {"w": "autofix.ran"},
+    )
+    assert len(ran_rows) >= 1
+    ran_found = False
+    for row in ran_rows:
+        after = json.loads(row[0])
+        if after.get("run_id") == result.run_id:
+            assert after["credential_type"] == "pin", (
+                f"Expected credential_type='pin' in autofix.ran audit, got {after}"
+            )
+            ran_found = True
+            break
+    assert ran_found, f"No autofix.ran audit found for run {result.run_id}"

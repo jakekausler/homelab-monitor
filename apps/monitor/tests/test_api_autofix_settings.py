@@ -29,6 +29,7 @@ from homelab_monitor.kernel.db.repositories.app_settings_repository import (
 from homelab_monitor.kernel.db.repository import SqliteRepository
 from homelab_monitor.kernel.docker.socket_client import DockerSocketConnectionError
 from homelab_monitor.kernel.secrets.repository import AsyncSecretsRepository
+from homelab_monitor.kernel.security.pin import PIN_HASH_KEY, hash_pin
 
 # Cross-file helper reuse — established idiom in this codebase (see
 # tests/test_api_autofix.py's import of the same helpers).
@@ -129,12 +130,19 @@ async def test_toggle_missing_csrf_403(authenticated_client: AsyncClient) -> Non
 
 
 @pytest.mark.asyncio
-async def test_toggle_missing_confirm_phrase_422(
+async def test_toggle_transition_missing_credential_returns_400(
     authenticated_client: AsyncClient,
     repo: SqliteRepository,
     secrets_repo: AsyncSecretsRepository,
 ) -> None:
-    """5: POST without confirm_phrase field -> 422 (Pydantic required field)."""
+    """Toggling enabled state requires a credential; transition without one -> 400.
+
+    Seed autofix_enabled=true, then attempt to disable (a transition) without
+    confirm_phrase or confirm_pin -> 400 invalid_input.
+    """
+    app_settings = AppSettingsRepository(repo)
+    await app_settings.set("autofix_enabled", "true")
+
     docker = _FakeDockerClient()
     orch = _make_orchestrator(repo, secrets_repo, docker)
     authenticated_client.app.state.autofix_orchestrator = orch  # type: ignore[attr-defined]
@@ -144,7 +152,8 @@ async def test_toggle_missing_confirm_phrase_422(
         json={"enabled": False},
         headers=_csrf(authenticated_client),
     )
-    assert response.status_code == 422  # noqa: PLR2004
+    assert response.status_code == 400  # noqa: PLR2004
+    assert response.json()["error"]["code"] == "invalid_input"
 
 
 @pytest.mark.asyncio
@@ -311,7 +320,7 @@ async def test_toggle_off_to_on_no_kill_inflight_returns_200_and_audits(
     before = json.loads(str(toggled[0][0]))
     after = json.loads(str(toggled[0][1]))
     assert before == {"enabled": False}
-    assert after == {"enabled": True}
+    assert after == {"enabled": True, "credential_type": "phrase"}
 
     killed_rows = await repo.fetch_all(
         text("SELECT what FROM audit_log WHERE what = 'autofix.killed'"), {}
@@ -509,3 +518,89 @@ async def test_get_kill_switch_disabled_state(
     data = response.json()
     assert data["enabled"] is False
     assert data["updated_at"] is None
+
+
+# ---------------------------------------------------------------------------
+# STAGE-009-010B: confirm_pin as an alternative to confirm_phrase
+# ---------------------------------------------------------------------------
+
+
+async def _seed_pin(repo: SqliteRepository, pin: str = "1234") -> None:
+    """Seed a PIN hash directly via app_settings (bypassing the security_pin router)."""
+    app_settings = AppSettingsRepository(repo)
+    await app_settings.set(PIN_HASH_KEY, hash_pin(pin, cost=4))
+
+
+@pytest.mark.asyncio
+async def test_kill_switch_pin_success(
+    authenticated_client: AsyncClient,
+    repo: SqliteRepository,
+    secrets_repo: AsyncSecretsRepository,
+) -> None:
+    """A PIN configured + correct confirm_pin toggles the kill switch."""
+    await _seed_pin(repo, pin="1234")
+    app_settings = AppSettingsRepository(repo)
+    await app_settings.set("autofix_enabled", "true")
+
+    docker = _FakeDockerClient()
+    orch = _make_orchestrator(repo, secrets_repo, docker)
+    authenticated_client.app.state.autofix_orchestrator = orch  # type: ignore[attr-defined]
+
+    response = await authenticated_client.post(
+        _URL,
+        json={"enabled": False, "confirm_pin": "1234"},
+        headers=_csrf(authenticated_client),
+    )
+    assert response.status_code == 200  # noqa: PLR2004
+    assert response.json()["enabled"] is False
+
+
+@pytest.mark.asyncio
+async def test_kill_switch_audit_includes_credential_type(
+    authenticated_client: AsyncClient,
+    repo: SqliteRepository,
+    secrets_repo: AsyncSecretsRepository,
+) -> None:
+    """autofix.kill_switch_toggled after_json contains credential_type for
+    both the phrase path and the pin path."""
+    docker = _FakeDockerClient()
+    orch = _make_orchestrator(repo, secrets_repo, docker)
+    authenticated_client.app.state.autofix_orchestrator = orch  # type: ignore[attr-defined]
+
+    # Phrase path: on->off.
+    app_settings = AppSettingsRepository(repo)
+    await app_settings.set("autofix_enabled", "true")
+    resp_phrase = await authenticated_client.post(
+        _URL,
+        json={"enabled": False, "confirm_phrase": "disable auto-fix"},
+        headers=_csrf(authenticated_client),
+    )
+    assert resp_phrase.status_code == 200  # noqa: PLR2004
+
+    rows_phrase = await repo.fetch_all(
+        text("SELECT after_json FROM audit_log WHERE what = 'autofix.kill_switch_toggled'"),
+        {},
+    )
+    assert len(rows_phrase) == 1
+    after_phrase = json.loads(rows_phrase[0][0])
+    assert after_phrase == {"enabled": False, "credential_type": "phrase"}
+
+    # PIN path: off->on.
+    await _seed_pin(repo, pin="1234")
+    resp_pin = await authenticated_client.post(
+        _URL,
+        json={"enabled": True, "confirm_pin": "1234"},
+        headers=_csrf(authenticated_client),
+    )
+    assert resp_pin.status_code == 200  # noqa: PLR2004
+
+    rows_pin = await repo.fetch_all(
+        text(
+            "SELECT after_json FROM audit_log WHERE what = 'autofix.kill_switch_toggled' "
+            'ORDER BY "when"'
+        ),
+        {},
+    )
+    assert len(rows_pin) == 2  # noqa: PLR2004
+    after_pin = json.loads(rows_pin[1][0])
+    assert after_pin == {"enabled": True, "credential_type": "pin"}

@@ -363,7 +363,7 @@ describe('useDeleteSavedLogQuery', () => {
   it('calls DELETE /api/logs/saved-queries/{query_id} and resolves void on 204', async () => {
     vi.mocked(apiClient.DELETE).mockResolvedValue({
       response: fakeResponse(204),
-    } as unknown as Awaited<ReturnType<typeof apiClient.DELETE>>)
+    })
 
     const { result } = renderHook(() => useDeleteSavedLogQuery(), {
       wrapper: makeWrapper(),

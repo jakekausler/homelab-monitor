@@ -162,7 +162,7 @@ describe('useDeleteAnnotation', () => {
   it('calls DELETE with correct path params and handles 204', async () => {
     vi.mocked(apiClient.DELETE).mockResolvedValue({
       response: fakeResponse(204),
-    } as unknown as Awaited<ReturnType<typeof apiClient.DELETE>>)
+    })
 
     const { result } = renderHook(() => useDeleteAnnotation(), {
       wrapper: makeWrapper(),

@@ -111,14 +111,14 @@ export function useApprovalPlan(approvalId: string | null): UseQueryResult<Appro
 export function useApproveApproval(): UseMutationResult<
   ApproveResponse,
   ApiError,
-  { approvalId: string; confirm_phrase: string }
+  { approvalId: string; confirm_phrase?: string; confirm_pin?: string }
 > {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: async ({ approvalId, confirm_phrase }) => {
+    mutationFn: async ({ approvalId, confirm_phrase, confirm_pin }) => {
       const result = await apiClient.POST('/api/autofix/approvals/{approval_id}/approve', {
         params: { path: { approval_id: approvalId } },
-        body: { confirm_phrase },
+        body: { confirm_phrase: confirm_phrase ?? null, confirm_pin: confirm_pin ?? null },
       })
       return unwrap<ApproveResponse>(result)
     },
@@ -155,14 +155,23 @@ export type TriggerResponse = Schema<'TriggerResponse'>
 export function useTriggerRunbook(): UseMutationResult<
   TriggerResponse,
   ApiError,
-  { id: string; mode: 'dry_run' | 'real' }
+  { id: string; mode: 'dry_run' | 'real'; confirm_phrase?: string; confirm_pin?: string }
 > {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: async (variables: { id: string; mode: 'dry_run' | 'real' }) => {
+    mutationFn: async (variables: {
+      id: string
+      mode: 'dry_run' | 'real'
+      confirm_phrase?: string
+      confirm_pin?: string
+    }) => {
       const result = await apiClient.POST('/api/runbooks/{runbook_id}/trigger', {
         params: { path: { runbook_id: variables.id } },
-        body: { mode: variables.mode },
+        body: {
+          mode: variables.mode,
+          confirm_phrase: variables.confirm_phrase ?? null,
+          confirm_pin: variables.confirm_pin ?? null,
+        },
       })
       return unwrap(result)
     },

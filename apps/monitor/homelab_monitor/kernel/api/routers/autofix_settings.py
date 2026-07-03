@@ -19,7 +19,12 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import text
 
-from homelab_monitor.kernel.api.dependencies import get_repo, require_session
+from homelab_monitor.kernel.api.dependencies import (
+    get_app_settings,
+    get_pin_rate_limiter,
+    get_repo,
+    require_session,
+)
 from homelab_monitor.kernel.api.routers.autofix import get_orchestrator
 from homelab_monitor.kernel.auth.models import User
 from homelab_monitor.kernel.autofix.orchestrator import AutoFixOrchestrator
@@ -29,6 +34,11 @@ from homelab_monitor.kernel.db.repositories.app_settings_repository import (
 )
 from homelab_monitor.kernel.db.repository import SqliteRepository
 from homelab_monitor.kernel.docker.socket_client import DockerSocketError
+from homelab_monitor.kernel.security.pin import (
+    InProcessPinRateLimiter,
+    PhraseMatchMode,
+    verify_destructive_credential,
+)
 
 router = APIRouter(prefix="/settings/autofix", tags=["settings"])
 
@@ -65,7 +75,8 @@ class KillSwitchToggleRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool
-    confirm_phrase: str
+    confirm_phrase: str | None = None
+    confirm_pin: str | None = None
 
 
 class KillSwitchToggleResponse(BaseModel):
@@ -107,11 +118,12 @@ async def toggle_kill_switch(  # noqa: PLR0913 -- FastAPI Depends parameters
     repo: Annotated[AppSettingsRepository, Depends(_get_app_settings_repo)],
     db: Annotated[SqliteRepository, Depends(get_repo)],
     orchestrator: Annotated[AutoFixOrchestrator, Depends(get_orchestrator)],
+    app_settings: Annotated[AppSettingsRepository, Depends(get_app_settings)],
+    pin_rate_limiter: Annotated[InProcessPinRateLimiter, Depends(get_pin_rate_limiter)],
 ) -> KillSwitchToggleResponse:
     current_value = await repo.get(_AUTOFIX_ENABLED_KEY)
     current_enabled = _is_truthy(current_value)
     target_enabled = payload.enabled
-    submitted = payload.confirm_phrase.strip().lower()
     ip = _client_ip(request)
 
     # No-op: state already matches. Return current state WITHOUT auditing —
@@ -130,11 +142,15 @@ async def toggle_kill_switch(  # noqa: PLR0913 -- FastAPI Depends parameters
 
     # Transition. Pick the phrase for THIS direction.
     expected_phrase = _DISABLE_PHRASE if current_enabled else _ENABLE_PHRASE
-    if submitted != expected_phrase.strip().lower():
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"confirm_phrase must equal '{expected_phrase}'",
-        )
+    credential_type = await verify_destructive_credential(
+        confirm_pin=payload.confirm_pin,
+        confirm_phrase=payload.confirm_phrase,
+        expected_phrase=expected_phrase,
+        phrase_match_mode=PhraseMatchMode.CASE_FOLD,
+        user=user,
+        app_settings=app_settings,  # type: ignore[arg-type]
+        rate_limiter=pin_rate_limiter,  # type: ignore[arg-type]
+    )
 
     # Persist the flag flip.
     await repo.set(_AUTOFIX_ENABLED_KEY, "true" if target_enabled else "false")
@@ -144,7 +160,7 @@ async def toggle_kill_switch(  # noqa: PLR0913 -- FastAPI Depends parameters
             who=user.username,
             what="autofix.kill_switch_toggled",
             before={"enabled": current_enabled},
-            after={"enabled": target_enabled},
+            after={"enabled": target_enabled, "credential_type": credential_type},
             ip=ip,
         )
 

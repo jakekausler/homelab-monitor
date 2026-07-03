@@ -227,6 +227,32 @@ def get_rate_limiter(request: Request) -> LoginRateLimiter:
     )
 
 
+def get_pin_rate_limiter(request: Request) -> Any:  # noqa: ANN401
+    """Get the PIN rate limiter (InProcessPinRateLimiter) from app state.
+
+    Returns the limiter for session-PIN verification throttling.
+    """
+    return _require_state(
+        request,
+        attr="pin_rate_limiter",
+        code="auth_unavailable",
+        message="pin rate limiter is not initialized",
+    )
+
+
+def get_app_settings(request: Request) -> Any:  # noqa: ANN401
+    """Get the app settings repository (AppSettingsRepository) from app state.
+
+    Returns the repository for key/value settings access.
+    """
+    return _require_state(
+        request,
+        attr="app_settings_repo",
+        code="settings_unavailable",
+        message="app settings repository is not initialized",
+    )
+
+
 def get_master_key(request: Request) -> bytes:
     """Get the master key from app state (used by login route to mint cookies)."""
     return _require_state(

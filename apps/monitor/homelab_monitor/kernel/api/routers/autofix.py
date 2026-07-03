@@ -11,10 +11,15 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, ConfigDict
 
-from homelab_monitor.kernel.api.dependencies import get_repo, require_session
+from homelab_monitor.kernel.api.dependencies import (
+    get_app_settings,
+    get_pin_rate_limiter,
+    get_repo,
+    require_session,
+)
 from homelab_monitor.kernel.api.errors import (
     ConflictProblem,
     DependencyUnavailableProblem,
@@ -27,8 +32,16 @@ from homelab_monitor.kernel.autofix.approvals_repository import (
 )
 from homelab_monitor.kernel.autofix.orchestrator import AutoFixOrchestrator
 from homelab_monitor.kernel.autofix.types import DenialReason, RunOutcome
+from homelab_monitor.kernel.db.repositories.app_settings_repository import (
+    AppSettingsRepository,
+)
 from homelab_monitor.kernel.db.repository import SqliteRepository
 from homelab_monitor.kernel.runbooks.repository import RunbookRepo
+from homelab_monitor.kernel.security.pin import (
+    InProcessPinRateLimiter,
+    PhraseMatchMode,
+    verify_destructive_credential,
+)
 
 router = APIRouter(prefix="/autofix", tags=["autofix"])
 
@@ -100,7 +113,8 @@ class PlanResponse(BaseModel):
 class ApproveRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    confirm_phrase: str
+    confirm_phrase: str | None = None
+    confirm_pin: str | None = None
 
 
 class RejectRequest(BaseModel):
@@ -194,15 +208,21 @@ async def approve(  # noqa: PLR0913 -- FastAPI Depends parameters
     user: Annotated[User, Depends(require_session())],
     approvals: Annotated[RunbookRunApprovalsRepository, Depends(get_approvals_repo)],
     orchestrator: Annotated[AutoFixOrchestrator, Depends(get_orchestrator)],
+    app_settings: Annotated[AppSettingsRepository, Depends(get_app_settings)],
+    pin_rate_limiter: Annotated[InProcessPinRateLimiter, Depends(get_pin_rate_limiter)],
 ) -> ApproveResponse:
     # N1: exact string equality (no strip / no case-fold). The confirm phrase is
     # a deliberate friction gate on a destructive action — variants like
     # 'APPROVE' or ' approve ' are rejected.
-    if payload.confirm_phrase != _APPROVE_CONFIRM_PHRASE:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"confirm_phrase must equal '{_APPROVE_CONFIRM_PHRASE}'",
-        )
+    credential_type = await verify_destructive_credential(
+        confirm_pin=payload.confirm_pin,
+        confirm_phrase=payload.confirm_phrase,
+        expected_phrase=_APPROVE_CONFIRM_PHRASE,
+        phrase_match_mode=PhraseMatchMode.EXACT,
+        user=user,
+        app_settings=app_settings,  # type: ignore[arg-type]
+        rate_limiter=pin_rate_limiter,  # type: ignore[arg-type]
+    )
     approval = await approvals.get(approval_id)
     if approval is None:
         raise NotFoundProblem(message=f"approval {approval_id} not found")
@@ -215,7 +235,10 @@ async def approve(  # noqa: PLR0913 -- FastAPI Depends parameters
     # owned by the orchestrator. The router only maps the denial_reason of the
     # returned RunResult to the right HTTP response.
     result = await orchestrator.execute_approved(
-        approval_id, principal=user.username, ip=_client_ip(request)
+        approval_id,
+        principal=user.username,
+        ip=_client_ip(request),
+        credential_type=credential_type,
     )
     if result.outcome == RunOutcome.DENIED:
         reason = result.denial_reason

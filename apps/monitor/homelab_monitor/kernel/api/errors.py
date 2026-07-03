@@ -275,8 +275,14 @@ async def _handle_http_exception(request: Request, exc: Exception) -> JSONRespon
     # Preserve dict-shaped details (FastAPI validation errors); coerce string
     # detail into the message field.
     if isinstance(exc.detail, dict):
-        return envelope_response(exc.status_code, code, code, exc.detail)
-    return envelope_response(exc.status_code, code, str(exc.detail) if exc.detail else "")
+        response = envelope_response(exc.status_code, code, code, exc.detail)
+    else:
+        response = envelope_response(exc.status_code, code, str(exc.detail) if exc.detail else "")
+    exc_headers = getattr(exc, "headers", None)
+    if exc_headers:
+        for k, v in exc_headers.items():
+            response.headers[k] = v
+    return response
 
 
 def _make_dependency_unavailable_handler(

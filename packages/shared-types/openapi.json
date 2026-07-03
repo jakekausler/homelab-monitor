@@ -520,13 +520,28 @@
         "additionalProperties": false,
         "properties": {
           "confirm_phrase": {
-            "title": "Confirm Phrase",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confirm Phrase"
+          },
+          "confirm_pin": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confirm Pin"
           }
         },
-        "required": [
-          "confirm_phrase"
-        ],
         "title": "ApproveRequest",
         "type": "object"
       },
@@ -2679,6 +2694,35 @@
         "title": "CrontabDiffOut",
         "type": "object"
       },
+      "DeletePinRequest": {
+        "additionalProperties": false,
+        "description": "Request body for DELETE /pin.",
+        "properties": {
+          "current_password": {
+            "title": "Current Password",
+            "type": "string"
+          }
+        },
+        "required": [
+          "current_password"
+        ],
+        "title": "DeletePinRequest",
+        "type": "object"
+      },
+      "DeletePinResponse": {
+        "description": "Response for DELETE /pin.",
+        "properties": {
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "title": "DeletePinResponse",
+        "type": "object"
+      },
       "DiskRow": {
         "properties": {
           "disk": {
@@ -4558,8 +4602,26 @@
         "additionalProperties": false,
         "properties": {
           "confirm_phrase": {
-            "title": "Confirm Phrase",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confirm Phrase"
+          },
+          "confirm_pin": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confirm Pin"
           },
           "enabled": {
             "title": "Enabled",
@@ -4567,8 +4629,7 @@
           }
         },
         "required": [
-          "enabled",
-          "confirm_phrase"
+          "enabled"
         ],
         "title": "KillSwitchToggleRequest",
         "type": "object"
@@ -6341,6 +6402,20 @@
         "title": "PiholeVersionInfo",
         "type": "object"
       },
+      "PinStatusResponse": {
+        "description": "PIN status response.",
+        "properties": {
+          "set": {
+            "title": "Set",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "set"
+        ],
+        "title": "PinStatusResponse",
+        "type": "object"
+      },
       "PlanResponse": {
         "properties": {
           "approval_id": {
@@ -7410,6 +7485,63 @@
           "count"
         ],
         "title": "ServiceCount",
+        "type": "object"
+      },
+      "SetPinRequest": {
+        "additionalProperties": false,
+        "description": "Request body for POST /pin (set or rotate).",
+        "properties": {
+          "current_password": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Password"
+          },
+          "current_pin": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Pin"
+          },
+          "new_pin": {
+            "pattern": "^[0-9]{4,12}$",
+            "title": "New Pin",
+            "type": "string"
+          }
+        },
+        "required": [
+          "new_pin"
+        ],
+        "title": "SetPinRequest",
+        "type": "object"
+      },
+      "SetPinResponse": {
+        "description": "Response for POST /pin.",
+        "properties": {
+          "rotated": {
+            "title": "Rotated",
+            "type": "boolean"
+          },
+          "set": {
+            "title": "Set",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "set",
+          "rotated"
+        ],
+        "title": "SetPinResponse",
         "type": "object"
       },
       "Severity": {
@@ -8519,6 +8651,28 @@
       "TriggerRequest": {
         "additionalProperties": false,
         "properties": {
+          "confirm_phrase": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confirm Phrase"
+          },
+          "confirm_pin": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confirm Pin"
+          },
           "mode": {
             "enum": [
               "dry_run",
@@ -10263,6 +10417,36 @@
           "type"
         ],
         "title": "ValidationError",
+        "type": "object"
+      },
+      "VerifyPinRequest": {
+        "additionalProperties": false,
+        "description": "Request body for POST /pin/verify.",
+        "properties": {
+          "pin": {
+            "pattern": "^[0-9]{4,12}$",
+            "title": "Pin",
+            "type": "string"
+          }
+        },
+        "required": [
+          "pin"
+        ],
+        "title": "VerifyPinRequest",
+        "type": "object"
+      },
+      "VerifyPinResponse": {
+        "description": "Response for POST /pin/verify.",
+        "properties": {
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "title": "VerifyPinResponse",
         "type": "object"
       },
       "VersionResponse": {
@@ -16875,6 +17059,154 @@
           }
         },
         "summary": "Patch Logs Retention"
+      }
+    },
+    "/api/settings/security/pin": {
+      "delete": {
+        "description": "Delete PIN. Requires current password verification.\n\nClears rate-limiter state on success.\nWrites audit row inside db.transaction().",
+        "operationId": "delete_pin_api_settings_security_pin_delete",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeletePinRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeletePinResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Pin",
+        "tags": [
+          "settings",
+          "security"
+        ]
+      },
+      "get": {
+        "description": "Get PIN status (whether a PIN is configured).\n\nReturns {set: true/false} revealing whether a PIN is currently configured.\nThis is intentional: a session-authenticated caller already has\ndestructive-action power (they hold the session cookie), so revealing PIN\nstate does not increase risk beyond session compromise. The PIN gates are\ndesigned to mitigate CSRF, not session compromise.\n\nNo audit logged.",
+        "operationId": "get_pin_status_api_settings_security_pin_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PinStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Pin Status",
+        "tags": [
+          "settings",
+          "security"
+        ]
+      },
+      "post": {
+        "description": "Set or rotate PIN.\n\nSet flow: requires current_password (no existing PIN).\nRotate flow: requires current_pin (existing PIN present).\n\nWrites audit rows inside `db.transaction()`: security.pin_set OR\nsecurity.pin_rotated on success; security.pin_verify_failed on wrong\ncurrent_pin; security.pin_locked when a failure triggers the rate-limit\ncurve threshold.",
+        "operationId": "set_pin_api_settings_security_pin_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetPinRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SetPinResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Pin",
+        "tags": [
+          "settings",
+          "security"
+        ]
+      }
+    },
+    "/api/settings/security/pin/verify": {
+      "post": {
+        "description": "Test PIN verification (no side effects on other endpoints).\n\nWrites audit rows for success, failure, and lockout.",
+        "operationId": "verify_pin_endpoint_api_settings_security_pin_verify_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerifyPinRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VerifyPinResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Verify Pin Endpoint",
+        "tags": [
+          "settings",
+          "security"
+        ]
       }
     },
     "/api/version": {

@@ -43,6 +43,7 @@ from homelab_monitor.kernel.api.routers import (
     metrics,
     observability,
     runbooks,
+    security_pin,
     settings_logs,
 )
 from homelab_monitor.kernel.api.routers import auth as auth_router
@@ -112,6 +113,7 @@ def create_app(*, lifespan_enabled: bool = True) -> FastAPI:
     app.include_router(autofix.router, prefix="/api")
     app.include_router(settings_logs.router, prefix="/api")
     app.include_router(autofix_settings.router, prefix="/api")
+    app.include_router(security_pin.router, prefix="/api")
     app.include_router(observability.router)  # mounted at root: /metrics
 
     # Serve the built UI with true SPA fallback.

@@ -147,9 +147,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
     # 4b. Auth subsystem
     from homelab_monitor.kernel.auth.rate_limit import InProcessLoginRateLimiter  # noqa: PLC0415
     from homelab_monitor.kernel.auth.repository import AuthRepository  # noqa: PLC0415
+    from homelab_monitor.kernel.db.repositories.app_settings_repository import (  # noqa: PLC0415
+        AppSettingsRepository,
+    )
+    from homelab_monitor.kernel.security.pin import InProcessPinRateLimiter  # noqa: PLC0415
 
     auth_repo = AuthRepository(repo)
     login_rate_limiter = InProcessLoginRateLimiter()
+    pin_rate_limiter = InProcessPinRateLimiter()
+    app_settings_repo = AppSettingsRepository(repo)
     # The "no users configured" warning fires once at lifespan startup. If the
     # operator deletes the last user mid-process, /api/version's
     # `users_configured` flag flips back to false (per-request lookup), but
@@ -1510,6 +1516,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
     app.state.auth_repo = auth_repo
     app.state.secrets_repo = secrets_repo
     app.state.login_rate_limiter = login_rate_limiter
+    app.state.pin_rate_limiter = pin_rate_limiter
+    app.state.app_settings_repo = app_settings_repo
     app.state.scheduler = scheduler
     app.state.repo = repo
     app.state.broker = broker

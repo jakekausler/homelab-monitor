@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Final
+from typing import Any, Final, Literal
 
 import yaml
 from sqlalchemy import text
@@ -526,6 +526,7 @@ class AutoFixOrchestrator:
         initiated_by: InitiatedBy,
         principal: str | None = None,
         approving_principal: str | None = None,
+        credential_type: Literal["pin", "phrase"] | None = None,
         ip: str | None = None,
     ) -> RunResult:
         """Durable claim, exec, and persist. Always returns a RunResult (ran=True or False).
@@ -569,17 +570,20 @@ class AutoFixOrchestrator:
                         rate_threshold_iso=rate_threshold_iso,
                     )
                     if in_lock_denial is not None:
+                        denied_after = {
+                            "runbook_id": record.id,
+                            "alert_id": alert_id,
+                            "gate": in_lock_denial.value,
+                            "detail": self._in_lock_detail(record, in_lock_denial),
+                            "initiated_by": initiated_by,
+                        }
+                        if credential_type is not None:
+                            denied_after["credential_type"] = credential_type
                         await insert_audit(
                             conn,
                             who=audit_who,
                             what="autofix.denied",
-                            after={
-                                "runbook_id": record.id,
-                                "alert_id": alert_id,
-                                "gate": in_lock_denial.value,
-                                "detail": self._in_lock_detail(record, in_lock_denial),
-                                "initiated_by": initiated_by,
-                            },
+                            after=denied_after,
                         )
                         return RunResult(
                             ran=False,
@@ -689,6 +693,7 @@ class AutoFixOrchestrator:
                 exec_log_path=exec_log_path,
                 host=host,
                 approving_principal=approving_principal,
+                credential_type=credential_type,
                 feedback_items=feedback_items,
                 initiated_by=initiated_by,
                 audit_who=audit_who,
@@ -892,7 +897,12 @@ class AutoFixOrchestrator:
         )
 
     async def execute_approved(
-        self, approval_id: str, *, principal: str, ip: str | None
+        self,
+        approval_id: str,
+        *,
+        principal: str,
+        ip: str | None,
+        credential_type: Literal["pin", "phrase"] | None = None,
     ) -> RunResult:
         """Execute the REAL run for a previously-approved dry-run plan.
 
@@ -902,6 +912,9 @@ class AutoFixOrchestrator:
           3. re-run operational gates -> if deny, audit + denial RunResult.
           4. mark approved (+ audit) in-txn, then REUSE _claim_and_exec (REAL),
              then set real_run_id on the approval.
+
+        ``credential_type`` — "pin" or "phrase" if approved via destructive-endpoint flow,
+        None if dry-run (no credential required).
         """
         approval = await self._approvals.get(approval_id)
         if approval is None or approval.status != "pending":
@@ -941,17 +954,20 @@ class AutoFixOrchestrator:
                     approved_by=principal,
                     when=utc_now_iso(),
                 )
+                rejected_after: dict[str, object] = {
+                    "approval_id": approval_id,
+                    "runbook_id": approval.runbook_id,
+                    "gate": reason.value,
+                    "pinned_runbook_hash": approval.pinned_runbook_hash,
+                    "runbook_deleted": True,
+                }
+                if credential_type is not None:
+                    rejected_after["credential_type"] = credential_type
                 await insert_audit(
                     conn,
                     who=principal,
                     what="autofix.rejected",
-                    after={
-                        "approval_id": approval_id,
-                        "runbook_id": approval.runbook_id,
-                        "gate": reason.value,
-                        "pinned_runbook_hash": approval.pinned_runbook_hash,
-                        "runbook_deleted": True,
-                    },
+                    after=rejected_after,
                     ip=ip,
                 )
             return RunResult(
@@ -972,17 +988,20 @@ class AutoFixOrchestrator:
                     approved_by=principal,
                     when=utc_now_iso(),
                 )
+                rejected_after: dict[str, object] = {
+                    "approval_id": approval_id,
+                    "runbook_id": approval.runbook_id,
+                    "gate": reason.value,
+                    "pinned_runbook_hash": approval.pinned_runbook_hash,
+                    "current_runbook_hash": record.content_hash,
+                }
+                if credential_type is not None:
+                    rejected_after["credential_type"] = credential_type
                 await insert_audit(
                     conn,
                     who=principal,
                     what="autofix.rejected",
-                    after={
-                        "approval_id": approval_id,
-                        "runbook_id": approval.runbook_id,
-                        "gate": reason.value,
-                        "pinned_runbook_hash": approval.pinned_runbook_hash,
-                        "current_runbook_hash": record.content_hash,
-                    },
+                    after=rejected_after,
                     ip=ip,
                 )
             return RunResult(
@@ -1058,16 +1077,19 @@ class AutoFixOrchestrator:
                     denial_reason=reason,
                     approval_id=approval_id,
                 )
+            approval_after: dict[str, object] = {
+                "approval_id": approval_id,
+                "runbook_id": record.id,
+                "dry_run_id": approval.dry_run_id,
+                "runbook_hash": record.content_hash,
+            }
+            if credential_type is not None:
+                approval_after["credential_type"] = credential_type
             await insert_audit(
                 conn,
                 who=principal,
                 what="autofix.approved",
-                after={
-                    "approval_id": approval_id,
-                    "runbook_id": record.id,
-                    "dry_run_id": approval.dry_run_id,
-                    "runbook_hash": record.content_hash,
-                },
+                after=approval_after,
                 ip=ip,
             )
 
@@ -1080,7 +1102,12 @@ class AutoFixOrchestrator:
         # `autofix.approved by <alice>` -> `autofix.ran by system:autofix` chain
         # is linked by more than approval_id alone).
         result = await self._claim_and_exec(
-            alert=alert, record=record, initiated_by="alert", approving_principal=principal, ip=ip
+            alert=alert,
+            record=record,
+            initiated_by="alert",
+            approving_principal=principal,
+            credential_type=credential_type,
+            ip=ip,
         )
 
         # Pin the resulting real run to the approval (if it actually ran/claimed).
@@ -1139,12 +1166,15 @@ class AutoFixOrchestrator:
         *,
         principal: str,
         ip: str | None,
+        credential_type: Literal["pin", "phrase"] | None = None,
     ) -> RunResult:
         """Operator-initiated trigger.
 
         Skips MATCH phase and skips the auto_trigger allow-list gate.
         Enforces every other safety gate (kill-switch, enabled, rate-limit,
         cooldown, dry-run-required-for-risky, per-runbook lock).
+
+        ``credential_type`` — "pin" or "phrase" if mode='real', None if mode='dry_run'.
 
         Raises:
             RunbookNotFoundError: runbook_id not found.
@@ -1163,6 +1193,7 @@ class AutoFixOrchestrator:
                 ip=ip,
                 reason="dry_run_required_for_risky",
                 mode=mode,
+                credential_type=credential_type,
             )
             raise DryRunRequiredForRiskyError(runbook_id)
 
@@ -1180,6 +1211,7 @@ class AutoFixOrchestrator:
                 reason=DenialReason.ALREADY_RUNNING,
                 principal=principal,
                 ip=ip,
+                credential_type=credential_type,
             )
 
         # 4. Operational gates (auto_trigger check SKIPPED for operator path).
@@ -1190,6 +1222,7 @@ class AutoFixOrchestrator:
                 reason=denial,
                 principal=principal,
                 ip=ip,
+                credential_type=credential_type,
             )
 
         # 5. Dispatch. Risky+real was rejected in step 2; here mode is either
@@ -1208,6 +1241,7 @@ class AutoFixOrchestrator:
             record=record,
             initiated_by="operator",
             principal=principal,
+            credential_type=credential_type,
             ip=ip,
         )
 
@@ -1514,6 +1548,7 @@ class AutoFixOrchestrator:
         host: str,
         feedback_items: list[ParsedFeedbackItem] | None,
         approving_principal: str | None = None,
+        credential_type: Literal["pin", "phrase"] | None = None,
         initiated_by: InitiatedBy = "alert",
         audit_who: str = "system:autofix",
         ip: str | None = None,
@@ -1549,6 +1584,8 @@ class AutoFixOrchestrator:
             }
             if approving_principal is not None:
                 after_json["approving_principal"] = approving_principal
+            if credential_type is not None:
+                after_json["credential_type"] = credential_type
             await insert_audit(
                 conn,
                 who=audit_who,
@@ -1696,25 +1733,29 @@ class AutoFixOrchestrator:
         reason: DenialReason,
         principal: str,
         ip: str | None,
+        credential_type: Literal["pin", "phrase"] | None = None,
         **extra: Any,  # noqa: ANN401 -- audit_kwargs collector
     ) -> RunResult:
         """Operator-initiated denial. Audit who = principal (not 'system:autofix')."""
         detail = self._gate_detail(record, reason)
         async with self._db.transaction() as conn:
+            denied_after = {
+                "runbook_id": record.id,
+                "alert_id": None,
+                "gate": reason.value,
+                "detail": detail,
+                "initiated_by": "operator",
+                **extra,
+            }
+            if credential_type is not None:
+                denied_after["credential_type"] = credential_type
             await insert_audit(
                 conn,
                 who=principal,
                 ip=ip,
                 what="autofix.denied",
                 before=None,
-                after={
-                    "runbook_id": record.id,
-                    "alert_id": None,
-                    "gate": reason.value,
-                    "detail": detail,
-                    "initiated_by": "operator",
-                    **extra,
-                },
+                after=denied_after,
             )
         return RunResult(
             ran=False,
@@ -1725,7 +1766,7 @@ class AutoFixOrchestrator:
             denial_reason=reason,
         )
 
-    async def _audit_trigger_rejected(
+    async def _audit_trigger_rejected(  # noqa: PLR0913 -- audit helper with distinct forensic kwargs
         self,
         *,
         record: RunbookRecord,
@@ -1733,6 +1774,7 @@ class AutoFixOrchestrator:
         ip: str | None,
         reason: str,
         mode: RunMode,
+        credential_type: Literal["pin", "phrase"] | None = None,
     ) -> None:
         """Audit an operator trigger that was rejected pre-lock (no runbook_runs row created).
 
@@ -1740,18 +1782,21 @@ class AutoFixOrchestrator:
         request-shape rejection at the router boundary.
         """
         async with self._db.transaction() as conn:
+            trigger_rejected_after: dict[str, object] = {
+                "runbook_id": record.id,
+                "reason": reason,
+                "mode": mode.value,
+                "initiated_by": "operator",
+            }
+            if credential_type is not None:
+                trigger_rejected_after["credential_type"] = credential_type
             await insert_audit(
                 conn,
                 who=principal,
                 ip=ip,
                 what="autofix.trigger_rejected",
                 before=None,
-                after={
-                    "runbook_id": record.id,
-                    "reason": reason,
-                    "mode": mode.value,
-                    "initiated_by": "operator",
-                },
+                after=trigger_rejected_after,
             )
 
     @asynccontextmanager

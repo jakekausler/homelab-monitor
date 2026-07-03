@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { UseMutationResult } from '@tanstack/react-query'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
@@ -7,10 +7,15 @@ import React from 'react'
 import { RunFixDialog } from '../RunFixDialog'
 import type { Runbook, TriggerResponse } from '@/api/runbooks'
 import { useTriggerRunbook } from '@/api/runbooks'
+import { usePinStatus } from '@/api/security-pin'
 import { ApiError } from '@/api/client'
 
 vi.mock('@/api/runbooks', () => ({
   useTriggerRunbook: vi.fn(),
+}))
+
+vi.mock('@/api/security-pin', () => ({
+  usePinStatus: vi.fn(),
 }))
 
 vi.mock('sonner', () => ({
@@ -36,6 +41,15 @@ function mockMutation<TData = unknown, TVariables = unknown>(
     reset: vi.fn(),
     ...overrides,
   } as unknown as UseMutationResult<TData, ApiError, TVariables>
+}
+
+function mockPinStatus(overrides: Record<string, unknown> = {}) {
+  return {
+    data: { set: false },
+    isLoading: false,
+    error: null,
+    ...overrides,
+  } as unknown as ReturnType<typeof usePinStatus>
 }
 
 const SAFE_RUNBOOK: Runbook = {
@@ -74,6 +88,12 @@ function makeWrapper() {
     return React.createElement(QueryClientProvider, { client }, children)
   }
 }
+
+beforeEach(() => {
+  // Default: no PIN configured — phrase branch renders (regression baseline for
+  // all pre-existing tests below that don't explicitly override this mock).
+  vi.mocked(usePinStatus).mockReturnValue(mockPinStatus())
+})
 
 afterEach(() => {
   cleanup()
@@ -156,7 +176,7 @@ describe('RunFixDialog', () => {
     expect(mutate).not.toHaveBeenCalled()
   })
 
-  it('confirming the phrase calls mutate with {id, mode: real}', () => {
+  it('confirming the phrase calls mutate with {id, mode: real, confirm_phrase: basename} (behavior change vs 010A)', () => {
     const mutate = vi.fn()
     vi.mocked(useTriggerRunbook).mockReturnValue(mockMutation({ mutate }))
     render(<RunFixDialog runbook={SAFE_RUNBOOK} open={true} onOpenChange={vi.fn()} />, {
@@ -172,7 +192,88 @@ describe('RunFixDialog', () => {
     const confirmButton = screen.getByRole('button', { name: /^Run for real$/ })
     fireEvent.click(confirmButton)
 
-    expect(mutate).toHaveBeenCalledWith({ id: 'runbook-safe', mode: 'real' }, expect.any(Object))
+    expect(mutate).toHaveBeenCalledWith(
+      { id: 'runbook-safe', mode: 'real', confirm_phrase: 'safe-example' },
+      expect.any(Object),
+    )
+  })
+
+  it('renders ConfirmPinDialog instead of ConfirmPhraseDialog for real mode when usePinStatus returns set:true', () => {
+    vi.mocked(usePinStatus).mockReturnValue(mockPinStatus({ data: { set: true } }))
+    vi.mocked(useTriggerRunbook).mockReturnValue(mockMutation())
+    render(<RunFixDialog runbook={SAFE_RUNBOOK} open={true} onOpenChange={vi.fn()} />, {
+      wrapper: makeWrapper(),
+    })
+
+    fireEvent.click(screen.getByTestId('run-fix-mode-real'))
+    fireEvent.click(screen.getByTestId('run-fix-submit'))
+
+    expect(screen.queryByPlaceholderText('safe-example')).not.toBeInTheDocument()
+    expect(screen.getByLabelText('PIN')).toBeInTheDocument()
+  })
+
+  it('PIN branch: onConfirm(pin) results in mutate called with {id, mode: real, confirm_pin} and no confirm_phrase key', () => {
+    vi.mocked(usePinStatus).mockReturnValue(mockPinStatus({ data: { set: true } }))
+    const mutate = vi.fn()
+    vi.mocked(useTriggerRunbook).mockReturnValue(mockMutation({ mutate }))
+    render(<RunFixDialog runbook={SAFE_RUNBOOK} open={true} onOpenChange={vi.fn()} />, {
+      wrapper: makeWrapper(),
+    })
+
+    fireEvent.click(screen.getByTestId('run-fix-mode-real'))
+    fireEvent.click(screen.getByTestId('run-fix-submit'))
+
+    fireEvent.change(screen.getByLabelText('PIN'), { target: { value: '1234' } })
+    fireEvent.click(screen.getByRole('button', { name: /^Run for real$/ }))
+
+    expect(mutate).toHaveBeenCalledWith(
+      { id: 'runbook-safe', mode: 'real', confirm_pin: '1234' },
+      expect.any(Object),
+    )
+    const [body] = mutate.mock.calls[0] as [{ confirm_phrase?: string }]
+    expect(body).not.toHaveProperty('confirm_phrase')
+  })
+
+  it('dry_run mode: no dialog renders and mutate body has neither confirm_phrase nor confirm_pin (regression)', () => {
+    const mutate = vi.fn()
+    vi.mocked(useTriggerRunbook).mockReturnValue(mockMutation({ mutate }))
+    render(<RunFixDialog runbook={SAFE_RUNBOOK} open={true} onOpenChange={vi.fn()} />, {
+      wrapper: makeWrapper(),
+    })
+
+    fireEvent.click(screen.getByTestId('run-fix-submit'))
+
+    expect(screen.queryByPlaceholderText('safe-example')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('PIN')).not.toBeInTheDocument()
+    expect(mutate).toHaveBeenCalledWith({ id: 'runbook-safe', mode: 'dry_run' }, expect.any(Object))
+    const [body] = mutate.mock.calls[0] as [{ confirm_phrase?: string; confirm_pin?: string }]
+    expect(body).not.toHaveProperty('confirm_phrase')
+    expect(body).not.toHaveProperty('confirm_pin')
+  })
+
+  it('429/retry-after shaped trigger error passes retryAfterSeconds through to ConfirmPinDialog', () => {
+    vi.mocked(usePinStatus).mockReturnValue(mockPinStatus({ data: { set: true } }))
+    const err = new ApiError({
+      status: 429,
+      code: 'pin_locked',
+      message: 'PIN entry locked. Try again in 30s.',
+      retryAfterSeconds: 30,
+      details: null,
+    })
+    vi.mocked(useTriggerRunbook).mockReturnValue(mockMutation({ error: err }))
+    render(<RunFixDialog runbook={SAFE_RUNBOOK} open={true} onOpenChange={vi.fn()} />, {
+      wrapper: makeWrapper(),
+    })
+
+    fireEvent.click(screen.getByTestId('run-fix-mode-real'))
+    fireEvent.click(screen.getByTestId('run-fix-submit'))
+
+    expect(
+      screen.getAllByText(
+        (_, element) =>
+          element?.textContent === 'Too many wrong attempts. Please wait 30s before trying again.',
+      ).length,
+    ).toBeGreaterThan(0)
   })
 
   it('success on real mode: toast.success called and dialog closes', () => {

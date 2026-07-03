@@ -23,6 +23,7 @@ from homelab_monitor.kernel.db.time import utc_now_iso
 from homelab_monitor.kernel.docker.socket_client import ExecResult
 from homelab_monitor.kernel.runbooks.loader import RUNBOOK_CONFIG_FILENAME, RUNBOOK_PROMPT_FILENAME
 from homelab_monitor.kernel.secrets.repository import AsyncSecretsRepository
+from homelab_monitor.kernel.security.pin import PIN_HASH_KEY, hash_pin
 
 # Reuse the underscore-private factories from the orchestrator test suite —
 # the codebase idiom for cross-test-file helper reuse (see test_api_autofix.py).
@@ -558,7 +559,7 @@ async def test_trigger_endpoint_real_success_on_safe(
     with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
         resp = await authenticated_client.post(
             f"/api/runbooks/{rb.id}/trigger",
-            json={"mode": "real"},
+            json={"mode": "real", "confirm_phrase": "runbook"},
             headers=_csrf(authenticated_client),
         )
     assert resp.status_code == 200  # noqa: PLR2004
@@ -583,7 +584,7 @@ async def test_trigger_endpoint_400_dry_run_required_for_risky(
 
     resp = await authenticated_client.post(
         f"/api/runbooks/{rb.id}/trigger",
-        json={"mode": "real"},
+        json={"mode": "real", "confirm_phrase": "risky-runbook"},
         headers=_csrf(authenticated_client),
     )
     assert resp.status_code == 400  # noqa: PLR2004
@@ -606,6 +607,28 @@ async def test_trigger_endpoint_404_runbook_not_found(
         headers=_csrf(authenticated_client),
     )
     assert resp.status_code == 404  # noqa: PLR2004
+
+
+@pytest.mark.asyncio
+async def test_trigger_endpoint_real_missing_runbook_404(
+    authenticated_client: AsyncClient,
+    repo: SqliteRepository,
+    secrets_repo: AsyncSecretsRepository,
+) -> None:
+    """Real mode with nonexistent runbook_id -> 404, code=not_found.
+
+    Covers runbooks.py:245 branch: missing runbook in handle_operator_trigger.
+    """
+    docker = _FakeDockerClient()
+    _wire_orchestrator(authenticated_client, repo, docker, secrets_repo=secrets_repo)
+
+    resp = await authenticated_client.post(
+        "/api/runbooks/nonexistent-id/trigger",
+        json={"mode": "real", "confirm_phrase": "anything"},
+        headers=_csrf(authenticated_client),
+    )
+    assert resp.status_code == 404  # noqa: PLR2004
+    assert resp.json()["error"]["code"] == "not_found"
 
 
 @pytest.mark.asyncio
@@ -943,3 +966,311 @@ async def test_patch_missing_runbook_returns_404(
         headers=_csrf(authenticated_client),
     )
     assert resp.status_code == 404  # noqa: PLR2004
+
+
+# ---------------------------------------------------------------------------
+# STAGE-009-010B: server-side credential gate on POST /trigger mode='real'
+# ---------------------------------------------------------------------------
+
+
+async def _seed_pin(repo: SqliteRepository, pin: str = "1234") -> None:
+    """Seed a PIN hash directly via app_settings (bypassing the security_pin router)."""
+    app_settings = AppSettingsRepository(repo)
+    await app_settings.set(PIN_HASH_KEY, hash_pin(pin, cost=4))
+
+
+@pytest.mark.asyncio
+async def test_trigger_dry_run_needs_no_credential(
+    authenticated_client: AsyncClient,
+    repo: SqliteRepository,
+    secrets_repo: AsyncSecretsRepository,
+    tmp_path: Path,
+) -> None:
+    """mode='dry_run' with an empty body (no confirm_phrase/confirm_pin)
+    still succeeds — dry runs stay confirmation-free (regression baseline;
+    mirrors test_trigger_endpoint_dry_success but explicitly names the
+    credential-free contract this stage must preserve)."""
+    rb = _make_runbook_record(alertname="TestAlert", runbook_dir=tmp_path / "runbook")
+    await _insert_runbook(repo, rb)
+
+    app_settings = AppSettingsRepository(repo)
+    await app_settings.set("autofix_enabled", "true")
+
+    transcript_dir = str(tmp_path / "transcripts")
+    os.makedirs(transcript_dir, exist_ok=True)
+    exec_log_dir = str(tmp_path / "exec-logs")
+    os.makedirs(exec_log_dir, exist_ok=True)
+
+    docker = _FakeDockerClient(result=ExecResult(exit_code=0, stdout="plan", stderr=""))
+    _wire_orchestrator(
+        authenticated_client,
+        repo,
+        docker,
+        secrets_repo=secrets_repo,
+        transcript_dir=transcript_dir,
+        exec_log_dir=exec_log_dir,
+    )
+
+    with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
+        resp = await authenticated_client.post(
+            f"/api/runbooks/{rb.id}/trigger",
+            json={"mode": "dry_run"},
+            headers=_csrf(authenticated_client),
+        )
+    assert resp.status_code == 200  # noqa: PLR2004
+    assert resp.json()["outcome"] == "dry_run_stored"
+
+
+@pytest.mark.asyncio
+async def test_trigger_real_without_credential_returns_400(
+    authenticated_client: AsyncClient,
+    repo: SqliteRepository,
+    secrets_repo: AsyncSecretsRepository,
+    tmp_path: Path,
+) -> None:
+    """mode='real' with empty confirm fields -> 400 (NEW behavior: closes the
+    010A gap where real-mode trigger required no server-side credential)."""
+    rb = _make_runbook_record(alertname="TestAlert", runbook_dir=tmp_path / "runbook")
+    await _insert_runbook(repo, rb)
+
+    app_settings = AppSettingsRepository(repo)
+    await app_settings.set("autofix_enabled", "true")
+
+    docker = _FakeDockerClient(result=ExecResult(exit_code=0, stdout="done", stderr=""))
+    _wire_orchestrator(authenticated_client, repo, docker, secrets_repo=secrets_repo)
+
+    resp = await authenticated_client.post(
+        f"/api/runbooks/{rb.id}/trigger",
+        json={"mode": "real"},
+        headers=_csrf(authenticated_client),
+    )
+    assert resp.status_code == 400  # noqa: PLR2004
+
+
+@pytest.mark.asyncio
+async def test_trigger_real_with_confirm_phrase_matching_basename_success(
+    authenticated_client: AsyncClient,
+    repo: SqliteRepository,
+    secrets_repo: AsyncSecretsRepository,
+    tmp_path: Path,
+) -> None:
+    """mode='real' with confirm_phrase == Path(runbook.path).name succeeds.
+
+    runbooks.py derives expected_basename via ``Path(record.path).name``; with
+    ``runbook_dir=tmp_path / "runbook"`` the basename is literally "runbook".
+    """
+    rb = _make_runbook_record(alertname="TestAlert", runbook_dir=tmp_path / "runbook")
+    await _insert_runbook(repo, rb)
+    assert Path(rb.path).name == "runbook"
+
+    app_settings = AppSettingsRepository(repo)
+    await app_settings.set("autofix_enabled", "true")
+
+    transcript_dir = str(tmp_path / "transcripts")
+    os.makedirs(transcript_dir, exist_ok=True)
+    exec_log_dir = str(tmp_path / "exec-logs")
+    os.makedirs(exec_log_dir, exist_ok=True)
+
+    docker = _FakeDockerClient(result=ExecResult(exit_code=0, stdout="done", stderr=""))
+    _wire_orchestrator(
+        authenticated_client,
+        repo,
+        docker,
+        secrets_repo=secrets_repo,
+        transcript_dir=transcript_dir,
+        exec_log_dir=exec_log_dir,
+    )
+
+    with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
+        resp = await authenticated_client.post(
+            f"/api/runbooks/{rb.id}/trigger",
+            json={"mode": "real", "confirm_phrase": "runbook"},
+            headers=_csrf(authenticated_client),
+        )
+    assert resp.status_code == 200  # noqa: PLR2004
+    assert resp.json()["outcome"] == "ran"
+
+
+@pytest.mark.asyncio
+async def test_trigger_real_with_confirm_phrase_case_fold_variations(
+    authenticated_client: AsyncClient,
+    repo: SqliteRepository,
+    secrets_repo: AsyncSecretsRepository,
+    tmp_path: Path,
+) -> None:
+    """mode='real' with confirm_phrase using different case + surrounding
+    whitespace still matches (trigger uses CASE_FOLD mode, unlike approve's
+    EXACT mode)."""
+    rb = _make_runbook_record(alertname="TestAlert", runbook_dir=tmp_path / "runbook")
+    await _insert_runbook(repo, rb)
+
+    app_settings = AppSettingsRepository(repo)
+    await app_settings.set("autofix_enabled", "true")
+
+    transcript_dir = str(tmp_path / "transcripts")
+    os.makedirs(transcript_dir, exist_ok=True)
+    exec_log_dir = str(tmp_path / "exec-logs")
+    os.makedirs(exec_log_dir, exist_ok=True)
+
+    docker = _FakeDockerClient(result=ExecResult(exit_code=0, stdout="done", stderr=""))
+    _wire_orchestrator(
+        authenticated_client,
+        repo,
+        docker,
+        secrets_repo=secrets_repo,
+        transcript_dir=transcript_dir,
+        exec_log_dir=exec_log_dir,
+    )
+
+    with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
+        resp = await authenticated_client.post(
+            f"/api/runbooks/{rb.id}/trigger",
+            json={"mode": "real", "confirm_phrase": "  RUNBOOK  "},
+            headers=_csrf(authenticated_client),
+        )
+    assert resp.status_code == 200  # noqa: PLR2004
+    assert resp.json()["outcome"] == "ran"
+
+
+@pytest.mark.asyncio
+async def test_trigger_real_with_confirm_pin_success(
+    authenticated_client: AsyncClient,
+    repo: SqliteRepository,
+    secrets_repo: AsyncSecretsRepository,
+    tmp_path: Path,
+) -> None:
+    """mode='real' with a configured PIN + correct confirm_pin succeeds."""
+    await _seed_pin(repo, pin="1234")
+
+    rb = _make_runbook_record(alertname="TestAlert", runbook_dir=tmp_path / "runbook")
+    await _insert_runbook(repo, rb)
+
+    app_settings = AppSettingsRepository(repo)
+    await app_settings.set("autofix_enabled", "true")
+
+    transcript_dir = str(tmp_path / "transcripts")
+    os.makedirs(transcript_dir, exist_ok=True)
+    exec_log_dir = str(tmp_path / "exec-logs")
+    os.makedirs(exec_log_dir, exist_ok=True)
+
+    docker = _FakeDockerClient(result=ExecResult(exit_code=0, stdout="done", stderr=""))
+    _wire_orchestrator(
+        authenticated_client,
+        repo,
+        docker,
+        secrets_repo=secrets_repo,
+        transcript_dir=transcript_dir,
+        exec_log_dir=exec_log_dir,
+    )
+
+    with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
+        resp = await authenticated_client.post(
+            f"/api/runbooks/{rb.id}/trigger",
+            json={"mode": "real", "confirm_pin": "1234"},
+            headers=_csrf(authenticated_client),
+        )
+    assert resp.status_code == 200  # noqa: PLR2004
+    assert resp.json()["outcome"] == "ran"
+
+
+@pytest.mark.asyncio
+async def test_trigger_audit_includes_credential_type(
+    authenticated_client: AsyncClient,
+    repo: SqliteRepository,
+    secrets_repo: AsyncSecretsRepository,
+    tmp_path: Path,
+) -> None:
+    """``handle_operator_trigger``'s ``credential_type`` kwarg is threaded into
+    both the pre-lock rejection audit (``autofix.trigger_rejected``, written
+    by ``_audit_trigger_rejected`` when a risky runbook is triggered with
+    mode='real') AND into the ``autofix.ran`` audit written by
+    ``_claim_and_exec``/``_persist_outcome`` for a successful real run.
+
+    credential_type surfaces in ``autofix.trigger_rejected`` for both the
+    phrase and pin paths on a risky+real rejection. A successful real-mode
+    trigger's ``autofix.ran`` row now INCLUDES credential_type, mirroring the
+    behavior of the approval path (autofix.approved also includes it).
+    """
+    # Phrase path: risky runbook + mode=real is rejected before any exec.
+    risky_rb = _make_risky_runbook_record(alertname="TestAlertRisky")
+    await _insert_runbook(repo, risky_rb)
+
+    app_settings = AppSettingsRepository(repo)
+    await app_settings.set("autofix_enabled", "true")
+
+    transcript_dir = str(tmp_path / "transcripts")
+    os.makedirs(transcript_dir, exist_ok=True)
+    exec_log_dir = str(tmp_path / "exec-logs")
+    os.makedirs(exec_log_dir, exist_ok=True)
+
+    docker = _FakeDockerClient(result=ExecResult(exit_code=0, stdout="done", stderr=""))
+    _wire_orchestrator(
+        authenticated_client,
+        repo,
+        docker,
+        secrets_repo=secrets_repo,
+        transcript_dir=transcript_dir,
+        exec_log_dir=exec_log_dir,
+    )
+
+    resp_phrase = await authenticated_client.post(
+        f"/api/runbooks/{risky_rb.id}/trigger",
+        json={"mode": "real", "confirm_phrase": "risky-runbook"},
+        headers=_csrf(authenticated_client),
+    )
+    assert resp_phrase.status_code == 400  # noqa: PLR2004
+    assert resp_phrase.json()["error"]["code"] == "dry_run_required_for_risky"
+
+    rejected_rows = await repo.fetch_all(
+        text("SELECT after_json FROM audit_log WHERE what = 'autofix.trigger_rejected'"),
+        {},
+    )
+    assert len(rejected_rows) == 1
+    after_phrase = json.loads(rejected_rows[0][0])
+    assert after_phrase["credential_type"] == "phrase"
+
+    # PIN path: same rejection, different runbook to keep audit rows distinct.
+    await _seed_pin(repo, pin="1234")
+    risky_rb2 = _make_risky_runbook_record(alertname="TestAlertRisky2")
+    await _insert_runbook(repo, risky_rb2)
+
+    resp_pin = await authenticated_client.post(
+        f"/api/runbooks/{risky_rb2.id}/trigger",
+        json={"mode": "real", "confirm_pin": "1234"},
+        headers=_csrf(authenticated_client),
+    )
+    assert resp_pin.status_code == 400  # noqa: PLR2004
+
+    rejected_rows2 = await repo.fetch_all(
+        text(
+            "SELECT after_json FROM audit_log WHERE what = 'autofix.trigger_rejected' "
+            "AND after_json LIKE :like"
+        ),
+        {"like": f'%"runbook_id": "{risky_rb2.id}"%'},
+    )
+    assert len(rejected_rows2) == 1
+    after_pin = json.loads(rejected_rows2[0][0])
+    assert after_pin["credential_type"] == "pin"
+
+    # Now test: a SUCCESSFUL real-mode trigger's autofix.ran row MUST include
+    # credential_type (now fixed to match the approval audit behavior).
+    safe_rb = _make_runbook_record(
+        alertname="TestAlertSafe", runbook_dir=tmp_path / "runbook", content_hash="h-safe"
+    )
+    await _insert_runbook(repo, safe_rb)
+
+    with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
+        resp_safe = await authenticated_client.post(
+            f"/api/runbooks/{safe_rb.id}/trigger",
+            json={"mode": "real", "confirm_phrase": "runbook"},
+            headers=_csrf(authenticated_client),
+        )
+    assert resp_safe.status_code == 200  # noqa: PLR2004
+
+    ran_rows = await repo.fetch_all(
+        text("SELECT after_json FROM audit_log WHERE what = 'autofix.ran'"),
+        {},
+    )
+    assert len(ran_rows) == 1
+    after_ran = json.loads(ran_rows[0][0])
+    assert after_ran["credential_type"] == "phrase"

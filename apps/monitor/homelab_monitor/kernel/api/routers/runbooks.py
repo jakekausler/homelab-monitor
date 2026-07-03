@@ -7,12 +7,18 @@ transaction as the data write (via the repository).
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, ConfigDict
 
-from homelab_monitor.kernel.api.dependencies import get_repo, require_session
+from homelab_monitor.kernel.api.dependencies import (
+    get_app_settings,
+    get_pin_rate_limiter,
+    get_repo,
+    require_session,
+)
 from homelab_monitor.kernel.api.errors import ConflictProblem, HttpProblem, NotFoundProblem
 from homelab_monitor.kernel.api.routers.autofix import get_orchestrator
 from homelab_monitor.kernel.auth.models import User
@@ -25,11 +31,19 @@ from homelab_monitor.kernel.autofix.types import (
     RunOutcome,
 )
 from homelab_monitor.kernel.config import get_runbooks_dir
+from homelab_monitor.kernel.db.repositories.app_settings_repository import (
+    AppSettingsRepository,
+)
 from homelab_monitor.kernel.db.repository import SqliteRepository
 from homelab_monitor.kernel.runbooks.loader import scan_runbooks
 from homelab_monitor.kernel.runbooks.repository import (
     RunbookRecord,
     RunbookRepo,
+)
+from homelab_monitor.kernel.security.pin import (
+    InProcessPinRateLimiter,
+    PhraseMatchMode,
+    verify_destructive_credential,
 )
 
 router = APIRouter(prefix="/runbooks", tags=["runbooks"])
@@ -92,6 +106,8 @@ class TriggerRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     mode: Literal["dry_run", "real"]
+    confirm_phrase: str | None = None
+    confirm_pin: str | None = None
 
 
 class TriggerResponse(BaseModel):
@@ -209,23 +225,47 @@ async def patch_runbook_gates(
         409: {"description": "Denied by an operational gate"},
     },
 )
-async def trigger_runbook(
+async def trigger_runbook(  # noqa: PLR0913 -- FastAPI route with injected dependencies
     runbook_id: str,
     payload: TriggerRequest,
     request: Request,
     user: Annotated[User, Depends(require_session())],
     orchestrator: Annotated[AutoFixOrchestrator, Depends(get_orchestrator)],
+    repo: Annotated[RunbookRepo, Depends(get_runbooks_repo)],
+    app_settings: Annotated[AppSettingsRepository, Depends(get_app_settings)],
+    pin_rate_limiter: Annotated[InProcessPinRateLimiter, Depends(get_pin_rate_limiter)],
 ) -> TriggerResponse:
     """Manually trigger a runbook (operator-initiated).
 
     Skips MATCH + auto_trigger allow-list; enforces every other safety gate.
     """
+    mode = RunMode(payload.mode)
+    credential_type: Literal["pin", "phrase"] | None = None
+
+    # For real mode, load runbook to derive basename for credential verification.
+    if mode == RunMode.REAL:
+        record = await repo.get_runbook(runbook_id)
+        if record is None:
+            raise NotFoundProblem(message=f"runbook {runbook_id} not found")
+        expected_basename = Path(record.path).name
+        credential_type = await verify_destructive_credential(
+            confirm_pin=payload.confirm_pin,
+            confirm_phrase=payload.confirm_phrase,
+            expected_phrase=expected_basename,
+            phrase_match_mode=PhraseMatchMode.CASE_FOLD,
+            user=user,
+            app_settings=app_settings,  # type: ignore[arg-type]
+            rate_limiter=pin_rate_limiter,  # type: ignore[arg-type]
+        )
+    # For dry_run, skip credential verification; credential_type stays None.
+
     try:
         result = await orchestrator.handle_operator_trigger(
             runbook_id=runbook_id,
-            mode=RunMode(payload.mode),
+            mode=mode,
             principal=user.username,
             ip=_client_ip(request),
+            credential_type=credential_type,
         )
     except RunbookNotFoundError as exc:
         raise NotFoundProblem(message=str(exc)) from exc

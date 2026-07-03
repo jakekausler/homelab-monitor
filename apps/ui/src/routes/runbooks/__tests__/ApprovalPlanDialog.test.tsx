@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { UseMutationResult, UseQueryResult } from '@tanstack/react-query'
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import React, { type ReactNode } from 'react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '@/api/client'
 
@@ -17,7 +17,12 @@ vi.mock('@/api/runbooks', () => ({
   },
 }))
 
+vi.mock('@/api/security-pin', () => ({
+  usePinStatus: vi.fn(),
+}))
+
 import { useApprovalPlan, useApproveApproval, useRejectApproval } from '@/api/runbooks'
+import { usePinStatus } from '@/api/security-pin'
 import { ApprovalPlanDialog } from '@/routes/runbooks/ApprovalPlanDialog'
 
 function makeWrapper(): ({ children }: { children: ReactNode }) => ReactNode {
@@ -61,6 +66,20 @@ function mockMutation<TData = unknown, TVariables = unknown>(
     ...overrides,
   } as unknown as UseMutationResult<TData, ApiError, TVariables>
 }
+
+function mockPinStatus(overrides: Record<string, unknown> = {}) {
+  return {
+    data: { set: false },
+    isLoading: false,
+    error: null,
+    ...overrides,
+  } as unknown as ReturnType<typeof usePinStatus>
+}
+
+beforeEach(() => {
+  // Default: no PIN configured — phrase branch renders (regression baseline).
+  vi.mocked(usePinStatus).mockReturnValue(mockPinStatus())
+})
 
 afterEach(() => {
   cleanup()
@@ -218,5 +237,72 @@ describe('ApprovalPlanDialog', () => {
     })
     fireEvent.click(screen.getByTestId('approval-reject'))
     expect(onClose).toHaveBeenCalled()
+  })
+
+  it('PIN branch: renders ConfirmPinDialog instead of ConfirmPhraseDialog when usePinStatus returns set:true', () => {
+    vi.mocked(usePinStatus).mockReturnValue(mockPinStatus({ data: { set: true } }))
+    vi.mocked(useApprovalPlan).mockReturnValue(mockQuery({ data: PLAN_DATA }))
+    vi.mocked(useApproveApproval).mockReturnValue(mockMutation())
+    vi.mocked(useRejectApproval).mockReturnValue(mockMutation())
+
+    render(<ApprovalPlanDialog approvalId="appr-x" killSwitchEnabled={true} onClose={vi.fn()} />, {
+      wrapper: makeWrapper(),
+    })
+
+    fireEvent.click(screen.getByTestId('approval-approve'))
+
+    expect(screen.queryByPlaceholderText('approve')).not.toBeInTheDocument()
+    expect(screen.getByLabelText('PIN')).toBeInTheDocument()
+  })
+
+  it('PIN branch: mutation body carries confirm_pin (no confirm_phrase) when PIN is set', () => {
+    vi.mocked(usePinStatus).mockReturnValue(mockPinStatus({ data: { set: true } }))
+    const mutate = vi.fn()
+    vi.mocked(useApprovalPlan).mockReturnValue(mockQuery({ data: PLAN_DATA }))
+    vi.mocked(useApproveApproval).mockReturnValue(mockMutation({ mutate }))
+    vi.mocked(useRejectApproval).mockReturnValue(mockMutation())
+
+    render(<ApprovalPlanDialog approvalId="appr-x" killSwitchEnabled={true} onClose={vi.fn()} />, {
+      wrapper: makeWrapper(),
+    })
+
+    fireEvent.click(screen.getByTestId('approval-approve'))
+    fireEvent.change(screen.getByLabelText('PIN'), { target: { value: '1234' } })
+    const confirmDialog = screen.getByRole('dialog', { name: /Approve auto-fix run/i })
+    fireEvent.click(within(confirmDialog).getByRole('button', { name: /^Approve$/i }))
+
+    expect(mutate).toHaveBeenCalledWith(
+      { approvalId: 'appr-x', confirm_pin: '1234' },
+      expect.any(Object),
+    )
+    const [body] = mutate.mock.calls[0] as [{ confirm_phrase?: string }]
+    expect(body).not.toHaveProperty('confirm_phrase')
+  })
+
+  it('429 countdown from approve mutation error is passed through to ConfirmPinDialog', () => {
+    vi.mocked(usePinStatus).mockReturnValue(mockPinStatus({ data: { set: true } }))
+    const err = new ApiError({
+      status: 429,
+      code: 'pin_locked',
+      message: 'PIN entry locked. Try again in 30s.',
+      retryAfterSeconds: 30,
+      details: null,
+    })
+    vi.mocked(useApprovalPlan).mockReturnValue(mockQuery({ data: PLAN_DATA }))
+    vi.mocked(useApproveApproval).mockReturnValue(mockMutation({ error: err }))
+    vi.mocked(useRejectApproval).mockReturnValue(mockMutation())
+
+    render(<ApprovalPlanDialog approvalId="appr-x" killSwitchEnabled={true} onClose={vi.fn()} />, {
+      wrapper: makeWrapper(),
+    })
+
+    fireEvent.click(screen.getByTestId('approval-approve'))
+
+    expect(
+      screen.getAllByText(
+        (_, element) =>
+          element?.textContent === 'Too many wrong attempts. Please wait 30s before trying again.',
+      ).length,
+    ).toBeGreaterThan(0)
   })
 })

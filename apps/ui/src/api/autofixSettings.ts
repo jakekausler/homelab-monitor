@@ -32,11 +32,15 @@ export function useAutofixKillSwitch(): UseQueryResult<KillSwitchState, ApiError
 export function useToggleAutofixKillSwitch(): UseMutationResult<
   KillSwitchToggleResponse,
   ApiError,
-  KillSwitchToggleRequest
+  { enabled: boolean; confirm_phrase?: string; confirm_pin?: string }
 > {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: async (body: KillSwitchToggleRequest) => {
+    mutationFn: async (body: {
+      enabled: boolean
+      confirm_phrase?: string
+      confirm_pin?: string
+    }) => {
       const result = await apiClient.POST('/api/settings/autofix/kill-switch', { body })
       return unwrap<KillSwitchToggleResponse>(result)
     },

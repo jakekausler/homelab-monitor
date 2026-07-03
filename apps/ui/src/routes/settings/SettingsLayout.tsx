@@ -4,6 +4,7 @@ import type { JSX } from 'react'
 const TABS = [
   { path: '/settings/logs', label: 'Logs' },
   { path: '/settings/autofix', label: 'Auto-fix' },
+  { path: '/settings/security', label: 'Security' },
 ] as const
 
 export function SettingsLayout(): JSX.Element {

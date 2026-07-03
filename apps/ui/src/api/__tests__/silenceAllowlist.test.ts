@@ -156,7 +156,7 @@ describe('useDeleteSilenceAllowlistEntry', () => {
   it('calls DELETE with correct path param and handles 204', async () => {
     vi.mocked(apiClient.DELETE).mockResolvedValue({
       response: fakeResponse(204),
-    } as unknown as Awaited<ReturnType<typeof apiClient.DELETE>>)
+    })
 
     const { result } = renderHook(() => useDeleteSilenceAllowlistEntry(), {
       wrapper: makeWrapper(),
