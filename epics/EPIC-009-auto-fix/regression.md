@@ -283,3 +283,30 @@ Added at Refinement 2026-07-02. All items derived from STAGE-009-010A Design Not
 - [ ] `sudo scripts/host-setup.sh --check` reports `present: /etc/nftables.d/homelab-fixer.nft (7 lines)` AND `active: table inet homelab_fixer loaded`. Regression if the host was re-imaged / firewall reset without re-running host-setup.sh.
 - [ ] `docker exec homelab-fixer-runner env | grep _PROXY` shows `HTTPS_PROXY=http://homelab-fixer-egress-proxy:3128`. Regression if the env vars are dropped from compose — fixer-runner would attempt direct DNS + direct HTTPS, bypassing the allow-list at the application layer (nftables would still catch it, but the audit trail would look different).
 - [ ] Kill switch: `docker kill homelab-fixer-runner` returns 137 exit code (SIGKILL) even with proxy healthy. Regression if a future compose change adds `stop_signal: SIGKILL` or blocks kill somehow.
+
+### Discovered infra flake (STAGE-009-016 Build, 2026-07-04): JsonMessageTree UI test times out under CPU-contended parallel `make verify`
+
+**Symptom:** `apps/ui/src/components/logs/__tests__/JsonMessageTree.test.tsx > JsonMessageTree > renders child cap indicator` times out (5000ms budget, ran ~7590ms) when `make verify` runs backend pytest + UI vitest in parallel (`_verify-parallel` target). Passes cleanly in 238ms on isolated re-run.
+
+**Root cause:** the test renders 1001-key JSON tree in JSDOM. Under parallel CPU contention with the backend pytest (which pins all cores via pytest-xdist), JSDOM render exceeds the 5s test timeout. Not a regression — file untouched since STAGE-004-016B (2026-06-03).
+
+**Owner:** future infra pass. Options: (a) raise per-test timeout in `JsonMessageTree.test.tsx` to 15000ms; (b) split `_verify-parallel` to serialize UI vitest after backend pytest; (c) reduce fixture size in that specific test (e.g., 501 items instead of 1001 — cap indicator only needs >1000 to fire).
+
+**Not blocking STAGE-009-016:** UI files not touched this stage; failure orthogonal to autofix hashing.
+
+## STAGE-009-016 — Whole-folder + markdown drift hash
+
+**Regression items to re-verify in future stages / prod validations:**
+
+- **content_hash format is `v2:sha256:<64-hex>`, total 74 chars** — the `runbooks.content_hash` column values MUST start with `v2:sha256:`. If any row appears with a bare 64-hex value, either (a) reconcile has not yet run against that row, or (b) STAGE-009-016 was reverted / regressed.
+- **README.md and sibling file drift invalidates the hash** — editing `README.md` (or any allowlisted-extension sibling file) inside a runbook folder MUST change `runbooks.content_hash` on next `POST /api/runbooks/refresh`. If it does not, the whole-folder walk is broken.
+- **Semantically-equivalent YAML re-formatting invalidates the hash** — this is TIGHTER than pre-STAGE-009-016 behavior (v1 hashed the parsed model). Reformatting `runbook.yaml` (whitespace, key order, trailing comments) MUST change the hash in v2. This is intentional per non-negotiable #4.
+- **Pending `runbook_run_approvals` rows with a bare-hex `pinned_runbook_hash` should reject with 409 `runbook_changed_since_plan`** on approve after the first post-deploy refresh. If a v1-hash approval ever silently succeeds, the drift-gate is broken.
+- **Hash algorithm reject cases:** symlinks in a runbook folder, non-ASCII filenames, files >1 MiB, folders with >50 files, files with non-allowlisted extensions (allowlist: `.md .yaml .yml .sh .txt .json .toml`) MUST raise `RunbookHashError` and cause reconcile to log-and-skip that folder without aborting the whole refresh.
+- **`GET /api/autofix/approvals`** shows `drift_detected: true` on any pending approval whose `pinned_runbook_hash` no longer matches the current `runbooks.content_hash` (v1 pins after deploy → always drifts).
+- **Bind-mount inode sensitivity:** because `os.replace` breaks Docker bind mounts (per STAGE-009-015 discovery), no file the monitor writes into the runbooks tree should use it. STAGE-009-016 does NOT write to runbooks — it only reads — so this is a defensive note for future stages that might.
+
+**Deferred infra items discovered during STAGE-009-016 (NOT this stage's responsibility):**
+
+- The synthetic runbook example `scoped_capabilities` shape in prompts / docs is stale — actual schema requires nested `docker: {container: ..., allowed_actions: []}` and a LIST for `egress`, not `false`. Any doc / example that shows `scoped_capabilities: docker: false` should be corrected in a future doc-refresh pass.
+- Confirmed the STAGE-009-017 gap: `POST /api/runbooks/refresh` does NOT prune DB rows whose folders are deleted (that's the whole point of 017). Orphaned rows persist. STAGE-009-016 is not responsible for this.
