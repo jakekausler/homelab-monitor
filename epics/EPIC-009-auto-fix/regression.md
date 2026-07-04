@@ -228,3 +228,45 @@ Added at Refinement 2026-07-02. All items derived from STAGE-009-010A Design Not
 - [ ] Outcome derivation logic: `runbook_runs` has NO `outcome` column. Derived from `exit_code` + `killed_at` + `mode` + `ended_at`. Any change to `_derive_status_from_row` in `runs_repository.py` or `_derive_outcome` in `autofix_runs.py` must keep the 5 cases correct: `in_flight` (ended_at NULL AND killed_at NULL), `killed` (killed_at NOT NULL), `success` (real + exit_code=0), `failure` (real + exit_code!=0), `dry_run` (mode='dry_run' + ended_at NOT NULL). Tests in `test_runs_repository_stats.py::test_last_run_status_success_failure_killed_in_flight_dry_run` and `test_autofix_runs_router.py` (killed/dry_run/failure cases).
 - [ ] Pagination: offset-based, `?limit=100&offset=N`. `total_count` reported in response. If pagination shape changes to cursor/keyset, `RunsHistoryPage.tsx`'s Pagination component + URL param logic must be updated together.
 - [ ] Feedback rows display: `parse_error` `kind` renders with distinct destructive/red badge (visually distinguishes malformed feedback from valid). Other 6 kinds get outline/secondary variants. Regression test: `FeedbackList.test.tsx` covers all 7 kinds.
+
+## STAGE-009-014 — Docker intent gateway
+
+### Non-negotiable #2 (SCOPE — docker dimension) — CRITICAL
+- **Intent for a container NOT in envelope → `autofix.intent_denied` with reason `container '<x>' not in envelope`; NO `docker.restart_container` call.** Regression test: `test_one_intent_denied_container_mismatch_no_docker_call` in `apps/monitor/tests/kernel/autofix/test_autofix_intent_gateway.py`.
+- **Intent for an action NOT in `allowed_actions` → `autofix.intent_denied` with reason `action '<x>' not in allowed_actions`; NO docker call.** Test: `test_one_intent_denied_action_not_allowed_no_docker_call`.
+- **Runbook with NO `docker` in `scoped_capabilities` (SSH-only or empty) → all intents `autofix.intent_denied` with reason `docker not in scoped_capabilities`; NO docker calls.** Test: `test_no_docker_capability_all_intents_denied`.
+- **Intent `container` violating docker-name pattern (`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,254}$`) OR exceeding 256 chars → `autofix.intent_malformed` with reason `invalid_entry`; NO docker call.** Defense-in-depth against path-traversal / control characters / audit-DoS. Tests: `test_parse_intents_container_too_long_raises_invalid_entry`, `test_parse_intents_container_invalid_chars_raises_invalid_entry`. Envelope-side `DockerCapability.container` in `apps/monitor/homelab_monitor/kernel/runbooks/config.py` enforces the same pattern.
+
+### Non-negotiable #3 (Identity — fixer no docker socket)
+- **Fixer-runner container must NOT have access to a docker socket.** No mount of `/var/run/docker.sock` into the fixer container. Verified via `docker inspect homelab-fixer-runner` or compose config — sockets are ONLY mounted into the monitor container.
+- **All docker mutations run in monitor process via `self._docker.restart_container(...)`.** Regression: no `subprocess.run(['docker', ...])` or similar shell-out in the fixer container's PATH; enforced by fixer container image which excludes the docker CLI.
+
+### Non-negotiable #4 (Audit)
+- **Every intent code path (executed / denied / exec_error / malformed / skipped_after_error / kill_switched / gateway_failed / dry_planned) emits a distinct `autofix.intent_*` audit row (8 events).** Tests: all 21 tests in `test_autofix_intent_gateway.py` verify audit `what` values via `_read_intent_audits`.
+- **Unhandled exception in `_execute_intents` (both real + dry paths) → SINGLE `autofix.intent_gateway_failed` audit; `_persist_outcome`/completion still runs; run row is NEVER left orphaned (`ended_at IS NOT NULL`).** Test: `test_execute_intents_raises_emits_gateway_failed_audit_real`, `test_execute_intents_raises_emits_gateway_failed_audit_dry`.
+- **Audit rows for intent gateway are immutable per STAGE-009-012 invariant.** No `DELETE FROM audit_log WHERE what LIKE 'autofix.intent%'` endpoint exists. Verified by grep for delete endpoints in `apps/monitor/homelab_monitor/kernel/api/routers/`.
+- **Malformed intent file → SINGLE `autofix.intent_malformed` audit row, not per-entry denials.** Test: `test_malformed_intent_json_audits_malformed_and_returns`, `test_not_a_list_json_audits_malformed_with_reason`, `test_invalid_entry_audits_malformed`.
+- **File-read failure (OSError, UnicodeDecodeError) → `autofix.intent_malformed` with reason `not_json`.** Tests: `test_parse_intents_read_failure_raises_not_json` (OSError) + implicit UnicodeDecodeError coverage via the same catch.
+- **Detail strings on `autofix.intent_malformed` audit rows are truncated at 1024 chars + '...' suffix.** Prevents unbounded audit-table field bloat from oversized pydantic error messages or IO error messages. Tests: `test_parse_intents_read_failure_truncates_long_detail`, `test_parse_intents_invalid_entry_truncates_long_detail`.
+
+### Non-negotiable #5 (Dry-run)
+- **Dry runs NEVER call `docker.restart_container`.** Test: `test_dry_run_docker_never_called_regardless_of_validation` asserts `restart_calls == []` even with valid intents. Also tests: `test_dry_run_valid_intent_audits_dry_planned_no_docker_call`, `test_dry_run_denied_intent_audits_denied_not_dry_planned`.
+- **Dry runs audit valid intents as `autofix.intent_dry_planned` (not `intent_executed`).** Denied intents in dry-run still audit as `intent_denied`.
+
+### Non-negotiable #7 (Kill switch)
+- **Kill switch flipped between `_exec_claude` return and `_execute_intents` start → ONE `autofix.intent_kill_switched` audit; ZERO `intent_executed`.** Test: `test_kill_switch_off_skips_all_intents_with_single_audit`.
+- **Kill switch check is GATED on intent-file existence. A run with NO intent file emits ZERO audit rows regardless of kill-switch state (no spurious `intent_kill_switched` audit).** Test: `test_empty_intent_list_no_audits` covers the fast-path when file exists but list is empty.
+- **Grant resolution failure (envelope None from `_resolve_grants` error) → intent gateway SKIPPED entirely; NO intent audits at all.** Test: `test_grant_resolution_failure_skips_intent_gateway`.
+
+### Executor semantics (D4-C)
+- **`DockerSocketConnectionError` (including `DockerExecTimeoutError` subclass) → 1 `intent_exec_error` + remainder `intent_skipped_after_error`; batch halts.** Test: `test_docker_connection_error_halts_batch_with_skipped_audits`, `test_docker_exec_timeout_error_treated_as_connection_error`.
+- **`DockerSocketProtocolError` → 1 `intent_exec_error`; batch CONTINUES.** Test: `test_docker_protocol_error_continues_batch`.
+
+### Real-host validation (STAGE-009-014 Refinement, 2026-07-04)
+- **Instance A prod redeploy** included the intent gateway code. Verified via `docker exec homelab-monitor python -c "from homelab_monitor.kernel.autofix import intents; print(intents.DockerIntent.model_json_schema())"` — schema exposes `container` + `action=const("restart")` fields.
+- **Real container restart** confirmed against a disposable alpine sleep container: `DockerSocketClient.restart_container(...)` called from monitor process, container's `StartedAt` timestamp changed post-call.
+- **All 5 `validate_intent` decision paths** confirmed live (accept matching + 3 deny paths + no-docker deny) against real `ResolvedGrants` + `DockerCapability` types.
+
+### Coverage gate
+- **`apps/monitor/homelab_monitor/kernel/autofix/intents.py` — 100% branch coverage** including the `except (OSError, UnicodeDecodeError)` branch at lines 113-117 (`test_parse_intents_read_failure_raises_not_json` uses `monkeypatch` on `Path.read_text`).
+- **`apps/monitor/homelab_monitor/kernel/autofix/orchestrator.py::_execute_intents` — 100% branch coverage** INCLUDING the try/except at both call sites, the file-existence fast-path, the empty-list fast-path, and the audit-txn-per-intent structure. Tests exist for both real + dry exception handlers.
