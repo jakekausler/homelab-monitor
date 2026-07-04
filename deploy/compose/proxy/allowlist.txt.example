@@ -1,0 +1,7 @@
+# STAGE-009-015 baseline allow-list (Anthropic family).
+# The orchestrator OVERWRITES /data/proxy/allowlist.txt per real exec
+# with baseline + runbook-declared egress.
+api.anthropic.com
+statsig.anthropic.com
+install.claude.ai
+console.anthropic.com

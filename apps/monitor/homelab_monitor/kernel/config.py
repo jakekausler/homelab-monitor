@@ -778,6 +778,17 @@ class FixerRunnerConfig:
       ``transcript_rotation_max_age_days`` — max transcript file age in days
       (default 365). Files older than the cutoff are pruned regardless of N.
       Both bounds MUST be > 0; the loader raises ``ValueError`` otherwise.
+
+    STAGE-009-015 (egress enforcement):
+      ``egress_proxy_container`` — the fixer-egress-proxy container name to
+      ``docker exec squid -k reconfigure`` into.
+      ``egress_allowlist_path`` — the monitor-writable path to the allow-list
+      file (host FS mounted at /data/proxy/allowlist.txt); the proxy sees the
+      same file at /etc/squid/allowlist.txt.
+      ``egress_baseline_hostnames`` — always-on hostnames prepended to every
+      per-exec allow-list. Default is the Anthropic family (Decision G).
+      ``egress_reconfigure_timeout_seconds`` — bound on the
+      ``docker exec … squid -k reconfigure`` call.
     """
 
     container: str = "homelab-fixer-runner"
@@ -787,6 +798,15 @@ class FixerRunnerConfig:
     exec_timeout_seconds: float = 1800.0
     transcript_rotation_max_count: int = 100
     transcript_rotation_max_age_days: int = 365
+    egress_proxy_container: str = "homelab-fixer-egress-proxy"
+    egress_allowlist_path: str = "/data/proxy/allowlist.txt"
+    egress_baseline_hostnames: tuple[str, ...] = (
+        "api.anthropic.com",
+        "console.anthropic.com",
+        "install.claude.ai",
+        "statsig.anthropic.com",
+    )
+    egress_reconfigure_timeout_seconds: float = 2.0
 
 
 def load_fixer_runner_config() -> FixerRunnerConfig:
@@ -821,6 +841,37 @@ def load_fixer_runner_config() -> FixerRunnerConfig:
         )
         raise ValueError(msg)
 
+    egress_proxy_container = os.environ.get(
+        "HOMELAB_MONITOR_FIXER_EGRESS_PROXY_CONTAINER",
+        defaults.egress_proxy_container,
+    )
+    egress_allowlist_path = os.environ.get(
+        "HOMELAB_MONITOR_FIXER_EGRESS_ALLOWLIST_PATH",
+        defaults.egress_allowlist_path,
+    )
+    egress_baseline_raw = os.environ.get("HOMELAB_MONITOR_FIXER_EGRESS_BASELINE_HOSTNAMES")
+    if egress_baseline_raw:
+        # Comma-separated; strip whitespace; drop empty entries.
+        parsed = tuple(h.strip() for h in egress_baseline_raw.split(",") if h.strip())
+        egress_baseline_hostnames = parsed if parsed else defaults.egress_baseline_hostnames
+    else:
+        egress_baseline_hostnames = defaults.egress_baseline_hostnames
+
+    egress_reconfigure_raw = os.environ.get(
+        "HOMELAB_MONITOR_FIXER_EGRESS_RECONFIGURE_TIMEOUT_SECONDS"
+    )
+    egress_reconfigure_timeout_seconds = (
+        defaults.egress_reconfigure_timeout_seconds
+        if not egress_reconfigure_raw
+        else float(egress_reconfigure_raw)
+    )
+    if egress_reconfigure_timeout_seconds <= 0:
+        msg = (
+            "HOMELAB_MONITOR_FIXER_EGRESS_RECONFIGURE_TIMEOUT_SECONDS must be > 0 "
+            f"(got {egress_reconfigure_timeout_seconds})"
+        )
+        raise ValueError(msg)
+
     return FixerRunnerConfig(
         container=container,
         transcript_dir=transcript_dir,
@@ -829,6 +880,10 @@ def load_fixer_runner_config() -> FixerRunnerConfig:
         exec_timeout_seconds=exec_timeout_seconds,
         transcript_rotation_max_count=transcript_rotation_max_count,
         transcript_rotation_max_age_days=transcript_rotation_max_age_days,
+        egress_proxy_container=egress_proxy_container,
+        egress_allowlist_path=egress_allowlist_path,
+        egress_baseline_hostnames=egress_baseline_hostnames,
+        egress_reconfigure_timeout_seconds=egress_reconfigure_timeout_seconds,
     )
 
 

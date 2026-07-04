@@ -136,6 +136,25 @@ class GrantResolutionError(Exception):
         self.detail = detail
 
 
+class EgressConfigurationError(Exception):
+    """Raised when the fixer-runner's per-exec egress proxy config cannot be
+    installed (allow-list write failure, Squid reconfigure timeout, Squid
+    reconfigure non-zero exit, or invalid hostname in grants).
+
+    ``reason`` is a short machine-stable token used as the audit ``after``
+    payload's ``reason`` field. Mirrors :class:`GrantResolutionError`'s shape.
+
+    Fail-closed policy (STAGE-009-015 Decision F): NO retry — a single failure
+    causes the orchestrator to skip the real exec and emit
+    ``autofix.egress_configuration_error``.
+    """
+
+    def __init__(self, reason: str, detail: str) -> None:
+        super().__init__(detail)
+        self.reason = reason
+        self.detail = detail
+
+
 class FeedbackKind(StrEnum):
     """Category of a Claude→user improvement feedback row (STAGE-009-009).
 

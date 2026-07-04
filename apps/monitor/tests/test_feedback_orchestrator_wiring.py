@@ -88,6 +88,8 @@ class _FakeDockerClient:
         user: str | None = None,
         env: Mapping[str, str] | None = None,
     ) -> ExecResult:
+        if cmd and cmd[0] == "squid":
+            return ExecResult(exit_code=0, stdout="", stderr="")
         self.last_call_container_id = container_id
         self.last_call_cmd = cmd
         self.last_call_user = user
@@ -228,12 +230,14 @@ def _make_orchestrator(  # noqa: PLR0913 -- test-only factory
     feedback_id_provider: Callable[[], str] | None = None,
 ) -> AutoFixOrchestrator:
     log = structlog.get_logger()
+    Path(exec_log_dir).mkdir(parents=True, exist_ok=True)
     config = FixerRunnerConfig(
         container="test-fixer",
         transcript_dir=transcript_dir,
         exec_log_dir=exec_log_dir,
         fixer_user="homelab-fixer",
         exec_timeout_seconds=60.0,
+        egress_allowlist_path=str(Path(exec_log_dir) / "allowlist.txt"),
     )
     return AutoFixOrchestrator(
         runbook_repo=RunbookRepo(repo),
@@ -559,8 +563,10 @@ async def test_real_errored_path_still_processes_feedback(
     original_exec_capture = docker.exec_capture
 
     async def _exec_capture_with_feedback(**kwargs: Any) -> ExecResult:  # noqa: ANN401 -- test kwargs proxy
-        sentinel = Path(transcript_dir) / f"{uuid7()}.feedback.json"
-        sentinel.write_text(feedback_payload, encoding="utf-8")
+        cmd = kwargs.get("cmd")
+        if not cmd or cmd[0] != "squid":
+            sentinel = Path(transcript_dir) / f"{uuid7()}.feedback.json"
+            sentinel.write_text(feedback_payload, encoding="utf-8")
         return await original_exec_capture(**kwargs)
 
     docker.exec_capture = _exec_capture_with_feedback  # type: ignore[method-assign]
@@ -727,8 +733,10 @@ async def test_feedback_repo_insert_exception_on_errored_path_swallowed_parent_t
     original_exec_capture = docker.exec_capture
 
     async def _exec_capture_with_feedback(**kwargs: Any) -> ExecResult:  # noqa: ANN401 -- test kwargs proxy
-        sentinel = Path(transcript_dir) / f"{uuid7()}.feedback.json"
-        sentinel.write_text(feedback_payload, encoding="utf-8")
+        cmd = kwargs.get("cmd")
+        if not cmd or cmd[0] != "squid":
+            sentinel = Path(transcript_dir) / f"{uuid7()}.feedback.json"
+            sentinel.write_text(feedback_payload, encoding="utf-8")
         return await original_exec_capture(**kwargs)
 
     docker.exec_capture = _exec_capture_with_feedback  # type: ignore[method-assign]

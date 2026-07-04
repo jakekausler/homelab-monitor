@@ -647,6 +647,82 @@ ensure_user_in_compose_group "$USERNAME"
 ensure_user_in_compose_group "$COMPOSE_GROUP_DESKTOP_USER"
 apply_compose_group_to_shared_files
 
+# ---------------------------------------------------------------------------
+# §3.10 fixer-egress firewall (STAGE-009-015)
+#
+# Installs nftables rules that DROP all traffic leaving the `hm-fixegress`
+# bridge except through the Squid proxy sitting on that same bridge.
+# The bridge is created by `docker compose up -d fixer-runner fixer-egress-proxy`
+# (profile `fixer`); rules pre-exist the bridge and are harmless before compose
+# is up (they only match `iifname "hm-fixegress"`).
+#
+# Also bootstraps deploy/compose/proxy/allowlist.txt from allowlist.txt.example
+# if missing (fresh clones must not fail on the RO proxy mount at cold start).
+#
+# To uninstall:
+#   rm /etc/nftables.d/homelab-fixer.nft
+#   systemctl reload nftables
+# ---------------------------------------------------------------------------
+
+log "§3.10: installing fixer-egress firewall rules"
+
+NFTABLES_DIR=/etc/nftables.d
+NFTABLES_FILE="$NFTABLES_DIR/homelab-fixer.nft"
+NFTABLES_CONFIG="/etc/nftables.conf"
+
+# Ensure include directive for /etc/nftables.d/*.nft exists in main config.
+if ! grep -qE '^include\s+"/etc/nftables\.d/\*\.nft"' "$NFTABLES_CONFIG" 2>/dev/null; then
+    do_or_check "mkdir -p $NFTABLES_DIR"
+    do_or_check "echo 'include \"/etc/nftables.d/*.nft\"' | tee -a $NFTABLES_CONFIG > /dev/null"
+fi
+
+# Write the rules file (idempotent overwrite).
+NFTABLES_CONTENT='# STAGE-009-015: fixer-runner egress enforcement.
+# Drops all traffic leaving the fixer-egress bridge (only Squid proxy on
+# that bridge can bridge the exec container to the outside world).
+table inet homelab_fixer {
+    chain forward {
+        type filter hook forward priority filter - 10; policy accept;
+        iifname "hm-fixegress" oifname != "hm-fixegress" counter drop
+    }
+}
+'
+if [[ $CHECK_ONLY -eq 1 ]]; then
+    log "WOULD: write $NFTABLES_FILE (content head: $(echo "$NFTABLES_CONTENT" | head -1))"
+    if [[ -f "$NFTABLES_FILE" ]]; then
+        log "  present: $NFTABLES_FILE ($(wc -l < "$NFTABLES_FILE") lines)"
+        if nft list table inet homelab_fixer >/dev/null 2>&1; then
+            log "  active: table inet homelab_fixer loaded"
+        else
+            log "  MISSING: table inet homelab_fixer NOT loaded"
+        fi
+    else
+        log "  MISSING: $NFTABLES_FILE does not exist"
+    fi
+else
+    printf '%s' "$NFTABLES_CONTENT" | tee "$NFTABLES_FILE" > /dev/null
+    log "wrote $NFTABLES_FILE"
+    if command -v systemctl >/dev/null && systemctl is-active --quiet nftables; then
+        systemctl reload nftables
+        log "reloaded nftables via systemctl"
+    else
+        nft -f "$NFTABLES_FILE"
+        log "loaded $NFTABLES_FILE via nft"
+    fi
+    log "OK: table inet homelab_fixer installed"
+fi
+
+# Bootstrap allowlist.txt from example on cold start (missing file breaks the
+# proxy's RO mount). The orchestrator overwrites this per-exec anyway.
+PROXY_CONFIG_DIR="$(readlink -f "$SCRIPT_DIR/../deploy/compose/proxy" 2>/dev/null || echo "")"
+if [[ -n "$PROXY_CONFIG_DIR" && -d "$PROXY_CONFIG_DIR" ]]; then
+    if [[ ! -f "$PROXY_CONFIG_DIR/allowlist.txt" && -f "$PROXY_CONFIG_DIR/allowlist.txt.example" ]]; then
+        do_or_check "cp $PROXY_CONFIG_DIR/allowlist.txt.example $PROXY_CONFIG_DIR/allowlist.txt"
+        do_or_check "chmod 0644 $PROXY_CONFIG_DIR/allowlist.txt"
+        log "bootstrapped $PROXY_CONFIG_DIR/allowlist.txt from example"
+    fi
+fi
+
 # --- 5. Print UID/GID for dev.env / production env ---
 UID_VAL=$(id -u "$USERNAME" 2>/dev/null || echo "<not-created>")
 GID_VAL=$(id -g "$USERNAME" 2>/dev/null || echo "<not-created>")

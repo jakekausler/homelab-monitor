@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import socket
 import time
 from collections.abc import AsyncGenerator, Callable
@@ -47,6 +48,7 @@ from homelab_monitor.kernel.autofix.runs_repository import RunbookRunsRepository
 from homelab_monitor.kernel.autofix.types import (
     DenialReason,
     DryRunRequiredForRiskyError,
+    EgressConfigurationError,
     ExecOutcome,
     FeedbackKind,
     GrantResolutionError,
@@ -80,6 +82,29 @@ from homelab_monitor.kernel.secrets.repository import AsyncSecretsRepository
 
 _TRUTHY = frozenset({"true", "1", "yes"})
 _STALE_CLAIM_SLACK_SECONDS = 300  # margin past exec_timeout before a claim is treated as orphaned
+
+# STAGE-009-015: RFC 1035-ish hostname validation used before writing the
+# Squid allow-list. Prevents newline/space/comment-char injection into the
+# `dstdomain` file format. NOT a URL parser — this is DEFENSE for allow-list
+# integrity when the baseline (config) or grants.egress (runbook YAML) is
+# malformed. Real DNS resolution happens in Squid; this is boundary check only.
+_HOSTNAME_RE = re.compile(
+    r"^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?"
+    r"(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$"
+)
+
+
+def _is_valid_hostname(hostname: str) -> bool:
+    """Strict RFC 1035-ish hostname check used only for allow-list writes.
+
+    A ``True`` result guarantees the string contains only ASCII letters,
+    digits, hyphens, and dots, with each label ≤63 chars and no leading/
+    trailing hyphen. A ``False`` result MUST cause EgressConfigurationError
+    at the boundary; do NOT silently drop the entry.
+    """
+    if not hostname or len(hostname) > 253:  # noqa: PLR2004
+        return False
+    return bool(_HOSTNAME_RE.match(hostname))
 
 
 def _is_truthy(value: str | None) -> bool:
@@ -389,7 +414,85 @@ class AutoFixOrchestrator:
             egress=tuple(scoped.egress),
         )
 
-    async def _exec_claude(
+    async def _configure_egress_for_exec(
+        self,
+        *,
+        grants: ResolvedGrants,
+    ) -> None:
+        """Rewrite the Squid allow-list and reconfigure the proxy for a real exec.
+
+        Composes union of baseline_hostnames and grants.egress (dedup, sorted for
+        determinism), validates every hostname, writes the file via inode-preserving
+        truncate + write. Docker bind-mounts track the original inode, so ``os.replace``
+        (which swaps inodes) would leave the Squid container reading stale content. The
+        write happens BEFORE ``squid -k reconfigure`` is triggered, so a torn write is
+        safe under the ``_transcript_lock`` single-flight guarantee. Then calls
+        ``docker exec <proxy> squid -k reconfigure`` bounded by
+        ``egress_reconfigure_timeout_seconds``.
+
+        Raises :class:`EgressConfigurationError` on ANY failure — write error,
+        reconfigure timeout, reconfigure non-zero exit, or invalid hostname.
+        The caller (``_exec_claude``) treats this fail-closed: no retry, no
+        real exec, emit ``autofix.egress_configuration_error`` audit, return
+        ``ExecOutcome(errored=True, exit_code=1)``.
+        """
+        # 1. Compose allow-list (baseline union grants.egress, dedup, sort).
+        combined = set(self._config.egress_baseline_hostnames) | set(grants.egress)
+        sorted_hostnames = sorted(combined)
+
+        # 2. Validate every hostname at the boundary.
+        for hostname in sorted_hostnames:
+            if not _is_valid_hostname(hostname):
+                raise EgressConfigurationError(
+                    reason="invalid_hostname",
+                    detail=f"hostname {hostname!r} failed RFC 1035 validation",
+                )
+
+        # 3. Write inode-preserving: truncate + write in place.
+        # Bind-mounts in the proxy container track the original inode, so
+        # os.replace (new inode) would leave the container seeing a stale file.
+        # Truncate + write in place instead. Reconfigure isn't called until
+        # after this write completes, so a torn write cannot be seen by Squid.
+        allowlist_path = Path(self._config.egress_allowlist_path)
+        content = "".join(f"{h}\n" for h in sorted_hostnames)
+        try:
+            with open(allowlist_path, "w", encoding="utf-8") as fp:
+                fp.write(content)
+        except OSError as exc:
+            raise EgressConfigurationError(
+                reason="allowlist_write_failed",
+                detail=str(exc),
+            ) from exc
+
+        # 4. squid -k reconfigure (bounded).
+        try:
+            result = await self._docker.exec_capture(
+                container_id=self._config.egress_proxy_container,
+                cmd=["squid", "-k", "reconfigure"],
+                timeout_seconds=self._config.egress_reconfigure_timeout_seconds,
+                user=None,
+                env=None,
+            )
+        except DockerExecTimeoutError as exc:
+            raise EgressConfigurationError(
+                reason="reconfigure_timeout",
+                detail=str(exc),
+            ) from exc
+        except DockerSocketError as exc:
+            raise EgressConfigurationError(
+                reason="reconfigure_docker_error",
+                detail=str(exc),
+            ) from exc
+
+        if result.exit_code != 0:
+            # First 256 chars of stderr as detail; keeps the audit row bounded.
+            stderr_snippet = (result.stderr or "")[:256]
+            raise EgressConfigurationError(
+                reason="reconfigure_nonzero",
+                detail=f"exit_code={result.exit_code} stderr={stderr_snippet!r}",
+            )
+
+    async def _exec_claude(  # noqa: PLR0915
         self, *, record: RunbookRecord, alert: Alert | None, run_id: str, dry: bool
     ) -> ExecOutcome:
         """Run claude (real or dry) under the process-wide transcript lock.
@@ -398,9 +501,13 @@ class AutoFixOrchestrator:
         bundling execution result, transcript path, error message, errored flag,
         feedback items, and resolved grants. Mirrors the exec critical section
         of _claim_and_exec exactly, differing ONLY by the argv (Decision A).
-        Persists grant-resolution audit rows (``autofix.grant_resolved`` /
-        ``autofix.egress_unenforced`` on success; ``autofix.grant_failed`` on
-        failure) BEFORE exec. Does NOT persist run completion or exec outcome
+        Persists grant-resolution audit rows (``autofix.grant_resolved`` on
+        success; ``autofix.grant_failed`` on failure) BEFORE exec. On real
+        runs, additionally installs the fixer-egress-proxy per-exec allow-list
+        (STAGE-009-015 Decisions A/B/F): success emits
+        ``autofix.egress_enforced``; failure emits
+        ``autofix.egress_configuration_error`` and returns errored fail-closed
+        (no retry). Does NOT persist run completion or exec outcome
         — caller persists those. Feedback sentinel scan + parse happens HERE,
         inside self._transcript_lock, to prevent cross-run misattribution.
         """
@@ -464,21 +571,73 @@ class AutoFixOrchestrator:
                         "egress": list(grants.egress),
                     },
                 )
-                if not dry and grants.egress:
-                    await insert_audit(
-                        conn,
-                        who="system:autofix",
-                        what="autofix.egress_unenforced",
-                        after={
-                            "runbook_id": record.id,
-                            "alert_id": alert.id if alert is not None else None,
-                            "run_id": run_id,
-                            "egress": list(grants.egress),
-                            "detail": (
-                                "egress declared but not enforced by the "
-                                "fixer-runner network layer (STAGE-009-015)"
-                            ),
-                        },
+
+            # STAGE-009-015: per-exec egress-proxy config (Decisions A/B/F).
+            # DRY runs skip this entirely — no real network calls happen during
+            # a dry run (`claude --print --allowed-tools=...` is the plan
+            # generator; it does not need Anthropic API access during exec
+            # since ANTHROPIC_API_KEY is threaded via env and the CLI's plan
+            # mode uses a local model preview in fake-CI). Real runs MUST
+            # succeed here or the exec is skipped fail-closed.
+            if not dry:
+                try:
+                    await self._configure_egress_for_exec(grants=grants)
+                except EgressConfigurationError as exc:
+                    try:
+                        async with self._db.transaction() as conn:
+                            await insert_audit(
+                                conn,
+                                who="system:autofix",
+                                what="autofix.egress_configuration_error",
+                                after={
+                                    "runbook_id": record.id,
+                                    "alert_id": alert.id if alert is not None else None,
+                                    "run_id": run_id,
+                                    "reason": exc.reason,
+                                    "detail": exc.detail,
+                                    "egress": list(grants.egress),
+                                    "baseline": list(self._config.egress_baseline_hostnames),
+                                },
+                            )
+                    except Exception:  # pragma: no cover
+                        self._log.exception(
+                            "autofix_egress_configuration_error_audit_failed",
+                            runbook_id=record.id,
+                            run_id=run_id,
+                        )
+                    # Fail-closed return, mirroring GrantResolutionError's ExecOutcome return shape,
+                    # except grants=grants (we have grants; egress config failed AFTER grant
+                    # resolution succeeded).
+                    return ExecOutcome(
+                        exec_result=ExecResult(exit_code=1, stdout="", stderr=""),
+                        transcript_path=None,
+                        error_msg=exc.detail,
+                        errored=True,
+                        feedback_items=None,
+                        grants=grants,
+                    )
+                # Success: emit informational egress_enforced audit.
+                try:
+                    async with self._db.transaction() as conn:
+                        await insert_audit(
+                            conn,
+                            who="system:autofix",
+                            what="autofix.egress_enforced",
+                            after={
+                                "runbook_id": record.id,
+                                "alert_id": alert.id if alert is not None else None,
+                                "run_id": run_id,
+                                "egress": list(grants.egress),
+                                "baseline": list(self._config.egress_baseline_hostnames),
+                            },
+                        )
+                except Exception:  # pragma: no cover - defensive: informational audit write failure
+                    # Non-fatal: proxy is configured correctly; log-only if
+                    # the informational audit write fails.
+                    self._log.exception(
+                        "autofix_egress_enforced_audit_failed",
+                        runbook_id=record.id,
+                        run_id=run_id,
                     )
 
             before = self._snapshot_dir(transcript_dir)

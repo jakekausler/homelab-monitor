@@ -91,6 +91,11 @@ services:
       # /runbooks is not a directory" error. Read-only: the loader only reads
       # runbook folder configs; runbook edits happen on the host filesystem.
       - ${HM_RUNBOOKS_SRC:-../../runbooks}:/runbooks:ro
+      # STAGE-009-015: RW mount for the fixer-egress-proxy allow-list. The
+      # orchestrator rewrites /data/proxy/allowlist.txt per real exec, then
+      # invokes `docker exec fixer-egress-proxy squid -k reconfigure`. The proxy
+      # sees the SAME file via a RO mount at /etc/squid/allowlist.txt.
+      - ${HM_FIXER_PROXY_CONFIG_SRC:-./proxy}:/data/proxy
       - data_vm:/var/vm-data:ro
       - data_vl:/var/vl-data:ro
       - data_backup:/storage/backup/homelab-monitor
@@ -622,6 +627,9 @@ services:
     # NOT publish anything (#7 / least exposure).
     networks:
       - fixer-egress
+    depends_on:
+      fixer-egress-proxy:
+        condition: service_healthy
     environment:
       # STAGE-009-003 ships ANTHROPIC_API_KEY as a plain compose passthrough
       # sourced from .env / host env. It is NEVER committed. Under CI / the
@@ -631,6 +639,13 @@ services:
       # injection (`docker exec -e ANTHROPIC_API_KEY=<vault-fetched> ...`). The
       # orchestrator, not compose, will supply the real key at run time.
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # STAGE-009-015: force all HTTPS/HTTP egress through the proxy sidecar.
+      # NO_PROXY is deliberately empty — there is no LAN destination the fixer
+      # is allowed to reach; the fixer-egress bridge is not routed to the
+      # homelab LAN, and nftables §3.10 drops everything else.
+      HTTPS_PROXY: http://${HM_CONTAINER_PREFIX:-homelab}-fixer-egress-proxy:3128
+      HTTP_PROXY: http://${HM_CONTAINER_PREFIX:-homelab}-fixer-egress-proxy:3128
+      NO_PROXY: ""
     volumes:
       # The fixer is the WRITER of transcripts: mount the SAME host path as the
       # monitor's :ro mount, but READ-WRITE here (no :ro). POSIX default ACLs on
@@ -651,6 +666,44 @@ services:
     # is observable to the monitor/orchestrator rather than silently auto-restarted by
     # `restart: unless-stopped`). Tracked, not silently dropped.
 
+  # ===========================================================================
+  # fixer-egress-proxy — STAGE-009-015
+  # ===========================================================================
+  # HTTPS forward proxy sitting on the `fixer-egress` bridge. Fixer-runner
+  # egress goes ONLY through this proxy (via HTTPS_PROXY/HTTP_PROXY env vars
+  # on the fixer-runner). The allow-list is rewritten per real exec by the
+  # orchestrator (baseline hostnames ∪ runbook-declared egress); Squid is
+  # reloaded via `docker exec fixer-egress-proxy squid -k reconfigure`. The
+  # nftables rules in scripts/host-setup.sh §3.10 enforce that this is the
+  # ONLY way out of the `hm-fixegress` bridge.
+  #
+  # Profile-gated `fixer` (matches fixer-runner). Off by default in public
+  # release; enabled by adding `fixer` to COMPOSE_PROFILES in .env.
+  fixer-egress-proxy:
+    profiles: ["fixer"]
+    image: ubuntu/squid:6.6-24.04_beta
+    container_name: ${HM_CONTAINER_PREFIX:-homelab}-fixer-egress-proxy
+    restart: unless-stopped
+    networks:
+      fixer-uplink:
+        gw_priority: 100
+      fixer-egress:
+        gw_priority: 0
+    volumes:
+      # RO mounts of the config + allow-list. The orchestrator writes the
+      # allow-list on the host (via its RW `/data/proxy` mount) then calls
+      # `docker exec squid -k reconfigure`.
+      - ${HM_FIXER_PROXY_CONFIG_SRC:-./proxy}/squid.conf:/etc/squid/squid.conf:ro
+      - ${HM_FIXER_PROXY_CONFIG_SRC:-./proxy}/allowlist.txt:/etc/squid/allowlist.txt:ro
+    # No `ports:` — proxy is reached only by other containers on the
+    # `fixer-egress` bridge (fixer-runner → proxy → internet).
+    healthcheck:
+      test: ["CMD-SHELL", "squid -k parse"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
 networks:
   homelab-monitor-net:
     name: ${HM_INSTANCE:-homelab-monitor}-net
@@ -659,10 +712,27 @@ networks:
   # It is a SEPARATE network from homelab-monitor-net so the fixer cannot reach
   # the monitor's sidecars (VM/VL/AM/etc.) directly — its only inbound surface is
   # `docker exec`. No `ports:` are published on the fixer-runner service.
-  # TODO(STAGE-009-008): per-runbook egress DESTINATION filtering (restricting
-  # this network's reachable endpoints) is owned by STAGE-009-008.
+  # STAGE-009-015: explicit bridge name `hm-fixegress` (Decision D) so
+  # scripts/host-setup.sh §3.10's nftables rules can target the netns by a
+  # stable, human-readable interface name instead of a docker-generated
+  # `br-<hash>` id. The fixer-runner and the fixer-egress-proxy sidecar both
+  # attach to this bridge; the host firewall drops any traffic leaving the
+  # bridge that does not exit through the proxy (see §3.10 header).
   fixer-egress:
     name: ${HM_INSTANCE:-homelab-monitor}-fixer-egress
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.name: hm-fixegress
+  # STAGE-009-015: proxy-only uplink network — the fixer-egress-proxy
+  # attaches to BOTH fixer-egress (facing the fixer-runner) AND fixer-uplink
+  # (its outbound to the internet). The nftables `homelab_fixer` table drops
+  # traffic leaving hm-fixegress → but the proxy's outbound originates from
+  # fixer-uplink instead, so it isn't affected. This preserves the
+  # defense-in-depth pattern: fixer-runner cannot reach the internet except
+  # by going through the proxy on fixer-egress.
+  fixer-uplink:
+    driver: bridge
+    name: ${HM_INSTANCE:-homelab-monitor}-fixer-uplink
 
 volumes:
   data_monitor:

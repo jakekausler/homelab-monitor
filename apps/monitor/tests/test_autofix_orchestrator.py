@@ -91,19 +91,40 @@ from homelab_monitor.kernel.secrets.repository import AsyncSecretsRepository
 
 
 @dataclass
+class _RecordedExecCall:
+    """One recorded exec_capture invocation.
+
+    STAGE-009-015: added to observe per-call args (squid reconfigure + claude
+    exec) from within the same fake, in call order.
+    """
+
+    container_id: str
+    cmd: list[str]
+    timeout_seconds: float
+    user: str | None
+    env: Mapping[str, str] | None
+
+
+@dataclass
 class _FakeDockerClient:
     """Minimal DockerSocketClient-shaped stub.
 
     Set `result` to the ExecResult to return, or `raises` to the exception
     to raise from exec_capture. If `transcript_to_write` is set, write a
     .transcript file there on exec (to support _resolve_transcript finding it).
+    For squid (-k reconfigure), set `squid_result`/`squid_raises` (STAGE-009-015).
     """
 
     result: ExecResult = field(
         default_factory=lambda: ExecResult(exit_code=0, stdout="ok", stderr="")
     )
     raises: BaseException | None = None
+    squid_result: ExecResult = field(
+        default_factory=lambda: ExecResult(exit_code=0, stdout="", stderr="")
+    )
+    squid_raises: BaseException | None = None
     transcript_to_write: str | None = None  # if set, write a .transcript here on exec
+    calls: list[_RecordedExecCall] = field(default_factory=list[_RecordedExecCall])
     # Records the last call arguments for assertion
     last_call_container_id: str = ""
     last_call_cmd: list[str] | None = None
@@ -129,6 +150,19 @@ class _FakeDockerClient:
         self.last_call_cmd = cmd
         self.last_call_user = user
         self.last_call_env = env
+        self.calls.append(
+            _RecordedExecCall(
+                container_id=container_id,
+                cmd=cmd,
+                timeout_seconds=timeout_seconds,
+                user=user,
+                env=env,
+            )
+        )
+        if cmd and cmd[0] == "squid":
+            if self.squid_raises is not None:
+                raise self.squid_raises
+            return self.squid_result
         if self.raises is not None:
             raise self.raises
         if self.transcript_to_write is not None:
@@ -301,12 +335,14 @@ def _make_orchestrator(  # noqa: PLR0913
     ssh_target_ids_provider: Callable[[], frozenset[str]] | None = None,
 ) -> AutoFixOrchestrator:
     log = structlog.get_logger()
+    Path(exec_log_dir).mkdir(parents=True, exist_ok=True)
     config = FixerRunnerConfig(
         container="test-fixer",
         transcript_dir=transcript_dir,
         exec_log_dir=exec_log_dir,
         fixer_user="homelab-fixer",
         exec_timeout_seconds=exec_timeout_seconds,
+        egress_allowlist_path=str(Path(exec_log_dir) / "allowlist.txt"),
     )
     return AutoFixOrchestrator(
         runbook_repo=RunbookRepo(repo),
@@ -1457,6 +1493,73 @@ async def test_exec_non_timeout_docker_error_sentinel_1(
 
 
 # ---------------------------------------------------------------------------
+# EgressConfigurationError during _exec_claude's real-run egress-proxy config
+# (STAGE-009-015): squid -k reconfigure raises a DockerSocketError, which
+# _configure_egress_for_exec wraps as EgressConfigurationError(reason=
+# "reconfigure_docker_error"). _exec_claude's except EgressConfigurationError
+# handler (lines 590-616) must audit autofix.egress_configuration_error and
+# return a fail-closed errored ExecOutcome (exit_code=1, no retry).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_egress_configuration_error_fails_closed_and_audits(
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
+) -> None:
+    """squid -k reconfigure raising DockerSocketError → EgressConfigurationError
+    caught in _exec_claude: exit_code=1 sentinel, autofix.egress_configuration_error
+    audited with reason/detail/egress/baseline, no autofix.egress_enforced emitted."""
+    rb = _make_runbook_record(alertname="TestAlert", runbook_dir=tmp_path / "runbook")
+    await _insert_runbook(repo, rb)
+    alert = _make_alert(alertname="TestAlert")
+    await _insert_alert(repo, alert)
+
+    app_settings = AppSettingsRepository(repo)
+    await app_settings.set("autofix_enabled", "true")
+
+    transcript_dir = str(tmp_path / "transcripts")
+    os.makedirs(transcript_dir, exist_ok=True)
+    exec_log_dir = str(tmp_path / "exec-logs")
+    os.makedirs(exec_log_dir, exist_ok=True)
+
+    docker = _FakeDockerClient(squid_raises=DockerSocketConnectionError("squid socket unreachable"))
+    orch = _make_orchestrator(
+        repo, secrets_repo, docker, transcript_dir=transcript_dir, exec_log_dir=exec_log_dir
+    )
+
+    with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
+        result = await orch.handle_alert(alert)
+
+    assert result is not None
+    assert result.ran is True
+    assert result.exit_code == 1
+
+    audit_row = await repo.fetch_one(
+        text("SELECT after_json FROM audit_log WHERE what = 'autofix.egress_configuration_error'"),
+        {},
+    )
+    assert audit_row is not None
+    after = json.loads(audit_row[0])
+    assert after["reason"] == "reconfigure_docker_error"
+    assert after["detail"]
+    assert after["egress"] == []
+    assert isinstance(after["baseline"], list)
+
+    # Only one egress_configuration_error row, and no egress_enforced (fail-closed).
+    count_row = await repo.fetch_one(
+        text("SELECT COUNT(*) FROM audit_log WHERE what = 'autofix.egress_configuration_error'"),
+        {},
+    )
+    assert count_row is not None
+    assert int(count_row[0]) == 1
+
+    enforced_row = await repo.fetch_one(
+        text("SELECT what FROM audit_log WHERE what = 'autofix.egress_enforced'"), {}
+    )
+    assert enforced_row is None
+
+
+# ---------------------------------------------------------------------------
 # Non-DockerSocketError exception propagates
 # ---------------------------------------------------------------------------
 
@@ -1527,6 +1630,10 @@ async def test_resolve_transcript_file_within_window(
             user: str | None = None,
             env: Mapping[str, str] | None = None,
         ) -> ExecResult:
+            if cmd and cmd[0] == "squid":
+                # STAGE-009-015: egress proxy reconfigure call happens BEFORE
+                # the transcript-dir snapshot; do not write the transcript here.
+                return ExecResult(exit_code=0, stdout="", stderr="")
             # Small yield so exec_started is in the past before writing
             await asyncio.sleep(0.05)
             # Write the transcript file to the transcript_dir
@@ -5316,7 +5423,7 @@ scoped_capabilities:
   ssh:
     target_id: "udm"
   egress:
-    - "1.2.3.4:443"
+    - "1.2.3.4"
 """
     )
 
@@ -5356,7 +5463,7 @@ scoped_capabilities:
     audit_rows = await repo.execute(
         text(
             "SELECT what, after_json FROM audit_log "
-            "WHERE what IN ('autofix.grant_resolved', 'autofix.egress_unenforced') "
+            "WHERE what IN ('autofix.grant_resolved', 'autofix.egress_enforced') "
             "ORDER BY rowid"
         )
     )
@@ -5369,11 +5476,11 @@ scoped_capabilities:
     assert resolved_after["docker_container"] == "foo"
     assert resolved_after["docker_allowed_actions"] == ["restart"]
     assert resolved_after["ssh_target_id"] == "udm"
-    assert resolved_after["egress"] == ["1.2.3.4:443"]
+    assert resolved_after["egress"] == ["1.2.3.4"]
 
-    assert egress_row[0] == "autofix.egress_unenforced"
+    assert egress_row[0] == "autofix.egress_enforced"
     egress_after = json.loads(egress_row[1])
-    assert egress_after["egress"] == ["1.2.3.4:443"]
+    assert egress_after["egress"] == ["1.2.3.4"]
 
 
 @pytest.mark.asyncio
@@ -5686,10 +5793,10 @@ def test_autofix_package_lazy_getattr_returns_autofix_orchestrator() -> None:
 
 
 @pytest.mark.asyncio
-async def test_grant_resolution_dry_run_suppresses_egress_unenforced(
+async def test_grant_resolution_dry_run_does_not_emit_egress_enforced(
     repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
-    """T5: dry=True -> grant_resolved present, egress_unenforced absent."""
+    """T5: dry=True -> grant_resolved present, egress_enforced absent."""
     rb_dir = tmp_path / "test-runbook"
     rb_dir.mkdir()
     runbook_yaml = rb_dir / "runbook.yaml"
@@ -5745,24 +5852,26 @@ scoped_capabilities:
     assert error_msg is None
     assert errored is False
 
-    # Check that grant_resolved is present but egress_unenforced is NOT.
+    # Check that grant_resolved is present but egress_enforced is NOT.
     audit_rows = await repo.execute(
         text(
             "SELECT what FROM audit_log "
-            "WHERE what IN ('autofix.grant_resolved', 'autofix.egress_unenforced')"
+            "WHERE what IN ('autofix.grant_resolved', 'autofix.egress_enforced')"
         )
     )
     rows = audit_rows.fetchall()
     whats = [row[0] for row in rows]
     assert "autofix.grant_resolved" in whats
-    assert "autofix.egress_unenforced" not in whats
+    assert "autofix.egress_enforced" not in whats
 
 
 @pytest.mark.asyncio
-async def test_grant_resolution_empty_egress_suppresses_unenforced(
+async def test_grant_resolution_empty_egress_still_emits_egress_enforced_with_baseline(
     repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
-    """T6: egress: [] (empty) -> grant_resolved present, egress_unenforced absent."""
+    """T6: egress: [] (empty) -> grant_resolved present, egress_enforced IS emitted
+    with empty egress payload and baseline populated (real runs always enforce
+    baseline even when the runbook declares no additional egress)."""
     rb_dir = tmp_path / "test-runbook"
     rb_dir.mkdir()
     runbook_yaml = rb_dir / "runbook.yaml"
@@ -5808,25 +5917,35 @@ scoped_capabilities:
     assert exec_result.exit_code == 0
     assert errored is False
 
-    # Check audit rows: grant_resolved present, egress_unenforced absent.
+    # Check audit rows: BOTH grant_resolved AND egress_enforced present.
+    # egress_enforced fires on every real exec even when grants.egress is empty,
+    # because the baseline is always configured (STAGE-009-015).
     audit_rows = await repo.execute(
         text(
-            "SELECT what FROM audit_log "
-            "WHERE what IN ('autofix.grant_resolved', 'autofix.egress_unenforced')"
+            "SELECT what, after_json FROM audit_log "
+            "WHERE what IN ('autofix.grant_resolved', 'autofix.egress_enforced') "
+            "ORDER BY rowid"
         )
     )
     rows = audit_rows.fetchall()
     whats = [row[0] for row in rows]
     assert "autofix.grant_resolved" in whats
-    assert "autofix.egress_unenforced" not in whats
+    assert "autofix.egress_enforced" in whats
+
+    # Verify the egress_enforced payload has empty egress + populated baseline
+    enforced_row = next(row for row in rows if row[0] == "autofix.egress_enforced")
+    enforced_after = json.loads(enforced_row[1])
+    assert enforced_after["egress"] == []
+    assert len(enforced_after["baseline"]) > 0
 
 
 @pytest.mark.asyncio
-async def test_grant_resolution_default_egress_when_key_missing(
+async def test_grant_resolution_default_egress_when_key_missing_still_emits_egress_enforced(
     repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """Test: egress key missing (default) -> grant_resolved present,
-    egress_unenforced absent, egress=[]."""
+    egress_enforced IS emitted with egress=[] and baseline populated (STAGE-009-015:
+    baseline always configured on real runs)."""
     rb_dir = tmp_path / "test-runbook"
     rb_dir.mkdir()
     runbook_yaml = rb_dir / "runbook.yaml"
@@ -5871,17 +5990,26 @@ scoped_capabilities:
     assert exec_result.exit_code == 0
     assert errored is False
 
-    # Check audit rows: grant_resolved present, egress_unenforced absent.
+    # Check audit rows: BOTH grant_resolved AND egress_enforced present.
+    # egress_enforced fires on every real exec even when grants.egress is empty,
+    # because the baseline is always configured (STAGE-009-015).
     audit_rows = await repo.execute(
         text(
-            "SELECT what FROM audit_log "
-            "WHERE what IN ('autofix.grant_resolved', 'autofix.egress_unenforced')"
+            "SELECT what, after_json FROM audit_log "
+            "WHERE what IN ('autofix.grant_resolved', 'autofix.egress_enforced') "
+            "ORDER BY rowid"
         )
     )
     rows = audit_rows.fetchall()
     whats = [row[0] for row in rows]
     assert "autofix.grant_resolved" in whats
-    assert "autofix.egress_unenforced" not in whats
+    assert "autofix.egress_enforced" in whats
+
+    # Verify the egress_enforced payload has empty egress + populated baseline
+    enforced_row = next(row for row in rows if row[0] == "autofix.egress_enforced")
+    enforced_after = json.loads(enforced_row[1])
+    assert enforced_after["egress"] == []
+    assert len(enforced_after["baseline"]) > 0
 
 
 @pytest.mark.asyncio

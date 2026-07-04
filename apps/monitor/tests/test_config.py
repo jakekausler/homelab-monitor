@@ -17,6 +17,7 @@ from homelab_monitor.kernel.config import (
     DrainConfig,
     ErrorPattern,
     ErrorRateOverride,
+    FixerRunnerConfig,
     LogsConfig,
     LogStreamBudgetConfig,
     NewSignatureConfig,
@@ -1705,4 +1706,35 @@ def test_load_fixer_runner_config_max_age_days_negative_raises(
     monkeypatch.delenv("HOMELAB_MONITOR_FIXER_TRANSCRIPT_ROTATION_MAX_COUNT", raising=False)
     monkeypatch.setenv("HOMELAB_MONITOR_FIXER_TRANSCRIPT_ROTATION_MAX_AGE_DAYS", "-5")
     with pytest.raises(ValueError, match="TRANSCRIPT_ROTATION_MAX_AGE_DAYS must be > 0"):
+        load_fixer_runner_config()
+
+
+def test_load_fixer_runner_config_egress_baseline_env_var_parsed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """HOMELAB_MONITOR_FIXER_EGRESS_BASELINE_HOSTNAMES parses comma-separated, stripped entries."""
+    monkeypatch.setenv(
+        "HOMELAB_MONITOR_FIXER_EGRESS_BASELINE_HOSTNAMES",
+        "foo.example, bar.example ,  baz.example",
+    )
+    config = load_fixer_runner_config()
+    assert config.egress_baseline_hostnames == ("foo.example", "bar.example", "baz.example")
+
+
+def test_load_fixer_runner_config_egress_baseline_env_var_empty_after_strip_falls_back_to_defaults(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Whitespace/comma-only HOMELAB_MONITOR_FIXER_EGRESS_BASELINE_HOSTNAMES
+    falls back to defaults."""
+    monkeypatch.setenv("HOMELAB_MONITOR_FIXER_EGRESS_BASELINE_HOSTNAMES", " , , , ")
+    config = load_fixer_runner_config()
+    assert config.egress_baseline_hostnames == FixerRunnerConfig().egress_baseline_hostnames
+
+
+def test_load_fixer_runner_config_egress_reconfigure_timeout_zero_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """HOMELAB_MONITOR_FIXER_EGRESS_RECONFIGURE_TIMEOUT_SECONDS=0 raises ValueError."""
+    monkeypatch.setenv("HOMELAB_MONITOR_FIXER_EGRESS_RECONFIGURE_TIMEOUT_SECONDS", "0")
+    with pytest.raises(ValueError, match=r".*must be > 0.*"):
         load_fixer_runner_config()
