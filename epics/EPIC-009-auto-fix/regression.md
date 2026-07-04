@@ -319,3 +319,29 @@ Added at Refinement 2026-07-02. All items derived from STAGE-009-010A Design Not
 - [ ] **Non-negotiable #4 (Audit) preservation:** All prune and prune-skip actions MUST emit audit rows synchronously with the DB write (same transaction per row). Silent registry deletion would violate the auditability invariant.
 
 (STAGE-009-004 back-patch; owns the "refresh does not prune deleted-folder DB rows" bug filed by STAGE-009-010 Refinement 2026-07-02 and confirmed by STAGE-009-016.)
+
+---
+
+## STAGE-009-013 regression items
+
+Discovered during STAGE-009-013 Refinement (epic-closing prod E2E validation, 2026-07-04). All four items are product-behavior questions that surfaced when the first-ever real-mode risky-runbook approval was exercised end-to-end. The two orchestrator issues (#1, #3) were partially addressed in STAGE-009-013 itself (source patched for the `allow_list` asymmetry + `_load_alert_for_exec` simplification); the remaining items are follow-ups.
+
+1. **`_check_operational_gates` cooldown SQL lacks `mode='real'` filter** (BACKEND).
+
+   The `runs_repository._LATEST_ENDED_SQL` query used by the cooldown gate filters only on `runbook_id`, not `mode`. Result: a dry-run row's `ended_at` trips the cooldown gate against the subsequent real-run request in `execute_approved`. Test-side workaround is `cooldown_seconds=0` (used by both the new pytest and the reference integration test `test_autofix_orchestrator_e2e.py::_insert_test_runbook`). Symptom for operator users: after approving a dry-run, the real run will be denied for the full `cooldown_seconds` window even though no real run has yet occurred. Product decision needed: should `mode='real'` be filtered, or should dry-run rows continue to consume cooldown budget (safety-model rationale: prevent dry-run-approval storms)? If filter is added, backfill test coverage where `cooldown_seconds > 0` for dry+approve flow.
+
+2. **`_check_operational_gates` rate-limit SQL likely lacks `mode='real'` filter (adjacent to #1)** (BACKEND).
+
+   The `_COUNT_RECENT_SQL` query used by the rate-limit gate similarly filters only on `runbook_id`. Not confirmed but architecturally symmetric to #1. Verify + decide alongside #1.
+
+3. **Operator-initiated real runs get `initiated_by='alert'`** (BACKEND).
+
+   The STAGE-009-013 prod E2E showed the successful real run row (run_id `019f2ea0-8ebc-7b80-9b9d-4729c248cf8c`, mode=real, exit_code=0) has `initiated_by: "alert"`, but the corresponding dry-run row (mode=dry_run, run_id `019f2ea0-3746-7150-ae4c-034ddcdb7b4f`) correctly has `initiated_by: "operator"`. The whole flow was operator-initiated (via `POST /api/runbooks/{id}/trigger` → dry-run → `POST /api/autofix/approvals/{id}/approve` → real run). Likely root cause: `execute_approved` calls into `_claim_and_exec` with the default `initiated_by="alert"`, not threading through the operator context from the dry-run's approval. Fix: `execute_approved` should pass `initiated_by="operator"` to `_claim_and_exec` (mirroring the dry-run store path). Affects history UI labelling (STAGE-009-011 filter values), audit fidelity.
+
+4. **`/data/proxy` host bind-mount permission provisioning gap** (HOST-INTEGRATION / DEPLOY).
+
+   The first real-mode auto-fix invocation on prod (2026-07-04, before the STAGE-009-013 chown fix) failed with `EgressConfigurationError(reason="allowlist_write_failed")` at 5ms exit code 1, because `/storage/programs/homelab-monitor/deploy/compose/proxy/` was owned by uid 1000 (host user) but the `homelab-monitor` container runs as uid 995. STAGE-009-015 shipped the egress-config write path but no host-setup step enforced writable permissions on the mount. STAGE-009-013 host-fixed by `sudo chown -R 995:995 /storage/programs/homelab-monitor/deploy/compose/proxy`, but this needs a permanent solution: (a) `scripts/host-setup.sh` should chown the proxy dir to match the monitor container's runtime uid, OR (b) a startup health-check should assert `/data/proxy` is writable and fail-loudly if not, OR (c) an init container should chown on startup. Would prevent silent recurrence after fresh host provisioning.
+
+5. **Refresh endpoint documentation gap: prune_skipped signal for orphaned rows** (LOW PRIORITY / DOC).
+
+   The refresh endpoint returned `prune_skipped: ["/runbooks/pihole-restart-loop-e2e-stage013"]` for our scratch runbook because it had `runbook_runs` rows (FK-preserved per STAGE-009-017). This is intended behavior but there's no operator-facing surface to complete the prune (delete runs first + re-refresh). Documenting the intended cleanup path in the runbooks admin UI would reduce confusion.
