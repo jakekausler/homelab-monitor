@@ -121,6 +121,30 @@ Per-stage regression checks. Run these when suspecting any regression that touch
 - [ ] `runbook_run_feedback` is a SIBLING table — `runbook_runs` schema unchanged. `audit_log` writes for `autofix.ran` / `autofix.exec_error` / `autofix.dry_run_stored` unchanged. `autofix.feedback_parse_error` is additive telemetry, not a replacement. Seven non-negotiables (allow-list trigger, scoped runbook, homelab-fixer identity, audit trail, dry-run + approval, rate-limit + cooldown, kill switch): all PASS-verified by code-reviewer pass 2.
 - [ ] UI + list endpoint deferred to STAGE-009-011 (tracked existing stage; Deliverable #3 explicitly reads "Show the runbook_run_feedback items (STAGE-009-009) for the selected run"). Feedback rows are queryable via SQLite CLI in the interim.
 
+## STAGE-009-012 — Regression Items (2026-07-03, Design)
+
+- [ ] **Audit immutability invariant:** `runbook_runs` and `audit_log` MUST NOT have any DELETE endpoint on ANY router in `apps/monitor/homelab_monitor/kernel/api/routers/*.py`. Regression test asserts a delete attempt via any conceivable path returns 404/405. Non-negotiable #4 (audit integrity).
+- [ ] **`runbook_hash` per-run invariant:** every `runbook_runs` row MUST have a non-null `runbook_hash`. Regression test asserts SELECT COUNT(*) FROM runbook_runs WHERE runbook_hash IS NULL == 0 after any orchestrator write path (dry + real).
+- [ ] **Hash-drift check invariant:** `POST /api/autofix/approvals/{id}/approve` MUST return 409 `runbook_changed_since_plan` when the runbook's `content_hash` has changed since dry-run capture. Regression test: mutate a runbook file, then approve → 409 + `autofix.rejected` audit row + approval marked `rejected`.
+- [ ] **Hash-missing-runbook invariant:** `POST /api/autofix/approvals/{id}/approve` MUST return 409 `runbook_missing` when the runbook folder has been deleted since dry-run.
+- [ ] **Transcript rotation retains audit row:** rotation MUST prune transcript FILES only. The `runbook_runs` row MUST persist with `transcript_path=NULL` AND `transcript_pruned_at=<utc_iso>` after prune. Regression test asserts row count unchanged, file gone, marker set.
+- [ ] **Rotation config configurable via env:** `HOMELAB_MONITOR_FIXER_TRANSCRIPT_ROTATION_MAX_COUNT` and `HOMELAB_MONITOR_FIXER_TRANSCRIPT_ROTATION_MAX_AGE_DAYS` MUST override `FixerRunnerConfig` defaults (100 / 365).
+- [ ] **Rotation reuses fixer-runner identity split:** monitor process MUST call `docker exec homelab-fixer-runner rm ...` for actual file deletion; monitor MUST NOT attempt to unlink under `/data/runbook-transcripts` directly (would fail with EROFS; regression test asserts monitor's mount stays `:ro`).
+- [ ] **Rotation admin endpoint:** `POST /api/autofix/rotate-transcripts` MUST require an authenticated admin session (401 on unauthenticated; 403 on non-admin session); returns `{files_pruned: int, runs_marked: int, runbooks_scanned: int}`.
+- [ ] **Rotation graceful when fixer-runner disabled:** if `homelab-fixer-runner` container is not running, rotation MUST emit `autofix.transcript_rotation_skipped_fixer_disabled` audit row + log WARN, and NOT raise an unhandled exception.
+- [ ] **Scheduler tick fires:** the daily 03:00 UTC autofix housekeeping tick MUST be observable via metric or log (regression test hooks the scheduler's tick emission).
+- [ ] **Instance-A E2E: DELETE endpoints reject unauthenticated + authenticated:** `curl -X DELETE http://192.168.2.148:29090/api/autofix/runs/<any-uuid>` → 405; same for `/api/audit-log/<any-uuid>`. If ANY future stage adds a delete route on these tables, this test breaks — that's the point (non-negotiable #4).
+- [ ] **Instance-A E2E: Rotate endpoint 401 unauthenticated + 200 admin+CSRF:** unauthenticated POST → 401; authenticated admin session POST with `X-CSRF-Token` from cookie → 200 body containing `{files_pruned, runs_marked, runbooks_scanned, skipped_reason}`. If any future refactor drops `require_session` from the endpoint, this catches it.
+- [ ] **Instance-A E2E: RunOut/RunDetailOut schema fields present:** `docker exec homelab-monitor python -c "from homelab_monitor.kernel.api.routers.autofix_runs import RunOut, RunDetailOut; print('transcript_pruned_at' in RunOut.model_fields, 'runbook_hash' in RunDetailOut.model_fields)"` → both True. If a future stage removes either field, this catches it.
+- [ ] **Instance-A E2E: DB schema present:** `sqlite3` against prod DB `SELECT sql FROM sqlite_master WHERE name='runbook_runs'` contains `transcript_pruned_at TEXT` and `runbook_hash TEXT`. If a future migration accidentally drops either column, this catches it.
+- [ ] **Instance-A E2E: Alembic head at 0051 or later:** `alembic_current_revision` returns 0051+. Prevents a rollback below the STAGE-009-012 migration line.
+
+**Owed inheritance re-pointing:**
+
+- The STAGE-009-001 regression item ("STAGE-009-012 follow-up: whole-folder/markdown hash decision") is now owned by **STAGE-009-016** (whole-folder + markdown drift hash). Move / re-point at 016's Refinement.
+- The STAGE-009-006 regression item ("Markdown/whole-folder drift detection → STAGE-009-012") is now owned by **STAGE-009-016**. Move / re-point at 016's Refinement.
+- The STAGE-009-010 Refinement bug ("`POST /api/runbooks/refresh` does not prune deleted-folder DB rows") is now owned by **STAGE-009-017** (registry row pruning on refresh).
+
 ## STAGE-009-010 (Build + Refinement — completed 2026-07-02)
 
 **Design decisions (locked 2026-07-02):**

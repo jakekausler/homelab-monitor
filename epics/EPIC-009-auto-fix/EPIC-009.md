@@ -1,6 +1,6 @@
 # EPIC-009: Auto-fix subsystem
 
-## Status: In Progress (13/17 stages — STAGE-009-001..015 + STAGE-009-010A/010B; STAGE-009-014/015 added 2026-07-02 during STAGE-009-008 Design as owned deferrals; STAGE-009-010A/010B added 2026-07-02 during STAGE-009-010 Design as owned deferrals; decomposed 2026-06-29)
+## Status: In Progress (14/19 stages — STAGE-009-001..017 + STAGE-009-010A/010B; STAGE-009-014/015 added 2026-07-02 during STAGE-009-008 Design as owned deferrals; STAGE-009-010A/010B added 2026-07-02 during STAGE-009-010 Design as owned deferrals; STAGE-009-016/017 added 2026-07-03 during STAGE-009-012 Design as owned deferrals; decomposed 2026-06-29)
 
 ## Overview
 
@@ -73,6 +73,8 @@ Ship with auto-trigger **entirely OFF, ZERO enabled runbooks**. The `pihole-rest
 | STAGE-009-013 | `pihole-restart-loop` example runbook (folder: markdown + config declaring docker capability for `pihole-unbound` action `restart`, `risk_tag: risky`), shipped in `runbooks/_examples/` NOT registered/enabled; end-to-end pipeline validation against the fake claude. **Epic-closing stage** | BACKEND/CONTENT |
 | STAGE-009-014 | Docker intent gateway: fixer emits `docker-intent.json` → orchestrator parses post-exec → validates against STAGE-009-008's `DockerCapability` envelope → executes via existing `DockerClient` → audits `autofix.intent_executed` / `autofix.intent_denied`. Enforces non-negotiable #2 (docker dimension) at execution time. Fixer holds no docker socket — enforcement runs in monitor process | BACKEND |
 | STAGE-009-015 | fixer-runner egress enforcement: HTTPS proxy sidecar on `fixer-egress` network + host iptables/nftables DROP for non-proxy outbound; proxy enforces STAGE-009-008's `granted_egress` allow-list + baseline Anthropic API. Enforces non-negotiable #2 (egress dimension) at network layer. Transitions `autofix.egress_unenforced` warning to `autofix.egress_enforced` informational | BACKEND/DEPLOY |
+| STAGE-009-016 | Whole-folder + markdown drift hash: extend `content_hash` from YAML-only to include `*.md` and sibling files under runbook folder; migration to backfill; behavior change docs (existing pinned approvals auto-invalidate on next approve — expected + tested) | BACKEND |
+| STAGE-009-017 | Registry row pruning on `POST /api/runbooks/refresh`: refresh endpoint prunes `runbooks` DB rows whose disk folders have been deleted (STAGE-009-004 back-patch); audit row on prune; regression test | BACKEND |
 
 ## Dependency ordering rationale
 
