@@ -33,6 +33,10 @@ from homelab_monitor.kernel.docker.socket_client import ExecResult
 from homelab_monitor.kernel.runbooks.repository import RunbookRepo
 from homelab_monitor.kernel.secrets.repository import AsyncSecretsRepository
 from homelab_monitor.kernel.security.pin import PIN_HASH_KEY, hash_pin
+from tests.test_api_runbooks import (
+    _valid_config_dict,  # pyright: ignore[reportPrivateUsage]
+    _write_runbook,  # pyright: ignore[reportPrivateUsage]
+)
 
 # Import test fixtures and helpers from orchestrator tests. These are underscore-
 # private factories shared across the autofix test suite; the codebase idiom for
@@ -646,6 +650,106 @@ async def test_approve_drift_conflict_and_rejects(
     assert after["gate"] == "runbook_changed"
     assert after["pinned_runbook_hash"] == "hash-v1"
     assert after["current_runbook_hash"] == "hash-v2"
+
+
+@pytest.mark.asyncio
+async def test_pending_approval_from_v1_hash_gets_409_after_refresh(
+    authenticated_client: AsyncClient,
+    repo: SqliteRepository,
+    secrets_repo: AsyncSecretsRepository,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Primary regression: a v1-hash pinned approval 409s once the runbook is
+    rehashed to v2 on refresh — this IS the intended audit trail per Design.
+    """
+    # 1. Write a valid runbook folder
+    rb_folder = tmp_path / "runbook"
+    _write_runbook(rb_folder, config=_valid_config_dict("test-runbook"))
+    monkeypatch.setenv("HOMELAB_MONITOR_RUNBOOKS_DIR", str(tmp_path))
+
+    # Create the runbook record with v2 hash
+    rb = _make_runbook_record(
+        alertname="TestAlert",
+        dry_run_required=True,
+        runbook_dir=rb_folder,
+    )
+    await _insert_runbook(repo, rb)
+
+    app_settings = AppSettingsRepository(repo)
+    await app_settings.set("autofix_enabled", "true")
+
+    # 2. Simulate pre-stage v1 row by directly UPDATEing to bare hex
+    async with repo.transaction() as conn:
+        await conn.execute(
+            text("UPDATE runbooks SET content_hash = :hash WHERE id = :id"),
+            {"id": rb.id, "hash": "a" * 64},
+        )
+
+    # 3. Create a pending approval with the v1 hash
+    transcript_dir = str(tmp_path / "transcripts")
+    os.makedirs(transcript_dir, exist_ok=True)
+    exec_log_dir = str(tmp_path / "exec-logs")
+    os.makedirs(exec_log_dir, exist_ok=True)
+
+    docker = _FakeDockerClient(
+        result=ExecResult(exit_code=0, stdout="plan", stderr=""),
+        transcript_to_write=f"{transcript_dir}/dry-{uuid7()}.transcript",
+    )
+    orch = _make_orchestrator(
+        repo,
+        secrets_repo,
+        docker,
+        transcript_dir=transcript_dir,
+        exec_log_dir=exec_log_dir,
+    )
+    authenticated_client.app.state.autofix_orchestrator = orch  # type: ignore[attr-defined]
+
+    alert = _make_alert(alertname="TestAlert")
+    await _insert_alert(repo, alert)
+
+    with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
+        dry_result = await orch.handle_alert(alert)
+
+    assert dry_result is not None
+    approval_id = dry_result.approval_id
+    assert approval_id is not None
+
+    # Verify approval was created with v1 hash
+    approvals_repo = RunbookRunApprovalsRepository(repo)
+    approval = await approvals_repo.get(approval_id)
+    assert approval is not None
+    assert approval.pinned_runbook_hash == "a" * 64
+
+    # 4. Manually POST /api/runbooks/refresh to trigger v2 hash computation
+    resp = await authenticated_client.post(
+        "/api/runbooks/refresh", json={}, headers=_csrf(authenticated_client)
+    )
+    assert resp.status_code == 200  # noqa: PLR2004
+
+    # Verify the runbook now has v2 hash
+    resp = await authenticated_client.get("/api/runbooks")
+    runbooks = resp.json()["items"]
+    assert len(runbooks) == 1
+    current_hash = runbooks[0]["content_hash"]
+    assert current_hash.startswith("v2:sha256:")
+    assert current_hash != "a" * 64
+
+    # 5. POST /approve with the v1-pinned approval
+    response = await authenticated_client.post(
+        f"/api/autofix/approvals/{approval_id}/approve",
+        json={"confirm_phrase": "approve"},
+        headers=_csrf(authenticated_client),
+    )
+
+    # 6. Assert 409 with runbook_changed_since_plan
+    assert response.status_code == 409  # noqa: PLR2004
+    assert response.json()["error"]["code"] == "runbook_changed_since_plan"
+
+    # Verify approval is now rejected
+    approval = await approvals_repo.get(approval_id)
+    assert approval is not None
+    assert approval.status == "rejected"
 
 
 @pytest.mark.asyncio

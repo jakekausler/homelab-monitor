@@ -469,6 +469,89 @@ async def test_refresh_missing_root_reported_not_fatal(
     assert data["registered"] == []
 
 
+@pytest.mark.asyncio
+async def test_reconcile_v1_hash_becomes_v2_on_next_refresh(
+    authenticated_client: AsyncClient,
+    repo: SqliteRepository,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A pre-stage bare-hex content_hash is rewritten to v2 on the next refresh."""
+    monkeypatch.setenv("HOMELAB_MONITOR_RUNBOOKS_DIR", str(tmp_path))
+
+    # 1. Write a runbook folder
+    folder = tmp_path / "test-runbook"
+    _write_runbook(folder, config=_valid_config_dict("test-runbook"))
+
+    # 2. Initial refresh to create the row (with v2 hash computed)
+    resp = await authenticated_client.post(
+        "/api/runbooks/refresh", json={}, headers=_csrf(authenticated_client)
+    )
+    assert resp.status_code == 200  # noqa: PLR2004
+
+    # 3. Manually insert/update the row with bare-hex v1 hash
+    async with repo.transaction() as conn:
+        await conn.execute(
+            text("UPDATE runbooks SET content_hash = :hash WHERE path = :path"),
+            {"path": str(folder), "hash": "a" * 64},
+        )
+
+    # 4. Refresh again
+    resp = await authenticated_client.post(
+        "/api/runbooks/refresh", json={}, headers=_csrf(authenticated_client)
+    )
+    assert resp.status_code == 200  # noqa: PLR2004
+    data = resp.json()
+
+    # 5. Assert the row's content_hash now starts with v2:sha256:
+    items = data.get("registered", []) + data.get("refreshed", [])
+    assert str(folder) in items
+
+    # Verify the hash was updated in the DB
+    resp = await authenticated_client.get("/api/runbooks")
+    runbooks = resp.json()["items"]
+    assert len(runbooks) == 1
+    assert runbooks[0]["content_hash"].startswith("v2:sha256:")
+
+
+@pytest.mark.asyncio
+async def test_reconcile_hash_error_skips_folder_and_logs(
+    authenticated_client: AsyncClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A folder with a hard-reject condition (symlink) is skipped; other folders
+    still reconcile; the error is surfaced in the refresh response's errors list.
+    """
+    monkeypatch.setenv("HOMELAB_MONITOR_RUNBOOKS_DIR", str(tmp_path))
+
+    # 1. Write one valid runbook
+    valid_folder = tmp_path / "good-runbook"
+    _write_runbook(valid_folder, config=_valid_config_dict("good"))
+
+    # 2. Write another with a symlink (will cause hash error)
+    bad_folder = tmp_path / "bad-runbook"
+    _write_runbook(bad_folder, config=_valid_config_dict("bad"))
+    target = tmp_path / "outside.txt"
+    target.write_text("x", encoding="utf-8")
+    (bad_folder / "link.txt").symlink_to(target)
+
+    # 3. POST refresh
+    resp = await authenticated_client.post(
+        "/api/runbooks/refresh", json={}, headers=_csrf(authenticated_client)
+    )
+    assert resp.status_code == 200  # noqa: PLR2004
+    data = resp.json()
+
+    # 4. Assert valid folder registered, bad folder error reported
+    assert str(valid_folder) in data["registered"]
+    errors = data["errors"]
+    assert len(errors) > 0
+    error = next((e for e in errors if str(bad_folder) in e["path"]), None)
+    assert error is not None
+    assert "symlink" in error["message"]
+
+
 # ---------------------------------------------------------------------------
 # POST /runbooks/{runbook_id}/trigger (STAGE-009-010A)
 # ---------------------------------------------------------------------------

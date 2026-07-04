@@ -252,6 +252,16 @@ make dev   # will recopy from example
 
 If `make dev` fails for unknown reasons, fall back to the manual pattern in `CLAUDE.md` (Local Refinement section, "Manual fallback" subsection). That recipe sources from `/tmp/hm-refine/.env` and starts each process by hand.
 
+## After STAGE-009-016 deploy
+
+After deploying content-hash v2 (whole-folder + markdown drift hashing), POST
+`/api/runbooks/refresh` once to backfill v2 hashes for all rows.
+
+Every pending `runbook_run_approvals` row from before this deploy will 409
+`runbook_changed_since_plan` on next approve — this is intentional
+(documented behavior change, not a bug). Recapture affected dry-runs and
+re-approve.
+
 ## Files this stage introduced
 
 - `deploy/dev/dev.env.example` — template (committed)

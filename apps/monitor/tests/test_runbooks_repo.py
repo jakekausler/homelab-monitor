@@ -32,6 +32,14 @@ def _config(**overrides: object) -> RunbookConfig:
     return RunbookConfig.model_validate(base)
 
 
+def _write_runbook_files(folder: Path, *, runbook_yaml_body: str = "runbook: 1\n") -> None:
+    """Write minimal on-disk runbook files so compute_runbook_content_hash has
+    real content to hash (STAGE-009-016 whole-folder hash reads the filesystem,
+    not the in-memory RunbookConfig object)."""
+    (folder / "runbook.yaml").write_text(runbook_yaml_body)
+    (folder / "CLAUDE.md").write_text("placeholder prompt\n")
+
+
 async def _audit_rows(repo: SqliteRepository, what: str) -> list[dict[str, object]]:
     """Fetch audit rows matching the given 'what' value."""
     rows = await repo.fetch_all(
@@ -135,6 +143,7 @@ async def test_reconcile_changed_updates_cached(repo: SqliteRepository, tmp_path
     runbook_repo = RunbookRepo(repo)
     folder = tmp_path / "test-rb"
     folder.mkdir()
+    _write_runbook_files(folder, runbook_yaml_body="runbook: 1\nversion: 1\n")
 
     user = _test_user()
     config1 = _config(cooldown_seconds=100)
@@ -147,6 +156,7 @@ async def test_reconcile_changed_updates_cached(repo: SqliteRepository, tmp_path
     hash1 = record1.content_hash
 
     config2 = _config(cooldown_seconds=999)
+    _write_runbook_files(folder, runbook_yaml_body="runbook: 1\nversion: 2\n")
     loaded2 = LoadedRunbook(folder=folder, config=config2)
     scan2 = ScanResult(loaded=[loaded2], errors=[])
     outcome = await runbook_repo.reconcile(scan2, who_principal=user, ip=None)
@@ -210,6 +220,7 @@ async def test_reconcile_mixed_batch(repo: SqliteRepository, tmp_path: Path) -> 
     new_folder.mkdir()
     unchanged_folder = tmp_path / "unchanged"
     unchanged_folder.mkdir()
+    _write_runbook_files(unchanged_folder)
     changed_folder = tmp_path / "changed"
     changed_folder.mkdir()
 
@@ -221,8 +232,11 @@ async def test_reconcile_mixed_batch(repo: SqliteRepository, tmp_path: Path) -> 
         ],
         errors=[],
     )
+    _write_runbook_files(changed_folder, runbook_yaml_body="runbook: 1\nversion: 1\n")
     await runbook_repo.reconcile(scan1, who_principal=user, ip=None)
 
+    _write_runbook_files(new_folder)
+    _write_runbook_files(changed_folder, runbook_yaml_body="runbook: 1\nversion: 2\n")
     scan2 = ScanResult(
         loaded=[
             LoadedRunbook(folder=new_folder, config=config),
@@ -269,6 +283,7 @@ async def test_refresh_writes_audit(repo: SqliteRepository, tmp_path: Path) -> N
     runbook_repo = RunbookRepo(repo)
     folder = tmp_path / "test-rb"
     folder.mkdir()
+    _write_runbook_files(folder, runbook_yaml_body="runbook: 1\nversion: 1\n")
 
     user = _test_user()
     config1 = _config(cooldown_seconds=100)
@@ -278,6 +293,7 @@ async def test_refresh_writes_audit(repo: SqliteRepository, tmp_path: Path) -> N
     )
 
     config2 = _config(cooldown_seconds=999)
+    _write_runbook_files(folder, runbook_yaml_body="runbook: 1\nversion: 2\n")
     loaded2 = LoadedRunbook(folder=folder, config=config2)
     await runbook_repo.reconcile(
         ScanResult(loaded=[loaded2], errors=[]), who_principal=user, ip=None

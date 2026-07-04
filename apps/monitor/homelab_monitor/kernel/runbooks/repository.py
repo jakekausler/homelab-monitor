@@ -5,13 +5,14 @@ Reconcile UPDATEs ONLY the file-authoritative cached columns; the operator gates
 (enabled, auto_trigger) are NEVER in any reconcile UPDATE set so a refresh can
 never clobber an operator's allow-list decision (structural clobber-safety).
 
-content_hash is the config-only hash (compute_runbook_content_hash). Whole-folder
-/ markdown-drift hashing is owned by STAGE-009-012; not computed here.
+content_hash is the whole-folder v2 hash (compute_runbook_content_hash, STAGE-009-016):
+covers runbook.yaml plus every allow-listed sibling file (e.g. CLAUDE.md, README.md).
 """
 
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -26,8 +27,13 @@ from homelab_monitor.kernel.db.ids import uuid7
 from homelab_monitor.kernel.db.repository import SqliteRepository
 from homelab_monitor.kernel.db.time import utc_now_iso
 from homelab_monitor.kernel.runbooks.config import AlertMatcher, RunbookConfig
-from homelab_monitor.kernel.runbooks.hashing import compute_runbook_content_hash
+from homelab_monitor.kernel.runbooks.hashing import (
+    RunbookHashError,
+    compute_runbook_content_hash,
+)
 from homelab_monitor.kernel.runbooks.loader import LoadError, ScanResult
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True, frozen=True)
@@ -153,10 +159,17 @@ class RunbookRepo:
         registered: list[str] = []
         refreshed: list[str] = []
         skipped: list[str] = []
+        hash_errors: list[LoadError] = []
 
         for loaded in scan.loaded:
             folder_str = str(loaded.folder)
-            content_hash = compute_runbook_content_hash(loaded.config)
+            try:
+                content_hash = compute_runbook_content_hash(loaded.folder)
+            except RunbookHashError as exc:
+                logger.warning("runbook_hash_error folder=%s error=%s", folder_str, exc)
+                hash_errors.append(LoadError(path=folder_str, message=str(exc)))
+                continue
+
             existing = await self._db.fetch_one(_SELECT_BY_PATH_SQL, {"path": folder_str})
 
             if existing is None:
@@ -178,7 +191,7 @@ class RunbookRepo:
             registered=registered,
             refreshed=refreshed,
             skipped=skipped,
-            errors=scan.errors,
+            errors=[*scan.errors, *hash_errors],
         )
 
     async def _insert(
