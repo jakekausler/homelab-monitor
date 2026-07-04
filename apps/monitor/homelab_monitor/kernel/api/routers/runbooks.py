@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Request
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from homelab_monitor.kernel.api.dependencies import (
     get_app_settings,
@@ -99,6 +99,8 @@ class RefreshResponse(BaseModel):
     refreshed: list[str]
     skipped: list[str]
     errors: list[LoadErrorOut]
+    pruned: list[str] = Field(default_factory=list)
+    prune_skipped: list[str] = Field(default_factory=list)
 
 
 class RunbookGatesPatch(BaseModel):
@@ -227,6 +229,8 @@ async def refresh_runbooks(
         refreshed=outcome.refreshed,
         skipped=outcome.skipped,
         errors=[LoadErrorOut(path=e.path, message=e.message) for e in outcome.errors],
+        pruned=outcome.pruned,
+        prune_skipped=outcome.prune_skipped,
     )
 
 

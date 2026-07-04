@@ -3,17 +3,23 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 
 import pytest
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 
 from homelab_monitor.kernel.auth.models import User
+from homelab_monitor.kernel.config import get_runbooks_dir
+from homelab_monitor.kernel.db.ids import uuid7
 from homelab_monitor.kernel.db.repository import SqliteRepository
 from homelab_monitor.kernel.db.time import utc_now_iso
 from homelab_monitor.kernel.runbooks.config import RunbookConfig
 from homelab_monitor.kernel.runbooks.loader import LoadedRunbook, LoadError, ScanResult
 from homelab_monitor.kernel.runbooks.repository import RunbookRepo
+
+_EXPECTED_ABC_RUNBOOKS = 3
 
 
 def _config(**overrides: object) -> RunbookConfig:
@@ -622,3 +628,353 @@ async def test_patch_enabled_change_preserves_auto_trigger(
 
     assert rec.enabled is True
     assert rec.auto_trigger is True
+
+
+@pytest.mark.asyncio
+async def test_reconcile_prunes_missing_folder(repo: SqliteRepository, tmp_path: Path) -> None:
+    """Register a folder, delete it from disk, reconcile. Folder is pruned."""
+    runbook_repo = RunbookRepo(repo)
+    folder = tmp_path / "test-rb"
+    folder.mkdir()
+    _write_runbook_files(folder)
+
+    user = _test_user()
+    config = _config()
+    loaded = LoadedRunbook(folder=folder, config=config)
+    scan = ScanResult(loaded=[loaded], errors=[])
+    await runbook_repo.reconcile(scan, who_principal=user, ip=None)
+
+    records = await runbook_repo.list_runbooks()
+    assert len(records) == 1
+
+    # Delete folder from disk and reconcile with empty scan
+    shutil.rmtree(folder)
+    empty_scan = ScanResult(loaded=[], errors=[])
+    outcome = await runbook_repo.reconcile(empty_scan, who_principal=user, ip=None)
+
+    # Verify pruned
+    assert outcome.pruned == [str(folder)]
+    assert outcome.prune_skipped == []
+
+    # Verify row is gone
+    records = await runbook_repo.list_runbooks()
+    assert len(records) == 0
+
+    # Verify audit row exists
+    audit_rows = await _audit_rows(repo, "runbook_pruned")
+    assert len(audit_rows) == 1
+    audit_row = audit_rows[0]
+    before = json.loads(str(audit_row["before_json"]))
+    assert before["id"] is not None
+    assert before["path"] == str(folder)
+    assert before["content_hash"] is not None
+    assert before["enabled"] is not None
+    assert before["auto_trigger"] is not None
+    assert before["risk_tag"] == "safe"
+
+
+@pytest.mark.asyncio
+async def test_reconcile_skips_prune_when_runs_history_present(
+    repo: SqliteRepository, tmp_path: Path
+) -> None:
+    """Register a folder, add run history, delete folder. Prune is skipped."""
+    runbook_repo = RunbookRepo(repo)
+    folder = tmp_path / "test-rb"
+    folder.mkdir()
+    _write_runbook_files(folder)
+
+    user = _test_user()
+    config = _config()
+    loaded = LoadedRunbook(folder=folder, config=config)
+    scan = ScanResult(loaded=[loaded], errors=[])
+    await runbook_repo.reconcile(scan, who_principal=user, ip=None)
+
+    runbook_id = (await runbook_repo.list_runbooks())[0].id
+
+    # Insert a synthetic run
+    await repo.execute(
+        text(
+            "INSERT INTO runbook_runs (id, runbook_id, created_at, initiated_by) "
+            "VALUES (:id, :rb, :ts, :initiated_by)"
+        ),
+        {"id": uuid7(), "rb": runbook_id, "ts": utc_now_iso(), "initiated_by": "alert"},
+    )
+
+    # Delete folder and reconcile
+    shutil.rmtree(folder)
+    empty_scan = ScanResult(loaded=[], errors=[])
+    outcome = await runbook_repo.reconcile(empty_scan, who_principal=user, ip=None)
+
+    # Verify prune was skipped
+    assert outcome.pruned == []
+    assert outcome.prune_skipped == [str(folder)]
+
+    # Verify row still exists
+    records = await runbook_repo.list_runbooks()
+    assert len(records) == 1
+
+    # Verify prune_skipped audit row
+    audit_rows = await _audit_rows(repo, "runbook_prune_skipped")
+    assert len(audit_rows) == 1
+    audit_row = audit_rows[0]
+    before = json.loads(str(audit_row["before_json"]))
+    assert before["runs_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_reconcile_does_not_prune_folder_that_exists_but_loader_rejected(
+    repo: SqliteRepository, tmp_path: Path
+) -> None:
+    """Register a folder, corrupt it, reconcile. Folder is NOT pruned."""
+    runbook_repo = RunbookRepo(repo)
+    folder = tmp_path / "test-rb"
+    folder.mkdir()
+    _write_runbook_files(folder)
+
+    user = _test_user()
+    config = _config()
+    loaded = LoadedRunbook(folder=folder, config=config)
+    scan = ScanResult(loaded=[loaded], errors=[])
+    await runbook_repo.reconcile(scan, who_principal=user, ip=None)
+
+    # Corrupt the runbook.yaml so loader will reject it
+    (folder / "runbook.yaml").write_text("invalid: yaml:\n  - incomplete")
+
+    # Reconcile with error instead of loaded
+    error_scan = ScanResult(
+        loaded=[],
+        errors=[LoadError(path=str(folder), message="Invalid YAML")],
+    )
+    outcome = await runbook_repo.reconcile(error_scan, who_principal=user, ip=None)
+
+    # Verify NOT pruned
+    assert outcome.pruned == []
+    assert outcome.prune_skipped == []
+    assert str(folder) in [e.path for e in outcome.errors]
+
+    # Verify row still exists
+    records = await runbook_repo.list_runbooks()
+    assert len(records) == 1
+
+    # Verify no prune audit row
+    pruned_rows = await _audit_rows(repo, "runbook_pruned")
+    assert len(pruned_rows) == 0
+
+
+@pytest.mark.asyncio
+async def test_reconcile_hash_error_does_not_prune(repo: SqliteRepository, tmp_path: Path) -> None:
+    """Register a folder, then make it hash-error (symlink inside), reconcile.
+
+    The folder still exists on disk but compute_runbook_content_hash() raises
+    RunbookHashError (STAGE-009-016 hard-reject-symlink rule). This is a
+    distinct code path from the loader-rejects-via-scan.errors case covered by
+    test_reconcile_does_not_prune_folder_that_exists_but_loader_rejected: here
+    the folder IS in scan.loaded (the caller still thinks it's a candidate),
+    but reconcile()'s own hashing step rejects it and routes it to
+    outcome.errors via the internal hash_errors list, never touching the
+    prune loop's scanned_paths set. The row must survive.
+    """
+    runbook_repo = RunbookRepo(repo)
+    folder = tmp_path / "test-rb-hash-error"
+    folder.mkdir()
+    _write_runbook_files(folder)
+
+    user = _test_user()
+    config = _config()
+    loaded = LoadedRunbook(folder=folder, config=config)
+    scan = ScanResult(loaded=[loaded], errors=[])
+    await runbook_repo.reconcile(scan, who_principal=user, ip=None)
+
+    # Introduce a hash error: a symlink inside the folder is a hard-reject
+    # per compute_runbook_content_hash (hashing.py).
+    target = tmp_path / "symlink-target.txt"
+    target.write_text("irrelevant")
+    (folder / "evil-symlink").symlink_to(target)
+
+    # Folder is still in scan.loaded (loader itself doesn't know about the
+    # hash error — that's computed inside reconcile()).
+    hash_error_scan = ScanResult(loaded=[loaded], errors=[])
+    outcome = await runbook_repo.reconcile(hash_error_scan, who_principal=user, ip=None)
+
+    # Verify NOT pruned, and surfaced as an error instead.
+    assert outcome.pruned == []
+    assert outcome.prune_skipped == []
+    assert str(folder) in [e.path for e in outcome.errors]
+
+    # Verify row still exists.
+    records = await runbook_repo.list_runbooks()
+    assert len(records) == 1
+
+    # Verify no prune audit row.
+    pruned_rows = await _audit_rows(repo, "runbook_pruned")
+    assert len(pruned_rows) == 0
+
+
+@pytest.mark.asyncio
+async def test_reconcile_root_missing_does_not_mass_prune(
+    repo: SqliteRepository, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Register a folder, then reconcile with a root-level LoadError.
+
+    C2 guard: when scan.errors contains a LoadError whose path equals the
+    runbooks root (misconfigured HOMELAB_MONITOR_RUNBOOKS_DIR / unmounted
+    volume), reconcile MUST skip the prune pass entirely — otherwise every
+    row in the registry would be treated as "missing" and hard-deleted.
+    """
+    # Point the monitor at tmp_path so get_runbooks_dir() returns a
+    # predictable value the guard can match against.
+    monkeypatch.setenv("HOMELAB_MONITOR_RUNBOOKS_DIR", str(tmp_path))
+    runbooks_root = str(get_runbooks_dir())
+
+    runbook_repo = RunbookRepo(repo)
+    folder = tmp_path / "test-rb-root-missing"
+    folder.mkdir()
+    _write_runbook_files(folder)
+
+    user = _test_user()
+    config = _config()
+    loaded = LoadedRunbook(folder=folder, config=config)
+    scan = ScanResult(loaded=[loaded], errors=[])
+    await runbook_repo.reconcile(scan, who_principal=user, ip=None)
+
+    # Now delete the folder to make it a natural prune candidate.
+    shutil.rmtree(folder)
+
+    # Reconcile with a scan that reports the runbooks root itself is
+    # missing (mimics scan_runbooks(root) when root is not a directory).
+    root_missing_scan = ScanResult(
+        loaded=[],
+        errors=[LoadError(path=runbooks_root, message="is not a directory")],
+    )
+    outcome = await runbook_repo.reconcile(root_missing_scan, who_principal=user, ip=None)
+
+    # Guard must have fired: nothing pruned, nothing prune-skipped.
+    assert outcome.pruned == []
+    assert outcome.prune_skipped == []
+
+    # Row must still exist despite the folder being gone.
+    records = await runbook_repo.list_runbooks()
+    assert len(records) == 1
+    assert records[0].path == str(folder)
+
+    # No prune/prune-skipped audits emitted for this reconcile.
+    pruned_audits = await _audit_rows(repo, "runbook_pruned")
+    skipped_audits = await _audit_rows(repo, "runbook_prune_skipped")
+    assert len(pruned_audits) == 0
+    assert len(skipped_audits) == 0
+
+
+@pytest.mark.asyncio
+async def test_reconcile_mixed_batch_prune_and_normal(
+    repo: SqliteRepository, tmp_path: Path
+) -> None:
+    """Register A, B, C. Delete A. Modify B. Reconcile with B, C. Verify outcomes.
+
+    Validates prune loop runs AFTER scan loop: B's refresh (scan loop) and A's
+    prune (prune loop) both happen within the same reconcile() call, and the
+    outcome correctly reflects both in one RefreshOutcome.
+    """
+    runbook_repo = RunbookRepo(repo)
+
+    user = _test_user()
+    a = tmp_path / "a"
+    a.mkdir()
+    _write_runbook_files(a, runbook_yaml_body="runbook: 1\nversion: 1\n")
+
+    b = tmp_path / "b"
+    b.mkdir()
+    _write_runbook_files(b, runbook_yaml_body="runbook: 1\nversion: 1\n")
+
+    c = tmp_path / "c"
+    c.mkdir()
+    _write_runbook_files(c, runbook_yaml_body="runbook: 1\nversion: 1\n")
+
+    config = _config()
+    scan1 = ScanResult(
+        loaded=[
+            LoadedRunbook(folder=a, config=config),
+            LoadedRunbook(folder=b, config=config),
+            LoadedRunbook(folder=c, config=config),
+        ],
+        errors=[],
+    )
+    await runbook_repo.reconcile(scan1, who_principal=user, ip=None)
+
+    # Modify B and reconcile with only B and C
+    _write_runbook_files(b, runbook_yaml_body="runbook: 1\nversion: 2\n")
+    scan2 = ScanResult(
+        loaded=[
+            LoadedRunbook(folder=b, config=_config(cooldown_seconds=999)),
+            LoadedRunbook(folder=c, config=config),
+        ],
+        errors=[],
+    )
+
+    shutil.rmtree(a)
+    outcome = await runbook_repo.reconcile(scan2, who_principal=user, ip=None)
+
+    # Verify outcomes
+    assert outcome.registered == []
+    assert outcome.refreshed == [str(b)]
+    assert outcome.skipped == [str(c)]
+    assert outcome.pruned == [str(a)]
+    assert outcome.prune_skipped == []
+
+    # Verify audit rows
+    registered_rows = await _audit_rows(repo, "runbook_registered")
+    assert len(registered_rows) == _EXPECTED_ABC_RUNBOOKS  # Original A, B, C
+    pruned_rows = await _audit_rows(repo, "runbook_pruned")
+    assert len(pruned_rows) == 1
+
+
+@pytest.mark.asyncio
+async def test_reconcile_toctou_race_falls_back_to_prune_skipped(
+    repo: SqliteRepository, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """TOCTOU race: a runbook_runs row is inserted between COUNT and DELETE.
+
+    Simulates the race by monkeypatching `_prune` to raise IntegrityError.
+    The prune loop must catch, log a warning, and fall through to
+    `_emit_prune_skipped(runs_count=-1)` — appending to prune_skipped
+    rather than propagating the error.
+    """
+    runbook_repo = RunbookRepo(repo)
+    folder = tmp_path / "test-rb-toctou"
+    folder.mkdir()
+    _write_runbook_files(folder)
+
+    user = _test_user()
+    config = _config()
+    loaded = LoadedRunbook(folder=folder, config=config)
+    scan = ScanResult(loaded=[loaded], errors=[])
+    await runbook_repo.reconcile(scan, who_principal=user, ip=None)
+
+    # Delete the folder — natural prune candidate, runs_count=0.
+    shutil.rmtree(folder)
+
+    # Force IntegrityError from _prune to simulate a runbook_runs row
+    # racing in between the COUNT check and the DELETE.
+    async def _raise_integrity_error(*args: object, **kwargs: object) -> None:
+        raise IntegrityError("stmt", {}, Exception("FK race"))
+
+    monkeypatch.setattr(runbook_repo, "_prune", _raise_integrity_error)
+
+    empty_scan = ScanResult(loaded=[], errors=[])
+    outcome = await runbook_repo.reconcile(empty_scan, who_principal=user, ip=None)
+
+    # Race branch: pruned stays empty, path routed to prune_skipped.
+    assert outcome.pruned == []
+    assert outcome.prune_skipped == [str(folder)]
+
+    # Row still in DB — the delete was blocked.
+    records = await runbook_repo.list_runbooks()
+    assert len(records) == 1
+    assert records[0].path == str(folder)
+
+    # Audit shows the race-fallback: runbook_prune_skipped emitted with
+    # the -1 sentinel.
+    skipped_rows = await _audit_rows(repo, "runbook_prune_skipped")
+    assert len(skipped_rows) == 1
+    before = json.loads(str(skipped_rows[0]["before_json"]))
+    assert before["path"] == str(folder)
+    assert before["runs_count"] == -1

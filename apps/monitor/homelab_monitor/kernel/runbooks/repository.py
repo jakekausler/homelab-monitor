@@ -13,15 +13,17 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.engine import Row
+from sqlalchemy.exc import IntegrityError
 
 from homelab_monitor.kernel.api._audit_helpers import principal_label
 from homelab_monitor.kernel.auth.models import ApiToken, User
+from homelab_monitor.kernel.config import get_runbooks_dir
 from homelab_monitor.kernel.db.audit import insert_audit
 from homelab_monitor.kernel.db.ids import uuid7
 from homelab_monitor.kernel.db.repository import SqliteRepository
@@ -57,10 +59,12 @@ class RunbookRecord:
 class RefreshOutcome:
     """Result of a refresh scan+reconcile, echoed by the API."""
 
-    registered: list[str]  # folder paths newly inserted
-    refreshed: list[str]  # folder paths whose cached fields were updated
-    skipped: list[str]  # folder paths unchanged (content_hash matched)
-    errors: list[LoadError]  # per-folder validation errors
+    registered: list[str] = field(default_factory=list[str])  # newly inserted
+    refreshed: list[str] = field(default_factory=list[str])  # cached fields updated
+    skipped: list[str] = field(default_factory=list[str])  # unchanged (hash matched)
+    errors: list[LoadError] = field(default_factory=list[LoadError])  # validation errors
+    pruned: list[str] = field(default_factory=list[str])  # DB rows deleted
+    prune_skipped: list[str] = field(default_factory=list[str])  # folder gone but has run history
 
 
 _RUNBOOK_COLS = (
@@ -72,6 +76,9 @@ _SELECT_BY_PATH_SQL = text(f"SELECT {_RUNBOOK_COLS} FROM runbooks WHERE path = :
 
 _SELECT_BY_ID_SQL = text(f"SELECT {_RUNBOOK_COLS} FROM runbooks WHERE id = :id")
 
+# homelab-scale: registries expected < 100 rows. If registry grows,
+# replace the prune loop's full-table fetch_all(_SELECT_ALL_SQL) with a
+# targeted query, e.g. WHERE path NOT IN (:scanned_paths).
 _SELECT_ALL_SQL = text(f"SELECT {_RUNBOOK_COLS} FROM runbooks ORDER BY path ASC")
 
 _INSERT_RUNBOOK_SQL = text(
@@ -99,6 +106,13 @@ _UPDATE_CACHED_SQL = text(
 )
 
 _UPDATE_GATES_SQL_TEMPLATE = "UPDATE runbooks SET {assignments} WHERE id = :id"
+
+_COUNT_RUNS_FOR_RUNBOOK_SQL = text(
+    "SELECT COUNT(*) AS run_count FROM runbook_runs WHERE runbook_id = :runbook_id"
+)
+_DELETE_RUNBOOK_SQL = text("DELETE FROM runbooks WHERE id = :id")
+
+_MAX_RUNS_FOR_HARD_PRUNE = 0
 
 
 def _row_to_runbook(row: Row[Any]) -> RunbookRecord:
@@ -187,11 +201,17 @@ class RunbookRepo:
             )
             refreshed.append(folder_str)
 
+        # Prune stale registry rows (see _run_prune_pass docstring for
+        # C1 folder-missing rule + C2 mass-prune guard rationale).
+        pruned, prune_skipped = await self._run_prune_pass(scan=scan, who=who, ip=ip)
+
         return RefreshOutcome(
             registered=registered,
             refreshed=refreshed,
             skipped=skipped,
             errors=[*scan.errors, *hash_errors],
+            pruned=pruned,
+            prune_skipped=prune_skipped,
         )
 
     async def _insert(
@@ -286,6 +306,135 @@ class RunbookRepo:
                 ip=ip,
                 when=now,
             )
+
+    async def _prune(self, record: RunbookRecord, *, who: str, ip: str | None) -> None:
+        """Hard-delete a registry row whose folder is gone and has no run
+        history.
+
+        Callers must have verified folder-absent + run-history-empty; this
+        method does no checks.
+        """
+        before = {
+            "id": record.id,
+            "path": record.path,
+            "content_hash": record.content_hash,
+            "enabled": record.enabled,
+            "auto_trigger": record.auto_trigger,
+            "risk_tag": record.risk_tag,
+        }
+        async with self._db.transaction() as conn:
+            await conn.execute(_DELETE_RUNBOOK_SQL, {"id": record.id})
+            await insert_audit(
+                conn,
+                who=who,
+                what="runbook_pruned",
+                before=before,
+                after=None,
+                ip=ip,
+            )
+
+    async def _emit_prune_skipped(
+        self, record: RunbookRecord, *, runs_count: int, who: str, ip: str | None
+    ) -> None:
+        """Audit-only: folder is gone but run history blocks deletion (FK
+        safety).
+
+        This audit is emitted per-refresh (not deduplicated) — every refresh
+        call that hits a prune-blocked row emits a fresh audit row. This is
+        intentional per non-negotiable #4 (every material decision, including
+        a refusal-to-prune, is auditable).
+        """
+        # NOTE: per-refresh emission is intentional — see docstring.
+        before = {
+            "id": record.id,
+            "path": record.path,
+            "runs_count": runs_count,
+        }
+        async with self._db.transaction() as conn:
+            await insert_audit(
+                conn,
+                who=who,
+                what="runbook_prune_skipped",
+                before=before,
+                after=None,
+                ip=ip,
+            )
+
+    async def _run_prune_pass(
+        self,
+        *,
+        scan: ScanResult,
+        who: str,
+        ip: str | None,
+    ) -> tuple[list[str], list[str]]:
+        """Prune registry rows whose folders were deleted.
+
+        Called after the scan-loop in reconcile(). Returns (pruned, prune_skipped)
+        path lists. See the C1 (folder-missing-only) and C2 (mass-prune guard)
+        rationale in the code comments below.
+
+        C1: folders that still exist but were rejected by the loader/hasher
+        are NEVER pruned (they surface via `errors` instead).
+
+        C2 (mass-prune guard): if the runbooks root itself is missing/not-a-
+        directory, scan_runbooks() returns loaded=[] and a single root-level
+        LoadError whose path equals the root. In that case every DB row would
+        look "missing from scan" and (if the parent dir is also gone) would
+        also fail Path.exists(), causing every row to be hard-deleted. Skip
+        the entire prune pass when the scan reports a root-level error so a
+        misconfigured/transiently-unmounted HOMELAB_MONITOR_RUNBOOKS_DIR can
+        never wipe the registry.
+        """
+        pruned: list[str] = []
+        prune_skipped: list[str] = []
+
+        runbooks_root_str = str(get_runbooks_dir())
+        root_scan_failed = any(err.path == runbooks_root_str for err in scan.errors)
+
+        if root_scan_failed:
+            logger.warning(
+                "runbooks_prune_skipped_root_missing root=%s errors=%s",
+                runbooks_root_str,
+                [err.message for err in scan.errors],
+            )
+            return pruned, prune_skipped
+
+        scanned_paths: set[str] = {str(loaded.folder) for loaded in scan.loaded}
+        all_rows = await self._db.fetch_all(_SELECT_ALL_SQL, {})
+        for row in all_rows:
+            record = _row_to_runbook(row)
+            if record.path in scanned_paths:
+                continue
+            if Path(record.path).exists():
+                continue
+            count_row = await self._db.fetch_one(
+                _COUNT_RUNS_FOR_RUNBOOK_SQL, {"runbook_id": record.id}
+            )
+            runs_count = int(count_row.run_count) if count_row is not None else 0
+            if runs_count > _MAX_RUNS_FOR_HARD_PRUNE:
+                await self._emit_prune_skipped(record, runs_count=runs_count, who=who, ip=ip)
+                prune_skipped.append(record.path)
+            else:
+                try:
+                    await self._prune(record, who=who, ip=ip)
+                    pruned.append(record.path)
+                except IntegrityError:
+                    # TOCTOU: a runbook_runs row was inserted for this
+                    # runbook_id between the COUNT above and this DELETE
+                    # (e.g. an alert fired and triggered autofix mid-
+                    # refresh). The FK constraint blocked the delete;
+                    # treat this as prune-skipped instead of raising.
+                    # The exact post-race run count is unknown here, so
+                    # report a sentinel rather than a stale/misleading 0.
+                    logger.warning(
+                        "runbook_prune_race_detected runbook_id=%s path=%s",
+                        record.id,
+                        record.path,
+                    )
+                    await self._emit_prune_skipped(record, runs_count=-1, who=who, ip=ip)
+                    prune_skipped.append(record.path)
+
+        return pruned, prune_skipped
 
     # ---- operator gates ----
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from collections.abc import Mapping
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -1357,3 +1358,47 @@ async def test_trigger_audit_includes_credential_type(
     assert len(ran_rows) == 1
     after_ran = json.loads(ran_rows[0][0])
     assert after_ran["credential_type"] == "phrase"
+
+
+@pytest.mark.asyncio
+async def test_refresh_prunes_removed_folder_and_surfaces_in_response(
+    authenticated_client: AsyncClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Register folder, delete from disk, refresh. Response surfaces in pruned."""
+    monkeypatch.setenv("HOMELAB_MONITOR_RUNBOOKS_DIR", str(tmp_path))
+
+    # Register a folder
+    folder = tmp_path / "foo"
+    _write_runbook(folder, config=_valid_config_dict("foo"))
+
+    resp = await authenticated_client.post(
+        "/api/runbooks/refresh", json={}, headers=_csrf(authenticated_client)
+    )
+    assert resp.status_code == 200  # noqa: PLR2004
+    data = resp.json()
+    assert str(folder) in data["registered"]
+
+    # Delete folder from disk
+    shutil.rmtree(folder)
+
+    # Refresh again
+    resp = await authenticated_client.post(
+        "/api/runbooks/refresh", json={}, headers=_csrf(authenticated_client)
+    )
+    assert resp.status_code == 200  # noqa: PLR2004
+    data = resp.json()
+
+    # Verify pruned in response
+    assert str(folder) in data["pruned"]
+    assert data["prune_skipped"] == []
+    assert data["registered"] == []
+    assert data["refreshed"] == []
+    assert data["skipped"] == []
+
+    # Verify GET /api/runbooks no longer has the folder
+    resp = await authenticated_client.get("/api/runbooks")
+    assert resp.status_code == 200  # noqa: PLR2004
+    items = resp.json()["items"]
+    assert not any(item["path"] == str(folder) for item in items)

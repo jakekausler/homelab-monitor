@@ -6805,6 +6805,20 @@
             "title": "Errors",
             "type": "array"
           },
+          "prune_skipped": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Prune Skipped",
+            "type": "array"
+          },
+          "pruned": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Pruned",
+            "type": "array"
+          },
           "refreshed": {
             "items": {
               "type": "string"
