@@ -310,3 +310,12 @@ Added at Refinement 2026-07-02. All items derived from STAGE-009-010A Design Not
 
 - The synthetic runbook example `scoped_capabilities` shape in prompts / docs is stale — actual schema requires nested `docker: {container: ..., allowed_actions: []}` and a LIST for `egress`, not `false`. Any doc / example that shows `scoped_capabilities: docker: false` should be corrected in a future doc-refresh pass.
 - Confirmed the STAGE-009-017 gap: `POST /api/runbooks/refresh` does NOT prune DB rows whose folders are deleted (that's the whole point of 017). Orphaned rows persist. STAGE-009-016 is not responsible for this.
+
+## STAGE-009-017 (2026-07-04) — Registry row pruning on refresh
+
+- [ ] **Refresh prune scenario:** `POST /api/runbooks/refresh` MUST prune registry rows whose folder is missing from disk AND whose `runbook_runs` count is 0. Response should surface pruned paths in `pruned: list[str]`. Assertion: emit exactly one `runbook_pruned` audit row per pruned registry row with `before_json` containing `id, path, content_hash, enabled, auto_trigger, risk_tag` and `after=None`.
+- [ ] **Refresh prune-skip scenario:** For a registry row whose folder is missing AND `runbook_runs` count > 0, refresh MUST NOT delete the row (FK constraint) and MUST emit a `runbook_prune_skipped` audit row with `before_json` containing `id, path, runs_count`. The path should also surface in the response's `prune_skipped: list[str]`. This audit event is per-refresh (fires every call while the condition persists).
+- [ ] **Loader-error preservation:** If a registry row's folder exists on disk but the loader rejects it (invalid `runbook.yaml`, symlink hash error, etc.), refresh MUST NOT prune the row — the loader error surfaces via existing `errors: list[LoadError]` field instead. Regression: verify that a folder with a broken yaml keeps its registry row and reports through `errors`, never `pruned`/`prune_skipped`.
+- [ ] **Non-negotiable #4 (Audit) preservation:** All prune and prune-skip actions MUST emit audit rows synchronously with the DB write (same transaction per row). Silent registry deletion would violate the auditability invariant.
+
+(STAGE-009-004 back-patch; owns the "refresh does not prune deleted-folder DB rows" bug filed by STAGE-009-010 Refinement 2026-07-02 and confirmed by STAGE-009-016.)
