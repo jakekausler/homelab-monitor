@@ -37,7 +37,6 @@ This epic is when the project transitions from "personal homelab tool" to "open-
 | STAGE-019-009 | Operator documentation: deployment guide, upgrade procedures, backup/restore procedures, troubleshooting, common pitfalls (e.g., master key loss) |
 | STAGE-019-010 | Promote `plugin-sdk-py` to a published PyPI package |
 | STAGE-019-011 | Cut v1.0 release: tag, GH Actions release.yml runs, container images published to GHCR, release notes auto-generated from CHANGELOG.md, GitHub release page populated |
-| STAGE-019-012 | Post-release: announcement (r/homelab, r/selfhosted, lobste.rs, Hacker News if appropriate); set up an issue-template + good-first-issue labels |
 
 ## Cross-stage acceptance criteria
 
