@@ -1447,7 +1447,11 @@ class AutoFixOrchestrator:
                 approval_id=approval_id,
             )
 
-        op_denial = await self._check_operational_gates(record)
+        # Operator-approved path: auto_trigger is an alert-routing concept
+        # irrelevant to an operator action already authenticated via PIN/phrase
+        # with a hash-pinned plan. Skip that specific gate; other gates
+        # (kill-switch, enabled, rate-limit, cooldown) still enforce.
+        op_denial = await self._check_operational_gates(record, require_auto_trigger=False)
         if op_denial is not None:
             async with self._db.transaction() as conn:
                 await insert_audit(
@@ -1527,7 +1531,15 @@ class AutoFixOrchestrator:
             )
 
         # Load the alert the dry run recorded (exec path uses only alert.id).
-        alert = await self._load_alert_for_exec(approval.alert_id)
+        # If the dry run was operator-initiated (no alert), pass alert=None
+        # straight through rather than fabricating a placeholder Alert — a
+        # fabricated non-None Alert would force _claim_and_exec to write a
+        # non-null alert_id, violating the runbook_runs.alert_id FK.
+        alert = (
+            None
+            if approval.alert_id is None
+            else await self._load_alert_for_exec(approval.alert_id)
+        )
 
         # REUSE the shared real-exec path (mode=REAL). No duplicated exec/persist.
         # Thread the approving principal so the autofix.ran audit records who
@@ -1851,17 +1863,16 @@ class AutoFixOrchestrator:
             unwind_warning=unwind_warning,
         )
 
-    async def _load_alert_for_exec(self, alert_id: str | None) -> Alert:
+    async def _load_alert_for_exec(self, alert_id: str) -> Alert:
         """Load the Alert for the real exec. The exec/persist path reads only
         alert.id, so a minimal Alert is sufficient if the row is gone/absent.
         """
-        if alert_id is not None:
-            loaded = await self._alert_repo.get_alert_by_id(alert_id)
-            if loaded is not None:
-                return loaded
+        loaded = await self._alert_repo.get_alert_by_id(alert_id)
+        if loaded is not None:
+            return loaded
         # Minimal placeholder: exec/persist only reads .id. Use empty/neutral
         # values for the other required Alert fields.
-        placeholder_id = alert_id if alert_id is not None else "unknown"
+        placeholder_id = alert_id
         now = utc_now_iso()
         return Alert(
             id=placeholder_id,

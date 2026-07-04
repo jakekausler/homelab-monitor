@@ -3160,6 +3160,156 @@ async def test_execute_approved_happy_fires_real_and_sets_real_run_id(
     assert len(audits) >= 1
 
 
+@pytest.mark.asyncio
+async def test_execute_approved_allows_operator_path_with_auto_trigger_false(
+    tmp_path: Path,
+    repo: SqliteRepository,
+    secrets_repo: AsyncSecretsRepository,
+) -> None:
+    """execute_approved allows an operator-approved run when auto_trigger=False.
+
+    Regression for STAGE-009-013 Refinement finding: `execute_approved` used to
+    call `_check_operational_gates(record)` without an override, requiring
+    `auto_trigger=True` even though STAGE-009-010A rejects `auto_trigger=True` on
+    risky runbooks — making the risky dry-run → approve → real-exec path
+    unreachable via the HTTP API. Fixed by passing `require_auto_trigger=False`
+    on the approval path (parity with `handle_operator_trigger`).
+    """
+    runbook_dir = tmp_path / "runbook"
+    record = _make_runbook_record(
+        alertname="TestAlert",
+        enabled=True,
+        auto_trigger=False,
+        dry_run_required=True,
+        content_hash="fixture-hash",
+        runbook_dir=runbook_dir,
+    )
+    await _insert_runbook(repo, record)
+    alert = _make_alert(alertname="TestAlert")
+    await _insert_alert(repo, alert)
+    await AppSettingsRepository(repo).set("autofix_enabled", "true")
+
+    transcript_dir = tmp_path / "transcripts"
+    transcript_dir.mkdir()
+    exec_log_dir = tmp_path / "exec-logs"
+    exec_log_dir.mkdir()
+    docker = _FakeDockerClient(
+        result=ExecResult(exit_code=0, stdout="ok", stderr=""),
+        transcript_to_write=str(transcript_dir / "transcript.txt"),
+    )
+    orch = _make_orchestrator(
+        repo,
+        secrets_repo,
+        docker,
+        transcript_dir=str(transcript_dir),
+        exec_log_dir=str(exec_log_dir),
+    )
+
+    with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
+        # Step 1 — operator triggers dry-run (existing operator path).
+        dry_result = await orch.handle_operator_trigger(
+            record.id, mode=RunMode.DRY_RUN, principal="test-user", ip="127.0.0.1"
+        )
+        assert dry_result.outcome == RunOutcome.DRY_RUN_STORED
+        assert dry_result.approval_id is not None
+
+        # Step 2 — operator approves. With the STAGE-009-013 fix, this must NOT
+        # deny on `allow_list` even though the runbook has auto_trigger=False.
+        real_result = await orch.execute_approved(
+            dry_result.approval_id,
+            principal="test-user",
+            ip="127.0.0.1",
+        )
+
+    assert real_result.outcome == RunOutcome.RAN, (
+        f"execute_approved should allow the operator-approved path even when "
+        f"auto_trigger=False, but got {real_result.outcome} "
+        f"(denial_reason={real_result.denial_reason})"
+    )
+    assert real_result.ran is True
+
+
+@pytest.mark.asyncio
+async def test_execute_approved_allows_alert_path_after_auto_trigger_flipped_off(
+    tmp_path: Path,
+    repo: SqliteRepository,
+    secrets_repo: AsyncSecretsRepository,
+) -> None:
+    """execute_approved still allows an alert-path dry-run's approval even if
+    an operator toggles auto_trigger OFF between dry-run capture and approval.
+
+    Regression companion to test_execute_approved_allows_operator_path_...
+    This covers the ALERT path (handle_alert → dry-run stored) then simulates
+    an operator flipping auto_trigger=False on the runbook via a direct DB
+    update (as if PATCH /api/runbooks/{id} had unset it — though STAGE-009-010A
+    forbids that on risky runbooks, the state can occur if the operator
+    changes risk_tag first, then unsets auto_trigger). The approval must still
+    succeed because execute_approved skips the auto_trigger gate.
+    """
+
+    runbook_dir = tmp_path / "runbook"
+    record = _make_runbook_record(
+        alertname="TestAlert",
+        enabled=True,
+        auto_trigger=True,  # initial: alert-path can trigger
+        dry_run_required=True,
+        content_hash="fixture-alert-path-hash",
+        runbook_dir=runbook_dir,
+    )
+    await _insert_runbook(repo, record)
+    alert = _make_alert(alertname="TestAlert")
+    await _insert_alert(repo, alert)
+    await AppSettingsRepository(repo).set("autofix_enabled", "true")
+
+    transcript_dir = tmp_path / "transcripts"
+    transcript_dir.mkdir()
+    exec_log_dir = tmp_path / "exec-logs"
+    exec_log_dir.mkdir()
+    docker = _FakeDockerClient(
+        result=ExecResult(exit_code=0, stdout="ok", stderr=""),
+        transcript_to_write=str(transcript_dir / "transcript.txt"),
+    )
+    orch = _make_orchestrator(
+        repo,
+        secrets_repo,
+        docker,
+        transcript_dir=str(transcript_dir),
+        exec_log_dir=str(exec_log_dir),
+    )
+
+    with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
+        # Step 1 — alert triggers dry-run.
+        dry_result = await orch.handle_alert(alert)
+        assert dry_result is not None
+        assert dry_result.outcome == RunOutcome.DRY_RUN_STORED
+        assert dry_result.approval_id is not None
+
+        # Step 2 — operator flips auto_trigger=False between dry-run and approval.
+        # Simulated via direct DB update (rare but valid state: operator
+        # changed risk_tag then unset auto_trigger).
+        async with repo.transaction() as conn:
+            await conn.execute(
+                text("UPDATE runbooks SET auto_trigger = 0 WHERE id = :id"),
+                {"id": record.id},
+            )
+
+        # Step 3 — operator approves. Must NOT deny on `allow_list` despite
+        # auto_trigger now being False, because execute_approved skips that
+        # gate on the approval path (fix from STAGE-009-013).
+        real_result = await orch.execute_approved(
+            dry_result.approval_id,
+            principal="test-user",
+            ip="127.0.0.1",
+        )
+
+    assert real_result.outcome == RunOutcome.RAN, (
+        f"execute_approved should allow the alert-path approved run even when "
+        f"auto_trigger was flipped off between dry-run and approval, but got "
+        f"{real_result.outcome} (denial_reason={real_result.denial_reason})"
+    )
+    assert real_result.ran is True
+
+
 # ---------------------------------------------------------------------------
 # Fix M1: execute_approved threads the approving principal into the
 # autofix.ran audit for forensic clarity (auto-triggered path leaves it None).

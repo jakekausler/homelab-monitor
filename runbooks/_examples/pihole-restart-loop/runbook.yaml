@@ -1,0 +1,12 @@
+runbook: 1
+name: pihole-restart-loop
+match_patterns:
+  - alertname: PiholeCrashLoop
+risk_tag: risky
+dry_run_required: true
+rate_limit_per_hour: 2
+cooldown_seconds: 900
+scoped_capabilities:
+  docker:
+    container: pihole-unbound
+    allowed_actions: [restart]
