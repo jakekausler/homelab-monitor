@@ -50,6 +50,19 @@ elif [ -n "${FAKE_CLAUDE_FEEDBACK:-}" ]; then
     printf '%s' "${FAKE_CLAUDE_FEEDBACK}" >"${FEEDBACK_FILE}"
 fi
 
+# (4b) STAGE-009-014 docker-intent sentinel. When FAKE_CLAUDE_DOCKER_INTENT
+# is set (a JSON string), write it verbatim to
+# <TRANSCRIPT_DIR>/<HM_RUN_ID>/docker-intent.json. The subdir is created
+# with mkdir -p. HM_RUN_ID is injected by the orchestrator via exec env.
+# If HM_RUN_ID is unset, fall back to the fake-claude PREFIX subdir so
+# older test paths still work.
+if [ -n "${FAKE_CLAUDE_DOCKER_INTENT:-}" ]; then
+    INTENT_RUN_ID="${HM_RUN_ID:-${PREFIX}}"
+    INTENT_DIR="${TRANSCRIPT_DIR}/${INTENT_RUN_ID}"
+    mkdir -p "${INTENT_DIR}"
+    printf '%s' "${FAKE_CLAUDE_DOCKER_INTENT}" >"${INTENT_DIR}/docker-intent.json"
+fi
+
 if [ "${IS_PLAN}" = "1" ]; then
     PLAN_MARKER="${TRANSCRIPT_DIR}/${PREFIX}.plan"
     : >"${PLAN_MARKER}"

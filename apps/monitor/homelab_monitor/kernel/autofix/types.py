@@ -5,7 +5,11 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Final, Literal
+from typing import TYPE_CHECKING, Final, Literal
+
+if TYPE_CHECKING:
+    from homelab_monitor.kernel.autofix.feedback_parser import ParsedFeedbackItem
+    from homelab_monitor.kernel.docker.socket_client import ExecResult
 
 
 class DenialReason(StrEnum):
@@ -93,6 +97,28 @@ class ResolvedGrants:
     docker_allowed_actions: tuple[str, ...]
     ssh_target_id: str | None
     egress: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ExecOutcome:
+    """Bundled result of :meth:`AutoFixOrchestrator._exec_claude`.
+
+    Promoted from a 5-tuple to a dataclass by STAGE-009-014 so the intent
+    gateway can access ``grants`` (previously computed inside the exec's
+    transcript-lock critical section but not returned) without re-reading the
+    runbook config from disk.
+
+    ``grants`` is ``None`` only when ``errored is True`` due to a grant-
+    resolution failure (the caller must skip the intent gateway in that
+    case — an envelope-less exec cannot have valid intents).
+    """
+
+    exec_result: ExecResult
+    transcript_path: str | None
+    error_msg: str | None
+    errored: bool
+    feedback_items: list[ParsedFeedbackItem] | None
+    grants: ResolvedGrants | None
 
 
 class GrantResolutionError(Exception):

@@ -74,7 +74,17 @@ class DockerCapability(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    container: str = Field(min_length=1)
+    container: str = Field(
+        min_length=1,
+        max_length=256,
+        pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,254}$",
+        description=(
+            "Docker container name to target. Must match Docker's container-name form: "
+            "starts with an alphanumeric, then any of [A-Za-z0-9_.-], length 1-256. "
+            "Enforced defense-in-depth (STAGE-009-014 I4) against path-traversal and "
+            "audit-DoS via oversized/malformed names."
+        ),
+    )
     allowed_actions: list[str] = Field(default_factory=list)
 
 

@@ -38,7 +38,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
-import pytest_asyncio
 import structlog
 from sqlalchemy import text
 
@@ -159,9 +158,15 @@ def _write_valid_runbook_yaml(runbook_dir: Path, *, dry_run_required: bool = Fal
     STAGE-009-008: _resolve_grants reads this file fresh at exec-start.
     ScopedCapabilities requires at least one of docker/ssh; docker-only avoids
     the extra ssh_target_ids_provider dependency.
+
+    Skips if a config already exists — allows tests to pre-write their own inline
+    YAML for deny-path testing.
     """
     runbook_dir.mkdir(parents=True, exist_ok=True)
-    (runbook_dir / RUNBOOK_CONFIG_FILENAME).write_text(
+    config_path = runbook_dir / RUNBOOK_CONFIG_FILENAME
+    if config_path.exists():
+        return
+    config_path.write_text(
         f"""\
 name: test-runbook
 match_patterns:
@@ -173,7 +178,7 @@ rate_limit_per_hour: 100
 cooldown_seconds: 0
 scoped_capabilities:
   docker:
-    container: "test-container"
+    container: "pihole-unbound"
     allowed_actions:
       - "restart"
 """
@@ -323,18 +328,6 @@ def _make_orchestrator(  # noqa: PLR0913
 # ---------------------------------------------------------------------------
 
 
-@pytest_asyncio.fixture
-async def master_key_bytes() -> bytes:
-    return bytes(range(32))
-
-
-@pytest_asyncio.fixture
-async def secrets_repo_fixture(
-    repo: SqliteRepository, master_key_bytes: bytes
-) -> AsyncSecretsRepository:
-    return AsyncSecretsRepository(repo, master_key_bytes)
-
-
 # ---------------------------------------------------------------------------
 # _is_truthy
 # ---------------------------------------------------------------------------
@@ -469,7 +462,7 @@ def test_matching_runbooks_many_matches() -> None:
 
 @pytest.mark.asyncio
 async def test_handle_alert_no_match_returns_none(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository
 ) -> None:
     """Branch 1: no-match → None, no audit, no run row."""
     rb = _make_runbook_record(alertname="OtherAlert")
@@ -479,7 +472,7 @@ async def test_handle_alert_no_match_returns_none(
     await _insert_alert(repo, alert)
 
     docker = _FakeDockerClient()
-    orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+    orch = _make_orchestrator(repo, secrets_repo, docker)
 
     result = await orch.handle_alert(alert)
     assert result is None
@@ -500,7 +493,7 @@ async def test_handle_alert_no_match_returns_none(
 
 @pytest.mark.asyncio
 async def test_handle_alert_ambiguous_match_denied(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository
 ) -> None:
     """Branch 2: ≥2 runbooks match → DENY ambiguous_match; audit includes runbook_ids."""
     rb1 = _make_runbook_record(alertname="TestAlert")
@@ -512,7 +505,7 @@ async def test_handle_alert_ambiguous_match_denied(
     await _insert_alert(repo, alert)
 
     docker = _FakeDockerClient()
-    orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+    orch = _make_orchestrator(repo, secrets_repo, docker)
 
     result = await orch.handle_alert(alert)
     assert result is not None
@@ -541,7 +534,7 @@ async def test_handle_alert_ambiguous_match_denied(
 
 @pytest.mark.asyncio
 async def test_kill_switch_unset_denies(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository
 ) -> None:
     """Branch 4a: autofix_enabled unset → DENY kill_switch (checked first)."""
     rb = _make_runbook_record(alertname="TestAlert")
@@ -550,7 +543,7 @@ async def test_kill_switch_unset_denies(
     await _insert_alert(repo, alert)
 
     docker = _FakeDockerClient()
-    orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+    orch = _make_orchestrator(repo, secrets_repo, docker)
 
     result = await orch.handle_alert(alert)
     assert result is not None
@@ -562,7 +555,7 @@ async def test_kill_switch_unset_denies(
 
 @pytest.mark.asyncio
 async def test_kill_switch_false_denies(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository
 ) -> None:
     """Branch 4b: autofix_enabled 'false' → DENY kill_switch."""
     rb = _make_runbook_record(alertname="TestAlert")
@@ -574,7 +567,7 @@ async def test_kill_switch_false_denies(
     await app_settings.set("autofix_enabled", "false")
 
     docker = _FakeDockerClient()
-    orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+    orch = _make_orchestrator(repo, secrets_repo, docker)
 
     result = await orch.handle_alert(alert)
     assert result is not None
@@ -583,7 +576,7 @@ async def test_kill_switch_false_denies(
 
 @pytest.mark.asyncio
 async def test_kill_switch_zero_denies(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository
 ) -> None:
     """Branch 4c: autofix_enabled '0' → DENY kill_switch."""
     rb = _make_runbook_record(alertname="TestAlert")
@@ -595,7 +588,7 @@ async def test_kill_switch_zero_denies(
     await app_settings.set("autofix_enabled", "0")
 
     docker = _FakeDockerClient()
-    orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+    orch = _make_orchestrator(repo, secrets_repo, docker)
 
     result = await orch.handle_alert(alert)
     assert result is not None
@@ -609,7 +602,7 @@ async def test_kill_switch_zero_denies(
 
 @pytest.mark.asyncio
 async def test_allow_list_enabled_false_denies(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository
 ) -> None:
     """Branch 5a: enabled=False → DENY allow_list."""
     rb = _make_runbook_record(alertname="TestAlert", enabled=False, auto_trigger=True)
@@ -621,7 +614,7 @@ async def test_allow_list_enabled_false_denies(
     await app_settings.set("autofix_enabled", "true")
 
     docker = _FakeDockerClient()
-    orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+    orch = _make_orchestrator(repo, secrets_repo, docker)
 
     result = await orch.handle_alert(alert)
     assert result is not None
@@ -630,7 +623,7 @@ async def test_allow_list_enabled_false_denies(
 
 @pytest.mark.asyncio
 async def test_allow_list_auto_trigger_false_denies(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository
 ) -> None:
     """Branch 5b: auto_trigger=False → DENY allow_list."""
     rb = _make_runbook_record(alertname="TestAlert", enabled=True, auto_trigger=False)
@@ -642,7 +635,7 @@ async def test_allow_list_auto_trigger_false_denies(
     await app_settings.set("autofix_enabled", "true")
 
     docker = _FakeDockerClient()
-    orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+    orch = _make_orchestrator(repo, secrets_repo, docker)
 
     result = await orch.handle_alert(alert)
     assert result is not None
@@ -656,7 +649,7 @@ async def test_allow_list_auto_trigger_false_denies(
 
 @pytest.mark.asyncio
 async def test_rate_limit_none_skips_gate(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """Branch 6b: rate_limit_per_hour=None → gate skipped, proceeds to exec.
 
@@ -677,7 +670,7 @@ async def test_rate_limit_none_skips_gate(
 
     docker = _FakeDockerClient(result=ExecResult(exit_code=0, stdout="", stderr=""))
     orch = _make_orchestrator(
-        repo, secrets_repo_fixture, docker, transcript_dir=transcript_dir, exec_log_dir=exec_log_dir
+        repo, secrets_repo, docker, transcript_dir=transcript_dir, exec_log_dir=exec_log_dir
     )
 
     with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
@@ -688,7 +681,7 @@ async def test_rate_limit_none_skips_gate(
 
 @pytest.mark.asyncio
 async def test_rate_limit_exceeded_denies(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository
 ) -> None:
     """Branch 6a: rate_limit reached → DENY rate_limit before claim."""
     rb = _make_runbook_record(alertname="TestAlert", rate_limit_per_hour=1)
@@ -723,7 +716,7 @@ async def test_rate_limit_exceeded_denies(
     )  # type: ignore[index]
 
     docker = _FakeDockerClient()
-    orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+    orch = _make_orchestrator(repo, secrets_repo, docker)
 
     result = await orch.handle_alert(alert)
     assert result is not None
@@ -740,7 +733,7 @@ async def test_rate_limit_exceeded_denies(
 
 @pytest.mark.asyncio
 async def test_cooldown_none_skips_gate(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """Branch 7b: cooldown_seconds=None → gate skipped.
 
@@ -761,7 +754,7 @@ async def test_cooldown_none_skips_gate(
 
     docker = _FakeDockerClient(result=ExecResult(exit_code=0, stdout="", stderr=""))
     orch = _make_orchestrator(
-        repo, secrets_repo_fixture, docker, transcript_dir=transcript_dir, exec_log_dir=exec_log_dir
+        repo, secrets_repo, docker, transcript_dir=transcript_dir, exec_log_dir=exec_log_dir
     )
 
     with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
@@ -772,7 +765,7 @@ async def test_cooldown_none_skips_gate(
 
 @pytest.mark.asyncio
 async def test_cooldown_zero_skips_gate(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """Branch 7b: cooldown_seconds=0 → gate skipped (treated as disabled).
 
@@ -793,7 +786,7 @@ async def test_cooldown_zero_skips_gate(
 
     docker = _FakeDockerClient(result=ExecResult(exit_code=0, stdout="", stderr=""))
     orch = _make_orchestrator(
-        repo, secrets_repo_fixture, docker, transcript_dir=transcript_dir, exec_log_dir=exec_log_dir
+        repo, secrets_repo, docker, transcript_dir=transcript_dir, exec_log_dir=exec_log_dir
     )
 
     with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
@@ -804,7 +797,7 @@ async def test_cooldown_zero_skips_gate(
 
 @pytest.mark.asyncio
 async def test_cooldown_within_window_denies(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository
 ) -> None:
     """Branch 7a: within cooldown window → DENY cooldown."""
     rb = _make_runbook_record(alertname="TestAlert", cooldown_seconds=3600)
@@ -832,7 +825,7 @@ async def test_cooldown_within_window_denies(
     await runs_repo.mark_completed(run_id=run_id, exit_code=0, transcript_path=None)
 
     docker = _FakeDockerClient()
-    orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+    orch = _make_orchestrator(repo, secrets_repo, docker)
 
     result = await orch.handle_alert(alert)
     assert result is not None
@@ -841,7 +834,7 @@ async def test_cooldown_within_window_denies(
 
 @pytest.mark.asyncio
 async def test_cooldown_elapsed_passes_gate(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """Branch 7a: cooldown elapsed → gate passes, exec proceeds.
 
@@ -884,7 +877,7 @@ async def test_cooldown_elapsed_passes_gate(
 
     docker = _FakeDockerClient(result=ExecResult(exit_code=0, stdout="", stderr=""))
     orch = _make_orchestrator(
-        repo, secrets_repo_fixture, docker, transcript_dir=transcript_dir, exec_log_dir=exec_log_dir
+        repo, secrets_repo, docker, transcript_dir=transcript_dir, exec_log_dir=exec_log_dir
     )
 
     with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
@@ -900,7 +893,7 @@ async def test_cooldown_elapsed_passes_gate(
 
 @pytest.mark.asyncio
 async def test_dry_store_risky_gates_pass_stores_plan_and_pending_approval(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """T1: Risky runbook with all gates pass → dry-run stored + PENDING approval."""
     rb = _make_runbook_record(
@@ -928,7 +921,7 @@ async def test_dry_store_risky_gates_pass_stores_plan_and_pending_approval(
     )
     orch = _make_orchestrator(
         repo,
-        secrets_repo_fixture,
+        secrets_repo,
         docker,
         transcript_dir=transcript_dir,
         exec_log_dir=exec_log_dir,
@@ -990,7 +983,7 @@ async def test_dry_store_risky_gates_pass_stores_plan_and_pending_approval(
 
 @pytest.mark.asyncio
 async def test_in_lock_inflight_denies(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository
 ) -> None:
     """Branch 9: a fresh open-ended (ended_at IS NULL) claim → DENY already_running.
 
@@ -1006,7 +999,7 @@ async def test_in_lock_inflight_denies(
 
     with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=1)):
         docker = _FakeDockerClient()
-        orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+        orch = _make_orchestrator(repo, secrets_repo, docker)
 
         result = await orch.handle_alert(alert)
 
@@ -1025,7 +1018,7 @@ async def test_in_lock_inflight_denies(
 
 @pytest.mark.asyncio
 async def test_in_lock_stale_inflight_not_blocked(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """Branch 10: stale open-ended claim (older than exec_timeout+slack) → proceeds.
 
@@ -1051,7 +1044,7 @@ async def test_in_lock_stale_inflight_not_blocked(
     docker = _FakeDockerClient(result=ExecResult(exit_code=0, stdout="", stderr=""))
     orch = _make_orchestrator(
         repo,
-        secrets_repo_fixture,
+        secrets_repo,
         docker,
         transcript_dir=transcript_dir,
         exec_log_dir=exec_log_dir,
@@ -1073,7 +1066,7 @@ async def test_in_lock_stale_inflight_not_blocked(
 
 @pytest.mark.asyncio
 async def test_in_lock_rate_limit_recheck_denies(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository
 ) -> None:
     """Branch 11: row inserted between fast-path and lock → in-lock rate denial."""
     rb = _make_runbook_record(alertname="TestAlert", rate_limit_per_hour=1)
@@ -1110,7 +1103,7 @@ async def test_in_lock_rate_limit_recheck_denies(
         patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)),
     ):
         docker = _FakeDockerClient()
-        orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+        orch = _make_orchestrator(repo, secrets_repo, docker)
 
         result = await orch.handle_alert(alert)
 
@@ -1129,7 +1122,7 @@ async def test_in_lock_rate_limit_recheck_denies(
 
 @pytest.mark.asyncio
 async def test_in_lock_cooldown_recheck_denies(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository
 ) -> None:
     """Branch 12: completed run inserted between fast-path and lock → in-lock cooldown denial."""
     rb = _make_runbook_record(alertname="TestAlert", cooldown_seconds=3600)
@@ -1161,7 +1154,7 @@ async def test_in_lock_cooldown_recheck_denies(
         patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)),
     ):
         docker = _FakeDockerClient()
-        orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+        orch = _make_orchestrator(repo, secrets_repo, docker)
 
         result = await orch.handle_alert(alert)
 
@@ -1176,7 +1169,7 @@ async def test_in_lock_cooldown_recheck_denies(
 
 @pytest.mark.asyncio
 async def test_in_lock_inflight_beats_rate_and_cooldown(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository
 ) -> None:
     """Branch 13: inflight takes precedence over rate_limit and cooldown.
 
@@ -1203,7 +1196,7 @@ async def test_in_lock_inflight_beats_rate_and_cooldown(
         patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=1)),
     ):
         docker = _FakeDockerClient()
-        orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+        orch = _make_orchestrator(repo, secrets_repo, docker)
 
         result = await orch.handle_alert(alert)
 
@@ -1218,7 +1211,7 @@ async def test_in_lock_inflight_beats_rate_and_cooldown(
 
 @pytest.mark.asyncio
 async def test_claim_error_audited_and_returns_claim_error(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository
 ) -> None:
     """Branch 14: insert_started raises → audit autofix.claim_error; return CLAIM_ERROR."""
     rb = _make_runbook_record(alertname="TestAlert")
@@ -1235,7 +1228,7 @@ async def test_claim_error_audited_and_returns_claim_error(
         new=AsyncMock(side_effect=RuntimeError("DB write failed")),
     ):
         docker = _FakeDockerClient()
-        orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+        orch = _make_orchestrator(repo, secrets_repo, docker)
 
         result = await orch.handle_alert(alert)
 
@@ -1261,7 +1254,7 @@ async def test_claim_error_audited_and_returns_claim_error(
 
 @pytest.mark.asyncio
 async def test_exec_success_exit_0_all_persisted(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """Branch 15: exec exit 0 → runbook_runs completed, alert_outcomes auto_fixed, audit."""
     rb = _make_runbook_record(alertname="TestAlert", runbook_dir=tmp_path / "runbook")
@@ -1279,7 +1272,7 @@ async def test_exec_success_exit_0_all_persisted(
 
     docker = _FakeDockerClient(result=ExecResult(exit_code=0, stdout="done", stderr=""))
     orch = _make_orchestrator(
-        repo, secrets_repo_fixture, docker, transcript_dir=transcript_dir, exec_log_dir=exec_log_dir
+        repo, secrets_repo, docker, transcript_dir=transcript_dir, exec_log_dir=exec_log_dir
     )
 
     with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
@@ -1329,7 +1322,7 @@ async def test_exec_success_exit_0_all_persisted(
 
 @pytest.mark.asyncio
 async def test_exec_nonzero_exit_no_auto_fixed_outcome(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """Branch 16: exec exit_code != 0 → no auto_fixed outcome, but audit.ran present."""
     rb = _make_runbook_record(alertname="TestAlert", runbook_dir=tmp_path / "runbook")
@@ -1347,7 +1340,7 @@ async def test_exec_nonzero_exit_no_auto_fixed_outcome(
 
     docker = _FakeDockerClient(result=ExecResult(exit_code=1, stdout="", stderr="error"))
     orch = _make_orchestrator(
-        repo, secrets_repo_fixture, docker, transcript_dir=transcript_dir, exec_log_dir=exec_log_dir
+        repo, secrets_repo, docker, transcript_dir=transcript_dir, exec_log_dir=exec_log_dir
     )
 
     with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
@@ -1377,7 +1370,7 @@ async def test_exec_nonzero_exit_no_auto_fixed_outcome(
 
 @pytest.mark.asyncio
 async def test_exec_timeout_sentinel_124(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """Branch 17: DockerExecTimeoutError → exit_code=124, completion+audit written."""
     rb = _make_runbook_record(alertname="TestAlert", runbook_dir=tmp_path / "runbook")
@@ -1397,7 +1390,7 @@ async def test_exec_timeout_sentinel_124(
         raises=DockerExecTimeoutError("timed out after 60s in test-fixer: ...")
     )
     orch = _make_orchestrator(
-        repo, secrets_repo_fixture, docker, transcript_dir=transcript_dir, exec_log_dir=exec_log_dir
+        repo, secrets_repo, docker, transcript_dir=transcript_dir, exec_log_dir=exec_log_dir
     )
 
     with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
@@ -1429,7 +1422,7 @@ async def test_exec_timeout_sentinel_124(
 
 @pytest.mark.asyncio
 async def test_exec_non_timeout_docker_error_sentinel_1(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """Branch 18: non-timeout DockerSocketError → exit_code=1 sentinel, completion+audit."""
     rb = _make_runbook_record(alertname="TestAlert")
@@ -1447,7 +1440,7 @@ async def test_exec_non_timeout_docker_error_sentinel_1(
 
     docker = _FakeDockerClient(raises=DockerSocketConnectionError("socket unreachable"))
     orch = _make_orchestrator(
-        repo, secrets_repo_fixture, docker, transcript_dir=transcript_dir, exec_log_dir=exec_log_dir
+        repo, secrets_repo, docker, transcript_dir=transcript_dir, exec_log_dir=exec_log_dir
     )
 
     with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
@@ -1470,7 +1463,7 @@ async def test_exec_non_timeout_docker_error_sentinel_1(
 
 @pytest.mark.asyncio
 async def test_exec_generic_exception_propagates(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """Branch 19: non-DockerSocketError exception from exec_capture propagates."""
     rb = _make_runbook_record(alertname="TestAlert", runbook_dir=tmp_path / "runbook")
@@ -1488,7 +1481,7 @@ async def test_exec_generic_exception_propagates(
 
     docker = _FakeDockerClient(raises=ValueError("unexpected internal error"))
     orch = _make_orchestrator(
-        repo, secrets_repo_fixture, docker, transcript_dir=transcript_dir, exec_log_dir=exec_log_dir
+        repo, secrets_repo, docker, transcript_dir=transcript_dir, exec_log_dir=exec_log_dir
     )
 
     with (
@@ -1505,7 +1498,7 @@ async def test_exec_generic_exception_propagates(
 
 @pytest.mark.asyncio
 async def test_resolve_transcript_file_within_window(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """Branch 20a: .transcript file created within [started, ended] mtime → picked."""
     rb = _make_runbook_record(alertname="TestAlert", runbook_dir=tmp_path / "runbook")
@@ -1545,7 +1538,7 @@ async def test_resolve_transcript_file_within_window(
 
     docker = _WritingFakeDocker()
     orch = _make_orchestrator(
-        repo, secrets_repo_fixture, docker, transcript_dir=transcript_dir, exec_log_dir=exec_log_dir
+        repo, secrets_repo, docker, transcript_dir=transcript_dir, exec_log_dir=exec_log_dir
     )
 
     with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
@@ -1566,7 +1559,7 @@ async def test_resolve_transcript_file_within_window(
 
 @pytest.mark.asyncio
 async def test_resolve_transcript_file_outside_window_not_picked(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """Branch 20b: pre-existing .transcript file (before snapshot) → NOT picked."""
     rb = _make_runbook_record(alertname="TestAlert")
@@ -1589,7 +1582,7 @@ async def test_resolve_transcript_file_outside_window_not_picked(
 
     docker = _FakeDockerClient(result=ExecResult(exit_code=0, stdout="", stderr=""))
     orch = _make_orchestrator(
-        repo, secrets_repo_fixture, docker, transcript_dir=transcript_dir, exec_log_dir=exec_log_dir
+        repo, secrets_repo, docker, transcript_dir=transcript_dir, exec_log_dir=exec_log_dir
     )
 
     with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
@@ -1609,7 +1602,7 @@ async def test_resolve_transcript_file_outside_window_not_picked(
 
 @pytest.mark.asyncio
 async def test_resolve_transcript_no_file_returns_none(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """Branch 20c: no new .transcript file → transcript_path is None."""
     rb = _make_runbook_record(alertname="TestAlert")
@@ -1627,7 +1620,7 @@ async def test_resolve_transcript_no_file_returns_none(
 
     docker = _FakeDockerClient(result=ExecResult(exit_code=0, stdout="", stderr=""))
     orch = _make_orchestrator(
-        repo, secrets_repo_fixture, docker, transcript_dir=transcript_dir, exec_log_dir=exec_log_dir
+        repo, secrets_repo, docker, transcript_dir=transcript_dir, exec_log_dir=exec_log_dir
     )
 
     with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
@@ -1644,7 +1637,7 @@ async def test_resolve_transcript_no_file_returns_none(
 
 @pytest.mark.asyncio
 async def test_resolve_transcript_mtime_outside_exec_window_not_picked(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """Branch 20d: new file (not in before) but mtime outside [started, ended] → not picked."""
     rb = _make_runbook_record(alertname="TestAlert")
@@ -1681,7 +1674,7 @@ async def test_resolve_transcript_mtime_outside_exec_window_not_picked(
 
     docker = _StaleTimestampFakeDocker()
     orch = _make_orchestrator(
-        repo, secrets_repo_fixture, docker, transcript_dir=transcript_dir, exec_log_dir=exec_log_dir
+        repo, secrets_repo, docker, transcript_dir=transcript_dir, exec_log_dir=exec_log_dir
     )
 
     with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
@@ -1703,7 +1696,7 @@ async def test_resolve_transcript_mtime_outside_exec_window_not_picked(
 
 @pytest.mark.asyncio
 async def test_anthropic_api_key_present_injected_in_env(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """Branch 21a: ANTHROPIC_API_KEY in secrets → exec env includes it."""
     rb = _make_runbook_record(alertname="TestAlert", runbook_dir=tmp_path / "runbook")
@@ -1713,7 +1706,7 @@ async def test_anthropic_api_key_present_injected_in_env(
 
     app_settings = AppSettingsRepository(repo)
     await app_settings.set("autofix_enabled", "true")
-    await secrets_repo_fixture.set("ANTHROPIC_API_KEY", "sk-test-secret")
+    await secrets_repo.set("ANTHROPIC_API_KEY", "sk-test-secret")
 
     transcript_dir = str(tmp_path / "transcripts")
     os.makedirs(transcript_dir, exist_ok=True)
@@ -1722,7 +1715,7 @@ async def test_anthropic_api_key_present_injected_in_env(
 
     docker = _FakeDockerClient(result=ExecResult(exit_code=0, stdout="", stderr=""))
     orch = _make_orchestrator(
-        repo, secrets_repo_fixture, docker, transcript_dir=transcript_dir, exec_log_dir=exec_log_dir
+        repo, secrets_repo, docker, transcript_dir=transcript_dir, exec_log_dir=exec_log_dir
     )
 
     with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
@@ -1734,7 +1727,7 @@ async def test_anthropic_api_key_present_injected_in_env(
 
 @pytest.mark.asyncio
 async def test_anthropic_api_key_absent_env_is_none(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """Branch 21b: ANTHROPIC_API_KEY absent → exec env is None (empty dict → None)."""
     rb = _make_runbook_record(alertname="TestAlert")
@@ -1753,7 +1746,7 @@ async def test_anthropic_api_key_absent_env_is_none(
 
     docker = _FakeDockerClient(result=ExecResult(exit_code=0, stdout="", stderr=""))
     orch = _make_orchestrator(
-        repo, secrets_repo_fixture, docker, transcript_dir=transcript_dir, exec_log_dir=exec_log_dir
+        repo, secrets_repo, docker, transcript_dir=transcript_dir, exec_log_dir=exec_log_dir
     )
 
     with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
@@ -1980,7 +1973,7 @@ async def test_runs_repo_count_started_since_conn(repo: SqliteRepository) -> Non
 
 @pytest.mark.asyncio
 async def test_maintenance_window_passthrough(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """_maintenance_window is a pass-through seam — exec runs inside it."""
     rb = _make_runbook_record(alertname="TestAlert", runbook_dir=tmp_path / "runbook")
@@ -2014,7 +2007,7 @@ async def test_maintenance_window_passthrough(
 
     docker = _TrackingFakeDocker()
     orch = _make_orchestrator(
-        repo, secrets_repo_fixture, docker, transcript_dir=transcript_dir, exec_log_dir=exec_log_dir
+        repo, secrets_repo, docker, transcript_dir=transcript_dir, exec_log_dir=exec_log_dir
     )
 
     with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
@@ -2032,11 +2025,11 @@ async def test_maintenance_window_passthrough(
 
 @pytest.mark.asyncio
 async def test_lock_for_same_runbook_reuses_lock(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository
 ) -> None:
     """_lock_for returns the same lock instance for the same runbook_id."""
     docker = _FakeDockerClient()
-    orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+    orch = _make_orchestrator(repo, secrets_repo, docker)
 
     rb_id = uuid7()
     lock1 = orch._lock_for(rb_id)  # pyright: ignore[reportPrivateUsage]
@@ -2054,11 +2047,11 @@ async def test_lock_for_same_runbook_reuses_lock(
 
 
 def test_snapshot_dir_missing_path(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository
 ) -> None:
     """_snapshot_dir returns empty set when path does not exist."""
     docker = _FakeDockerClient()
-    orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+    orch = _make_orchestrator(repo, secrets_repo, docker)
 
     result = orch._snapshot_dir("/nonexistent/path/that/cannot/exist")  # pyright: ignore[reportPrivateUsage]
     assert result == set()
@@ -2070,11 +2063,11 @@ def test_snapshot_dir_missing_path(
 
 
 def test_resolve_transcript_oserror_on_listdir(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository
 ) -> None:
     """_resolve_transcript: OSError on os.listdir(path) after exec → returns None."""
     docker = _FakeDockerClient()
-    orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+    orch = _make_orchestrator(repo, secrets_repo, docker)
 
     # Use a path that doesn't exist to trigger OSError in 'after' listdir
     now = datetime.now(tz=UTC)
@@ -2088,11 +2081,11 @@ def test_resolve_transcript_oserror_on_listdir(
 
 
 def test_resolve_transcript_non_transcript_file_skipped(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """_resolve_transcript: new non-.transcript files in dir are skipped."""
     docker = _FakeDockerClient()
-    orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+    orch = _make_orchestrator(repo, secrets_repo, docker)
 
     transcript_dir = str(tmp_path / "transcripts")
     os.makedirs(transcript_dir, exist_ok=True)
@@ -2114,11 +2107,11 @@ def test_resolve_transcript_non_transcript_file_skipped(
 
 
 def test_resolve_transcript_oserror_on_mtime(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """_resolve_transcript: OSError on os.path.getmtime → file skipped, returns None."""
     docker = _FakeDockerClient()
-    orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+    orch = _make_orchestrator(repo, secrets_repo, docker)
 
     transcript_dir = str(tmp_path / "transcripts")
     os.makedirs(transcript_dir, exist_ok=True)
@@ -2156,7 +2149,7 @@ def test_resolve_transcript_oserror_on_mtime(
 
 @pytest.mark.asyncio
 async def test_in_lock_rate_under_limit_falls_through_to_cooldown_no_prior_run(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """_in_lock_gate: rate count < limit → falls through to cooldown check.
     cooldown set but no prior run → latest_ended_at_conn=None → None returned.
@@ -2177,7 +2170,7 @@ async def test_in_lock_rate_under_limit_falls_through_to_cooldown_no_prior_run(
 
     docker = _FakeDockerClient(result=ExecResult(exit_code=0, stdout="", stderr=""))
     orch = _make_orchestrator(
-        repo, secrets_repo_fixture, docker, transcript_dir=transcript_dir, exec_log_dir=exec_log_dir
+        repo, secrets_repo, docker, transcript_dir=transcript_dir, exec_log_dir=exec_log_dir
     )
 
     # No prior completed run → latest_ended_at_conn returns None → cooldown not triggered.
@@ -2197,11 +2190,11 @@ async def test_in_lock_rate_under_limit_falls_through_to_cooldown_no_prior_run(
 
 @pytest.mark.asyncio
 async def test_in_lock_detail_fallback(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository
 ) -> None:
     """_in_lock_detail: fallback return reason.value for unlisted reason."""
     docker = _FakeDockerClient()
-    orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+    orch = _make_orchestrator(repo, secrets_repo, docker)
     rb = _make_runbook_record(alertname="TestAlert")
     result = orch._in_lock_detail(rb, DenialReason.KILL_SWITCH)  # pyright: ignore[reportPrivateUsage]
     assert result == "kill_switch"
@@ -2403,7 +2396,7 @@ async def test_exec_capture_timeout_raises_docker_exec_timeout_error() -> None:
 async def test_denial_paths_never_call_exec(  # noqa: PLR0915 -- one parametrized body covers all denial paths
     denial_label: str,
     repo: SqliteRepository,
-    secrets_repo_fixture: AsyncSecretsRepository,
+    secrets_repo: AsyncSecretsRepository,
 ) -> None:
     """For every denial path, assert docker exec_capture is NEVER reached.
 
@@ -2420,7 +2413,7 @@ async def test_denial_paths_never_call_exec(  # noqa: PLR0915 -- one parametrize
         await _insert_runbook(repo, rb2)
         alert = _make_alert(alertname="TestAlert")
         await _insert_alert(repo, alert)
-        orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+        orch = _make_orchestrator(repo, secrets_repo, docker)
         result = await orch.handle_alert(alert)
 
     elif denial_label == "kill_switch":
@@ -2429,7 +2422,7 @@ async def test_denial_paths_never_call_exec(  # noqa: PLR0915 -- one parametrize
         alert = _make_alert(alertname="TestAlert")
         await _insert_alert(repo, alert)
         # Do NOT set autofix_enabled → kill_switch denial
-        orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+        orch = _make_orchestrator(repo, secrets_repo, docker)
         result = await orch.handle_alert(alert)
 
     elif denial_label == "allow_list":
@@ -2439,7 +2432,7 @@ async def test_denial_paths_never_call_exec(  # noqa: PLR0915 -- one parametrize
         await _insert_alert(repo, alert)
         app_settings = AppSettingsRepository(repo)
         await app_settings.set("autofix_enabled", "true")
-        orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+        orch = _make_orchestrator(repo, secrets_repo, docker)
         result = await orch.handle_alert(alert)
 
     elif denial_label == "rate_limit":
@@ -2464,7 +2457,7 @@ async def test_denial_paths_never_call_exec(  # noqa: PLR0915 -- one parametrize
                 initiated_by="alert",
             )
         await runs_repo.mark_completed(run_id=run_id_pre, exit_code=0, transcript_path=None)
-        orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+        orch = _make_orchestrator(repo, secrets_repo, docker)
         result = await orch.handle_alert(alert)
 
     elif denial_label == "cooldown":
@@ -2489,7 +2482,7 @@ async def test_denial_paths_never_call_exec(  # noqa: PLR0915 -- one parametrize
                 initiated_by="alert",
             )
         await runs_repo.mark_completed(run_id=run_id_pre, exit_code=0, transcript_path=None)
-        orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+        orch = _make_orchestrator(repo, secrets_repo, docker)
         result = await orch.handle_alert(alert)
 
     elif denial_label == "already_running":
@@ -2499,7 +2492,7 @@ async def test_denial_paths_never_call_exec(  # noqa: PLR0915 -- one parametrize
         await _insert_alert(repo, alert)
         app_settings = AppSettingsRepository(repo)
         await app_settings.set("autofix_enabled", "true")
-        orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+        orch = _make_orchestrator(repo, secrets_repo, docker)
         with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=1)):
             result = await orch.handle_alert(alert)
 
@@ -2510,7 +2503,7 @@ async def test_denial_paths_never_call_exec(  # noqa: PLR0915 -- one parametrize
         await _insert_alert(repo, alert)
         app_settings = AppSettingsRepository(repo)
         await app_settings.set("autofix_enabled", "true")
-        orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+        orch = _make_orchestrator(repo, secrets_repo, docker)
         with (
             patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)),
             patch.object(
@@ -2538,7 +2531,7 @@ async def test_denial_paths_never_call_exec(  # noqa: PLR0915 -- one parametrize
 @pytest.mark.asyncio
 async def test_secret_api_key_not_leaked_to_persisted_artifacts(
     repo: SqliteRepository,
-    secrets_repo_fixture: AsyncSecretsRepository,
+    secrets_repo: AsyncSecretsRepository,
     tmp_path: Path,
 ) -> None:
     """ANTHROPIC_API_KEY reaches exec env but must NOT appear in any persisted artifact.
@@ -2558,7 +2551,7 @@ async def test_secret_api_key_not_leaked_to_persisted_artifacts(
 
     app_settings = AppSettingsRepository(repo)
     await app_settings.set("autofix_enabled", "true")
-    await secrets_repo_fixture.set("ANTHROPIC_API_KEY", _SENTINEL)
+    await secrets_repo.set("ANTHROPIC_API_KEY", _SENTINEL)
 
     transcript_dir = str(tmp_path / "transcripts")
     os.makedirs(transcript_dir, exist_ok=True)
@@ -2568,7 +2561,7 @@ async def test_secret_api_key_not_leaked_to_persisted_artifacts(
     docker = _FakeDockerClient(result=ExecResult(exit_code=0, stdout="done", stderr=""))
     orch = _make_orchestrator(
         repo,
-        secrets_repo_fixture,
+        secrets_repo,
         docker,
         transcript_dir=transcript_dir,
         exec_log_dir=exec_log_dir,
@@ -2624,7 +2617,7 @@ async def test_secret_api_key_not_leaked_to_persisted_artifacts(
 @pytest.mark.asyncio
 async def test_persist_outcome_rollback_on_audit_failure(
     repo: SqliteRepository,
-    secrets_repo_fixture: AsyncSecretsRepository,
+    secrets_repo: AsyncSecretsRepository,
     tmp_path: Path,
 ) -> None:
     """_persist_outcome writes mark_completed + audit + alert_outcomes in ONE txn.
@@ -2651,7 +2644,7 @@ async def test_persist_outcome_rollback_on_audit_failure(
     docker = _FakeDockerClient(result=ExecResult(exit_code=0, stdout="ok", stderr=""))
     orch = _make_orchestrator(
         repo,
-        secrets_repo_fixture,
+        secrets_repo,
         docker,
         transcript_dir=transcript_dir,
         exec_log_dir=exec_log_dir,
@@ -2708,7 +2701,7 @@ async def test_persist_outcome_rollback_on_audit_failure(
 @pytest.mark.asyncio
 async def test_concurrent_same_runbook_serialized_by_lock(
     repo: SqliteRepository,
-    secrets_repo_fixture: AsyncSecretsRepository,
+    secrets_repo: AsyncSecretsRepository,
     tmp_path: Path,
 ) -> None:
     """Two concurrent handle_alert calls for the SAME runbook+alert are serialized.
@@ -2759,7 +2752,7 @@ async def test_concurrent_same_runbook_serialized_by_lock(
     # Single orchestrator instance so the per-runbook lock dict is shared.
     orch = _make_orchestrator(
         repo,
-        secrets_repo_fixture,
+        secrets_repo,
         docker,
         transcript_dir=transcript_dir,
         exec_log_dir=exec_log_dir,
@@ -2827,7 +2820,7 @@ async def test_concurrent_same_runbook_serialized_by_lock(
 
 @pytest.mark.asyncio
 async def test_safe_runbook_runs_real_directly_unchanged(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """T2: Safe runbook (dry_run_required=False) runs real, no approval."""
     rb = _make_runbook_record(
@@ -2851,7 +2844,7 @@ async def test_safe_runbook_runs_real_directly_unchanged(
     )
     orch = _make_orchestrator(
         repo,
-        secrets_repo_fixture,
+        secrets_repo,
         docker,
         transcript_dir=transcript_dir,
         exec_log_dir=exec_log_dir,
@@ -2888,7 +2881,7 @@ async def test_safe_runbook_runs_real_directly_unchanged(
 
 @pytest.mark.asyncio
 async def test_operational_deny_preempts_dry(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository
 ) -> None:
     """T3: Operational gate (kill-switch) denies risky runbook before dry branch."""
     rb = _make_runbook_record(alertname="TestAlert", dry_run_required=True)
@@ -2898,7 +2891,7 @@ async def test_operational_deny_preempts_dry(
 
     # Do NOT set autofix_enabled → kill-switch denies
     docker = _FakeDockerClient()
-    orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+    orch = _make_orchestrator(repo, secrets_repo, docker)
 
     result = await orch.handle_alert(alert)
 
@@ -2921,7 +2914,7 @@ async def test_operational_deny_preempts_dry(
 
 @pytest.mark.asyncio
 async def test_dry_exec_error_stores_run_no_approval(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """T4: Dry exec errors → run stored, approval NOT created."""
     rb = _make_runbook_record(alertname="TestAlert", dry_run_required=True, content_hash="hash-v1")
@@ -2940,7 +2933,7 @@ async def test_dry_exec_error_stores_run_no_approval(
     docker = _FakeDockerClient(raises=DockerSocketConnectionError("connection failed"))
     orch = _make_orchestrator(
         repo,
-        secrets_repo_fixture,
+        secrets_repo,
         docker,
         transcript_dir=transcript_dir,
         exec_log_dir=exec_log_dir,
@@ -2974,7 +2967,7 @@ async def test_dry_exec_error_stores_run_no_approval(
 
 @pytest.mark.asyncio
 async def test_execute_approved_happy_fires_real_and_sets_real_run_id(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """T5: execute_approved on pending approval → real exec fires, real_run_id set."""
     rb = _make_runbook_record(
@@ -3002,7 +2995,7 @@ async def test_execute_approved_happy_fires_real_and_sets_real_run_id(
     )
     orch = _make_orchestrator(
         repo,
-        secrets_repo_fixture,
+        secrets_repo,
         docker,
         transcript_dir=transcript_dir,
         exec_log_dir=exec_log_dir,
@@ -3068,7 +3061,7 @@ async def test_execute_approved_happy_fires_real_and_sets_real_run_id(
 
 @pytest.mark.asyncio
 async def test_execute_approved_ran_audit_includes_approving_principal(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """Fix M1: on a human-approved real run, autofix.ran.after_json carries
     approving_principal so the audit chain (autofix.approved by <alice> →
@@ -3098,7 +3091,7 @@ async def test_execute_approved_ran_audit_includes_approving_principal(
     )
     orch = _make_orchestrator(
         repo,
-        secrets_repo_fixture,
+        secrets_repo,
         docker,
         transcript_dir=transcript_dir,
         exec_log_dir=exec_log_dir,
@@ -3133,7 +3126,7 @@ async def test_execute_approved_ran_audit_includes_approving_principal(
 
 @pytest.mark.asyncio
 async def test_handle_alert_ran_audit_omits_approving_principal(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """Fix M1 inverse: auto-triggered handle_alert (safe runbook) MUST NOT
     write an approving_principal key on the autofix.ran audit — there is no
@@ -3157,7 +3150,7 @@ async def test_handle_alert_ran_audit_omits_approving_principal(
     docker = _FakeDockerClient(result=ExecResult(exit_code=0, stdout="done", stderr=""))
     orch = _make_orchestrator(
         repo,
-        secrets_repo_fixture,
+        secrets_repo,
         docker,
         transcript_dir=transcript_dir,
         exec_log_dir=exec_log_dir,
@@ -3190,7 +3183,7 @@ async def test_handle_alert_ran_audit_omits_approving_principal(
 
 @pytest.mark.asyncio
 async def test_execute_approved_claim_denies_no_real_run_id_set(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """Covers execute_approved's FALSE leg of `if result.run_id is not None`.
 
@@ -3223,7 +3216,7 @@ async def test_execute_approved_claim_denies_no_real_run_id_set(
     )
     orch = _make_orchestrator(
         repo,
-        secrets_repo_fixture,
+        secrets_repo,
         docker,
         transcript_dir=transcript_dir,
         exec_log_dir=exec_log_dir,
@@ -3288,7 +3281,7 @@ async def test_execute_approved_claim_denies_no_real_run_id_set(
 
 @pytest.mark.asyncio
 async def test_execute_approved_alert_present_id_but_row_missing_uses_original_id(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """Covers _load_alert_for_exec's FALSE leg of `if loaded is not None`.
 
@@ -3323,7 +3316,7 @@ async def test_execute_approved_alert_present_id_but_row_missing_uses_original_i
     )
     orch = _make_orchestrator(
         repo,
-        secrets_repo_fixture,
+        secrets_repo,
         docker,
         transcript_dir=transcript_dir,
         exec_log_dir=exec_log_dir,
@@ -3390,7 +3383,7 @@ async def test_execute_approved_alert_present_id_but_row_missing_uses_original_i
 
 @pytest.mark.asyncio
 async def test_execute_approved_race_only_one_wins(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """Two concurrent execute_approved calls on the same approval: exactly ONE
     produces a real run (mode='real') and the OTHER is denied with
@@ -3429,7 +3422,7 @@ async def test_execute_approved_race_only_one_wins(
     )
     orch = _make_orchestrator(
         repo,
-        secrets_repo_fixture,
+        secrets_repo,
         docker,
         transcript_dir=transcript_dir,
         exec_log_dir=exec_log_dir,
@@ -3485,7 +3478,7 @@ async def test_execute_approved_race_only_one_wins(
 
 @pytest.mark.asyncio
 async def test_execute_approved_sql_guard_zero_rowcount_denies_approval_not_pending(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """Deterministic coverage for Fix I1's rowcount==0 branch (orchestrator.py:747).
 
@@ -3530,7 +3523,7 @@ async def test_execute_approved_sql_guard_zero_rowcount_denies_approval_not_pend
     )
     orch = _make_orchestrator(
         repo,
-        secrets_repo_fixture,
+        secrets_repo,
         docker,
         transcript_dir=transcript_dir,
         exec_log_dir=exec_log_dir,
@@ -3599,7 +3592,7 @@ async def test_execute_approved_sql_guard_zero_rowcount_denies_approval_not_pend
 
 @pytest.mark.asyncio
 async def test_execute_approved_second_call_denies_after_first_succeeded(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """Sequential: after a successful execute_approved the approval status is
     'approved' (with a real_run_id). A second execute_approved on the same
@@ -3630,7 +3623,7 @@ async def test_execute_approved_second_call_denies_after_first_succeeded(
     )
     orch = _make_orchestrator(
         repo,
-        secrets_repo_fixture,
+        secrets_repo,
         docker,
         transcript_dir=transcript_dir,
         exec_log_dir=exec_log_dir,
@@ -3667,7 +3660,7 @@ async def test_execute_approved_second_call_denies_after_first_succeeded(
 
 @pytest.mark.asyncio
 async def test_execute_approved_revert_race_safe(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """Corner case for Fix I2: between "we noticed claim denied" and "we run
     revert", something ELSE modified the approval so ``revert_to_pending_conn``
@@ -3698,7 +3691,7 @@ async def test_execute_approved_revert_race_safe(
     )
     orch = _make_orchestrator(
         repo,
-        secrets_repo_fixture,
+        secrets_repo,
         docker,
         transcript_dir=transcript_dir,
         exec_log_dir=exec_log_dir,
@@ -3744,7 +3737,7 @@ async def test_execute_approved_revert_race_safe(
 
 @pytest.mark.asyncio
 async def test_execute_approved_drift_rejects_no_exec(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """T6: Runbook hash changed since plan → rejection, no exec, no real run."""
     rb = _make_runbook_record(
@@ -3772,7 +3765,7 @@ async def test_execute_approved_drift_rejects_no_exec(
     )
     orch = _make_orchestrator(
         repo,
-        secrets_repo_fixture,
+        secrets_repo,
         docker,
         transcript_dir=transcript_dir,
         exec_log_dir=exec_log_dir,
@@ -3837,7 +3830,7 @@ async def test_execute_approved_drift_rejects_no_exec(
 
 @pytest.mark.asyncio
 async def test_execute_approved_runbook_missing_returns_runbook_missing_denial(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """Fix M2: runbook DELETED between plan and approve →
     denial_reason=RUNBOOK_MISSING, audit gate='runbook_missing' with
@@ -3867,7 +3860,7 @@ async def test_execute_approved_runbook_missing_returns_runbook_missing_denial(
     )
     orch = _make_orchestrator(
         repo,
-        secrets_repo_fixture,
+        secrets_repo,
         docker,
         transcript_dir=transcript_dir,
         exec_log_dir=exec_log_dir,
@@ -3943,7 +3936,7 @@ async def test_execute_approved_runbook_missing_returns_runbook_missing_denial(
 
 @pytest.mark.asyncio
 async def test_execute_approved_not_pending_denies(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """T7: Approval not pending → APPROVAL_NOT_PENDING denial, no exec."""
     rb = _make_runbook_record(
@@ -3968,7 +3961,7 @@ async def test_execute_approved_not_pending_denies(
     )
     orch = _make_orchestrator(
         repo,
-        secrets_repo_fixture,
+        secrets_repo,
         docker,
         transcript_dir=transcript_dir,
         exec_log_dir=exec_log_dir,
@@ -4012,11 +4005,11 @@ async def test_execute_approved_not_pending_denies(
 
 @pytest.mark.asyncio
 async def test_execute_approved_missing_approval_denies(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository
 ) -> None:
     """T8: Approval does not exist → APPROVAL_NOT_PENDING denial."""
     docker = _FakeDockerClient()
-    orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+    orch = _make_orchestrator(repo, secrets_repo, docker)
 
     result = await orch.execute_approved("nonexistent-id", principal="admin", ip="1.2.3.4")
 
@@ -4032,7 +4025,7 @@ async def test_execute_approved_missing_approval_denies(
 
 @pytest.mark.asyncio
 async def test_execute_approved_gate_deny_on_approve(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """T9: Operational gate (kill-switch flipped) denies after plan."""
     rb = _make_runbook_record(
@@ -4060,7 +4053,7 @@ async def test_execute_approved_gate_deny_on_approve(
     )
     orch = _make_orchestrator(
         repo,
-        secrets_repo_fixture,
+        secrets_repo,
         docker,
         transcript_dir=transcript_dir,
         exec_log_dir=exec_log_dir,
@@ -4100,7 +4093,7 @@ async def test_execute_approved_gate_deny_on_approve(
 
 @pytest.mark.asyncio
 async def test_execute_approved_missing_alert_reconstructs(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """T10: Alert missing → reconstructed minimal Alert, real exec fires."""
     rb = _make_runbook_record(
@@ -4128,7 +4121,7 @@ async def test_execute_approved_missing_alert_reconstructs(
     )
     orch = _make_orchestrator(
         repo,
-        secrets_repo_fixture,
+        secrets_repo,
         docker,
         transcript_dir=transcript_dir,
         exec_log_dir=exec_log_dir,
@@ -4203,7 +4196,7 @@ async def test_execute_approved_missing_alert_reconstructs(
 
 @pytest.mark.asyncio
 async def test_execute_approved_alert_id_none_placeholder(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """T11: Approval alert_id is None → uses minimal placeholder Alert."""
     rb = _make_runbook_record(
@@ -4231,7 +4224,7 @@ async def test_execute_approved_alert_id_none_placeholder(
     )
     orch = _make_orchestrator(
         repo,
-        secrets_repo_fixture,
+        secrets_repo,
         docker,
         transcript_dir=transcript_dir,
         exec_log_dir=exec_log_dir,
@@ -4287,7 +4280,7 @@ async def test_execute_approved_alert_id_none_placeholder(
 
 @pytest.mark.asyncio
 async def test_read_dry_plan_happy(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """T12: read_dry_plan success → plan_text from file."""
     transcript_dir = str(tmp_path / "transcripts")
@@ -4333,7 +4326,7 @@ async def test_read_dry_plan_happy(
         )
 
     docker = _FakeDockerClient()
-    orch = _make_orchestrator(repo, secrets_repo_fixture, docker, transcript_dir=transcript_dir)
+    orch = _make_orchestrator(repo, secrets_repo, docker, transcript_dir=transcript_dir)
 
     plan = await orch.read_dry_plan(run_id)
 
@@ -4345,11 +4338,11 @@ async def test_read_dry_plan_happy(
 
 @pytest.mark.asyncio
 async def test_read_dry_plan_missing_run(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository
 ) -> None:
     """T13: read_dry_plan run not found → None."""
     docker = _FakeDockerClient()
-    orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+    orch = _make_orchestrator(repo, secrets_repo, docker)
 
     plan = await orch.read_dry_plan("nonexistent-id")
     assert plan is None
@@ -4357,7 +4350,7 @@ async def test_read_dry_plan_missing_run(
 
 @pytest.mark.asyncio
 async def test_read_dry_plan_no_transcript_path(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """T14: read_dry_plan transcript_path NULL → None."""
     # runbook_runs.runbook_id FKs to runbooks.id (NOT NULL, enforced): seed a parent.
@@ -4395,7 +4388,7 @@ async def test_read_dry_plan_no_transcript_path(
 
     docker = _FakeDockerClient()
     orch = _make_orchestrator(
-        repo, secrets_repo_fixture, docker, transcript_dir=str(tmp_path / "transcripts")
+        repo, secrets_repo, docker, transcript_dir=str(tmp_path / "transcripts")
     )
 
     plan = await orch.read_dry_plan(run_id)
@@ -4404,7 +4397,7 @@ async def test_read_dry_plan_no_transcript_path(
 
 @pytest.mark.asyncio
 async def test_read_dry_plan_file_unreadable(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """T15: read_dry_plan file missing → None."""
     # runbook_runs.runbook_id FKs to runbooks.id (NOT NULL, enforced): seed a parent.
@@ -4444,7 +4437,7 @@ async def test_read_dry_plan_file_unreadable(
 
     docker = _FakeDockerClient()
     orch = _make_orchestrator(
-        repo, secrets_repo_fixture, docker, transcript_dir=str(tmp_path / "transcripts")
+        repo, secrets_repo, docker, transcript_dir=str(tmp_path / "transcripts")
     )
 
     plan = await orch.read_dry_plan(run_id)
@@ -4607,11 +4600,11 @@ async def test_approvals_repo_insert_get_list_and_transitions(
 
 @pytest.mark.asyncio
 async def test_build_claude_cmd_dry_and_real(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository
 ) -> None:
     """T17: _build_claude_cmd dry vs real branches."""
     rb = _make_runbook_record(alertname="Test")
-    orch = _make_orchestrator(repo, secrets_repo_fixture, _FakeDockerClient())
+    orch = _make_orchestrator(repo, secrets_repo, _FakeDockerClient())
 
     # Dry cmd
     dry_cmd = orch._build_claude_cmd(rb, dry=True)  # pyright: ignore[reportPrivateUsage]
@@ -4631,7 +4624,7 @@ async def test_build_claude_cmd_dry_and_real(
 
 @pytest.mark.asyncio
 async def test_dry_in_lock_inflight_denies(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository
 ) -> None:
     """T18: Dry exec path, in-lock inflight check denies (ALREADY_RUNNING)."""
     rb = _make_runbook_record(alertname="TestAlert", dry_run_required=True, content_hash="hash-v1")
@@ -4643,7 +4636,7 @@ async def test_dry_in_lock_inflight_denies(
     await app_settings.set("autofix_enabled", "true")
 
     docker = _FakeDockerClient()
-    orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+    orch = _make_orchestrator(repo, secrets_repo, docker)
 
     with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=1)):
         result = await orch.handle_alert(alert)
@@ -4667,7 +4660,7 @@ async def test_dry_in_lock_inflight_denies(
 
 @pytest.mark.asyncio
 async def test_dry_claim_error_audited(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository
 ) -> None:
     """T19: Dry exec path, insert_started raises → CLAIM_ERROR, audit written."""
     rb = _make_runbook_record(alertname="TestAlert", dry_run_required=True, content_hash="hash-v1")
@@ -4679,7 +4672,7 @@ async def test_dry_claim_error_audited(
     await app_settings.set("autofix_enabled", "true")
 
     docker = _FakeDockerClient()
-    orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+    orch = _make_orchestrator(repo, secrets_repo, docker)
 
     # Mock insert_started to raise
     with (
@@ -4711,11 +4704,11 @@ async def test_dry_claim_error_audited(
 
 @pytest.mark.asyncio
 async def test_kill_inflight_no_current_run_returns_no_inflight_and_audits(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository
 ) -> None:
     """No in-flight run -> KillResult(killed=False, error='no_inflight_run') + audit."""
     docker = _FakeDockerClient()
-    orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+    orch = _make_orchestrator(repo, secrets_repo, docker)
 
     result = await orch.kill_inflight(reason="test", killed_by="test-user")
 
@@ -4737,7 +4730,7 @@ async def test_kill_inflight_no_current_run_returns_no_inflight_and_audits(
 
 @pytest.mark.asyncio
 async def test_kill_inflight_success_stamps_killed_at_and_audits_killed(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository
 ) -> None:
     """Success: docker.kill_container succeeds, killed_at stamped, audit written,
     unwind observed cleanly (post_snapshot is None fast-path is NOT exercised here
@@ -4763,7 +4756,7 @@ async def test_kill_inflight_success_stamps_killed_at_and_audits_killed(
         )
 
     docker = _FakeDockerClient()
-    orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+    orch = _make_orchestrator(repo, secrets_repo, docker)
     orch._current_run = _CurrentRun(  # pyright: ignore[reportPrivateUsage]
         run_id=run_id, container="test-fixer", started_at_monotonic=time.monotonic()
     )
@@ -4800,11 +4793,11 @@ async def test_kill_inflight_success_stamps_killed_at_and_audits_killed(
 
 @pytest.mark.asyncio
 async def test_kill_inflight_docker_kill_fails_audits_kill_failed_and_reraises(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository
 ) -> None:
     """docker.kill_container raises DockerSocketError -> audited + re-raised."""
     docker = _FakeDockerClient(kill_raises=DockerSocketConnectionError("boom"))
-    orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+    orch = _make_orchestrator(repo, secrets_repo, docker)
     orch._current_run = _CurrentRun(  # pyright: ignore[reportPrivateUsage]
         run_id="r1", container="test-fixer", started_at_monotonic=time.monotonic()
     )
@@ -4832,7 +4825,7 @@ async def test_kill_inflight_docker_kill_fails_audits_kill_failed_and_reraises(
 @pytest.mark.asyncio
 async def test_kill_inflight_unwind_deadline_exceeded_returns_warning(
     repo: SqliteRepository,
-    secrets_repo_fixture: AsyncSecretsRepository,
+    secrets_repo: AsyncSecretsRepository,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """_current_run never clears -> unwind_warning='unwind_deadline_exceeded'."""
@@ -4863,7 +4856,7 @@ async def test_kill_inflight_unwind_deadline_exceeded_returns_warning(
         )
 
     docker = _FakeDockerClient()
-    orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+    orch = _make_orchestrator(repo, secrets_repo, docker)
     # NEVER clear _current_run — simulates the exec never unwinding within the
     # deadline. The snapshot the poll observes stays non-None throughout.
     orch._current_run = _CurrentRun(  # pyright: ignore[reportPrivateUsage]
@@ -4879,7 +4872,7 @@ async def test_kill_inflight_unwind_deadline_exceeded_returns_warning(
 @pytest.mark.asyncio
 async def test_kill_inflight_unwind_observed_returns_no_warning(
     repo: SqliteRepository,
-    secrets_repo_fixture: AsyncSecretsRepository,
+    secrets_repo: AsyncSecretsRepository,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """_current_run is non-None when the poll starts but clears mid-poll (not
@@ -4912,7 +4905,7 @@ async def test_kill_inflight_unwind_observed_returns_no_warning(
         )
 
     docker = _FakeDockerClient()
-    orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+    orch = _make_orchestrator(repo, secrets_repo, docker)
     # Non-None at snapshot time (post_snapshot is not None -> loop entered).
     # Do NOT clear via on_kill_call — the delayed task below does the
     # clearing, AFTER the poll has started, so the loop's `if cleared: break`
@@ -4943,7 +4936,7 @@ async def test_kill_inflight_unwind_observed_returns_no_warning(
 
 @pytest.mark.asyncio
 async def test_kill_inflight_current_run_already_none_at_post_snapshot_skips_polling(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository
 ) -> None:
     """When _current_run is already None at the post-kill snapshot (post_snapshot
     is None), the unwind-deadline poll is skipped entirely (fast-path). Success
@@ -4968,7 +4961,7 @@ async def test_kill_inflight_current_run_already_none_at_post_snapshot_skips_pol
         )
 
     docker = _FakeDockerClient()
-    orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+    orch = _make_orchestrator(repo, secrets_repo, docker)
     orch._current_run = _CurrentRun(  # pyright: ignore[reportPrivateUsage]
         run_id=run_id, container="test-fixer", started_at_monotonic=time.monotonic()
     )
@@ -4990,7 +4983,7 @@ async def test_kill_inflight_current_run_already_none_at_post_snapshot_skips_pol
 
 @pytest.mark.asyncio
 async def test_kill_inflight_wrong_run_race_audits_and_skips_stamp(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository
 ) -> None:
     """When _current_run is republished with a different run_id between the
     snapshot and post-kill re-check, kill_inflight audits
@@ -5016,7 +5009,7 @@ async def test_kill_inflight_wrong_run_race_audits_and_skips_stamp(
         )
 
     docker = _FakeDockerClient()
-    orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+    orch = _make_orchestrator(repo, secrets_repo, docker)
     orch._current_run = _CurrentRun(  # pyright: ignore[reportPrivateUsage]
         run_id=run_id_a, container="test-fixer", started_at_monotonic=time.monotonic()
     )
@@ -5068,14 +5061,14 @@ async def test_kill_inflight_wrong_run_race_audits_and_skips_stamp(
 
 @pytest.mark.asyncio
 async def test_kill_inflight_writes_pre_kill_audit_before_docker_kill(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository
 ) -> None:
     """The pre-kill autofix.kill_attempted audit row commits BEFORE
     docker.kill_container is called, so a crash mid-kill still leaves a
     forensic trail. Verified by making docker.kill_container raise: the
     pre-kill audit row must still be present."""
     docker = _FakeDockerClient(kill_raises=DockerSocketConnectionError("boom"))
-    orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+    orch = _make_orchestrator(repo, secrets_repo, docker)
     orch._current_run = _CurrentRun(  # pyright: ignore[reportPrivateUsage]
         run_id="r1", container="test-fixer", started_at_monotonic=time.monotonic()
     )
@@ -5117,7 +5110,7 @@ async def test_kill_inflight_writes_pre_kill_audit_before_docker_kill(
 
 @pytest.mark.asyncio
 async def test_exec_claude_publishes_and_clears_current_run_on_success(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """dry=False success: _current_run set during exec, cleared after (finally)."""
     rb = _make_runbook_record(alertname="TestAlert", runbook_dir=tmp_path / "runbook")
@@ -5149,7 +5142,7 @@ async def test_exec_claude_publishes_and_clears_current_run_on_success(
             )
 
     docker = _ObservingDocker(result=ExecResult(exit_code=0, stdout="ok", stderr=""))
-    orch = _make_orchestrator(repo, secrets_repo_fixture, docker, transcript_dir=transcript_dir)
+    orch = _make_orchestrator(repo, secrets_repo, docker, transcript_dir=transcript_dir)
 
     assert orch._current_run is None  # pyright: ignore[reportPrivateUsage]
 
@@ -5165,7 +5158,7 @@ async def test_exec_claude_publishes_and_clears_current_run_on_success(
 
 @pytest.mark.asyncio
 async def test_exec_claude_clears_current_run_on_docker_socket_error(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """dry=False, exec_capture raises DockerSocketError -> _current_run cleared after."""
     rb = _make_runbook_record(alertname="TestAlert")
@@ -5175,11 +5168,15 @@ async def test_exec_claude_clears_current_run_on_docker_socket_error(
     os.makedirs(transcript_dir, exist_ok=True)
 
     docker = _FakeDockerClient(raises=DockerSocketConnectionError("boom"))
-    orch = _make_orchestrator(repo, secrets_repo_fixture, docker, transcript_dir=transcript_dir)
+    orch = _make_orchestrator(repo, secrets_repo, docker, transcript_dir=transcript_dir)
 
-    exec_result, _transcript, error_msg, errored, _snapshot = await orch._exec_claude(  # pyright: ignore[reportPrivateUsage]
+    outcome = await orch._exec_claude(  # pyright: ignore[reportPrivateUsage]
         record=rb, alert=alert, run_id="r1", dry=False
     )
+    exec_result = outcome.exec_result
+    _transcript = outcome.transcript_path
+    error_msg = outcome.error_msg
+    errored = outcome.errored
 
     assert errored is True
     assert error_msg is not None
@@ -5189,7 +5186,7 @@ async def test_exec_claude_clears_current_run_on_docker_socket_error(
 
 @pytest.mark.asyncio
 async def test_exec_claude_clears_current_run_on_timeout(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """dry=False, exec_capture raises DockerExecTimeoutError -> exit 124, cleared after."""
     rb = _make_runbook_record(alertname="TestAlert", runbook_dir=tmp_path / "runbook")
@@ -5199,11 +5196,15 @@ async def test_exec_claude_clears_current_run_on_timeout(
     os.makedirs(transcript_dir, exist_ok=True)
 
     docker = _FakeDockerClient(raises=DockerExecTimeoutError("timed out"))
-    orch = _make_orchestrator(repo, secrets_repo_fixture, docker, transcript_dir=transcript_dir)
+    orch = _make_orchestrator(repo, secrets_repo, docker, transcript_dir=transcript_dir)
 
-    exec_result, _transcript, error_msg, errored, _snapshot = await orch._exec_claude(  # pyright: ignore[reportPrivateUsage]
+    outcome = await orch._exec_claude(  # pyright: ignore[reportPrivateUsage]
         record=rb, alert=alert, run_id="r1", dry=False
     )
+    exec_result = outcome.exec_result
+    _transcript = outcome.transcript_path
+    error_msg = outcome.error_msg
+    errored = outcome.errored
 
     _TIMEOUT_EXIT_CODE = 124
     assert errored is True
@@ -5214,7 +5215,7 @@ async def test_exec_claude_clears_current_run_on_timeout(
 
 @pytest.mark.asyncio
 async def test_exec_claude_does_not_publish_current_run_for_dry(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """dry=True: _current_run stays None throughout (never published)."""
     rb = _make_runbook_record(alertname="TestAlert")
@@ -5246,7 +5247,7 @@ async def test_exec_claude_does_not_publish_current_run_for_dry(
             )
 
     docker = _ObservingDocker(result=ExecResult(exit_code=0, stdout="plan", stderr=""))
-    orch = _make_orchestrator(repo, secrets_repo_fixture, docker, transcript_dir=transcript_dir)
+    orch = _make_orchestrator(repo, secrets_repo, docker, transcript_dir=transcript_dir)
 
     await orch._exec_claude(  # pyright: ignore[reportPrivateUsage]
         record=rb, alert=alert, run_id="r1", dry=True
@@ -5263,7 +5264,7 @@ async def test_exec_claude_does_not_publish_current_run_for_dry(
 
 @pytest.mark.asyncio
 async def test_pre_run_gate_denial_latency_under_100ms(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository
 ) -> None:
     """_check_operational_gates denies fast (kill-switch off, checked first) —
     no accidental blocking I/O added by the kill-switch feature. Runs the check
@@ -5272,7 +5273,7 @@ async def test_pre_run_gate_denial_latency_under_100ms(
     await _insert_runbook(repo, rb)
 
     docker = _FakeDockerClient()
-    orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+    orch = _make_orchestrator(repo, secrets_repo, docker)
     # autofix_enabled left unset (falsy) -> kill-switch gate denies immediately.
 
     max_delta = 0.0
@@ -5293,7 +5294,7 @@ async def test_pre_run_gate_denial_latency_under_100ms(
 
 @pytest.mark.asyncio
 async def test_grant_resolution_happy_path_docker_ssh_egress(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """T1: docker + ssh + egress declared; real run -> grants resolved and egress audited."""
     rb_dir = tmp_path / "test-runbook"
@@ -5332,15 +5333,19 @@ scoped_capabilities:
     docker = _FakeDockerClient(result=ExecResult(exit_code=0, stdout="", stderr=""))
     orch = _make_orchestrator(
         repo,
-        secrets_repo_fixture,
+        secrets_repo,
         docker,
         transcript_dir=transcript_dir,
         ssh_target_ids_provider=lambda: frozenset({"udm"}),
     )
 
-    exec_result, _transcript_path, error_msg, errored, _snapshot = await orch._exec_claude(  # pyright: ignore[reportPrivateUsage]
+    outcome = await orch._exec_claude(  # pyright: ignore[reportPrivateUsage]
         record=rb, alert=alert, run_id="r1", dry=False
     )
+    exec_result = outcome.exec_result
+    _transcript_path = outcome.transcript_path
+    error_msg = outcome.error_msg
+    errored = outcome.errored
 
     # Should proceed to exec (no early return on grant failure).
     assert exec_result.exit_code == 0
@@ -5373,7 +5378,7 @@ scoped_capabilities:
 
 @pytest.mark.asyncio
 async def test_grant_resolution_missing_runbook_yaml(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """T2: runbook.yaml missing -> grant_failed audit, early return,
     _current_run never published."""
@@ -5392,11 +5397,15 @@ async def test_grant_resolution_missing_runbook_yaml(
     os.makedirs(transcript_dir, exist_ok=True)
 
     docker = _FakeDockerClient(result=ExecResult(exit_code=0, stdout="", stderr=""))
-    orch = _make_orchestrator(repo, secrets_repo_fixture, docker, transcript_dir=transcript_dir)
+    orch = _make_orchestrator(repo, secrets_repo, docker, transcript_dir=transcript_dir)
 
-    exec_result, transcript_path, error_msg, errored, _snapshot = await orch._exec_claude(  # pyright: ignore[reportPrivateUsage]
+    outcome = await orch._exec_claude(  # pyright: ignore[reportPrivateUsage]
         record=rb, alert=alert, run_id="r1", dry=False
     )
+    exec_result = outcome.exec_result
+    transcript_path = outcome.transcript_path
+    error_msg = outcome.error_msg
+    errored = outcome.errored
 
     # Should return early (grant failure).
     assert exec_result.exit_code == 1
@@ -5421,7 +5430,7 @@ async def test_grant_resolution_missing_runbook_yaml(
 
 @pytest.mark.asyncio
 async def test_grant_resolution_malformed_yaml(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """T3: malformed YAML -> grant_failed audit, no exec attempted."""
     rb_dir = tmp_path / "test-runbook"
@@ -5448,11 +5457,15 @@ scoped_capabilities:
     os.makedirs(transcript_dir, exist_ok=True)
 
     docker = _FakeDockerClient(result=ExecResult(exit_code=0, stdout="", stderr=""))
-    orch = _make_orchestrator(repo, secrets_repo_fixture, docker, transcript_dir=transcript_dir)
+    orch = _make_orchestrator(repo, secrets_repo, docker, transcript_dir=transcript_dir)
 
-    exec_result, transcript_path, error_msg, errored, _snapshot = await orch._exec_claude(  # pyright: ignore[reportPrivateUsage]
+    outcome = await orch._exec_claude(  # pyright: ignore[reportPrivateUsage]
         record=rb, alert=alert, run_id="r1", dry=False
     )
+    exec_result = outcome.exec_result
+    transcript_path = outcome.transcript_path
+    error_msg = outcome.error_msg
+    errored = outcome.errored
 
     # Should return early on malformed YAML.
     assert exec_result.exit_code == 1
@@ -5469,7 +5482,7 @@ scoped_capabilities:
 
 @pytest.mark.asyncio
 async def test_grant_resolution_unknown_ssh_target_id(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """T4: ssh.target_id unknown -> grant_failed with reason='unknown_ssh_target_id'."""
     rb_dir = tmp_path / "test-runbook"
@@ -5502,15 +5515,19 @@ scoped_capabilities:
     docker = _FakeDockerClient(result=ExecResult(exit_code=0, stdout="", stderr=""))
     orch = _make_orchestrator(
         repo,
-        secrets_repo_fixture,
+        secrets_repo,
         docker,
         transcript_dir=transcript_dir,
         ssh_target_ids_provider=lambda: frozenset({"udm", "synology"}),
     )
 
-    exec_result, transcript_path, error_msg, errored, _snapshot = await orch._exec_claude(  # pyright: ignore[reportPrivateUsage]
+    outcome = await orch._exec_claude(  # pyright: ignore[reportPrivateUsage]
         record=rb, alert=alert, run_id="r1", dry=False
     )
+    exec_result = outcome.exec_result
+    transcript_path = outcome.transcript_path
+    error_msg = outcome.error_msg
+    errored = outcome.errored
 
     # Should return early on unknown SSH target.
     assert exec_result.exit_code == 1
@@ -5534,7 +5551,7 @@ scoped_capabilities:
 @pytest.mark.asyncio
 async def test_grant_resolution_ssh_provider_raises_maps_to_grant_failed(
     repo: SqliteRepository,
-    secrets_repo_fixture: AsyncSecretsRepository,
+    secrets_repo: AsyncSecretsRepository,
     tmp_path: Path,
 ) -> None:
     """Test: ssh_target_ids_provider() raising an exception is caught and mapped
@@ -5568,15 +5585,19 @@ scoped_capabilities:
 
     orch = _make_orchestrator(
         repo,
-        secrets_repo_fixture,
+        secrets_repo,
         docker,
         transcript_dir=transcript_dir,
         ssh_target_ids_provider=_failing_provider,
     )
 
-    exec_result, transcript_path, error_msg, errored, _snapshot = await orch._exec_claude(  # pyright: ignore[reportPrivateUsage]
+    outcome = await orch._exec_claude(  # pyright: ignore[reportPrivateUsage]
         record=rb, alert=alert, run_id="r1", dry=False
     )
+    exec_result = outcome.exec_result
+    transcript_path = outcome.transcript_path
+    error_msg = outcome.error_msg
+    errored = outcome.errored
 
     assert exec_result.exit_code == 1
     assert errored is True
@@ -5599,7 +5620,7 @@ scoped_capabilities:
 @pytest.mark.asyncio
 async def test_grant_resolution_audit_failure_swallowed_and_returned(
     repo: SqliteRepository,
-    secrets_repo_fixture: AsyncSecretsRepository,
+    secrets_repo: AsyncSecretsRepository,
     tmp_path: Path,
 ) -> None:
     """Test: if the autofix.grant_failed audit-write itself raises, the exception
@@ -5619,7 +5640,7 @@ async def test_grant_resolution_audit_failure_swallowed_and_returned(
 
     orch = _make_orchestrator(
         repo,
-        secrets_repo_fixture,
+        secrets_repo,
         docker,
         transcript_dir=transcript_dir,
     )
@@ -5628,9 +5649,13 @@ async def test_grant_resolution_audit_failure_swallowed_and_returned(
         raise RuntimeError("simulated audit-write failure")
 
     with patch.object(orch_module, "insert_audit", side_effect=_raising_insert_audit):
-        exec_result, transcript_path, error_msg, errored, _snapshot = await orch._exec_claude(  # pyright: ignore[reportPrivateUsage]
+        outcome = await orch._exec_claude(  # pyright: ignore[reportPrivateUsage]
             record=rb, alert=alert, run_id="r1", dry=False
         )
+        exec_result = outcome.exec_result
+        transcript_path = outcome.transcript_path
+        error_msg = outcome.error_msg
+        errored = outcome.errored
 
     # Failure tuple returned, exception NOT propagated.
     assert exec_result.exit_code == 1
@@ -5662,7 +5687,7 @@ def test_autofix_package_lazy_getattr_returns_autofix_orchestrator() -> None:
 
 @pytest.mark.asyncio
 async def test_grant_resolution_dry_run_suppresses_egress_unenforced(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """T5: dry=True -> grant_resolved present, egress_unenforced absent."""
     rb_dir = tmp_path / "test-runbook"
@@ -5701,15 +5726,19 @@ scoped_capabilities:
     docker = _FakeDockerClient(result=ExecResult(exit_code=0, stdout="plan", stderr=""))
     orch = _make_orchestrator(
         repo,
-        secrets_repo_fixture,
+        secrets_repo,
         docker,
         transcript_dir=transcript_dir,
         ssh_target_ids_provider=lambda: frozenset({"udm"}),
     )
 
-    exec_result, _transcript_path, error_msg, errored, _snapshot = await orch._exec_claude(  # pyright: ignore[reportPrivateUsage]
+    outcome = await orch._exec_claude(  # pyright: ignore[reportPrivateUsage]
         record=rb, alert=alert, run_id="r1", dry=True
     )
+    exec_result = outcome.exec_result
+    _transcript_path = outcome.transcript_path
+    error_msg = outcome.error_msg
+    errored = outcome.errored
 
     # Dry run should proceed normally.
     assert exec_result.exit_code == 0
@@ -5731,7 +5760,7 @@ scoped_capabilities:
 
 @pytest.mark.asyncio
 async def test_grant_resolution_empty_egress_suppresses_unenforced(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """T6: egress: [] (empty) -> grant_resolved present, egress_unenforced absent."""
     rb_dir = tmp_path / "test-runbook"
@@ -5765,11 +5794,15 @@ scoped_capabilities:
     os.makedirs(transcript_dir, exist_ok=True)
 
     docker = _FakeDockerClient(result=ExecResult(exit_code=0, stdout="", stderr=""))
-    orch = _make_orchestrator(repo, secrets_repo_fixture, docker, transcript_dir=transcript_dir)
+    orch = _make_orchestrator(repo, secrets_repo, docker, transcript_dir=transcript_dir)
 
-    exec_result, _transcript_path, _error_msg, errored, _snapshot = await orch._exec_claude(  # pyright: ignore[reportPrivateUsage]
+    outcome = await orch._exec_claude(  # pyright: ignore[reportPrivateUsage]
         record=rb, alert=alert, run_id="r1", dry=False
     )
+    exec_result = outcome.exec_result
+    _transcript_path = outcome.transcript_path
+    _error_msg = outcome.error_msg
+    errored = outcome.errored
 
     # Should proceed normally.
     assert exec_result.exit_code == 0
@@ -5790,7 +5823,7 @@ scoped_capabilities:
 
 @pytest.mark.asyncio
 async def test_grant_resolution_default_egress_when_key_missing(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """Test: egress key missing (default) -> grant_resolved present,
     egress_unenforced absent, egress=[]."""
@@ -5824,11 +5857,15 @@ scoped_capabilities:
     os.makedirs(transcript_dir, exist_ok=True)
 
     docker = _FakeDockerClient(result=ExecResult(exit_code=0, stdout="", stderr=""))
-    orch = _make_orchestrator(repo, secrets_repo_fixture, docker, transcript_dir=transcript_dir)
+    orch = _make_orchestrator(repo, secrets_repo, docker, transcript_dir=transcript_dir)
 
-    exec_result, _transcript_path, _error_msg, errored, _snapshot = await orch._exec_claude(  # pyright: ignore[reportPrivateUsage]
+    outcome = await orch._exec_claude(  # pyright: ignore[reportPrivateUsage]
         record=rb, alert=alert, run_id="r1", dry=False
     )
+    exec_result = outcome.exec_result
+    _transcript_path = outcome.transcript_path
+    _error_msg = outcome.error_msg
+    errored = outcome.errored
 
     # Should proceed normally.
     assert exec_result.exit_code == 0
@@ -5849,7 +5886,7 @@ scoped_capabilities:
 
 @pytest.mark.asyncio
 async def test_grant_resolution_ssh_only_no_docker(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """T7: ssh-only (no docker) -> grants resolved with
     docker_container=None, docker_allowed_actions=[]."""
@@ -5883,15 +5920,19 @@ scoped_capabilities:
     docker = _FakeDockerClient(result=ExecResult(exit_code=0, stdout="", stderr=""))
     orch = _make_orchestrator(
         repo,
-        secrets_repo_fixture,
+        secrets_repo,
         docker,
         transcript_dir=transcript_dir,
         ssh_target_ids_provider=lambda: frozenset({"udm"}),
     )
 
-    exec_result, _transcript_path, _error_msg, errored, _snapshot = await orch._exec_claude(  # pyright: ignore[reportPrivateUsage]
+    outcome = await orch._exec_claude(  # pyright: ignore[reportPrivateUsage]
         record=rb, alert=alert, run_id="r1", dry=False
     )
+    exec_result = outcome.exec_result
+    _transcript_path = outcome.transcript_path
+    _error_msg = outcome.error_msg
+    errored = outcome.errored
 
     # Should proceed normally.
     assert exec_result.exit_code == 0
@@ -5911,7 +5952,7 @@ scoped_capabilities:
 
 @pytest.mark.asyncio
 async def test_grant_resolution_invalid_yaml_schema_valueerror(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """T9: syntactically valid YAML that is a list (not a mapping) -> ValueError branch."""
     rb_dir = tmp_path / "test-runbook"
@@ -5931,11 +5972,15 @@ async def test_grant_resolution_invalid_yaml_schema_valueerror(
     os.makedirs(transcript_dir, exist_ok=True)
 
     docker = _FakeDockerClient(result=ExecResult(exit_code=0, stdout="", stderr=""))
-    orch = _make_orchestrator(repo, secrets_repo_fixture, docker, transcript_dir=transcript_dir)
+    orch = _make_orchestrator(repo, secrets_repo, docker, transcript_dir=transcript_dir)
 
-    exec_result, transcript_path, error_msg, errored, _snapshot = await orch._exec_claude(  # pyright: ignore[reportPrivateUsage]
+    outcome = await orch._exec_claude(  # pyright: ignore[reportPrivateUsage]
         record=rb, alert=alert, run_id="r1", dry=False
     )
+    exec_result = outcome.exec_result
+    transcript_path = outcome.transcript_path
+    error_msg = outcome.error_msg
+    errored = outcome.errored
 
     assert exec_result.exit_code == 1
     assert errored is True
@@ -5957,7 +6002,7 @@ async def test_grant_resolution_invalid_yaml_schema_valueerror(
 
 @pytest.mark.asyncio
 async def test_grant_resolution_failure_never_publishes_current_run(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """T8: grant failure (real/non-dry) never publishes _current_run; kill_inflight sees no-op."""
     rb_dir = tmp_path / "test-runbook"
@@ -5975,15 +6020,19 @@ async def test_grant_resolution_failure_never_publishes_current_run(
     os.makedirs(transcript_dir, exist_ok=True)
 
     docker = _FakeDockerClient(result=ExecResult(exit_code=0, stdout="", stderr=""))
-    orch = _make_orchestrator(repo, secrets_repo_fixture, docker, transcript_dir=transcript_dir)
+    orch = _make_orchestrator(repo, secrets_repo, docker, transcript_dir=transcript_dir)
 
     # _current_run should be None before the call.
     assert orch._current_run is None  # pyright: ignore[reportPrivateUsage]
 
     # Call _exec_claude in non-dry mode with a grant failure setup.
-    _exec_result, transcript_path, _error_msg, errored, _snapshot = await orch._exec_claude(  # pyright: ignore[reportPrivateUsage]
+    outcome = await orch._exec_claude(  # pyright: ignore[reportPrivateUsage]
         record=rb, alert=alert, run_id="r1", dry=False
     )
+    _exec_result = outcome.exec_result
+    transcript_path = outcome.transcript_path
+    _error_msg = outcome.error_msg
+    errored = outcome.errored
 
     # Should have failed with a grant error.
     assert errored is True
@@ -6035,7 +6084,7 @@ def _make_risky_runbook_record(  # noqa: PLR0913 -- test factory params
 
 @pytest.mark.asyncio
 async def test_operator_trigger_dry_run_success(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """Safe runbook, dry mode -> DRY_RUN_STORED, run_id + approval_id set."""
     rb = _make_runbook_record(alertname="TestAlert", runbook_dir=tmp_path / "runbook")
@@ -6051,7 +6100,7 @@ async def test_operator_trigger_dry_run_success(
 
     docker = _FakeDockerClient(result=ExecResult(exit_code=0, stdout="plan", stderr=""))
     orch = _make_orchestrator(
-        repo, secrets_repo_fixture, docker, transcript_dir=transcript_dir, exec_log_dir=exec_log_dir
+        repo, secrets_repo, docker, transcript_dir=transcript_dir, exec_log_dir=exec_log_dir
     )
 
     with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
@@ -6067,7 +6116,7 @@ async def test_operator_trigger_dry_run_success(
 
 @pytest.mark.asyncio
 async def test_operator_trigger_real_success_on_safe(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """Safe runbook (dry_run_required=False), real mode -> RAN, run_id set."""
     rb = _make_runbook_record(alertname="TestAlert", runbook_dir=tmp_path / "runbook")
@@ -6083,7 +6132,7 @@ async def test_operator_trigger_real_success_on_safe(
 
     docker = _FakeDockerClient(result=ExecResult(exit_code=0, stdout="done", stderr=""))
     orch = _make_orchestrator(
-        repo, secrets_repo_fixture, docker, transcript_dir=transcript_dir, exec_log_dir=exec_log_dir
+        repo, secrets_repo, docker, transcript_dir=transcript_dir, exec_log_dir=exec_log_dir
     )
 
     with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
@@ -6098,7 +6147,7 @@ async def test_operator_trigger_real_success_on_safe(
 
 @pytest.mark.asyncio
 async def test_operator_trigger_real_on_risky_raises(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository
 ) -> None:
     """Risky runbook, real mode -> DryRunRequiredForRiskyError; no run row; audit."""
     rb = _make_risky_runbook_record(alertname="TestAlert")
@@ -6108,7 +6157,7 @@ async def test_operator_trigger_real_on_risky_raises(
     await app_settings.set("autofix_enabled", "true")
 
     docker = _FakeDockerClient()
-    orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+    orch = _make_orchestrator(repo, secrets_repo, docker)
 
     with pytest.raises(DryRunRequiredForRiskyError):
         await orch.handle_operator_trigger(rb.id, RunMode.REAL, principal="alice", ip="10.0.0.1")
@@ -6136,14 +6185,14 @@ async def test_operator_trigger_real_on_risky_raises(
 
 @pytest.mark.asyncio
 async def test_operator_trigger_kill_switch_denied(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository
 ) -> None:
     """Kill-switch engaged (unset) -> DENIED, KILL_SWITCH; audit who=principal."""
     rb = _make_runbook_record(alertname="TestAlert")
     await _insert_runbook(repo, rb)
 
     docker = _FakeDockerClient()
-    orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+    orch = _make_orchestrator(repo, secrets_repo, docker)
 
     result = await orch.handle_operator_trigger(
         rb.id, RunMode.DRY_RUN, principal="alice", ip="10.0.0.1"
@@ -6162,7 +6211,7 @@ async def test_operator_trigger_kill_switch_denied(
 
 @pytest.mark.asyncio
 async def test_operator_trigger_kill_switch_denied_with_credential_type(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository
 ) -> None:
     """Kill-switch denial audit includes credential_type when the caller passes one.
 
@@ -6174,7 +6223,7 @@ async def test_operator_trigger_kill_switch_denied_with_credential_type(
     await _insert_runbook(repo, rb)
 
     docker = _FakeDockerClient()
-    orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+    orch = _make_orchestrator(repo, secrets_repo, docker)
 
     result = await orch.handle_operator_trigger(
         rb.id,
@@ -6196,7 +6245,7 @@ async def test_operator_trigger_kill_switch_denied_with_credential_type(
 
 @pytest.mark.asyncio
 async def test_operator_trigger_disabled_runbook(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository
 ) -> None:
     """enabled=False -> DENIED, ALLOW_LIST."""
     rb = _make_runbook_record(alertname="TestAlert", enabled=False)
@@ -6206,7 +6255,7 @@ async def test_operator_trigger_disabled_runbook(
     await app_settings.set("autofix_enabled", "true")
 
     docker = _FakeDockerClient()
-    orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+    orch = _make_orchestrator(repo, secrets_repo, docker)
 
     result = await orch.handle_operator_trigger(
         rb.id, RunMode.DRY_RUN, principal="alice", ip="10.0.0.1"
@@ -6217,7 +6266,7 @@ async def test_operator_trigger_disabled_runbook(
 
 @pytest.mark.asyncio
 async def test_operator_trigger_rate_limited(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository
 ) -> None:
     """Rate-limit tripped -> DENIED, RATE_LIMIT."""
     rb = _make_runbook_record(alertname="TestAlert", rate_limit_per_hour=1)
@@ -6227,7 +6276,7 @@ async def test_operator_trigger_rate_limited(
     await app_settings.set("autofix_enabled", "true")
 
     docker = _FakeDockerClient()
-    orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+    orch = _make_orchestrator(repo, secrets_repo, docker)
 
     with patch.object(RunbookRunsRepository, "count_started_since", new=AsyncMock(return_value=1)):
         result = await orch.handle_operator_trigger(
@@ -6239,7 +6288,7 @@ async def test_operator_trigger_rate_limited(
 
 @pytest.mark.asyncio
 async def test_operator_trigger_cooldown(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository
 ) -> None:
     """Cooldown active -> DENIED, COOLDOWN."""
     rb = _make_runbook_record(alertname="TestAlert", cooldown_seconds=3600)
@@ -6249,7 +6298,7 @@ async def test_operator_trigger_cooldown(
     await app_settings.set("autofix_enabled", "true")
 
     docker = _FakeDockerClient()
-    orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+    orch = _make_orchestrator(repo, secrets_repo, docker)
 
     with patch.object(
         RunbookRunsRepository,
@@ -6265,7 +6314,7 @@ async def test_operator_trigger_cooldown(
 
 @pytest.mark.asyncio
 async def test_operator_trigger_in_lock_denial_audit_includes_credential_type(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository
 ) -> None:
     """In-lock ALREADY_RUNNING denial (_claim_and_exec, not the fast-path lock
     check) audits credential_type when the operator trigger supplied one.
@@ -6284,7 +6333,7 @@ async def test_operator_trigger_in_lock_denial_audit_includes_credential_type(
     await app_settings.set("autofix_enabled", "true")
 
     docker = _FakeDockerClient()
-    orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+    orch = _make_orchestrator(repo, secrets_repo, docker)
 
     with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=5)):
         result = await orch.handle_operator_trigger(
@@ -6308,7 +6357,7 @@ async def test_operator_trigger_in_lock_denial_audit_includes_credential_type(
 
 @pytest.mark.asyncio
 async def test_operator_trigger_already_running(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository
 ) -> None:
     """Per-runbook lock already held -> DENIED, ALREADY_RUNNING (fast-path, no deadlock)."""
     rb = _make_runbook_record(alertname="TestAlert")
@@ -6318,7 +6367,7 @@ async def test_operator_trigger_already_running(
     await app_settings.set("autofix_enabled", "true")
 
     docker = _FakeDockerClient()
-    orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+    orch = _make_orchestrator(repo, secrets_repo, docker)
 
     lock = orch._lock_for(rb.id)  # pyright: ignore[reportPrivateUsage]
     await lock.acquire()
@@ -6335,11 +6384,11 @@ async def test_operator_trigger_already_running(
 
 @pytest.mark.asyncio
 async def test_operator_trigger_runbook_not_found(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository
 ) -> None:
     """Nonexistent runbook_id -> RunbookNotFoundError."""
     docker = _FakeDockerClient()
-    orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+    orch = _make_orchestrator(repo, secrets_repo, docker)
 
     with pytest.raises(RunbookNotFoundError):
         await orch.handle_operator_trigger(
@@ -6349,7 +6398,7 @@ async def test_operator_trigger_runbook_not_found(
 
 @pytest.mark.asyncio
 async def test_operator_trigger_initiated_by_column_dry(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """After a dry operator trigger, runbook_runs.initiated_by == 'operator'."""
     rb = _make_runbook_record(alertname="TestAlert", runbook_dir=tmp_path / "runbook")
@@ -6365,7 +6414,7 @@ async def test_operator_trigger_initiated_by_column_dry(
 
     docker = _FakeDockerClient(result=ExecResult(exit_code=0, stdout="plan", stderr=""))
     orch = _make_orchestrator(
-        repo, secrets_repo_fixture, docker, transcript_dir=transcript_dir, exec_log_dir=exec_log_dir
+        repo, secrets_repo, docker, transcript_dir=transcript_dir, exec_log_dir=exec_log_dir
     )
 
     with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
@@ -6383,7 +6432,7 @@ async def test_operator_trigger_initiated_by_column_dry(
 
 @pytest.mark.asyncio
 async def test_operator_trigger_initiated_by_column_real(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """After a real operator trigger on a safe runbook, initiated_by == 'operator'."""
     rb = _make_runbook_record(alertname="TestAlert", runbook_dir=tmp_path / "runbook")
@@ -6399,7 +6448,7 @@ async def test_operator_trigger_initiated_by_column_real(
 
     docker = _FakeDockerClient(result=ExecResult(exit_code=0, stdout="done", stderr=""))
     orch = _make_orchestrator(
-        repo, secrets_repo_fixture, docker, transcript_dir=transcript_dir, exec_log_dir=exec_log_dir
+        repo, secrets_repo, docker, transcript_dir=transcript_dir, exec_log_dir=exec_log_dir
     )
 
     with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
@@ -6417,7 +6466,7 @@ async def test_operator_trigger_initiated_by_column_real(
 
 @pytest.mark.asyncio
 async def test_alert_path_still_writes_initiated_by_alert(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """Existing alert path (handle_alert) still results in initiated_by == 'alert'."""
     rb = _make_runbook_record(alertname="TestAlert", runbook_dir=tmp_path / "runbook")
@@ -6435,7 +6484,7 @@ async def test_alert_path_still_writes_initiated_by_alert(
 
     docker = _FakeDockerClient(result=ExecResult(exit_code=0, stdout="done", stderr=""))
     orch = _make_orchestrator(
-        repo, secrets_repo_fixture, docker, transcript_dir=transcript_dir, exec_log_dir=exec_log_dir
+        repo, secrets_repo, docker, transcript_dir=transcript_dir, exec_log_dir=exec_log_dir
     )
 
     with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
@@ -6452,7 +6501,7 @@ async def test_alert_path_still_writes_initiated_by_alert(
 
 @pytest.mark.asyncio
 async def test_audit_ran_after_json_contains_initiated_by(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """After a real operator run, autofix.ran's after_json includes initiated_by=operator."""
     rb = _make_runbook_record(alertname="TestAlert", runbook_dir=tmp_path / "runbook")
@@ -6468,7 +6517,7 @@ async def test_audit_ran_after_json_contains_initiated_by(
 
     docker = _FakeDockerClient(result=ExecResult(exit_code=0, stdout="done", stderr=""))
     orch = _make_orchestrator(
-        repo, secrets_repo_fixture, docker, transcript_dir=transcript_dir, exec_log_dir=exec_log_dir
+        repo, secrets_repo, docker, transcript_dir=transcript_dir, exec_log_dir=exec_log_dir
     )
 
     with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
@@ -6484,7 +6533,7 @@ async def test_audit_ran_after_json_contains_initiated_by(
 
 @pytest.mark.asyncio
 async def test_audit_dry_run_stored_after_json_contains_initiated_by(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """After a dry operator run, autofix.dry_run_stored's after_json includes initiated_by.
 
@@ -6506,7 +6555,7 @@ async def test_audit_dry_run_stored_after_json_contains_initiated_by(
 
     docker = _FakeDockerClient(result=ExecResult(exit_code=0, stdout="plan", stderr=""))
     orch = _make_orchestrator(
-        repo, secrets_repo_fixture, docker, transcript_dir=transcript_dir, exec_log_dir=exec_log_dir
+        repo, secrets_repo, docker, transcript_dir=transcript_dir, exec_log_dir=exec_log_dir
     )
 
     with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
@@ -6530,7 +6579,7 @@ async def test_audit_dry_run_stored_after_json_contains_initiated_by(
 
 @pytest.mark.asyncio
 async def test_operator_trigger_shares_rate_limit_bucket_with_alert(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """Real run via alert path, then operator trigger within rate window -> RATE_LIMIT."""
     rb = _make_runbook_record(
@@ -6550,7 +6599,7 @@ async def test_operator_trigger_shares_rate_limit_bucket_with_alert(
 
     docker = _FakeDockerClient(result=ExecResult(exit_code=0, stdout="done", stderr=""))
     orch = _make_orchestrator(
-        repo, secrets_repo_fixture, docker, transcript_dir=transcript_dir, exec_log_dir=exec_log_dir
+        repo, secrets_repo, docker, transcript_dir=transcript_dir, exec_log_dir=exec_log_dir
     )
 
     with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
@@ -6567,7 +6616,7 @@ async def test_operator_trigger_shares_rate_limit_bucket_with_alert(
 
 @pytest.mark.asyncio
 async def test_operator_trigger_shares_cooldown_bucket_with_alert(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """Real run via alert path, then operator trigger within cooldown window -> COOLDOWN."""
     rb = _make_runbook_record(
@@ -6587,7 +6636,7 @@ async def test_operator_trigger_shares_cooldown_bucket_with_alert(
 
     docker = _FakeDockerClient(result=ExecResult(exit_code=0, stdout="done", stderr=""))
     orch = _make_orchestrator(
-        repo, secrets_repo_fixture, docker, transcript_dir=transcript_dir, exec_log_dir=exec_log_dir
+        repo, secrets_repo, docker, transcript_dir=transcript_dir, exec_log_dir=exec_log_dir
     )
 
     with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
@@ -6604,7 +6653,7 @@ async def test_operator_trigger_shares_cooldown_bucket_with_alert(
 
 @pytest.mark.asyncio
 async def test_operator_trigger_denial_audit_who_is_principal(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository
 ) -> None:
     """Denial audit who = principal, NOT 'system:autofix'."""
     rb = _make_runbook_record(alertname="TestAlert", enabled=False)
@@ -6614,7 +6663,7 @@ async def test_operator_trigger_denial_audit_who_is_principal(
     await app_settings.set("autofix_enabled", "true")
 
     docker = _FakeDockerClient()
-    orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+    orch = _make_orchestrator(repo, secrets_repo, docker)
 
     result = await orch.handle_operator_trigger(
         rb.id, RunMode.DRY_RUN, principal="bob", ip="10.0.0.1"
@@ -6631,7 +6680,7 @@ async def test_operator_trigger_denial_audit_who_is_principal(
 
 @pytest.mark.asyncio
 async def test_operator_trigger_ran_audit_who_is_principal(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """autofix.ran audit who = principal on the operator path."""
     rb = _make_runbook_record(alertname="TestAlert", runbook_dir=tmp_path / "runbook")
@@ -6647,7 +6696,7 @@ async def test_operator_trigger_ran_audit_who_is_principal(
 
     docker = _FakeDockerClient(result=ExecResult(exit_code=0, stdout="done", stderr=""))
     orch = _make_orchestrator(
-        repo, secrets_repo_fixture, docker, transcript_dir=transcript_dir, exec_log_dir=exec_log_dir
+        repo, secrets_repo, docker, transcript_dir=transcript_dir, exec_log_dir=exec_log_dir
     )
 
     with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
@@ -6665,7 +6714,7 @@ async def test_operator_trigger_ran_audit_who_is_principal(
 
 @pytest.mark.asyncio
 async def test_execute_approved_runbook_deleted_credential_type_in_audit(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """When executing an approval for a deleted runbook, audit row includes
     credential_type that was used for the approve operation.
@@ -6680,7 +6729,7 @@ async def test_execute_approved_runbook_deleted_credential_type_in_audit(
     await _insert_alert(repo, alert)
 
     docker = _FakeDockerClient(result=ExecResult(exit_code=0, stdout="plan", stderr=""))
-    orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+    orch = _make_orchestrator(repo, secrets_repo, docker)
 
     # Create a dry run and approval.
     runs_repo = RunbookRunsRepository(repo)
@@ -6736,7 +6785,7 @@ async def test_execute_approved_runbook_deleted_credential_type_in_audit(
 
 @pytest.mark.asyncio
 async def test_execute_approved_runbook_changed_credential_type_in_audit(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """When executing an approval where the runbook's content_hash has changed,
     audit row includes the credential_type used for the approve operation.
@@ -6751,7 +6800,7 @@ async def test_execute_approved_runbook_changed_credential_type_in_audit(
     await _insert_alert(repo, alert)
 
     docker = _FakeDockerClient(result=ExecResult(exit_code=0, stdout="plan", stderr=""))
-    orch = _make_orchestrator(repo, secrets_repo_fixture, docker)
+    orch = _make_orchestrator(repo, secrets_repo, docker)
 
     # Create a dry run and approval with the original hash.
     runs_repo = RunbookRunsRepository(repo)
@@ -6808,7 +6857,7 @@ async def test_execute_approved_runbook_changed_credential_type_in_audit(
 
 @pytest.mark.asyncio
 async def test_execute_approved_happy_path_audit_includes_credential_type(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """Happy-path execute_approved with credential_type includes it in both
     autofix.approved and autofix.ran audit rows.
@@ -6840,7 +6889,7 @@ async def test_execute_approved_happy_path_audit_includes_credential_type(
     )
     orch = _make_orchestrator(
         repo,
-        secrets_repo_fixture,
+        secrets_repo,
         docker,
         transcript_dir=transcript_dir,
         exec_log_dir=exec_log_dir,

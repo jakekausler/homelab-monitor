@@ -57,6 +57,7 @@ function makeRunDetail(overrides: Partial<RunDetail> = {}): RunDetail {
     runbook_path: 'runbooks/safe-example',
     started_at: '2026-07-03T00:00:00Z',
     transcript_path: '/var/log/transcripts/run-abc.txt',
+    transcript_pruned_at: null,
     ...overrides,
   }
 }

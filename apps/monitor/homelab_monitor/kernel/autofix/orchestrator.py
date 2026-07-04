@@ -36,11 +36,18 @@ from homelab_monitor.kernel.autofix.feedback_parser import (
 from homelab_monitor.kernel.autofix.feedback_repository import (
     RunbookRunFeedbackRepository,
 )
+from homelab_monitor.kernel.autofix.intents import (
+    IntentDeny,
+    MalformedIntentFileError,
+    parse_intents,
+    validate_intent,
+)
 from homelab_monitor.kernel.autofix.matcher import matching_runbooks
 from homelab_monitor.kernel.autofix.runs_repository import RunbookRunsRepository
 from homelab_monitor.kernel.autofix.types import (
     DenialReason,
     DryRunRequiredForRiskyError,
+    ExecOutcome,
     FeedbackKind,
     GrantResolutionError,
     InitiatedBy,
@@ -61,7 +68,9 @@ from homelab_monitor.kernel.db.time import utc_now_iso
 from homelab_monitor.kernel.docker.socket_client import (
     DockerExecTimeoutError,
     DockerSocketClient,
+    DockerSocketConnectionError,
     DockerSocketError,
+    DockerSocketProtocolError,
     ExecResult,
 )
 from homelab_monitor.kernel.runbooks.config import RunbookConfig
@@ -382,20 +391,21 @@ class AutoFixOrchestrator:
 
     async def _exec_claude(
         self, *, record: RunbookRecord, alert: Alert | None, run_id: str, dry: bool
-    ) -> tuple[ExecResult, str | None, str | None, bool, list[ParsedFeedbackItem] | None]:
+    ) -> ExecOutcome:
         """Run claude (real or dry) under the process-wide transcript lock.
 
-        Returns (exec_result, transcript_path, error_msg, errored,
-        feedback_items). Mirrors the exec critical section of _claim_and_exec
-        exactly, differing ONLY by the argv (Decision A). Persists
-        grant-resolution audit rows (``autofix.grant_resolved`` /
+        Returns an :class:`~homelab_monitor.kernel.autofix.types.ExecOutcome`
+        bundling execution result, transcript path, error message, errored flag,
+        feedback items, and resolved grants. Mirrors the exec critical section
+        of _claim_and_exec exactly, differing ONLY by the argv (Decision A).
+        Persists grant-resolution audit rows (``autofix.grant_resolved`` /
         ``autofix.egress_unenforced`` on success; ``autofix.grant_failed`` on
         failure) BEFORE exec. Does NOT persist run completion or exec outcome
         — caller persists those. Feedback sentinel scan + parse happens HERE,
         inside self._transcript_lock, to prevent cross-run misattribution.
         """
         api_key = await self._secrets_repo.get("ANTHROPIC_API_KEY")
-        env: dict[str, str] = {}
+        env: dict[str, str] = {"HM_RUN_ID": run_id}
         if api_key is not None:
             env["ANTHROPIC_API_KEY"] = api_key
 
@@ -431,12 +441,13 @@ class AutoFixOrchestrator:
                         runbook_id=record.id,
                         run_id=run_id,
                     )
-                return (
-                    ExecResult(exit_code=1, stdout="", stderr=""),
-                    None,
-                    exc.detail,
-                    True,
-                    None,
+                return ExecOutcome(
+                    exec_result=ExecResult(exit_code=1, stdout="", stderr=""),
+                    transcript_path=None,
+                    error_msg=exc.detail,
+                    errored=True,
+                    feedback_items=None,
+                    grants=None,
                 )
             async with self._db.transaction() as conn:
                 await insert_audit(
@@ -516,7 +527,217 @@ class AutoFixOrchestrator:
             sentinel = scan_transcript_dir_for_feedback(transcript_dir, before)
             if sentinel is not None:
                 feedback_items = parse_feedback_file(sentinel)
-        return exec_result, transcript_path, error_msg, errored, feedback_items
+        return ExecOutcome(
+            exec_result=exec_result,
+            transcript_path=transcript_path,
+            error_msg=error_msg,
+            errored=errored,
+            feedback_items=feedback_items,
+            grants=grants,
+        )
+
+    async def _execute_intents(  # noqa: PLR0913 -- keyword-only orchestrator seam
+        self,
+        *,
+        run_id: str,
+        alert: Alert | None,
+        record: RunbookRecord,
+        grants: ResolvedGrants,
+        audit_who: str,
+        dry: bool,
+    ) -> None:
+        """Docker intent gateway (STAGE-009-014).
+
+        Reads ``<transcript_dir>/<run_id>/docker-intent.json``, validates each
+        intent against ``grants``, and (for real-exec accepted intents) invokes
+        ``DockerSocketClient.restart_container``. Every code path emits a
+        distinct ``autofix.intent_*`` audit row.
+
+        Contract:
+          - Missing file: no-op, no audit (matches the "most runs have no
+            intents" fast-path).
+          - Kill-switch re-check ONCE at start (D6-C). On disabled: emit
+            ``autofix.intent_kill_switched`` and return — no docker calls.
+          - Malformed file: emit ONE ``autofix.intent_malformed`` and return.
+          - Validate all intents first, then iterate: deny → audit, accept + dry
+            → ``intent_dry_planned`` audit (no docker call), accept + not dry →
+            docker call.
+          - Per-intent docker error semantics (D4-C):
+              * ``DockerSocketProtocolError`` → audit ``intent_exec_error`` and
+                CONTINUE with remaining intents (per-container failure).
+              * ``DockerSocketConnectionError`` (includes
+                ``DockerExecTimeoutError``) → audit ``intent_exec_error`` for
+                THIS intent, then for every remaining intent emit
+                ``intent_skipped_after_error`` and RETURN (daemon-down =
+                systemic).
+          - Audits use ``audit_who`` (the caller's principal), matching the
+            orchestrator's existing convention.
+          - Each intent's audit is written in its OWN transaction (atomicity
+            per-intent, not per-batch).
+        """
+        intent_path = Path(self._config.transcript_dir) / run_id / "docker-intent.json"
+
+        # M2: Gate kill-switch on intent-file existence. If no file, silently
+        # return (no audit). This avoids writing spurious audits for runs with
+        # no intents at all.
+        if not intent_path.exists():
+            return
+
+        # D6-C: single settings read + batch decision.
+        flag = await self._app_settings_repo.get("autofix_enabled")
+        if not _is_truthy(flag):
+            async with self._db.transaction() as conn:
+                await insert_audit(
+                    conn,
+                    who=audit_who,
+                    what="autofix.intent_kill_switched",
+                    after={
+                        "run_id": run_id,
+                        "runbook_id": record.id,
+                        "alert_id": alert.id if alert is not None else None,
+                        "dry": dry,
+                    },
+                )
+            return
+
+        try:
+            intents = parse_intents(intent_path)
+        except MalformedIntentFileError as exc:
+            async with self._db.transaction() as conn:
+                await insert_audit(
+                    conn,
+                    who=audit_who,
+                    what="autofix.intent_malformed",
+                    after={
+                        "run_id": run_id,
+                        "runbook_id": record.id,
+                        "alert_id": alert.id if alert is not None else None,
+                        "reason": exc.reason,
+                        "detail": exc.detail,
+                        "dry": dry,
+                    },
+                )
+            return
+
+        if not intents:
+            return
+
+        # D3: validate all first, then iterate.
+        validations = [(intent, validate_intent(intent, grants)) for intent in intents]
+
+        # Fix I1: Each intent's audit is written in its OWN transaction.
+        # Docker calls are OUTSIDE txns (they cannot participate).
+        # This ensures audit immutability even if a later commit fails.
+        alert_id = alert.id if alert is not None else None
+        halt_after_index: int | None = None
+
+        for idx, (intent, verdict) in enumerate(validations):
+            if halt_after_index is not None and idx > halt_after_index:
+                # D4-C: remaining intents skipped after DockerSocketConnectionError.
+                async with self._db.transaction() as conn:
+                    await insert_audit(
+                        conn,
+                        who=audit_who,
+                        what="autofix.intent_skipped_after_error",
+                        after={
+                            "run_id": run_id,
+                            "runbook_id": record.id,
+                            "alert_id": alert_id,
+                            "container": intent.container,
+                            "action": intent.action,
+                            "reason": "docker connection error halted batch",
+                            "dry": dry,
+                        },
+                    )
+                continue
+
+            if isinstance(verdict, IntentDeny):
+                async with self._db.transaction() as conn:
+                    await insert_audit(
+                        conn,
+                        who=audit_who,
+                        what="autofix.intent_denied",
+                        after={
+                            "run_id": run_id,
+                            "runbook_id": record.id,
+                            "alert_id": alert_id,
+                            "container": intent.container,
+                            "action": intent.action,
+                            "reason": verdict.reason,
+                            "dry": dry,
+                        },
+                    )
+                continue
+
+            # Accept path.
+            if dry:
+                async with self._db.transaction() as conn:
+                    await insert_audit(
+                        conn,
+                        who=audit_who,
+                        what="autofix.intent_dry_planned",
+                        after={
+                            "run_id": run_id,
+                            "runbook_id": record.id,
+                            "alert_id": alert_id,
+                            "container": intent.container,
+                            "action": intent.action,
+                        },
+                    )
+                continue
+
+            # Accept + real: docker call.
+            try:
+                await self._docker.restart_container(intent.container)
+            except DockerSocketConnectionError as exc:
+                # D4-C daemon-down: audit THIS one, halt the rest.
+                async with self._db.transaction() as conn:
+                    await insert_audit(
+                        conn,
+                        who=audit_who,
+                        what="autofix.intent_exec_error",
+                        after={
+                            "run_id": run_id,
+                            "runbook_id": record.id,
+                            "alert_id": alert_id,
+                            "container": intent.container,
+                            "action": intent.action,
+                            "error": str(exc),
+                        },
+                    )
+                halt_after_index = idx
+                continue
+            except DockerSocketProtocolError as exc:
+                # D4-C per-container: audit, continue.
+                async with self._db.transaction() as conn:
+                    await insert_audit(
+                        conn,
+                        who=audit_who,
+                        what="autofix.intent_exec_error",
+                        after={
+                            "run_id": run_id,
+                            "runbook_id": record.id,
+                            "alert_id": alert_id,
+                            "container": intent.container,
+                            "action": intent.action,
+                            "error": str(exc),
+                        },
+                    )
+                continue
+
+            async with self._db.transaction() as conn:
+                await insert_audit(
+                    conn,
+                    who=audit_who,
+                    what="autofix.intent_executed",
+                    after={
+                        "run_id": run_id,
+                        "runbook_id": record.id,
+                        "alert_id": alert_id,
+                        "container": intent.container,
+                        "action": intent.action,
+                    },
+                )
 
     async def _claim_and_exec(  # noqa: PLR0913 -- keyword-only claim/exec parameters (safety-model traceability)
         self,
@@ -635,13 +856,12 @@ class AutoFixOrchestrator:
 
             # --- Exec (real). Serialized process-wide for transcript-dir
             #     attribution safety (Important #4). ---
-            (
-                exec_result,
-                transcript_path,
-                error_msg,
-                errored,
-                feedback_items,
-            ) = await self._exec_claude(record=record, alert=alert, run_id=run_id, dry=False)
+            outcome = await self._exec_claude(record=record, alert=alert, run_id=run_id, dry=False)
+            exec_result = outcome.exec_result
+            transcript_path = outcome.transcript_path
+            error_msg = outcome.error_msg
+            errored = outcome.errored
+            feedback_items = outcome.feedback_items
 
         # Lock(s) released. Persist completion + exec.log + outcome + audit.
         exec_log_path = self._write_exec_log(
@@ -651,6 +871,35 @@ class AutoFixOrchestrator:
             exec_result=exec_result,
             error=error_msg,
         )
+
+        # STAGE-009-014: Docker intent gateway. Skip on any exec error (no way to
+        # trust an intent file from a failed exec) or when grant resolution failed
+        # (no envelope to validate against). Kill-switch re-check happens INSIDE
+        # _execute_intents (D6-C).
+        if not errored and outcome.grants is not None:
+            try:
+                await self._execute_intents(
+                    run_id=run_id,
+                    alert=alert,
+                    record=record,
+                    grants=outcome.grants,
+                    audit_who=audit_who,
+                    dry=False,
+                )
+            except Exception as exc:  # must not orphan run row (I3)
+                # Fix I3: Emit intent_gateway_failed audit; let _persist_outcome still run.
+                async with self._db.transaction() as conn:
+                    await insert_audit(
+                        conn,
+                        who=audit_who,
+                        what="autofix.intent_gateway_failed",
+                        after={
+                            "run_id": run_id,
+                            "runbook_id": record.id,
+                            "alert_id": alert.id if alert is not None else None,
+                            "error": str(exc),
+                        },
+                    )
 
         if errored:
             # Exec failed: completion + error audit in ONE txn (no outcome).
@@ -807,13 +1056,12 @@ class AutoFixOrchestrator:
                 )
 
             # --- Dry exec (plan-only). ---
-            (
-                exec_result,
-                transcript_path,
-                error_msg,
-                errored,
-                feedback_items,
-            ) = await self._exec_claude(record=record, alert=alert, run_id=run_id, dry=True)
+            outcome = await self._exec_claude(record=record, alert=alert, run_id=run_id, dry=True)
+            exec_result = outcome.exec_result
+            transcript_path = outcome.transcript_path
+            error_msg = outcome.error_msg
+            errored = outcome.errored
+            feedback_items = outcome.feedback_items
 
         # Lock released. Persist completion + exec.log + PENDING approval + audit.
         exec_log_path = self._write_exec_log(
@@ -823,6 +1071,32 @@ class AutoFixOrchestrator:
             exec_result=exec_result,
             error=error_msg,
         )
+
+        # STAGE-009-014: Docker intent gateway (dry mode).
+        if not errored and outcome.grants is not None:
+            try:
+                await self._execute_intents(
+                    run_id=run_id,
+                    alert=alert,
+                    record=record,
+                    grants=outcome.grants,
+                    audit_who=audit_who,
+                    dry=True,
+                )
+            except Exception as exc:  # must not orphan run row (I3)
+                # Fix I3: Emit intent_gateway_failed audit; let _persist_outcome still run.
+                async with self._db.transaction() as conn:
+                    await insert_audit(
+                        conn,
+                        who=audit_who,
+                        what="autofix.intent_gateway_failed",
+                        after={
+                            "run_id": run_id,
+                            "runbook_id": record.id,
+                            "alert_id": alert.id if alert is not None else None,
+                            "error": str(exc),
+                        },
+                    )
 
         approval_id: str | None = None
         async with self._db.transaction() as conn:

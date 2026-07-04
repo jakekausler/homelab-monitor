@@ -24,6 +24,7 @@ function makeRun(overrides: Partial<Run> = {}): Run {
     runbook_id: 'runbook-1',
     runbook_path: 'runbooks/safe-example',
     started_at: '2026-07-02T23:59:00Z',
+    transcript_pruned_at: null,
     ...overrides,
   }
 }

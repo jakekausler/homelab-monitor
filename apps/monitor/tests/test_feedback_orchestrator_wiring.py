@@ -26,7 +26,6 @@ from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
-import pytest_asyncio
 import structlog
 from sqlalchemy import text
 
@@ -277,18 +276,6 @@ def _make_dirs(tmp_path: Path) -> tuple[str, str]:
 # ---------------------------------------------------------------------------
 
 
-@pytest_asyncio.fixture
-async def master_key_bytes() -> bytes:
-    return bytes(range(32))
-
-
-@pytest_asyncio.fixture
-async def secrets_repo_fixture(
-    repo: SqliteRepository, master_key_bytes: bytes
-) -> AsyncSecretsRepository:
-    return AsyncSecretsRepository(repo, master_key_bytes)
-
-
 # ---------------------------------------------------------------------------
 # No feedback file -> no inserts, no audit
 # ---------------------------------------------------------------------------
@@ -296,7 +283,7 @@ async def secrets_repo_fixture(
 
 @pytest.mark.asyncio
 async def test_real_success_no_feedback_file_no_inserts_no_audit(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     rb = _make_runbook_record(runbook_dir=tmp_path / "runbook")
     alert = _make_alert()
@@ -307,7 +294,7 @@ async def test_real_success_no_feedback_file_no_inserts_no_audit(
     feedback_repo = RunbookRunFeedbackRepository(repo)
     orch = _make_orchestrator(
         repo,
-        secrets_repo_fixture,
+        secrets_repo,
         docker,
         transcript_dir=transcript_dir,
         exec_log_dir=exec_log_dir,
@@ -343,7 +330,7 @@ async def test_real_success_no_feedback_file_no_inserts_no_audit(
 
 @pytest.mark.asyncio
 async def test_real_success_single_feedback_item_persisted(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     rb = _make_runbook_record(runbook_dir=tmp_path / "runbook")
     alert = _make_alert()
@@ -367,7 +354,7 @@ async def test_real_success_single_feedback_item_persisted(
     feedback_repo = RunbookRunFeedbackRepository(repo)
     orch = _make_orchestrator(
         repo,
-        secrets_repo_fixture,
+        secrets_repo,
         docker,
         transcript_dir=transcript_dir,
         exec_log_dir=exec_log_dir,
@@ -398,7 +385,7 @@ async def test_real_success_single_feedback_item_persisted(
 
 @pytest.mark.asyncio
 async def test_real_success_multi_feedback_items_all_linked(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     rb = _make_runbook_record(runbook_dir=tmp_path / "runbook")
     alert = _make_alert()
@@ -420,7 +407,7 @@ async def test_real_success_multi_feedback_items_all_linked(
     feedback_repo = RunbookRunFeedbackRepository(repo)
     orch = _make_orchestrator(
         repo,
-        secrets_repo_fixture,
+        secrets_repo,
         docker,
         transcript_dir=transcript_dir,
         exec_log_dir=exec_log_dir,
@@ -454,7 +441,7 @@ async def test_real_success_multi_feedback_items_all_linked(
 
 @pytest.mark.asyncio
 async def test_real_success_malformed_feedback_persists_parse_error_and_audits(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     rb = _make_runbook_record(runbook_dir=tmp_path / "runbook")
     alert = _make_alert()
@@ -469,7 +456,7 @@ async def test_real_success_malformed_feedback_persists_parse_error_and_audits(
     feedback_repo = RunbookRunFeedbackRepository(repo)
     orch = _make_orchestrator(
         repo,
-        secrets_repo_fixture,
+        secrets_repo,
         docker,
         transcript_dir=transcript_dir,
         exec_log_dir=exec_log_dir,
@@ -505,7 +492,7 @@ async def test_real_success_malformed_feedback_persists_parse_error_and_audits(
 
 @pytest.mark.asyncio
 async def test_feedback_repo_none_no_crash_orchestrator_continues(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     rb = _make_runbook_record(runbook_dir=tmp_path / "runbook")
     alert = _make_alert()
@@ -520,7 +507,7 @@ async def test_feedback_repo_none_no_crash_orchestrator_continues(
     )
     orch = _make_orchestrator(
         repo,
-        secrets_repo_fixture,
+        secrets_repo,
         docker,
         transcript_dir=transcript_dir,
         exec_log_dir=exec_log_dir,
@@ -544,7 +531,7 @@ async def test_feedback_repo_none_no_crash_orchestrator_continues(
 
 @pytest.mark.asyncio
 async def test_real_errored_path_still_processes_feedback(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     rb = _make_runbook_record(runbook_dir=tmp_path / "runbook")
     alert = _make_alert()
@@ -559,7 +546,7 @@ async def test_real_errored_path_still_processes_feedback(
     feedback_repo = RunbookRunFeedbackRepository(repo)
     orch = _make_orchestrator(
         repo,
-        secrets_repo_fixture,
+        secrets_repo,
         docker,
         transcript_dir=transcript_dir,
         exec_log_dir=exec_log_dir,
@@ -598,7 +585,7 @@ async def test_real_errored_path_still_processes_feedback(
 
 @pytest.mark.asyncio
 async def test_dry_run_path_processes_feedback(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     rb = _make_runbook_record(dry_run_required=True, runbook_dir=tmp_path / "runbook")
     alert = _make_alert()
@@ -615,7 +602,7 @@ async def test_dry_run_path_processes_feedback(
     feedback_repo = RunbookRunFeedbackRepository(repo)
     orch = _make_orchestrator(
         repo,
-        secrets_repo_fixture,
+        secrets_repo,
         docker,
         transcript_dir=transcript_dir,
         exec_log_dir=exec_log_dir,
@@ -643,7 +630,7 @@ async def test_dry_run_path_processes_feedback(
 
 @pytest.mark.asyncio
 async def test_feedback_repo_insert_conn_exception_swallowed_parent_txn_lands(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """insert_conn raising must not prevent completion + autofix.ran audit landing."""
     rb = _make_runbook_record(runbook_dir=tmp_path / "runbook")
@@ -660,7 +647,7 @@ async def test_feedback_repo_insert_conn_exception_swallowed_parent_txn_lands(
     feedback_repo = RunbookRunFeedbackRepository(repo)
     orch = _make_orchestrator(
         repo,
-        secrets_repo_fixture,
+        secrets_repo,
         docker,
         transcript_dir=transcript_dir,
         exec_log_dir=exec_log_dir,
@@ -711,7 +698,7 @@ async def test_feedback_repo_insert_conn_exception_swallowed_parent_txn_lands(
 
 @pytest.mark.asyncio
 async def test_feedback_repo_insert_exception_on_errored_path_swallowed_parent_txn_lands(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """insert_conn raising on the ERRORED branch must not poison the parent txn.
 
@@ -730,7 +717,7 @@ async def test_feedback_repo_insert_exception_on_errored_path_swallowed_parent_t
     feedback_repo = RunbookRunFeedbackRepository(repo)
     orch = _make_orchestrator(
         repo,
-        secrets_repo_fixture,
+        secrets_repo,
         docker,
         transcript_dir=transcript_dir,
         exec_log_dir=exec_log_dir,
@@ -792,7 +779,7 @@ async def test_feedback_repo_insert_exception_on_errored_path_swallowed_parent_t
 
 @pytest.mark.asyncio
 async def test_feedback_sentinel_with_empty_list_no_inserts(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """A sentinel file exists (scan finds it) but parses to an empty list -> no-op.
 
@@ -811,7 +798,7 @@ async def test_feedback_sentinel_with_empty_list_no_inserts(
     feedback_repo = RunbookRunFeedbackRepository(repo)
     orch = _make_orchestrator(
         repo,
-        secrets_repo_fixture,
+        secrets_repo,
         docker,
         transcript_dir=transcript_dir,
         exec_log_dir=exec_log_dir,
@@ -831,7 +818,7 @@ async def test_feedback_sentinel_with_empty_list_no_inserts(
 
 @pytest.mark.asyncio
 async def test_feedback_id_provider_used_when_supplied(
-    repo: SqliteRepository, secrets_repo_fixture: AsyncSecretsRepository, tmp_path: Path
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
 ) -> None:
     """A custom feedback_id_provider is used for deterministic ids in tests."""
     rb = _make_runbook_record(runbook_dir=tmp_path / "runbook")
@@ -849,7 +836,7 @@ async def test_feedback_id_provider_used_when_supplied(
     fixed_id = "fixed-feedback-id-0001"
     orch = _make_orchestrator(
         repo,
-        secrets_repo_fixture,
+        secrets_repo,
         docker,
         transcript_dir=transcript_dir,
         exec_log_dir=exec_log_dir,

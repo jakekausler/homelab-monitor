@@ -15,7 +15,6 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
-import pytest_asyncio
 from sqlalchemy import text
 
 from homelab_monitor.kernel.autofix.runs_repository import RunbookRunsRepository
@@ -42,22 +41,10 @@ from tests.test_autofix_orchestrator import (
 # ---------------------------------------------------------------------------
 
 
-@pytest_asyncio.fixture
-async def master_key_bytes() -> bytes:
-    return bytes(range(32))
-
-
-@pytest_asyncio.fixture
-async def secrets_repo_fixture(
-    repo: SqliteRepository, master_key_bytes: bytes
-) -> AsyncSecretsRepository:
-    return AsyncSecretsRepository(repo, master_key_bytes)
-
-
 @pytest.mark.asyncio
 async def test_drift_execute_approved_rejects_when_hash_changed(
     repo: SqliteRepository,
-    secrets_repo_fixture: AsyncSecretsRepository,
+    secrets_repo: AsyncSecretsRepository,
     tmp_path: Path,
 ) -> None:
     """Runbook content_hash mutated after dry-run → execute_approved returns
@@ -87,7 +74,7 @@ async def test_drift_execute_approved_rejects_when_hash_changed(
     )
     orch = _make_orchestrator(
         repo,
-        secrets_repo_fixture,
+        secrets_repo,
         docker,
         transcript_dir=transcript_dir,
         exec_log_dir=exec_log_dir,
@@ -119,7 +106,7 @@ async def test_drift_execute_approved_rejects_when_hash_changed(
 @pytest.mark.asyncio
 async def test_drift_execute_approved_rejects_when_runbook_missing(
     repo: SqliteRepository,
-    secrets_repo_fixture: AsyncSecretsRepository,
+    secrets_repo: AsyncSecretsRepository,
     tmp_path: Path,
 ) -> None:
     """Runbook deleted between dry-run and approve → execute_approved returns
@@ -149,7 +136,7 @@ async def test_drift_execute_approved_rejects_when_runbook_missing(
     )
     orch = _make_orchestrator(
         repo,
-        secrets_repo_fixture,
+        secrets_repo,
         docker,
         transcript_dir=transcript_dir,
         exec_log_dir=exec_log_dir,
