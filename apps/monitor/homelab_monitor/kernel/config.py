@@ -770,6 +770,14 @@ class FixerRunnerConfig:
     where the orchestrator writes ``<run_id>.exec.log``.
     ``fixer_user`` is the low-priv user the exec runs as.
     ``exec_timeout_seconds`` bounds a single claude exec.
+
+    Transcript rotation policy (STAGE-009-012):
+      ``transcript_rotation_max_count`` — keep the N most recent transcript
+      files per runbook (default 100). Files beyond N are pruned by the
+      rotator.
+      ``transcript_rotation_max_age_days`` — max transcript file age in days
+      (default 365). Files older than the cutoff are pruned regardless of N.
+      Both bounds MUST be > 0; the loader raises ``ValueError`` otherwise.
     """
 
     container: str = "homelab-fixer-runner"
@@ -777,6 +785,8 @@ class FixerRunnerConfig:
     exec_log_dir: str = "/data/exec-logs"
     fixer_user: str = "homelab-fixer"
     exec_timeout_seconds: float = 1800.0
+    transcript_rotation_max_count: int = 100
+    transcript_rotation_max_age_days: int = 365
 
 
 def load_fixer_runner_config() -> FixerRunnerConfig:
@@ -788,12 +798,37 @@ def load_fixer_runner_config() -> FixerRunnerConfig:
     fixer_user = os.environ.get("HOMELAB_MONITOR_FIXER_USER", defaults.fixer_user)
     timeout_raw = os.environ.get("HOMELAB_MONITOR_FIXER_EXEC_TIMEOUT_SECONDS")
     exec_timeout_seconds = defaults.exec_timeout_seconds if not timeout_raw else float(timeout_raw)
+
+    max_count_raw = os.environ.get("HOMELAB_MONITOR_FIXER_TRANSCRIPT_ROTATION_MAX_COUNT")
+    transcript_rotation_max_count = (
+        defaults.transcript_rotation_max_count if not max_count_raw else int(max_count_raw)
+    )
+    if transcript_rotation_max_count <= 0:
+        msg = (
+            "HOMELAB_MONITOR_FIXER_TRANSCRIPT_ROTATION_MAX_COUNT must be > 0 "
+            f"(got {transcript_rotation_max_count})"
+        )
+        raise ValueError(msg)
+
+    max_age_raw = os.environ.get("HOMELAB_MONITOR_FIXER_TRANSCRIPT_ROTATION_MAX_AGE_DAYS")
+    transcript_rotation_max_age_days = (
+        defaults.transcript_rotation_max_age_days if not max_age_raw else int(max_age_raw)
+    )
+    if transcript_rotation_max_age_days <= 0:
+        msg = (
+            "HOMELAB_MONITOR_FIXER_TRANSCRIPT_ROTATION_MAX_AGE_DAYS must be > 0 "
+            f"(got {transcript_rotation_max_age_days})"
+        )
+        raise ValueError(msg)
+
     return FixerRunnerConfig(
         container=container,
         transcript_dir=transcript_dir,
         exec_log_dir=exec_log_dir,
         fixer_user=fixer_user,
         exec_timeout_seconds=exec_timeout_seconds,
+        transcript_rotation_max_count=transcript_rotation_max_count,
+        transcript_rotation_max_age_days=transcript_rotation_max_age_days,
     )
 
 

@@ -83,7 +83,8 @@ def _derive_status_from_row(
 
 _SELECT_RUN_BY_ID_SQL = text(
     "SELECT id, runbook_id, created_at, alert_id, mode, prompt, started_at, "
-    "ended_at, fixer_user, host, runbook_hash, transcript_path, exit_code, initiated_by "
+    "ended_at, fixer_user, host, runbook_hash, transcript_path, exit_code, "
+    "initiated_by, transcript_pruned_at "
     "FROM runbook_runs WHERE id = :id"
 )
 
@@ -93,7 +94,8 @@ _LIST_PAGED_COLS = (
     "rr.id, rr.runbook_id, rb.path AS runbook_path, "
     "rr.created_at, rr.alert_id, rr.mode, rr.prompt, "
     "rr.started_at, rr.ended_at, rr.fixer_user, rr.host, rr.runbook_hash, "
-    "rr.transcript_path, rr.exit_code, rr.initiated_by, rr.killed_at"
+    "rr.transcript_path, rr.exit_code, rr.initiated_by, rr.killed_at, "
+    "rr.transcript_pruned_at"
 )
 
 # NB: JOIN is inner — a run without a matching runbook row is a data-integrity
@@ -186,6 +188,10 @@ class RunsFilter:
 class RunRow:
     """Hydrated row from ``runbook_runs`` JOIN ``runbooks`` (for the runs-list
     and run-detail endpoints). Column names match the DB.
+
+    ``transcript_pruned_at`` (STAGE-009-012) is ISO UTC when the transcript
+    FILE was deleted by the rotator; the audit ROW is retained. NULL means
+    either the file is still present OR was never generated.
     """
 
     id: str
@@ -204,6 +210,7 @@ class RunRow:
     exit_code: int | None
     initiated_by: str
     killed_at: str | None
+    transcript_pruned_at: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -391,6 +398,110 @@ class RunbookRunsRepository:
             {"id": run_id, "killed_at": killed_at},
         )
 
+    async def mark_transcript_pruned_conn(
+        self,
+        conn: AsyncConnection,
+        *,
+        run_id: str,
+        pruned_at: str,
+    ) -> None:
+        """Mark the transcript file for ``run_id`` as pruned.
+
+        Sets ``transcript_path = NULL`` and ``transcript_pruned_at = pruned_at``.
+        NEVER deletes the ``runbook_runs`` row (non-negotiable #4 — audit
+        immutability). Callers pass the caller's txn so the marker update +
+        audit row commit atomically.
+
+        Idempotent: re-marking an already-pruned row is a no-op (both column
+        updates are already at their target values).
+        """
+        await conn.execute(
+            text(
+                "UPDATE runbook_runs "
+                "SET transcript_path = NULL, transcript_pruned_at = :pruned_at "
+                "WHERE id = :id"
+            ),
+            {"id": run_id, "pruned_at": pruned_at},
+        )
+
+    async def list_prune_candidates(
+        self,
+        *,
+        keep_last_n: int,
+        older_than_iso: str,
+    ) -> list[tuple[str, str, str, bool, bool]]:
+        """Return runs whose transcript FILE is eligible for rotation.
+
+        A candidate is either:
+          - The (row_number > keep_last_n) tail per-runbook, ordered by
+            ``started_at DESC, id DESC`` (COUNT-limit rule); OR
+          - ``started_at < older_than_iso`` (AGE-limit rule).
+
+        Only rows with ``transcript_path IS NOT NULL AND
+        transcript_pruned_at IS NULL`` are returned (never re-prune;
+        never touch runs that had no transcript).
+
+        Returns:
+          List of ``(run_id, runbook_id, transcript_path, count_exceeded,
+          age_exceeded)`` tuples. ``count_exceeded`` is True when the row's
+          per-runbook ``rn`` is greater than ``keep_last_n``; ``age_exceeded``
+          is True when ``started_at < older_than_iso``. At least one is True
+          for every returned row.
+
+        The rotator applies its own path-safety check against the configured
+        ``transcript_dir`` base before deleting; this method does no path
+        validation.
+        """
+        sql = text(
+            """
+            WITH ranked AS (
+              SELECT
+                id, runbook_id, transcript_path, started_at,
+                ROW_NUMBER() OVER (
+                  PARTITION BY runbook_id
+                  ORDER BY started_at DESC, id DESC
+                ) AS rn
+              FROM runbook_runs
+              WHERE transcript_path IS NOT NULL
+                AND transcript_pruned_at IS NULL
+            )
+            SELECT
+              id,
+              runbook_id,
+              transcript_path,
+              CASE WHEN rn > :keep_last_n THEN 1 ELSE 0 END AS count_exceeded,
+              CASE WHEN started_at < :older_than THEN 1 ELSE 0 END AS age_exceeded
+            FROM ranked
+            WHERE rn > :keep_last_n
+               OR started_at < :older_than
+            ORDER BY runbook_id, started_at DESC, id DESC
+            """
+        )
+        rows = await self._db.fetch_all(
+            sql, {"keep_last_n": keep_last_n, "older_than": older_than_iso}
+        )
+        return [
+            (
+                str(r.id),
+                str(r.runbook_id),
+                str(r.transcript_path),
+                bool(r.count_exceeded),
+                bool(r.age_exceeded),
+            )
+            for r in rows
+        ]
+
+    async def count_distinct_runbooks_with_runs(self) -> int:
+        """COUNT distinct runbook_id in runbook_runs. Used by the rotator to
+        report ``runbooks_scanned`` in ``RotationOutcome`` — an operator-
+        visible sanity check that the rotator saw something to scan.
+        """
+        row = await self._db.fetch_one(
+            text("SELECT COUNT(DISTINCT runbook_id) AS n FROM runbook_runs"),
+            {},
+        )
+        return 0 if row is None else int(row[0])
+
     async def list_paged(
         self,
         filt: RunsFilter,
@@ -518,6 +629,9 @@ class RunbookRunsRepository:
             exit_code=None if row.exit_code is None else int(row.exit_code),
             initiated_by=str(row.initiated_by),
             killed_at=None if row.killed_at is None else str(row.killed_at),
+            transcript_pruned_at=(
+                None if row.transcript_pruned_at is None else str(row.transcript_pruned_at)
+            ),
         )
 
 

@@ -94,6 +94,7 @@ async def insert_run(  # noqa: PLR0913
     fixer_user: str = "test-user",
     host: str = "test-host",
     runbook_hash: str | None = None,
+    transcript_pruned_at: str | None = None,
 ) -> str:
     """Insert a run and return its ID."""
     run_id = uuid7()
@@ -106,10 +107,11 @@ async def insert_run(  # noqa: PLR0913
                 "INSERT INTO runbook_runs "
                 "(id, runbook_id, created_at, alert_id, mode, prompt, started_at, "
                 " ended_at, fixer_user, host, runbook_hash, transcript_path, "
-                " exit_code, initiated_by, killed_at) "
+                " exit_code, initiated_by, killed_at, transcript_pruned_at) "
                 "VALUES (:id, :runbook_id, :created_at, :alert_id, :mode, :prompt, "
                 " :started_at, :ended_at, :fixer_user, :host, :runbook_hash, "
-                " :transcript_path, :exit_code, :initiated_by, :killed_at)"
+                " :transcript_path, :exit_code, :initiated_by, :killed_at, "
+                " :transcript_pruned_at)"
             ),
             {
                 "id": run_id,
@@ -127,6 +129,7 @@ async def insert_run(  # noqa: PLR0913
                 "exit_code": exit_code,
                 "initiated_by": initiated_by,
                 "killed_at": killed_at,
+                "transcript_pruned_at": transcript_pruned_at,
             },
         )
     return run_id

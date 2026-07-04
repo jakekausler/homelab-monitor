@@ -31,6 +31,10 @@ from homelab_monitor.kernel.autofix.approvals_repository import (
     RunbookRunApprovalsRepository,
 )
 from homelab_monitor.kernel.autofix.orchestrator import AutoFixOrchestrator
+from homelab_monitor.kernel.autofix.transcript_rotator import (
+    RotationOutcome,
+    TranscriptRotator,
+)
 from homelab_monitor.kernel.autofix.types import DenialReason, RunOutcome
 from homelab_monitor.kernel.db.repositories.app_settings_repository import (
     AppSettingsRepository,
@@ -72,6 +76,19 @@ def get_orchestrator(request: Request) -> AutoFixOrchestrator:
             code="autofix_unavailable",
         )
     return orch
+
+
+def get_transcript_rotator(request: Request) -> TranscriptRotator:
+    """Fetch the transcript rotator from app.state (built in lifespan when
+    docker is enabled). 503 if auto-fix is not enabled on this instance.
+    """
+    rotator = getattr(request.app.state, "autofix_transcript_rotator", None)
+    if not isinstance(rotator, TranscriptRotator):
+        raise DependencyUnavailableProblem(
+            message="auto-fix is not enabled on this instance",
+            code="autofix_unavailable",
+        )
+    return rotator
 
 
 def _client_ip(request: Request) -> str | None:
@@ -133,6 +150,31 @@ class ApproveResponse(BaseModel):
 class RejectResponse(BaseModel):
     approval_id: str
     status: str
+
+
+class RotateTranscriptsResponse(BaseModel):
+    """Result of a manual rotation. Mirrors ``RotationOutcome``.
+
+    Semantics (see ``RotationOutcome`` docstring for the authoritative
+    definition):
+
+    - ``files_pruned`` / ``runs_marked`` — per-pass work counts; equal by
+      construction.
+    - ``runbooks_scanned`` — POPULATION count of distinct ``runbook_id``s
+      that have ever produced a run, NOT the number of runbooks the rotator
+      touched this pass. Kept as an operator-visible sanity denominator.
+
+    ``skipped_reason`` is non-None when the pass was aborted for a benign
+    reason (e.g. fixer-runner not running). It is a Literal for a stable
+    contract; new reasons require a bump.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    files_pruned: int
+    runs_marked: int
+    runbooks_scanned: int
+    skipped_reason: Literal["fixer_runner_not_running"] | None = None
 
 
 async def _drift_for(repo: RunbookRepo, approval: ApprovalRecord) -> bool:
@@ -314,3 +356,26 @@ async def reject(
             code="approval_not_pending",
         )
     return RejectResponse(approval_id=approval_id, status="rejected")
+
+
+@router.post("/rotate-transcripts", response_model=RotateTranscriptsResponse)
+async def rotate_transcripts(
+    _user: Annotated[User, Depends(require_session())],
+    rotator: Annotated[TranscriptRotator, Depends(get_transcript_rotator)],
+) -> RotateTranscriptsResponse:
+    """Manually trigger a transcript-file rotation pass.
+
+    Auth: session (this app is single-user; a valid session is the admin
+    gate). NO destructive-credential gate — the action is idempotent
+    housekeeping: audit rows are RETAINED, only transcript FILES are deleted,
+    and only per the configured retention policy. See STAGE-009-012 Decision E.
+    """
+    outcome: RotationOutcome = await rotator.rotate()
+    return RotateTranscriptsResponse(
+        files_pruned=outcome.files_pruned,
+        runs_marked=outcome.runs_marked,
+        runbooks_scanned=outcome.runbooks_scanned,
+        skipped_reason=(
+            outcome.skipped_reason  # type: ignore[arg-type]  # narrowed by pydantic Literal
+        ),
+    )

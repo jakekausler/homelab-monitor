@@ -21,12 +21,12 @@ export function RunsFilterBar({ filters }: Props): JSX.Element {
     void navigate({
       to: '/autofix/history',
       search: {
-        runbook_id: partial.runbook_id !== undefined ? partial.runbook_id : filters.runbook_id,
-        mode: partial.mode !== undefined ? partial.mode : filters.mode,
-        outcome: partial.outcome !== undefined ? partial.outcome : filters.outcome,
-        initiator: partial.initiator !== undefined ? partial.initiator : filters.initiator,
-        since: partial.since !== undefined ? partial.since : filters.since,
-        until: partial.until !== undefined ? partial.until : filters.until,
+        runbook_id: 'runbook_id' in partial ? partial.runbook_id : filters.runbook_id,
+        mode: 'mode' in partial ? partial.mode : filters.mode,
+        outcome: 'outcome' in partial ? partial.outcome : filters.outcome,
+        initiator: 'initiator' in partial ? partial.initiator : filters.initiator,
+        since: 'since' in partial ? partial.since : filters.since,
+        until: 'until' in partial ? partial.until : filters.until,
         page: 1,
       },
     })

@@ -149,10 +149,10 @@ describe('RunsFilterBar', () => {
     expect(opts.search.until).toBe('2026-06-15T23:59:59.999Z')
   })
 
-  it('clearing the since date input falls back to the existing filter value (dateInputToIso returns undefined, patch keeps prior since)', () => {
-    // dateInputToIso('') returns undefined; patch() only overrides `since` when
-    // the partial value is !== undefined, so an undefined partial falls back to
-    // the current filters.since rather than clearing it.
+  it('clearing the since date input clears the since filter (dateInputToIso returns undefined, patch propagates undefined)', () => {
+    // dateInputToIso('') returns undefined; the partial passed to patch() has the
+    // `since` key present with value undefined, so patch() propagates the
+    // undefined and actually clears the filter (per the "in partial" check).
     vi.mocked(useRunbooks).mockReturnValue(mockQuery({ data: { items: [] } }))
     render(<RunsFilterBar filters={DEFAULT_FILTERS} />, { wrapper: makeWrapper() })
     fireEvent.change(screen.getByTestId('filter-since'), { target: { value: '' } })
@@ -161,7 +161,7 @@ describe('RunsFilterBar', () => {
       to: string
       search: Record<string, string | undefined | number>
     }
-    expect(opts.search.since).toBe(DEFAULT_FILTERS.since)
+    expect(opts.search.since).toBeUndefined()
   })
 
   it('Reset button navigates with all filters cleared and page 1', () => {

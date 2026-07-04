@@ -31,6 +31,7 @@ from homelab_monitor.kernel.config import (
     load_cron_run_reconciler_config,
     load_disk_budget_config,
     load_drain_config,
+    load_fixer_runner_config,
     load_log_stream_budget_config,
     load_logs_config,
     load_new_signature_config,
@@ -1664,3 +1665,44 @@ def test_load_pihole_config_non_numeric_direct_dns_port_raises(
     monkeypatch.setenv("HOMELAB_MONITOR_PIHOLE_DIRECT_DNS_PORT", "abc")
     with pytest.raises(ValueError):
         load_pihole_config()
+
+
+# load_fixer_runner_config transcript rotation bounds (STAGE-009-012)
+
+
+def test_load_fixer_runner_config_max_count_zero_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """HOMELAB_MONITOR_FIXER_TRANSCRIPT_ROTATION_MAX_COUNT=0 raises ValueError."""
+    monkeypatch.setenv("HOMELAB_MONITOR_FIXER_TRANSCRIPT_ROTATION_MAX_COUNT", "0")
+    with pytest.raises(ValueError, match="TRANSCRIPT_ROTATION_MAX_COUNT must be > 0"):
+        load_fixer_runner_config()
+
+
+def test_load_fixer_runner_config_max_count_negative_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """HOMELAB_MONITOR_FIXER_TRANSCRIPT_ROTATION_MAX_COUNT=-1 raises ValueError."""
+    monkeypatch.setenv("HOMELAB_MONITOR_FIXER_TRANSCRIPT_ROTATION_MAX_COUNT", "-1")
+    with pytest.raises(ValueError, match="TRANSCRIPT_ROTATION_MAX_COUNT must be > 0"):
+        load_fixer_runner_config()
+
+
+def test_load_fixer_runner_config_max_age_days_zero_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """HOMELAB_MONITOR_FIXER_TRANSCRIPT_ROTATION_MAX_AGE_DAYS=0 raises ValueError."""
+    monkeypatch.delenv("HOMELAB_MONITOR_FIXER_TRANSCRIPT_ROTATION_MAX_COUNT", raising=False)
+    monkeypatch.setenv("HOMELAB_MONITOR_FIXER_TRANSCRIPT_ROTATION_MAX_AGE_DAYS", "0")
+    with pytest.raises(ValueError, match="TRANSCRIPT_ROTATION_MAX_AGE_DAYS must be > 0"):
+        load_fixer_runner_config()
+
+
+def test_load_fixer_runner_config_max_age_days_negative_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """HOMELAB_MONITOR_FIXER_TRANSCRIPT_ROTATION_MAX_AGE_DAYS=-5 raises ValueError."""
+    monkeypatch.delenv("HOMELAB_MONITOR_FIXER_TRANSCRIPT_ROTATION_MAX_COUNT", raising=False)
+    monkeypatch.setenv("HOMELAB_MONITOR_FIXER_TRANSCRIPT_ROTATION_MAX_AGE_DAYS", "-5")
+    with pytest.raises(ValueError, match="TRANSCRIPT_ROTATION_MAX_AGE_DAYS must be > 0"):
+        load_fixer_runner_config()

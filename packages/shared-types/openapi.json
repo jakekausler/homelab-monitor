@@ -6999,6 +6999,43 @@
         "title": "RetryResponse",
         "type": "object"
       },
+      "RotateTranscriptsResponse": {
+        "additionalProperties": false,
+        "description": "Result of a manual rotation. Mirrors ``RotationOutcome``.\n\nSemantics (see ``RotationOutcome`` docstring for the authoritative\ndefinition):\n\n- ``files_pruned`` / ``runs_marked`` \u2014 per-pass work counts; equal by\n  construction.\n- ``runbooks_scanned`` \u2014 POPULATION count of distinct ``runbook_id``s\n  that have ever produced a run, NOT the number of runbooks the rotator\n  touched this pass. Kept as an operator-visible sanity denominator.\n\n``skipped_reason`` is non-None when the pass was aborted for a benign\nreason (e.g. fixer-runner not running). It is a Literal for a stable\ncontract; new reasons require a bump.",
+        "properties": {
+          "files_pruned": {
+            "title": "Files Pruned",
+            "type": "integer"
+          },
+          "runbooks_scanned": {
+            "title": "Runbooks Scanned",
+            "type": "integer"
+          },
+          "runs_marked": {
+            "title": "Runs Marked",
+            "type": "integer"
+          },
+          "skipped_reason": {
+            "anyOf": [
+              {
+                "const": "fixer_runner_not_running",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Skipped Reason"
+          }
+        },
+        "required": [
+          "files_pruned",
+          "runs_marked",
+          "runbooks_scanned"
+        ],
+        "title": "RotateTranscriptsResponse",
+        "type": "object"
+      },
       "RunDetailOut": {
         "properties": {
           "alert_id": {
@@ -7164,6 +7201,17 @@
               }
             ],
             "title": "Transcript Path"
+          },
+          "transcript_pruned_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Transcript Pruned At"
           }
         },
         "required": [
@@ -7179,6 +7227,7 @@
           "alert_id",
           "initiated_by",
           "killed_at",
+          "transcript_pruned_at",
           "prompt",
           "transcript_path",
           "runbook_hash",
@@ -7498,6 +7547,17 @@
               }
             ],
             "title": "Started At"
+          },
+          "transcript_pruned_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Transcript Pruned At"
           }
         },
         "required": [
@@ -7512,7 +7572,8 @@
           "duration_ms",
           "alert_id",
           "initiated_by",
-          "killed_at"
+          "killed_at",
+          "transcript_pruned_at"
         ],
         "title": "RunOut",
         "type": "object"
@@ -11687,6 +11748,28 @@
           }
         },
         "summary": "Reject",
+        "tags": [
+          "autofix"
+        ]
+      }
+    },
+    "/api/autofix/rotate-transcripts": {
+      "post": {
+        "description": "Manually trigger a transcript-file rotation pass.\n\nAuth: session (this app is single-user; a valid session is the admin\ngate). NO destructive-credential gate \u2014 the action is idempotent\nhousekeeping: audit rows are RETAINED, only transcript FILES are deleted,\nand only per the configured retention policy. See STAGE-009-012 Decision E.",
+        "operationId": "rotate_transcripts_api_autofix_rotate_transcripts_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RotateTranscriptsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Rotate Transcripts",
         "tags": [
           "autofix"
         ]

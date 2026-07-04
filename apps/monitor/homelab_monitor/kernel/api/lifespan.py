@@ -1576,8 +1576,41 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
             log=log.bind(component="autofix"),
             ssh_target_ids_provider=lambda: frozenset(load_ssh_target_configs().keys()),
         )
+
+        # STAGE-009-012 — Transcript rotator. Requires the same docker client
+        # + fixer-runner config the orchestrator uses. Constructed here so both
+        # the manual POST /autofix/rotate-transcripts endpoint and the daily
+        # background task share one instance.
+        from homelab_monitor.kernel.autofix.transcript_rotator import (  # noqa: PLC0415
+            TranscriptRotator,
+        )
+
+        transcript_rotator = TranscriptRotator(
+            db=repo,
+            runs_repo=RunbookRunsRepository(repo),
+            config=load_fixer_runner_config(),
+            docker_client=docker_client,
+            log=log.bind(component="autofix.transcript_rotator"),
+        )
+        app.state.autofix_transcript_rotator = transcript_rotator
+
+        # STAGE-009-012 — Daily rotation background task (03:00 UTC) + startup
+        # pass. Fire-and-forget; cancelled on shutdown.
+        from homelab_monitor.kernel.autofix.transcript_rotation_scheduler import (  # noqa: PLC0415
+            run_transcript_rotation_loop,
+        )
+
+        transcript_rotation_task = asyncio.create_task(
+            run_transcript_rotation_loop(
+                rotator=transcript_rotator,
+                log=log.bind(component="autofix.transcript_rotation_scheduler"),
+            )
+        )
+        app.state.autofix_transcript_rotation_task = transcript_rotation_task
     else:
         app.state.autofix_orchestrator = None
+        app.state.autofix_transcript_rotator = None
+        app.state.autofix_transcript_rotation_task = None
 
     # 8. Backup service (admin endpoint + CLI share this instance).
     db_path_str = _extract_sqlite_path(
@@ -1732,6 +1765,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
         )
 
         await drain_autofix_dispatch_tasks()
+        # Cancel STAGE-009-012 transcript rotation task (fire-and-forget cleanup).
+        transcript_rotation_task_handle = getattr(
+            app.state, "autofix_transcript_rotation_task", None
+        )
+        if transcript_rotation_task_handle is not None:
+            transcript_rotation_task_handle.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await transcript_rotation_task_handle
         # Stop HA entity-registry cache (STAGE-005-037) — before the WS client it uses.
         ha_registry_handle = getattr(app.state, "ha_entity_registry", None)
         if ha_registry_handle is not None:  # pragma: no branch -- always set in full boot

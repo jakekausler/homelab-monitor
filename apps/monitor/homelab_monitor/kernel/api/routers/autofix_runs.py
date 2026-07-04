@@ -72,6 +72,7 @@ class RunOut(BaseModel):
     alert_id: str | None
     initiated_by: InitiatorLiteral
     killed_at: str | None
+    transcript_pruned_at: str | None
 
 
 class RunDetailOut(RunOut):
@@ -169,6 +170,7 @@ def _row_to_run_out(row: RunRow) -> RunOut:
         alert_id=row.alert_id,
         initiated_by=row.initiated_by,  # type: ignore[arg-type]
         killed_at=row.killed_at,
+        transcript_pruned_at=row.transcript_pruned_at,
     )
 
 
