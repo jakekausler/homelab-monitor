@@ -13,12 +13,15 @@ import {
   CardTitle,
 } from '@/components/ui/card'
 import { cn } from '@/lib/utils'
-import { useToggleRunbook, type Runbook } from '@/api/runbooks'
+import { useToggleRunbook, type Runbook, type RunbookStats } from '@/api/runbooks'
+import { formatRelative } from '@/lib/relativeTime'
+import { useNowTick } from '@/lib/useNowTick'
 import { RunFixDialog } from './RunFixDialog'
 
 interface RunbookCardProps {
   runbook: Runbook
   killSwitchEnabled: boolean
+  stats: RunbookStats | undefined
 }
 
 function basename(path: string): string {
@@ -83,7 +86,7 @@ function PatternChips({
   return (
     <div className="flex flex-wrap gap-1" data-testid={testId}>
       {displayed.map((p, i) => (
-        <Badge key={i} variant="secondary" className="text-xs font-mono">
+        <Badge key={`${formatPattern(p)}-${i}`} variant="secondary" className="text-xs font-mono">
           {formatPattern(p)}
         </Badge>
       ))}
@@ -147,9 +150,10 @@ function ToggleSwitch({
   )
 }
 
-export function RunbookCard({ runbook, killSwitchEnabled }: RunbookCardProps): JSX.Element {
+export function RunbookCard({ runbook, killSwitchEnabled, stats }: RunbookCardProps): JSX.Element {
   const [runFixOpen, setRunFixOpen] = useState(false)
   const toggle = useToggleRunbook()
+  const nowMs = useNowTick(1000)
 
   const handleCopyPath = (): void => {
     if (typeof navigator !== 'undefined' && navigator.clipboard) {
@@ -227,23 +231,35 @@ export function RunbookCard({ runbook, killSwitchEnabled }: RunbookCardProps): J
           </label>
         </div>
 
-        {/* Stats row — placeholders. Real values ship in STAGE-009-011. */}
         <div className="border-t pt-3 text-sm text-muted-foreground">
           <div className="flex items-center justify-between">
             <span>Last run</span>
-            <span data-testid={`runbook-last-run-${runbook.id}`}>—</span>
+            <span data-testid={`runbook-last-run-${runbook.id}`}>
+              {stats?.last_run_at ? formatRelative(stats.last_run_at, nowMs) : '—'}
+            </span>
           </div>
           <div className="mt-1 flex items-center justify-between">
             <span className="flex items-center gap-1.5">
               Success rate
-              <span
-                title="Runs history and per-runbook aggregation ship in Auto-fix history (STAGE-009-011)."
-                aria-label="Success rate info"
-              >
+              <span title="Aggregated over last 30 days" aria-label="Success rate info">
                 <Info className="h-3.5 w-3.5" aria-hidden="true" />
               </span>
             </span>
-            <span data-testid={`runbook-success-rate-${runbook.id}`}>—</span>
+            <span
+              className="flex items-center gap-1"
+              data-testid={`runbook-success-rate-${runbook.id}`}
+            >
+              <span>
+                {stats?.success_rate_30d != null
+                  ? `${Math.round(stats.success_rate_30d * 100)}%`
+                  : '—'}
+              </span>
+              {stats?.run_count_30d != null && stats.run_count_30d > 0 && (
+                <span className="text-xs text-muted-foreground">
+                  ({stats.run_count_30d} run{stats.run_count_30d === 1 ? '' : 's'})
+                </span>
+              )}
+            </span>
           </div>
         </div>
       </CardContent>

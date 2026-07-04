@@ -6999,6 +6999,298 @@
         "title": "RetryResponse",
         "type": "object"
       },
+      "RunDetailOut": {
+        "properties": {
+          "alert_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Alert Id"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "duration_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Ms"
+          },
+          "ended_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ended At"
+          },
+          "exit_code": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exit Code"
+          },
+          "fixer_user": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fixer User"
+          },
+          "host": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Host"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "initiated_by": {
+            "enum": [
+              "alert",
+              "operator"
+            ],
+            "title": "Initiated By",
+            "type": "string"
+          },
+          "killed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Killed At"
+          },
+          "mode": {
+            "enum": [
+              "dry_run",
+              "real"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "outcome": {
+            "enum": [
+              "in_flight",
+              "success",
+              "failure",
+              "killed",
+              "dry_run"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          },
+          "prompt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prompt"
+          },
+          "runbook_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Runbook Hash"
+          },
+          "runbook_id": {
+            "title": "Runbook Id",
+            "type": "string"
+          },
+          "runbook_path": {
+            "title": "Runbook Path",
+            "type": "string"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "transcript_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Transcript Path"
+          }
+        },
+        "required": [
+          "id",
+          "runbook_id",
+          "runbook_path",
+          "mode",
+          "outcome",
+          "exit_code",
+          "started_at",
+          "ended_at",
+          "duration_ms",
+          "alert_id",
+          "initiated_by",
+          "killed_at",
+          "prompt",
+          "transcript_path",
+          "runbook_hash",
+          "fixer_user",
+          "host",
+          "created_at"
+        ],
+        "title": "RunDetailOut",
+        "type": "object"
+      },
+      "RunFeedbackListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/RunFeedbackOut"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "RunFeedbackListResponse",
+        "type": "object"
+      },
+      "RunFeedbackOut": {
+        "properties": {
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "missing_capability",
+              "config_change",
+              "runbook_gap",
+              "blocked",
+              "worked_around",
+              "other",
+              "parse_error"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "runbook_run_id": {
+            "title": "Runbook Run Id",
+            "type": "string"
+          },
+          "structured_hint": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Structured Hint"
+          },
+          "suggestion_text": {
+            "title": "Suggestion Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "runbook_run_id",
+          "kind",
+          "suggestion_text",
+          "structured_hint",
+          "created_at"
+        ],
+        "title": "RunFeedbackOut",
+        "type": "object"
+      },
+      "RunListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/RunOut"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
+          },
+          "offset": {
+            "title": "Offset",
+            "type": "integer"
+          },
+          "total_count": {
+            "title": "Total Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total_count",
+          "limit",
+          "offset"
+        ],
+        "title": "RunListResponse",
+        "type": "object"
+      },
       "RunLogResponse": {
         "additionalProperties": false,
         "description": "Response body for ``GET /api/crons/{fp}/runs/{run_id}/log``.\n\nSingle model with a ``log_status`` discriminator field. The 503\n``vl_unavailable`` error case is NOT this shape \u2014 it uses the standard\nHttpProblem error envelope (the endpoint raises before constructing\nthis body).\n\nlog_status values:\n  - \"available\": run is closed AND VL returned data. lines populated.\n  - \"running\": run is still in flight; VL queried over [vl_window_start, now].\n    lines reflect output so far.\n  - \"expired\": closed run whose vl_window_end is older than VL retention;\n    OR defensively for a malformed closed-row state. lines=[].",
@@ -7098,6 +7390,131 @@
           "truncated"
         ],
         "title": "RunLogResponse",
+        "type": "object"
+      },
+      "RunOut": {
+        "properties": {
+          "alert_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Alert Id"
+          },
+          "duration_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Ms"
+          },
+          "ended_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ended At"
+          },
+          "exit_code": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exit Code"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "initiated_by": {
+            "enum": [
+              "alert",
+              "operator"
+            ],
+            "title": "Initiated By",
+            "type": "string"
+          },
+          "killed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Killed At"
+          },
+          "mode": {
+            "enum": [
+              "dry_run",
+              "real"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "outcome": {
+            "enum": [
+              "in_flight",
+              "success",
+              "failure",
+              "killed",
+              "dry_run"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          },
+          "runbook_id": {
+            "title": "Runbook Id",
+            "type": "string"
+          },
+          "runbook_path": {
+            "title": "Runbook Path",
+            "type": "string"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          }
+        },
+        "required": [
+          "id",
+          "runbook_id",
+          "runbook_path",
+          "mode",
+          "outcome",
+          "exit_code",
+          "started_at",
+          "ended_at",
+          "duration_ms",
+          "alert_id",
+          "initiated_by",
+          "killed_at"
+        ],
+        "title": "RunOut",
         "type": "object"
       },
       "RunbookGatesPatch": {
@@ -7231,6 +7648,83 @@
           "content_hash"
         ],
         "title": "RunbookOut",
+        "type": "object"
+      },
+      "RunbookStatsOut": {
+        "properties": {
+          "last_run_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Run At"
+          },
+          "last_run_status": {
+            "anyOf": [
+              {
+                "enum": [
+                  "success",
+                  "failure",
+                  "killed",
+                  "in_flight",
+                  "dry_run"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Run Status"
+          },
+          "run_count_30d": {
+            "title": "Run Count 30D",
+            "type": "integer"
+          },
+          "runbook_id": {
+            "title": "Runbook Id",
+            "type": "string"
+          },
+          "success_rate_30d": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Success Rate 30D"
+          }
+        },
+        "required": [
+          "runbook_id",
+          "last_run_at",
+          "last_run_status",
+          "success_rate_30d",
+          "run_count_30d"
+        ],
+        "title": "RunbookStatsOut",
+        "type": "object"
+      },
+      "RunbookStatsResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/RunbookStatsOut"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "RunbookStatsResponse",
         "type": "object"
       },
       "SaveQueryCreateRequest": {
@@ -8646,6 +9140,30 @@
           "charge_percent"
         ],
         "title": "SynologyUps",
+        "type": "object"
+      },
+      "TranscriptOut": {
+        "additionalProperties": false,
+        "properties": {
+          "size_bytes": {
+            "title": "Size Bytes",
+            "type": "integer"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "text",
+          "truncated",
+          "size_bytes"
+        ],
+        "title": "TranscriptOut",
         "type": "object"
       },
       "TriggerRequest": {
@@ -11171,6 +11689,298 @@
         "summary": "Reject",
         "tags": [
           "autofix"
+        ]
+      }
+    },
+    "/api/autofix/runs": {
+      "get": {
+        "operationId": "list_runs_api_autofix_runs_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "runbook_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Runbook Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "mode",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "dry_run",
+                    "real"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Mode"
+            }
+          },
+          {
+            "in": "query",
+            "name": "outcome",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "in_flight",
+                    "success",
+                    "failure",
+                    "killed"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Outcome"
+            }
+          },
+          {
+            "in": "query",
+            "name": "initiator",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "alert",
+                    "operator"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Initiator"
+            }
+          },
+          {
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Since"
+            }
+          },
+          {
+            "in": "query",
+            "name": "until",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Until"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Runs",
+        "tags": [
+          "autofix-runs"
+        ]
+      }
+    },
+    "/api/autofix/runs/{run_id}": {
+      "get": {
+        "operationId": "get_run_api_autofix_runs__run_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunDetailOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Run",
+        "tags": [
+          "autofix-runs"
+        ]
+      }
+    },
+    "/api/autofix/runs/{run_id}/feedback": {
+      "get": {
+        "operationId": "get_run_feedback_api_autofix_runs__run_id__feedback_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunFeedbackListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Run Feedback",
+        "tags": [
+          "autofix-runs"
+        ]
+      }
+    },
+    "/api/autofix/runs/{run_id}/transcript": {
+      "get": {
+        "operationId": "get_run_transcript_api_autofix_runs__run_id__transcript_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TranscriptOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Run Transcript",
+        "tags": [
+          "autofix-runs"
         ]
       }
     },
@@ -16825,6 +17635,28 @@
           }
         },
         "summary": "Refresh Runbooks",
+        "tags": [
+          "runbooks"
+        ]
+      }
+    },
+    "/api/runbooks/stats": {
+      "get": {
+        "description": "Per-runbook 30-day aggregates for the runbooks-list UI cards.\n\nAll 30 registered runbooks appear (LEFT-JOIN semantics) \u2014 runbooks with\nzero runs return run_count_30d=0 and null stats.",
+        "operationId": "list_runbook_stats_api_runbooks_stats_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunbookStatsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Runbook Stats",
         "tags": [
           "runbooks"
         ]

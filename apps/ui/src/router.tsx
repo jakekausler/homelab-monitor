@@ -67,6 +67,8 @@ import { SettingsLogsPage } from '@/routes/settings/SettingsLogsPage'
 import { SettingsAutofixPage } from '@/routes/settings/SettingsAutofixPage'
 import { SettingsSecurityPage } from '@/routes/settings/SettingsSecurityPage'
 import { RunbooksPage } from '@/routes/runbooks/RunbooksPage'
+import { RunsHistoryPage } from '@/routes/autofix/RunsHistoryPage'
+import { RunDetailPage } from '@/routes/autofix/RunDetailPage'
 import { AppShell } from '@/components/AppShell'
 import { ErrorDisplay } from '@/components/ErrorDisplay'
 
@@ -473,6 +475,54 @@ const runbooksRoute = createRoute({
   component: RunbooksPage,
 })
 
+const autofixHistoryRoute = createRoute({
+  getParentRoute: () => protectedLayoutRoute,
+  path: '/autofix/history',
+  component: RunsHistoryPage,
+  validateSearch: (
+    search: Record<string, unknown>,
+  ): {
+    runbook_id: string | undefined
+    mode: 'dry_run' | 'real' | undefined
+    outcome: 'in_flight' | 'success' | 'failure' | 'killed' | undefined
+    initiator: 'alert' | 'operator' | undefined
+    since: string | undefined
+    until: string | undefined
+    page: number | undefined
+  } => {
+    const modeRaw = typeof search.mode === 'string' ? search.mode : undefined
+    const outcomeRaw = typeof search.outcome === 'string' ? search.outcome : undefined
+    const initiatorRaw = typeof search.initiator === 'string' ? search.initiator : undefined
+    const pageNum =
+      typeof search.page === 'number'
+        ? search.page
+        : typeof search.page === 'string'
+          ? parseInt(search.page, 10)
+          : undefined
+    return {
+      runbook_id: typeof search.runbook_id === 'string' ? search.runbook_id : undefined,
+      mode: modeRaw === 'dry_run' || modeRaw === 'real' ? modeRaw : undefined,
+      outcome:
+        outcomeRaw === 'in_flight' ||
+        outcomeRaw === 'success' ||
+        outcomeRaw === 'failure' ||
+        outcomeRaw === 'killed'
+          ? outcomeRaw
+          : undefined,
+      initiator: initiatorRaw === 'alert' || initiatorRaw === 'operator' ? initiatorRaw : undefined,
+      since: typeof search.since === 'string' ? search.since : undefined,
+      until: typeof search.until === 'string' ? search.until : undefined,
+      page: pageNum !== undefined && !Number.isNaN(pageNum) && pageNum >= 1 ? pageNum : undefined,
+    }
+  },
+})
+
+const autofixHistoryDetailRoute = createRoute({
+  getParentRoute: () => protectedLayoutRoute,
+  path: '/autofix/history/$run_id',
+  component: RunDetailPage,
+})
+
 const dockerIntegrationRoute = createRoute({
   getParentRoute: () => protectedLayoutRoute,
   path: '/integrations/docker',
@@ -752,6 +802,8 @@ const routeTree = rootRoute.addChildren([
       settingsSecurityRoute,
     ]),
     runbooksRoute,
+    autofixHistoryRoute,
+    autofixHistoryDetailRoute,
     dockerIntegrationRoute,
     cronsListRoute,
     cronDetailRoute,

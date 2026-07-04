@@ -7,6 +7,7 @@ transaction as the data write (via the repository).
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
@@ -23,6 +24,10 @@ from homelab_monitor.kernel.api.errors import ConflictProblem, HttpProblem, NotF
 from homelab_monitor.kernel.api.routers.autofix import get_orchestrator
 from homelab_monitor.kernel.auth.models import User
 from homelab_monitor.kernel.autofix.orchestrator import AutoFixOrchestrator
+from homelab_monitor.kernel.autofix.runs_repository import (
+    RunbookRunsRepository,
+    RunbookStatsRow,
+)
 from homelab_monitor.kernel.autofix.types import (
     DenialReason,
     DryRunRequiredForRiskyError,
@@ -35,6 +40,7 @@ from homelab_monitor.kernel.db.repositories.app_settings_repository import (
     AppSettingsRepository,
 )
 from homelab_monitor.kernel.db.repository import SqliteRepository
+from homelab_monitor.kernel.db.time import utc_now_iso
 from homelab_monitor.kernel.runbooks.loader import scan_runbooks
 from homelab_monitor.kernel.runbooks.repository import (
     RunbookRecord,
@@ -117,6 +123,37 @@ class TriggerResponse(BaseModel):
     approval_id: str | None = None
 
 
+# ---- stats (STAGE-009-011) ----
+
+
+class RunbookStatsOut(BaseModel):
+    runbook_id: str
+    last_run_at: str | None
+    last_run_status: Literal["success", "failure", "killed", "in_flight", "dry_run"] | None
+    success_rate_30d: float | None
+    run_count_30d: int
+
+
+class RunbookStatsResponse(BaseModel):
+    items: list[RunbookStatsOut]
+
+
+def _stats_row_to_out(row: RunbookStatsRow) -> RunbookStatsOut:
+    return RunbookStatsOut(
+        runbook_id=row.runbook_id,
+        last_run_at=row.last_run_at,
+        last_run_status=row.last_run_status,  # type: ignore[arg-type]
+        success_rate_30d=row.success_rate_30d,
+        run_count_30d=row.run_count_30d,
+    )
+
+
+def get_runs_repo(
+    db: Annotated[SqliteRepository, Depends(get_repo)],
+) -> RunbookRunsRepository:
+    return RunbookRunsRepository(db)
+
+
 def _record_to_out(rec: RunbookRecord) -> RunbookOut:
     return RunbookOut(
         id=rec.id,
@@ -159,6 +196,22 @@ async def list_runbooks(
 ) -> RunbookListResponse:
     records = await repo.list_runbooks()
     return RunbookListResponse(items=[_record_to_out(r) for r in records])
+
+
+@router.get("/stats", response_model=RunbookStatsResponse)
+async def list_runbook_stats(
+    _user: Annotated[User, Depends(require_session())],
+    repo: Annotated[RunbookRunsRepository, Depends(get_runs_repo)],
+) -> RunbookStatsResponse:
+    """Per-runbook 30-day aggregates for the runbooks-list UI cards.
+
+    All 30 registered runbooks appear (LEFT-JOIN semantics) — runbooks with
+    zero runs return run_count_30d=0 and null stats.
+    """
+    now = datetime.fromisoformat(utc_now_iso())
+    window_start = (now - timedelta(days=30)).isoformat()
+    rows = await repo.stats_per_runbook(window_start_iso=window_start)
+    return RunbookStatsResponse(items=[_stats_row_to_out(r) for r in rows])
 
 
 @router.post("/refresh", response_model=RefreshResponse)

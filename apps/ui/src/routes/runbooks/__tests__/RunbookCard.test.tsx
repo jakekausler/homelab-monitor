@@ -88,7 +88,7 @@ afterEach(() => {
 describe('RunbookCard', () => {
   it('renders safe runbook without dry-run badge and without risky info icon', () => {
     vi.mocked(useToggleRunbook).mockReturnValue(mockMutation())
-    render(<RunbookCard runbook={SAFE_RUNBOOK} killSwitchEnabled={true} />, {
+    render(<RunbookCard runbook={SAFE_RUNBOOK} killSwitchEnabled={true} stats={undefined} />, {
       wrapper: makeWrapper(),
     })
     expect(screen.getByTestId('runbook-card-runbook-safe')).toBeInTheDocument()
@@ -98,7 +98,7 @@ describe('RunbookCard', () => {
 
   it('renders risky runbook with dry-run badge and risky info icon', () => {
     vi.mocked(useToggleRunbook).mockReturnValue(mockMutation())
-    render(<RunbookCard runbook={RISKY_RUNBOOK} killSwitchEnabled={true} />, {
+    render(<RunbookCard runbook={RISKY_RUNBOOK} killSwitchEnabled={true} stats={undefined} />, {
       wrapper: makeWrapper(),
     })
     expect(screen.getByTestId('runbook-badge-dryrun')).toBeInTheDocument()
@@ -108,7 +108,7 @@ describe('RunbookCard', () => {
   it('auto-trigger toggle calls mutation with auto_trigger key', () => {
     const mutate = vi.fn()
     vi.mocked(useToggleRunbook).mockReturnValue(mockMutation({ mutate }))
-    render(<RunbookCard runbook={SAFE_RUNBOOK} killSwitchEnabled={true} />, {
+    render(<RunbookCard runbook={SAFE_RUNBOOK} killSwitchEnabled={true} stats={undefined} />, {
       wrapper: makeWrapper(),
     })
     fireEvent.click(screen.getByTestId('runbook-toggle-autotrigger-runbook-safe'))
@@ -121,7 +121,7 @@ describe('RunbookCard', () => {
     vi.mocked(useToggleRunbook).mockReturnValue(mockMutation())
     const writeText = vi.fn().mockResolvedValue(undefined)
     Object.assign(navigator, { clipboard: { writeText } })
-    render(<RunbookCard runbook={SAFE_RUNBOOK} killSwitchEnabled={true} />, {
+    render(<RunbookCard runbook={SAFE_RUNBOOK} killSwitchEnabled={true} stats={undefined} />, {
       wrapper: makeWrapper(),
     })
     fireEvent.click(screen.getByTestId('runbook-copy-path-runbook-safe'))
@@ -132,7 +132,7 @@ describe('RunbookCard', () => {
     vi.mocked(useToggleRunbook).mockReturnValue(mockMutation())
     const writeText = vi.fn().mockRejectedValue(new Error('permission denied'))
     Object.assign(navigator, { clipboard: { writeText } })
-    render(<RunbookCard runbook={SAFE_RUNBOOK} killSwitchEnabled={true} />, {
+    render(<RunbookCard runbook={SAFE_RUNBOOK} killSwitchEnabled={true} stats={undefined} />, {
       wrapper: makeWrapper(),
     })
     // Should not throw
@@ -142,7 +142,7 @@ describe('RunbookCard', () => {
 
   it('renders rate limit and cooldown summary when set', () => {
     vi.mocked(useToggleRunbook).mockReturnValue(mockMutation())
-    render(<RunbookCard runbook={SAFE_RUNBOOK} killSwitchEnabled={true} />, {
+    render(<RunbookCard runbook={SAFE_RUNBOOK} killSwitchEnabled={true} stats={undefined} />, {
       wrapper: makeWrapper(),
     })
     // SAFE_RUNBOOK has rate_limit_per_hour: 5 and cooldown_seconds: 300
@@ -151,7 +151,7 @@ describe('RunbookCard', () => {
 
   it('omits rate limit summary when both fields are null', () => {
     vi.mocked(useToggleRunbook).mockReturnValue(mockMutation())
-    render(<RunbookCard runbook={RISKY_RUNBOOK} killSwitchEnabled={true} />, {
+    render(<RunbookCard runbook={RISKY_RUNBOOK} killSwitchEnabled={true} stats={undefined} />, {
       wrapper: makeWrapper(),
     })
     expect(screen.queryByText(/\/\s*hr/i)).not.toBeInTheDocument()
@@ -159,7 +159,7 @@ describe('RunbookCard', () => {
 
   it('"Run fix" button visible on the card', () => {
     vi.mocked(useToggleRunbook).mockReturnValue(mockMutation())
-    render(<RunbookCard runbook={SAFE_RUNBOOK} killSwitchEnabled={true} />, {
+    render(<RunbookCard runbook={SAFE_RUNBOOK} killSwitchEnabled={true} stats={undefined} />, {
       wrapper: makeWrapper(),
     })
     expect(screen.getByTestId('runbook-run-fix-runbook-safe')).toBeInTheDocument()
@@ -167,7 +167,7 @@ describe('RunbookCard', () => {
 
   it('Run fix button disabled when kill switch is engaged (killSwitchEnabled=false)', () => {
     vi.mocked(useToggleRunbook).mockReturnValue(mockMutation())
-    render(<RunbookCard runbook={SAFE_RUNBOOK} killSwitchEnabled={false} />, {
+    render(<RunbookCard runbook={SAFE_RUNBOOK} killSwitchEnabled={false} stats={undefined} />, {
       wrapper: makeWrapper(),
     })
     expect(screen.getByTestId('runbook-run-fix-runbook-safe')).toBeDisabled()
@@ -175,7 +175,7 @@ describe('RunbookCard', () => {
 
   it('Run fix button disabled when runbook.enabled is false', () => {
     vi.mocked(useToggleRunbook).mockReturnValue(mockMutation())
-    render(<RunbookCard runbook={RISKY_RUNBOOK} killSwitchEnabled={true} />, {
+    render(<RunbookCard runbook={RISKY_RUNBOOK} killSwitchEnabled={true} stats={undefined} />, {
       wrapper: makeWrapper(),
     })
     // RISKY_RUNBOOK has enabled: false
@@ -184,11 +184,101 @@ describe('RunbookCard', () => {
 
   it('clicking Run fix opens the RunFixDialog', () => {
     vi.mocked(useToggleRunbook).mockReturnValue(mockMutation())
-    render(<RunbookCard runbook={SAFE_RUNBOOK} killSwitchEnabled={true} />, {
+    render(<RunbookCard runbook={SAFE_RUNBOOK} killSwitchEnabled={true} stats={undefined} />, {
       wrapper: makeWrapper(),
     })
     expect(screen.queryByTestId('run-fix-dialog')).not.toBeInTheDocument()
     fireEvent.click(screen.getByTestId('runbook-run-fix-runbook-safe'))
     expect(screen.getByTestId('run-fix-dialog')).toBeInTheDocument()
+  })
+})
+
+describe('RunbookCard stats', () => {
+  it('renders relative last-run time and success rate percentage when all stats fields are set', () => {
+    vi.mocked(useToggleRunbook).mockReturnValue(mockMutation())
+    render(
+      <RunbookCard
+        runbook={SAFE_RUNBOOK}
+        killSwitchEnabled={true}
+        stats={{
+          runbook_id: 'runbook-safe',
+          last_run_at: '2026-07-02T00:00:00Z',
+          last_run_status: 'success',
+          success_rate_30d: 0.75,
+          run_count_30d: 8,
+        }}
+      />,
+      { wrapper: makeWrapper() },
+    )
+    expect(screen.getByTestId('runbook-last-run-runbook-safe')).not.toHaveTextContent('—')
+    expect(screen.getByTestId('runbook-success-rate-runbook-safe')).toHaveTextContent('75%')
+    expect(screen.getByTestId('runbook-success-rate-runbook-safe')).toHaveTextContent('(8 runs)')
+  })
+
+  it('renders em-dash for success rate when success_rate_30d is null', () => {
+    vi.mocked(useToggleRunbook).mockReturnValue(mockMutation())
+    render(
+      <RunbookCard
+        runbook={SAFE_RUNBOOK}
+        killSwitchEnabled={true}
+        stats={{
+          runbook_id: 'runbook-safe',
+          last_run_at: '2026-07-02T00:00:00Z',
+          last_run_status: null,
+          success_rate_30d: null,
+          run_count_30d: 0,
+        }}
+      />,
+      { wrapper: makeWrapper() },
+    )
+    expect(screen.getByTestId('runbook-success-rate-runbook-safe')).toHaveTextContent('—')
+  })
+
+  it('renders em-dash for last run when last_run_at is null', () => {
+    vi.mocked(useToggleRunbook).mockReturnValue(mockMutation())
+    render(
+      <RunbookCard
+        runbook={SAFE_RUNBOOK}
+        killSwitchEnabled={true}
+        stats={{
+          runbook_id: 'runbook-safe',
+          last_run_at: null,
+          last_run_status: null,
+          success_rate_30d: 0.5,
+          run_count_30d: 4,
+        }}
+      />,
+      { wrapper: makeWrapper() },
+    )
+    expect(screen.getByTestId('runbook-last-run-runbook-safe')).toHaveTextContent('—')
+  })
+
+  it('rounds success_rate_30d=0.826 to 83%', () => {
+    vi.mocked(useToggleRunbook).mockReturnValue(mockMutation())
+    render(
+      <RunbookCard
+        runbook={SAFE_RUNBOOK}
+        killSwitchEnabled={true}
+        stats={{
+          runbook_id: 'runbook-safe',
+          last_run_at: '2026-07-02T00:00:00Z',
+          last_run_status: 'success',
+          success_rate_30d: 0.826,
+          run_count_30d: 1,
+        }}
+      />,
+      { wrapper: makeWrapper() },
+    )
+    expect(screen.getByTestId('runbook-success-rate-runbook-safe')).toHaveTextContent('83%')
+    expect(screen.getByTestId('runbook-success-rate-runbook-safe')).toHaveTextContent('(1 run)')
+  })
+
+  it('renders both em-dashes when stats is undefined', () => {
+    vi.mocked(useToggleRunbook).mockReturnValue(mockMutation())
+    render(<RunbookCard runbook={SAFE_RUNBOOK} killSwitchEnabled={true} stats={undefined} />, {
+      wrapper: makeWrapper(),
+    })
+    expect(screen.getByTestId('runbook-last-run-runbook-safe')).toHaveTextContent('—')
+    expect(screen.getByTestId('runbook-success-rate-runbook-safe')).toHaveTextContent('—')
   })
 })

@@ -20,6 +20,7 @@ vi.mock('@/api/runbooks', () => ({
   useApprovalPlan: vi.fn(),
   useApproveApproval: vi.fn(),
   useRejectApproval: vi.fn(),
+  useRunbookStats: vi.fn(),
   runbooksKeys: { all: ['runbooks'] },
   approvalsKeys: {
     all: ['autofix-approvals'],
@@ -42,6 +43,7 @@ import {
   useApprovalPlan,
   useApproveApproval,
   useRejectApproval,
+  useRunbookStats,
   type Runbook,
 } from '@/api/runbooks'
 import { useAutofixKillSwitch } from '@/api/autofixSettings'
@@ -124,6 +126,7 @@ function setupDefaultMocks() {
   vi.mocked(useApprovalPlan).mockReturnValue(mockQuery() as never)
   vi.mocked(useApproveApproval).mockReturnValue(mockMutation())
   vi.mocked(useRejectApproval).mockReturnValue(mockMutation())
+  vi.mocked(useRunbookStats).mockReturnValue(mockQuery({ data: { items: [] } }))
 }
 
 afterEach(() => {

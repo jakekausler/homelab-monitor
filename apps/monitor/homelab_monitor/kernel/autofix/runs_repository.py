@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, Literal
 
 from sqlalchemy import text
@@ -49,11 +50,177 @@ _LATEST_ENDED_SQL = text(
     "ORDER BY ended_at DESC LIMIT 1"
 )
 
+
+def _derive_status_from_row(
+    *,
+    mode: str,
+    ended_at: str | None,
+    exit_code: int | None,
+    killed_at: str | None,
+) -> str:
+    """Same rules as the router's ``_derive_outcome``, but returns the
+    'last_run_status' string used in ``RunbookStatsRow``. Duplicated here
+    (rather than imported from the router) to keep the repo layer independent
+    of the API layer.
+
+    Precedence (top wins): killed_at > in_flight > dry_run > success > failure.
+    Intentional: a killed run is 'killed' regardless of mode, matching the
+    `outcome=killed` filter semantics in RunbookRunsRepository.list_paged.
+    Keep the two in lock-step — see test:
+    tests/kernel/autofix/test_runs_repository_stats.py::test_status_matches_router_derivation
+    and test_dry_run_killed_at_precedence.
+    """
+    if killed_at is not None:
+        return "killed"
+    if ended_at is None:
+        return "in_flight"
+    if mode == "dry_run":
+        return "dry_run"
+    if exit_code == 0:
+        return "success"
+    return "failure"
+
+
 _SELECT_RUN_BY_ID_SQL = text(
     "SELECT id, runbook_id, created_at, alert_id, mode, prompt, started_at, "
     "ended_at, fixer_user, host, runbook_hash, transcript_path, exit_code, initiated_by "
     "FROM runbook_runs WHERE id = :id"
 )
+
+# ---- STAGE-009-011: runs-history read layer ----
+
+_LIST_PAGED_COLS = (
+    "rr.id, rr.runbook_id, rb.path AS runbook_path, "
+    "rr.created_at, rr.alert_id, rr.mode, rr.prompt, "
+    "rr.started_at, rr.ended_at, rr.fixer_user, rr.host, rr.runbook_hash, "
+    "rr.transcript_path, rr.exit_code, rr.initiated_by, rr.killed_at"
+)
+
+# NB: JOIN is inner — a run without a matching runbook row is a data-integrity
+# violation (runbook_id is a NOT NULL FK) so we treat it as invisible rather
+# than nullable-out the path. Callers who see a run present in the DB will
+# see its path here.
+
+_LIST_PAGED_BASE = (
+    f"SELECT {_LIST_PAGED_COLS} FROM runbook_runs rr "
+    "INNER JOIN runbooks rb ON rb.id = rr.runbook_id"
+)
+
+_COUNT_PAGED_BASE = (
+    "SELECT COUNT(*) AS n FROM runbook_runs rr INNER JOIN runbooks rb ON rb.id = rr.runbook_id"
+)
+
+_GET_BY_ID_PAGED_SQL = text(
+    f"SELECT {_LIST_PAGED_COLS} FROM runbook_runs rr "
+    "INNER JOIN runbooks rb ON rb.id = rr.runbook_id "
+    "WHERE rr.id = :id"
+)
+
+# 30-day per-runbook aggregate. LEFT JOIN from `runbooks` so runbooks with
+# 0 runs in the window still appear (all-null stats, run_count_30d=0).
+_STATS_AGG_SQL = text(
+    """
+    SELECT
+      r.id AS runbook_id,
+      COALESCE(agg.run_count_30d, 0) AS run_count_30d,
+      agg.last_run_at,
+      agg.real_ended_count,
+      agg.real_success_count
+    FROM runbooks r
+    LEFT JOIN (
+      SELECT
+        runbook_id,
+        COUNT(*) AS run_count_30d,
+        MAX(started_at) AS last_run_at,
+        SUM(CASE WHEN mode='real' AND ended_at IS NOT NULL THEN 1 ELSE 0 END)
+          AS real_ended_count,
+        SUM(CASE WHEN mode='real' AND ended_at IS NOT NULL AND exit_code=0
+                 THEN 1 ELSE 0 END) AS real_success_count
+      FROM runbook_runs
+      WHERE started_at >= :window_start
+      GROUP BY runbook_id
+    ) agg ON agg.runbook_id = r.id
+    """
+)
+
+# For each runbook that had a most-recent run in the window, fetch the row
+# fields we need to derive last_run_status. Uses a window function approach.
+# Uses SQLite window functions (ROW_NUMBER OVER PARTITION BY) — requires
+# SQLite >= 3.25.0 (2018-09). The aiosqlite driver ships a bundled recent
+# SQLite so this is satisfied on all supported platforms.
+_STATS_LAST_ROW_SQL = text(
+    """
+    SELECT runbook_id, mode, ended_at, exit_code, killed_at
+    FROM (
+      SELECT rr.*,
+        ROW_NUMBER() OVER (
+          PARTITION BY runbook_id
+          ORDER BY started_at DESC, id DESC
+        ) AS rn
+      FROM runbook_runs rr
+      WHERE started_at >= :window_start
+    ) t WHERE rn = 1
+    """
+)
+
+
+@dataclass(frozen=True, slots=True)
+class RunsFilter:
+    """Query-string filters for the runs-list endpoint. Fields are all
+    optional; any None is skipped when building the WHERE clause.
+
+    ``outcome`` accepts only user-visible filter values (in_flight / success /
+    failure / killed); ``dry_run`` is NOT a filter option because the UI
+    filters mode='dry_run' directly.
+    """
+
+    runbook_id: str | None = None
+    mode: str | None = None  # 'dry_run' | 'real'
+    outcome: str | None = None  # 'in_flight' | 'success' | 'failure' | 'killed'
+    initiator: str | None = None  # 'alert' | 'operator'
+    since: str | None = None  # ISO started_at >= since
+    until: str | None = None  # ISO started_at < until
+
+
+@dataclass(frozen=True, slots=True)
+class RunRow:
+    """Hydrated row from ``runbook_runs`` JOIN ``runbooks`` (for the runs-list
+    and run-detail endpoints). Column names match the DB.
+    """
+
+    id: str
+    runbook_id: str
+    runbook_path: str
+    created_at: str
+    alert_id: str | None
+    mode: str
+    prompt: str | None
+    started_at: str | None
+    ended_at: str | None
+    fixer_user: str | None
+    host: str | None
+    runbook_hash: str | None
+    transcript_path: str | None
+    exit_code: int | None
+    initiated_by: str
+    killed_at: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class RunbookStatsRow:
+    """Hydrated per-runbook 30-day aggregate row.
+
+    ``last_run_status`` is one of {success, failure, killed, in_flight,
+    dry_run} or None (no runs in window).
+    ``success_rate_30d`` is None if there are no ended, mode='real' runs in
+    the window (i.e. denominator zero).
+    """
+
+    runbook_id: str
+    last_run_at: str | None
+    last_run_status: str | None
+    success_rate_30d: float | None
+    run_count_30d: int
 
 
 class RunbookRunsRepository:
@@ -223,3 +390,140 @@ class RunbookRunsRepository:
             _UPDATE_KILLED_SQL,
             {"id": run_id, "killed_at": killed_at},
         )
+
+    async def list_paged(
+        self,
+        filt: RunsFilter,
+        *,
+        limit: int,
+        offset: int,
+    ) -> tuple[list[RunRow], int]:
+        """List runs with filters + offset pagination. Returns (rows, total_count).
+
+        Ordering: started_at DESC, id DESC (id tie-break for uuid7 monotonicity
+        + stable determinism when two runs share started_at ISO ms).
+        """
+        clauses: list[str] = []
+        params: dict[str, Any] = {}
+        if filt.runbook_id is not None:
+            clauses.append("rr.runbook_id = :runbook_id")
+            params["runbook_id"] = filt.runbook_id
+        if filt.mode is not None:
+            clauses.append("rr.mode = :mode")
+            params["mode"] = filt.mode
+        if filt.initiator is not None:
+            clauses.append("rr.initiated_by = :initiator")
+            params["initiator"] = filt.initiator
+        if filt.since is not None:
+            clauses.append("rr.started_at >= :since")
+            params["since"] = filt.since
+        if filt.until is not None:
+            clauses.append("rr.started_at < :until")
+            params["until"] = filt.until
+        if filt.outcome is not None:
+            # outcome is DERIVED — translate to SQL predicates.
+            if filt.outcome == "in_flight":
+                clauses.append("rr.ended_at IS NULL AND rr.killed_at IS NULL")
+            elif filt.outcome == "killed":
+                clauses.append("rr.killed_at IS NOT NULL")
+            elif filt.outcome == "success":
+                clauses.append(
+                    "rr.ended_at IS NOT NULL AND rr.killed_at IS NULL "
+                    "AND rr.mode = 'real' AND rr.exit_code = 0"
+                )
+            elif filt.outcome == "failure":
+                clauses.append(
+                    "rr.ended_at IS NOT NULL AND rr.killed_at IS NULL "
+                    "AND rr.mode = 'real' AND rr.exit_code != 0"
+                )
+            else:  # pragma: no cover -- FastAPI Literal narrows to the four above
+                pass
+
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        list_sql = text(
+            f"{_LIST_PAGED_BASE}{where} "
+            "ORDER BY rr.started_at DESC, rr.id DESC "
+            "LIMIT :limit OFFSET :offset"
+        )
+        count_sql = text(f"{_COUNT_PAGED_BASE}{where}")
+
+        list_params = {**params, "limit": limit, "offset": offset}
+        rows = await self._db.fetch_all(list_sql, list_params)
+        count_row = await self._db.fetch_one(count_sql, params)
+        total = 0 if count_row is None else int(count_row[0])
+        return [self._row_to_run_row(r) for r in rows], total
+
+    async def get_by_id(self, run_id: str) -> RunRow | None:
+        """Return one JOINed row (with runbook_path) or None."""
+        row = await self._db.fetch_one(_GET_BY_ID_PAGED_SQL, {"id": run_id})
+        if row is None:
+            return None
+        return self._row_to_run_row(row)
+
+    async def stats_per_runbook(self, *, window_start_iso: str) -> list[RunbookStatsRow]:
+        """Per-runbook 30-day aggregates. Runbooks with zero runs still appear
+        (all-null stats + run_count_30d=0).
+
+        ``window_start_iso`` is the caller-computed ISO cutoff (utc_now - 30d).
+        """
+        agg_rows = await self._db.fetch_all(_STATS_AGG_SQL, {"window_start": window_start_iso})
+        last_rows = await self._db.fetch_all(
+            _STATS_LAST_ROW_SQL, {"window_start": window_start_iso}
+        )
+
+        last_status_by_runbook: dict[str, str] = {}
+        for lr in last_rows:
+            status = _derive_status_from_row(
+                mode=str(lr.mode),
+                ended_at=lr.ended_at,
+                exit_code=lr.exit_code,
+                killed_at=lr.killed_at,
+            )
+            last_status_by_runbook[str(lr.runbook_id)] = status
+
+        out: list[RunbookStatsRow] = []
+        for r in agg_rows:
+            runbook_id = str(r.runbook_id)
+            run_count = int(r.run_count_30d)
+            real_ended = 0 if r.real_ended_count is None else int(r.real_ended_count)
+            real_success = 0 if r.real_success_count is None else int(r.real_success_count)
+            success_rate: float | None = None if real_ended == 0 else real_success / real_ended
+            out.append(
+                RunbookStatsRow(
+                    runbook_id=runbook_id,
+                    last_run_at=None if r.last_run_at is None else str(r.last_run_at),
+                    last_run_status=last_status_by_runbook.get(runbook_id),
+                    success_rate_30d=success_rate,
+                    run_count_30d=run_count,
+                )
+            )
+        return out
+
+    @staticmethod
+    def _row_to_run_row(row: Row[Any]) -> RunRow:
+        return RunRow(
+            id=str(row.id),
+            runbook_id=str(row.runbook_id),
+            runbook_path=str(row.runbook_path),
+            created_at=str(row.created_at),
+            alert_id=None if row.alert_id is None else str(row.alert_id),
+            mode=str(row.mode),
+            prompt=None if row.prompt is None else str(row.prompt),
+            started_at=None if row.started_at is None else str(row.started_at),
+            ended_at=None if row.ended_at is None else str(row.ended_at),
+            fixer_user=None if row.fixer_user is None else str(row.fixer_user),
+            host=None if row.host is None else str(row.host),
+            runbook_hash=None if row.runbook_hash is None else str(row.runbook_hash),
+            transcript_path=(None if row.transcript_path is None else str(row.transcript_path)),
+            exit_code=None if row.exit_code is None else int(row.exit_code),
+            initiated_by=str(row.initiated_by),
+            killed_at=None if row.killed_at is None else str(row.killed_at),
+        )
+
+
+__all__ = [
+    "RunRow",
+    "RunbookRunsRepository",
+    "RunbookStatsRow",
+    "RunsFilter",
+]

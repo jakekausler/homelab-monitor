@@ -8,7 +8,7 @@ import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { EmptyState } from '@/components/EmptyState'
 import { cn } from '@/lib/utils'
 import { useAutofixKillSwitch } from '@/api/autofixSettings'
-import { useRefreshRunbooks, useRunbooks } from '@/api/runbooks'
+import { useRefreshRunbooks, useRunbooks, useRunbookStats } from '@/api/runbooks'
 
 import { PendingApprovalsPanel } from './PendingApprovalsPanel'
 import { RunbookCard } from './RunbookCard'
@@ -16,6 +16,7 @@ import { RunbookCard } from './RunbookCard'
 export function RunbooksPage(): JSX.Element {
   const kill = useAutofixKillSwitch()
   const runbooks = useRunbooks()
+  const stats = useRunbookStats()
   const refresh = useRefreshRunbooks()
   const [showSummaryDismissed, setShowSummaryDismissed] = useState(false)
 
@@ -23,7 +24,7 @@ export function RunbooksPage(): JSX.Element {
 
   useEffect(() => {
     if (refresh.data === undefined) return
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional reset of dismissed flag when new refresh data arrives
+    // eslint-disable-next-line react-hooks/set-state-in-effect, @eslint-react/set-state-in-effect -- intentional reset of dismissed flag when new refresh data arrives
     setShowSummaryDismissed(false)
     const timer = setTimeout(() => {
       setShowSummaryDismissed(true)
@@ -90,7 +91,7 @@ export function RunbooksPage(): JSX.Element {
               <summary className="cursor-pointer">Show errors</summary>
               <ul className="mt-1 space-y-1">
                 {refresh.data.errors.map((e, i) => (
-                  <li key={i}>
+                  <li key={`${e.path}-${i}`}>
                     <code>{e.path}</code>: {e.message}
                   </li>
                 ))}
@@ -112,7 +113,7 @@ export function RunbooksPage(): JSX.Element {
           className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3"
         >
           {Array.from({ length: 6 }).map((_, i) => (
-            <Card key={i}>
+            <Card key={`runbook-skeleton-${i}`}>
               <CardHeader>
                 <div className="h-4 w-32 rounded bg-muted" />
               </CardHeader>
@@ -146,7 +147,12 @@ export function RunbooksPage(): JSX.Element {
           className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3"
         >
           {runbooks.data.items.map((r) => (
-            <RunbookCard key={r.id} runbook={r} killSwitchEnabled={killSwitchEnabled} />
+            <RunbookCard
+              key={r.id}
+              runbook={r}
+              killSwitchEnabled={killSwitchEnabled}
+              stats={stats.data?.items.find((s) => s.runbook_id === r.id)}
+            />
           ))}
         </div>
       )}

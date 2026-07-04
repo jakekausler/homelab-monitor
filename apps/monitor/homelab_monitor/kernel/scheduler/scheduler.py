@@ -853,9 +853,9 @@ class Scheduler:
                 proc_ctx,
             )
             for m in buffered:
-                if m.kind == "gauge":
+                if m.kind == "gauge":  # pragma: no cover -- subprocess isolation
                     ctx.vm.write_gauge(m.name, m.value, m.labels)
-                elif m.kind == "counter":
+                elif m.kind == "counter":  # pragma: no cover -- subprocess isolation
                     ctx.vm.write_counter(m.name, m.value, m.labels)
                 elif m.kind == "summary":  # pragma: no cover -- subprocess isolation
                     ctx.vm.write_summary(m.name, m.value, m.labels)

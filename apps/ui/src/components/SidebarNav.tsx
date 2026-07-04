@@ -48,7 +48,7 @@ const NAV_ITEMS: NavItem[] = [
   { label: 'Logs', to: '/logs', icon: ScrollText },
   { label: 'Metrics', to: '/metrics', icon: Gauge },
   { label: 'Runbooks', to: '/runbooks', icon: FileText },
-  { label: 'Auto-fix history', icon: Wand2, disabledNote: 'Coming soon' },
+  { label: 'Auto-fix history', to: '/autofix/history', icon: Wand2 },
   {
     label: 'Discovery & suggestions',
     icon: Sparkles,

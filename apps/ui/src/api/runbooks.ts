@@ -27,6 +27,12 @@ export const approvalsKeys = {
   plan: (id: string) => ['autofix-approvals', 'plan', id] as const,
 } as const
 
+export type RunbookStats = Schema<'RunbookStatsOut'>
+
+export const runbookStatsKeys = {
+  all: ['runbook-stats'] as const,
+} as const
+
 /** GET /api/runbooks */
 export function useRunbooks(): UseQueryResult<{ items: Runbook[] }, ApiError> {
   return useQuery({
@@ -34,6 +40,18 @@ export function useRunbooks(): UseQueryResult<{ items: Runbook[] }, ApiError> {
     queryFn: async () => {
       const result = await apiClient.GET('/api/runbooks', {})
       return unwrap<{ items: Runbook[] }>(result)
+    },
+    retry: false,
+  })
+}
+
+/** GET /api/runbooks/stats */
+export function useRunbookStats(): UseQueryResult<{ items: RunbookStats[] }, ApiError> {
+  return useQuery({
+    queryKey: runbookStatsKeys.all,
+    queryFn: async () => {
+      const result = await apiClient.GET('/api/runbooks/stats', {})
+      return unwrap<{ items: RunbookStats[] }>(result)
     },
     retry: false,
   })
