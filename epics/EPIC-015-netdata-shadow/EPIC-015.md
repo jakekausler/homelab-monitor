@@ -12,6 +12,15 @@ Per spec §2 Q16 (option A) and §2 Q17 (option D), Netdata's value vs. cost wil
 
 - Spec §3.2 (Netdata sidecar — runs as Docker container with `/proc`, `/sys`, `/etc/os-release`, `/var/run/docker.sock` mounted read-only), §3.4 (discovered targets), §6.2 (Netdata-streamed metrics under `_netdata_*` namespace), §10.3 (resource budget).
 
+## EPIC-010 integration requirements (added 2026-07-05)
+
+The tentative table already includes STAGE-015-004 "Comparative shadow rule: vmalert rolling-baseline rule vs Netdata anomaly on the same CPU metric." This is EPIC-010's designated FIRST REAL shadow pair (locked EPIC-010 Decision 6 — the synthetic vmalert-vs-vmalert pair shipped in STAGE-010-010 is a placeholder pending EPIC-015).
+
+- **STAGE-015-004 MUST wire into EPIC-010's shadow-rule framework** (built in STAGE-010-009): add the pair to `deploy/shadow-pairs.yaml` with `name: host_cpu_netdata_vs_vmalert_baseline`, `rule_a.source_tool='vmalert-metrics'`, `rule_a.alertname='<netdata anomaly rule name>'`, `rule_b.source_tool='vmalert-metrics'`, `rule_b.alertname='HostCPUAnomalous'` (or whichever baseline rule is designated).
+- **Both rules produce alerts with distinct `alertname` labels** so the overlap-join strategy from STAGE-010-009 can distinguish them.
+- **Verify the framework's Tool Analysis UI panel** (built in STAGE-010-008/009) renders the pair with sensible hit/miss/disagreement counts after Netdata's k-means model has had ≥6h to calibrate.
+- **Success criterion for this pair:** either Netdata catches unique behavioral anomalies vmalert misses (justifies keeping Netdata), OR Netdata contributes ~0 unique hits (triggers EPIC-010's recommendation-to-disable engine — decision surfaces automatically). Both outcomes are valid; the point is the data-driven answer.
+
 ## Stages (to decompose during epic Design phase)
 
 > **⚠️ TENTATIVE / PROSPECTIVE — DO NOT TREAT AS COMMITTED.**
@@ -23,14 +32,14 @@ Per spec §2 Q16 (option A) and §2 Q17 (option D), Netdata's value vs. cost wil
 > whatever downstream epics/stages have already taught us. Do NOT begin any stage below without
 > that re-decomposition and explicit user sign-off.
 
-| Likely stage | Theme |
-|---|---|
-| STAGE-015-001 | Netdata sidecar in compose: pinned image, mounts, env config; remote-write to VM via Prometheus protocol |
-| STAGE-015-002 | Netdata UI access: Netdata's own UI (port 19999) reverse-proxied through our auth at `/netdata/*` |
-| STAGE-015-003 | First Netdata anomaly subscription: the host CPU metric set; consume Netdata's anomaly bit via its API/MetricsQL once streamed to VM; default vmalert rule fires when anomaly bit is set for sustained periods |
+| Likely stage  | Theme                                                                                                                                                                                                                                                       |
+| ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| STAGE-015-001 | Netdata sidecar in compose: pinned image, mounts, env config; remote-write to VM via Prometheus protocol                                                                                                                                                    |
+| STAGE-015-002 | Netdata UI access: Netdata's own UI (port 19999) reverse-proxied through our auth at `/netdata/*`                                                                                                                                                           |
+| STAGE-015-003 | First Netdata anomaly subscription: the host CPU metric set; consume Netdata's anomaly bit via its API/MetricsQL once streamed to VM; default vmalert rule fires when anomaly bit is set for sustained periods                                              |
 | STAGE-015-004 | Comparative shadow rule: vmalert rolling-baseline rule on the same CPU metric set runs in parallel with the Netdata anomaly subscription. Both produce alerts tagged with distinct `source_tool` so EPIC-010's tool-effectiveness analyzer can compare them |
-| STAGE-015-005 | Default Grafana dashboard `netdata.json` showing Netdata's own panels via VM datasource |
-| STAGE-015-006 | Future-extensibility: docs for adding Netdata agents on other hosts (Synology, future hosts) and pointing them at this VM as their remote-write destination |
+| STAGE-015-005 | Default Grafana dashboard `netdata.json` showing Netdata's own panels via VM datasource                                                                                                                                                                     |
+| STAGE-015-006 | Future-extensibility: docs for adding Netdata agents on other hosts (Synology, future hosts) and pointing them at this VM as their remote-write destination                                                                                                 |
 
 ## Cross-stage acceptance criteria
 

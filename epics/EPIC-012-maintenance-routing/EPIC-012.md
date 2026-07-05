@@ -10,6 +10,14 @@ Build the configurable parts of the alert lifecycle: maintenance windows (schedu
 
 - Spec §3.1 (maintenance manager + alert dispatcher), §6.1 (`maintenance_windows`, `routing_rules` tables), §8.3 (routing rules description), §8.4 (lifecycle including maintenance windows), §9.2 (Maintenance windows + Settings → Routing screens).
 
+## EPIC-010 integration requirements (added 2026-07-05)
+
+The tool-effectiveness analyzer (EPIC-010) depends on correct alert-outcome accounting. Maintenance windows create a new alert-outcome case that must be handled explicitly:
+
+- **`AlertOutcome.MAINTENANCE_SUPPRESSED` writer required.** When an alert fires WITHIN an active maintenance window that scopes to it, write an `alert_outcomes` row with `outcome='maintenance_suppressed'`, `decided_by='maintenance:<window_id>'`. The enum value already exists (added in STAGE-010-002); this epic adds the writer.
+- **Do NOT count maintenance-suppressed outcomes toward `action_rate`.** STAGE-010-006's aggregation already excludes `maintenance_suppressed` from the action-rate numerator; the writer's job is just to produce the rows. `alerts_emitted` DOES include them (so users can still see "this rule fired 5 times but 4 were suppressed by maintenance").
+- **Placement.** The writer likely lives in the same code path that pushes silences to Alertmanager. When a new alert arrives at `/api/alerts/ingest` AND matches an active window's scope, emit the maintenance-suppressed outcome inline with the alert insert.
+
 ## Stages (to decompose during epic Design phase)
 
 > **⚠️ TENTATIVE / PROSPECTIVE — DO NOT TREAT AS COMMITTED.**
@@ -21,15 +29,15 @@ Build the configurable parts of the alert lifecycle: maintenance windows (schedu
 > whatever downstream epics/stages have already taught us. Do NOT begin any stage below without
 > that re-decomposition and explicit user sign-off.
 
-| Likely stage | Theme |
-|---|---|
-| STAGE-012-001 | Maintenance window CRUD: API endpoints, `maintenance_windows` table writes, audit log, validation (start_at < end_at; rrule parses) |
+| Likely stage  | Theme                                                                                                                                                                                                                                       |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| STAGE-012-001 | Maintenance window CRUD: API endpoints, `maintenance_windows` table writes, audit log, validation (start_at < end_at; rrule parses)                                                                                                         |
 | STAGE-012-002 | Maintenance window enforcement: a scheduled job that, at the start of each window, posts silences to Alertmanager via `/api/v2/silences` matching the window's scope (label selector or explicit target list); at end, expires the silences |
-| STAGE-012-003 | Maintenance window UI: calendar + list views; "Schedule new" form with scope picker, recurrence picker (rrule helper), and a "preview affected targets" panel that previews matched alerts |
-| STAGE-012-004 | Routing rules CRUD: API + table writes; rules are ordered (priority), match-conditions are `severity` + label selectors |
-| STAGE-012-005 | Routing rules engine: dispatcher consults `routing_rules` for every incoming alert; replaces the hard-coded "all → inproc-dashboard" from STAGE-001-013 |
-| STAGE-012-006 | Routing rules UI: drag-and-drop priority editor; "if this alert came in, it would route to ..." preview computed against the current rules |
-| STAGE-012-007 | Routing rules dry-run: a "test alert" feature lets the user submit a synthetic alert payload and see exactly which rules match, in priority order |
+| STAGE-012-003 | Maintenance window UI: calendar + list views; "Schedule new" form with scope picker, recurrence picker (rrule helper), and a "preview affected targets" panel that previews matched alerts                                                  |
+| STAGE-012-004 | Routing rules CRUD: API + table writes; rules are ordered (priority), match-conditions are `severity` + label selectors                                                                                                                     |
+| STAGE-012-005 | Routing rules engine: dispatcher consults `routing_rules` for every incoming alert; replaces the hard-coded "all → inproc-dashboard" from STAGE-001-013                                                                                     |
+| STAGE-012-006 | Routing rules UI: drag-and-drop priority editor; "if this alert came in, it would route to ..." preview computed against the current rules                                                                                                  |
+| STAGE-012-007 | Routing rules dry-run: a "test alert" feature lets the user submit a synthetic alert payload and see exactly which rules match, in priority order                                                                                           |
 
 ## Cross-stage acceptance criteria
 

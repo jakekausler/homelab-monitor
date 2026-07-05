@@ -13,6 +13,17 @@ This epic is when the project transitions from "personal homelab tool" to "open-
 - Whole spec — particularly §1.1 (non-goals, double-check we haven't drifted), §10.5 (release flow), §16 (cross-cutting), §17 (open items — verify all decisions made during implementation).
 - All previous epics' lessons-learned (per the `lessons-learned` skill triggered at each phase exit). Material here informs documentation gaps.
 
+## EPIC-010 integration requirements (added 2026-07-05)
+
+By the time EPIC-019 begins, the tool-effectiveness analyzer has been running for months and has real prod data. Pre-release verification:
+
+- **Documentation.** Ensure `docs/` includes user-facing pages for: (a) how the analyzer computes scorecards (5 dimensions × 3 windows explanation from EPIC-010 Decision 1); (b) how to read the Tool Analysis screen; (c) how the recommendation-Apply flow works; (d) the shadow-rule framework for advanced users adding their own pairs; (e) the SignatureWentSilent-purge event from STAGE-010-001 (so open-source users understand why the rule doesn't ship).
+- **Configuration docs.** Document the analyzer's tunables: nightly-job cadence, recommendation rule thresholds (the values used in `recommend_disable_zero_unique`, `recommend_evaluate_low_action_rate`, `recommend_evaluate_zero_emissions`), shadow-pair YAML schema.
+- **First-run experience.** On a fresh install (public release), the Tool Analysis screen has NO data (analyzer hasn't run yet AND there are no alerts). Ensure the empty state is welcoming ("The analyzer runs nightly at 03:00. Come back tomorrow to see your first scorecards.") and points to the manual-run CLI (`hm analyzer run-now`) for early exploration.
+- **Sample configs.** Ship a `deploy/shadow-pairs.yaml.example` showing the synthetic vmalert-vs-vmalert pair from STAGE-010-010 as a template. If EPIC-015 has landed by 019, also include the Netdata-vs-vmalert pair from STAGE-015-004 as a real-world example.
+- **Verify Karma reconciler still works.** The STAGE-010-003 hourly job depends on Alertmanager's `/api/v2/silences` API shape being stable. If AM was upgraded between EPIC-010 and 019, retest the reconciler.
+- **Recommendation-Apply audit trail readable.** Verify Apply operations (STAGE-010-012) produce audit_log entries with human-readable summaries, so the pre-release audit-log inspection surfaces "recommendation NN applied on YYYY-MM-DD, rule XX disabled" in a way a new user can understand.
+
 ## Stages (to decompose during epic Design phase)
 
 > **⚠️ TENTATIVE / PROSPECTIVE — DO NOT TREAT AS COMMITTED.**
@@ -24,19 +35,19 @@ This epic is when the project transitions from "personal homelab tool" to "open-
 > whatever downstream epics/stages have already taught us. Do NOT begin any stage below without
 > that re-decomposition and explicit user sign-off.
 
-| Likely stage | Theme |
-|---|---|
-| STAGE-019-001 | Accessibility audit + fixes: invoke `impeccable:audit` skill, fix P0/P1 findings; keyboard-nav full pass; screen-reader pass; color-contrast pass |
-| STAGE-019-002 | Performance pass: invoke `impeccable:optimize` skill, fix any P0/P1 findings; verify resource budget (§10.3) holds at the documented load |
-| STAGE-019-003 | Polish pass: invoke `impeccable:polish` skill (alignment, spacing, micro-details); `impeccable:harden` skill (edge cases, i18n hygiene though we ship English-only) |
-| STAGE-019-004 | Security review: invoke `oh-my-claudecode:security-reviewer` for OWASP top 10 audit; secret-leak scan across the entire codebase; SBOM generation; container image scan in CI |
+| Likely stage  | Theme                                                                                                                                                                                                                                                                                                    |
+| ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| STAGE-019-001 | Accessibility audit + fixes: invoke `impeccable:audit` skill, fix P0/P1 findings; keyboard-nav full pass; screen-reader pass; color-contrast pass                                                                                                                                                        |
+| STAGE-019-002 | Performance pass: invoke `impeccable:optimize` skill, fix any P0/P1 findings; verify resource budget (§10.3) holds at the documented load                                                                                                                                                                |
+| STAGE-019-003 | Polish pass: invoke `impeccable:polish` skill (alignment, spacing, micro-details); `impeccable:harden` skill (edge cases, i18n hygiene though we ship English-only)                                                                                                                                      |
+| STAGE-019-004 | Security review: invoke `oh-my-claudecode:security-reviewer` for OWASP top 10 audit; secret-leak scan across the entire codebase; SBOM generation; container image scan in CI                                                                                                                            |
 | STAGE-019-005 | First-run UX: a fresh deploy after `git clone && docker compose up` should bring the user to a useful state in under 10 minutes, with documentation that walks them through bootstrap (master key generation, first user creation, secret seeding for HA/Pi-hole/Unifi/Synology, first probes appearing) |
-| STAGE-019-006 | Comprehensive README: project description, screenshots, quickstart, architecture overview, contributing guide, security policy, code of conduct |
-| STAGE-019-007 | API documentation: auto-generated from OpenAPI; published as a static site or in-repo |
-| STAGE-019-008 | Plugin author documentation: how to write a collector, discoverer, channel, runbook, digest section; plugin-sdk-py walkthrough; published example plugins |
-| STAGE-019-009 | Operator documentation: deployment guide, upgrade procedures, backup/restore procedures, troubleshooting, common pitfalls (e.g., master key loss) |
-| STAGE-019-010 | Promote `plugin-sdk-py` to a published PyPI package |
-| STAGE-019-011 | Cut v1.0 release: tag, GH Actions release.yml runs, container images published to GHCR, release notes auto-generated from CHANGELOG.md, GitHub release page populated |
+| STAGE-019-006 | Comprehensive README: project description, screenshots, quickstart, architecture overview, contributing guide, security policy, code of conduct                                                                                                                                                          |
+| STAGE-019-007 | API documentation: auto-generated from OpenAPI; published as a static site or in-repo                                                                                                                                                                                                                    |
+| STAGE-019-008 | Plugin author documentation: how to write a collector, discoverer, channel, runbook, digest section; plugin-sdk-py walkthrough; published example plugins                                                                                                                                                |
+| STAGE-019-009 | Operator documentation: deployment guide, upgrade procedures, backup/restore procedures, troubleshooting, common pitfalls (e.g., master key loss)                                                                                                                                                        |
+| STAGE-019-010 | Promote `plugin-sdk-py` to a published PyPI package                                                                                                                                                                                                                                                      |
+| STAGE-019-011 | Cut v1.0 release: tag, GH Actions release.yml runs, container images published to GHCR, release notes auto-generated from CHANGELOG.md, GitHub release page populated                                                                                                                                    |
 
 ## Cross-stage acceptance criteria
 

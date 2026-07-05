@@ -4,51 +4,100 @@
 
 ## Overview
 
-Build the tool-effectiveness analyzer subsystem: tracks per-tool alert volume, action rates, dedup overlap, unique-detection share, runs comparative shadow rules where applicable, generates auto-recommendations after configurable observation windows, and surfaces all of this on the Tool Analysis screen.
+Build the tool-effectiveness analyzer subsystem: track per-tool alert volume, action rates, dedup overlap, unique-detection share; run comparative shadow rules where applicable; generate auto-recommendations after configurable observation windows; surface all of this on a new Tool Analysis screen; and (as part of this same epic, since EPIC-001..009 + 017 have all shipped without the outcome-writing infrastructure) retrofit the outcome-capture path so the analyzer has real data to work with from day 1.
 
-This epic operationalizes the user's instruction (Q17 → option D) to know which integrated tools are pulling their weight. After this epic, the system can generate "Netdata caught 0 unique alerts in 90 days; consider disabling for metric set X" or "vmalert-baseline rule R has 95% noise rate; tune or remove" recommendations.
+After this epic, the system can answer questions like "SignatureWentSilent produced 158k alerts in 30 days — is that useful signal?" (answer surfaced automatically as a recommendation) and "does Netdata catch anything vmalert doesn't?" (answered by the shadow-rule framework, first real pair deferred to EPIC-015 when Netdata itself lands).
 
-## Source documents
+## Source documents (MUST be read before any stage)
 
 - Spec §3.1 (tool-effectiveness analyzer), §4.7 (data flow), §6.1 (`alert_outcomes`, `tool_scorecards` tables), §9.2 (Tool analysis screen).
+- The 2026-07-05 EPIC-010 planning recon (see Notes below) — captures the actual label schema on prod, which drives the multi-dimensional aggregation design.
 
-## Stages (to decompose during epic Design phase)
+## LOCKED architecture decisions (2026-07-05 planning session — do NOT re-litigate)
 
-> **⚠️ TENTATIVE / PROSPECTIVE — DO NOT TREAT AS COMMITTED.**
->
-> The stages/pillars listed below are a first-pass sketch from the initial epic bootstrap. They
-> are PROSPECTIVE only and are expected to change substantially. Before this epic begins, the
-> entire decomposition MUST be **re-done from scratch with the user** during the epic's Design
-> phase — re-scope, re-order, split, merge, add, remove — using the latest project reality and
-> whatever downstream epics/stages have already taught us. Do NOT begin any stage below without
-> that re-decomposition and explicit user sign-off.
+These decisions were made with the user during EPIC-010 planning and supersede the original tentative table (which was written at project start and is now stale). Stage Design phases inherit them.
 
-| Likely stage | Theme |
-|---|---|
-| STAGE-010-001 | Outcome capture: ensure every alert ingested in EPIC-001 onward gets an outcome row when the user acks/dismisses, when auto-fix runs, or when the alert auto-resolves. The `alert_outcomes` table from STAGE-001-013 already exists; this stage tightens the writes |
-| STAGE-010-002 | Per-tool aggregation job (runs nightly): computes for each `source_tool` over a configurable window (7d / 30d / 90d): alerts_emitted, action_rate (acked / dismissed / auto_fixed), unique-share (alerts that no other tool caught), dedup_overlap (alerts where multiple tools caught the same fingerprint) |
-| STAGE-010-003 | Shadow-rule framework: pairs of detectors (e.g., a Netdata anomaly subscription + a vmalert baseline rule on the same metric) run in parallel with `source_tool` set to differ; the analyzer compares hit/miss/false-positive rates between pairs |
-| STAGE-010-004 | First shadow-rule pair: vmalert rolling-baseline rule for `homelab_host_cpu_percent` vs Netdata anomaly subscription for the same metric. Surfaced as a comparison panel in the Tool Analysis screen |
-| STAGE-010-005 | Recommendation engine: rules-as-code that generate human-readable recommendations from the scorecards (e.g., "if a tool has 0 unique-share over 90d AND 95%+ dedup_overlap, recommend disabling"). Ships with a starter set of rules; user can edit |
-| STAGE-010-006 | Tool Analysis UI: per-tool cards (alerts emitted sparkline, action-rate bar, unique-share percentage), comparison panels for shadow pairs, recommendations inbox with "Apply" / "Dismiss" actions |
-| STAGE-010-007 | "Apply" action: implementing a recommendation (e.g., disable a vmalert rule, unsubscribe a Netdata anomaly, deactivate a collector) is itself an action requiring confirm-on-destructive and audit |
+### Decision 1 — Multi-dimensional scorecards over 5 orthogonal dimensions
+
+Prod-DB recon on 168,110 real alerts confirmed the alert-label schema is already rich enough for multi-dimensional analysis. Every alert carries `source_tool` (100% presence, 4 values), `alertname` (100%, 86 values), `alertgroup` (100%, 39 values, auto-populated from vmalert group name), `severity` (100%, 4 values). Near-universal (95-98% presence) are `category` (12 values), `target_kind` (10 values), `anomaly_kind` (9 values). Rather than pick one aggregation axis, the analyzer computes scorecards for FIVE dimensions in parallel — `source_tool`, `category`, `target_kind`, `alertgroup`, `alertname` — over each configured window (7d / 30d / 90d). The UI defaults to per-`alertgroup` cards (39 cards is the right cardinality for a screen) with a dimension picker for switching views.
+
+**Rationale:** No single dimension is universally the "right" grouping. `source_tool` is too coarse (4 values, and `vmalert-metrics` swallows 99% of alerts). `alertname` is too fine (86 rules). `alertgroup` maps 1:1 to vmalert rule files, which IS the natural "unit of tuning" — but `category` (semantic) and `target_kind` (infrastructure) let the user slice differently when hunting patterns. Multi-dimensional storage is cheap; the UI complexity is a single dimension picker.
+
+### Decision 2 — Karma-→-outcome retrofit uses periodic reconciliation (NOT proxy interception)
+
+The recon confirmed `alert_outcomes` is empty (0 rows) despite 168k alerts, because Karma (the embedded alert-lifecycle UI) posts ack/silence actions directly to Alertmanager and never touches our monitor. Every alert Jake has ack'd in the past ~7 weeks is invisible to the analyzer. Two retrofit options were considered: (a) periodic pull from Alertmanager `/api/v2/silences` + resolved-alert state, matched to `alerts.fingerprint`, writing `acked` / `auto_resolved` outcome rows; (b) intercept requests in the `/api/karma/` reverse-proxy to record actions before forwarding. **Locked to (a).** Robust to reboots, no Karma-side dependency, matches "analyzer never deletes data" principle. Real-time-vs-eventual accuracy is irrelevant for scorecards computed over 7/30/90d windows.
+
+### Decision 3 — One-shot backfill for the existing 168k alerts
+
+Without backfill, scorecards would show empty action-rates for ALL EPIC-001..009 + 017 alerts until enough new outcome data accumulates through the periodic Karma reconciliation (weeks minimum). A one-shot CLI `hm alerts backfill-outcomes` infers outcomes deterministically from existing `alerts` columns: `resolved_at IS NOT NULL AND ack_at IS NULL` → `auto_resolved`; `ack_at IS NOT NULL` → `acked`. Runs once, then never again. Safe (no data destruction, just synthesizes outcome rows from state that already exists), deterministic (same input → same output), auditable (each backfilled row records `decided_by = "backfill"` and audit-log entry naming the CLI-run principal).
+
+### Decision 4 — SignatureWentSilent purge as the very first stage
+
+Prod DB has 158,782 `SignatureWentSilent` alerts of 168,110 total (94.5%). Left in place, this ONE rule dominates every dimension of the analyzer and buries all other signal. Rather than filter-at-analyzer (which hides the noise instead of fixing it), the epic OPENS with a hard-delete purge of all `SignatureWentSilent` rows AND removal of the underlying vmalert rule that produced them. Deleting 158k rows from prod is one-way and irreversible — explicit user sign-off recorded in the planning session (2026-07-05). The underlying `homelab_log_signature_*` metrics collection continues; only the noisy rule is deleted.
+
+### Decision 5 — Retrofit work for EPIC-001..009 + 017 lands INSIDE EPIC-010
+
+EPIC-001 through 009 + 017 shipped alert-emitting rules with correct `source_tool` tagging but WITHOUT the outcome-writing side. Rather than back-patch stages into those completed epics, all retrofits are stages of EPIC-010. Three retrofit stages: (a) Karma-→-outcome periodic reconciliation (Decision 2); (b) one-shot backfill CLI (Decision 3); (c) verify + fix EPIC-009's auto-fix outcome writer (auto-fixed outcome shows 0 rows in prod despite the code being present — either latent bug or "no successful auto-fix on prod yet since data cleanup"; also picks up STAGE-009-013 regression item #3 on `initiated_by` mislabeling for operator-approved runs). Future epics (011..019) get integration notes prepended (see below); no retrofit stages needed there because they haven't shipped alert-emitting code yet.
+
+### Decision 6 — First shadow-rule pair is synthetic (vmalert-vs-vmalert); Netdata pair deferred to EPIC-015
+
+The tentative table's first shadow pair was Netdata-anomaly vs vmalert-baseline on `homelab_host_cpu_percent`, but EPIC-015 (Netdata) hasn't shipped. Two options: (a) land the shadow FRAMEWORK in 010 with a placeholder pair (two vmalert rules on the same metric — one strict threshold + one baseline anomaly rule that already exists in `host_anomalies.yaml`) so the comparison logic can be exercised; (b) land the framework and defer the first REAL pair to EPIC-015. **Locked to (a).** Ships end-to-end value in EPIC-010; the real Netdata pair adds itself in EPIC-015 as an integration note (see below) once Netdata is available.
+
+### Decision 7 — First "Apply" action supports two operation types
+
+The recommendation-Apply loop is the value-realization slice: the analyzer must turn recommendations into acted-upon changes. **Locked scope for the first Apply implementation:** (a) disable-vmalert-rule — rewrites the rule file to comment out the rule + calls vmalert's `/-/reload` endpoint + audit-logs the action; (b) tag-as-known-noisy — metadata-only annotation on the rule (stored in a new `rule_annotations` table) that suppresses future recommendations against that rule; audit-logged but no behavior change. Both routed through confirm-on-destructive (per spec §7.2) and audit_log. Broader Apply operations (disable a collector, disable an anomaly subscription) are follow-ups.
+
+## Stages (decomposed 2026-07-05 — supersedes the original tentative table)
+
+| Stage         | Theme                                                                                                                                                                                                                                                                                                                                                                                                                                  | Type                                                                                                                                     |
+| ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ------------------ |
+| STAGE-010-001 | SignatureWentSilent purge + rule removal: hard-delete 158k noise alerts from `alerts` table, delete the vmalert rule file, audit-log the purge with row counts. Retrofit for EPIC-004 (log signature system)                                                                                                                                                                                                                           | BACKEND                                                                                                                                  |
+| STAGE-010-002 | Schema evolution: expand `tool_scorecards` with `dimension`, `dimension_value`, `window`, computed metric columns, `computed_at`; add `AlertOutcome.AUTO_RESOLVED` + `AlertOutcome.MAINTENANCE_SUPPRESSED` enum members; new `alert_overlap_groups`, `shadow_rule_results`, `recommendations`, `rule_annotations` tables. Alembic migration 0052                                                                                       | BACKEND                                                                                                                                  |
+| STAGE-010-003 | Karma → outcome retrofit (periodic reconciliation): scheduled job pulls Alertmanager `/api/v2/silences` + resolved-alert state, matches to `alerts.fingerprint`, writes `AlertOutcome.ACKED` / `AlertOutcome.AUTO_RESOLVED` rows. Runs hourly. Idempotent (INSERT OR IGNORE on `(alert_id, outcome)`). Retrofit for EPIC-001..009 + 017                                                                                                | BACKEND + integration                                                                                                                    |
+| STAGE-010-004 | One-shot backfill CLI: `hm alerts backfill-outcomes` infers outcomes for existing alerts from row state (`resolved_at`, `ack_at`). Refuses to re-run if outcomes already exist. Retrofit for EPIC-001..009 + 017                                                                                                                                                                                                                       | CLI + BACKEND                                                                                                                            |
+| STAGE-010-005 | EPIC-009 auto-fix outcome writer verification + `initiated_by` fix: verify `AlertOutcome.AUTO_FIXED` write path fires on real runs (prod shows 0 rows despite the code being present); fix STAGE-009-013 regression item #3 (operator-approved real runs get `initiated_by="alert"` — should be `"operator"`); add missing regression test coverage                                                                                    | BACKEND                                                                                                                                  |
+| STAGE-010-006 | Nightly aggregation job (multi-dimensional): computes scorecards across 5 dimensions × 3 windows. Per (dimension, dimension_value, window) row: `alerts_emitted`, `action_rate`, `dedup_overlap`, `unique_share`, `computed_at`. Concurrency group `analyzer`, low ionice. Writes to `tool_scorecards`. Handles source_tool='scheduler' rows (payload_json.labels is empty) as a special ingestion path                                | BACKEND                                                                                                                                  |
+| STAGE-010-007 | Fingerprint-overlap detection: groups alerts by fingerprint within ±5min group_interval. Feeds `dedup_overlap` + `unique_share` in stage 006. Writes to `alert_overlap_groups`. Deterministic — same alerts always produce same groups                                                                                                                                                                                                 | BACKEND                                                                                                                                  |
+| STAGE-010-008 | Tool Analysis UI (read-only, multi-dimensional): new `/tool-analysis` route. Default view: per-`alertgroup` cards (39 groups = right cardinality) showing (alerts_emitted sparkline, action_rate bar, unique-share %, dedup_overlap %). Dimension picker: source_tool / category / target_kind / alertgroup / alertname. Drill-down: click a card → per-alertname breakdown within that group. New `GET /api/tool-scorecards` endpoint | FRONTEND + BACKEND                                                                                                                       |
+| STAGE-010-009 | Shadow-rule framework: config schema for shadow pairs (`shadow_pairs.yaml`). Each rule in a pair emits with `source_tool=shadow.{pair}.{a                                                                                                                                                                                                                                                                                              | b}`naming convention. Framework computes hit/miss/disagreement rates per pair.`shadow_rule_results` table. Comparison-panel UI component | BACKEND + FRONTEND |
+| STAGE-010-010 | First synthetic shadow pair: two vmalert rules on `homelab_host_cpu_percent` — one strict threshold + one baseline anomaly (already exists in `host_anomalies.yaml`). Wire into the framework from 009. Verify comparison panel shows hit/miss/disagreement counts. Netdata↔vmalert pair deferred to EPIC-015                                                                                                                          | DEPLOY + BACKEND                                                                                                                         |
+| STAGE-010-011 | Recommendation engine: Python predicates over `tool_scorecards` produce human-readable recommendations. Starter rule set: "0 unique_share in 90d + >95% dedup_overlap → recommend disable", "action_rate < 5% in 30d → recommend tune-or-disable", "0 alerts emitted in 90d → recommend evaluate-if-rule-is-broken". `recommendations` table. UI inbox with "Apply" / "Dismiss" / "Snooze"                                             | BACKEND + FRONTEND                                                                                                                       |
+| STAGE-010-012 | First "Apply" actions + epic-closing E2E: two operation types per Decision 7 (disable-vmalert-rule with vmalert `/-/reload`; tag-as-known-noisy in `rule_annotations` table). Confirm-on-destructive + audit_log. Epic-closing prod validation exercises Karma-reconcile → backfill → nightly aggregation → generated recommendation → applied disable → recommendation reappears as "acted-on"                                        | BACKEND + FRONTEND + HOST-INTEGRATION                                                                                                    |
 
 ## Cross-stage acceptance criteria
 
-Same as EPIC-001 plus:
+Same as EPIC-001 plus EPIC-010-specific:
 
-- **The analyzer never deletes data.** Recommendations propose actions; the user approves and the action is taken via the same audit-log + confirm-on-destructive paths as everything else.
+- **The analyzer never deletes data.** Recommendations propose actions; the user approves and the action is taken via the same audit-log + confirm-on-destructive paths as everything else. STAGE-010-001's SignatureWentSilent purge is the ONE exception — it's a data-hygiene action taken with explicit user sign-off at planning time, not an analyzer-driven delete.
 - **Computations are deterministic given inputs** — recompute on demand returns the same scorecards.
 - **Scorecards stored in `tool_scorecards`** survive restarts; expiring windows roll forward.
+- **Karma-side actions are NEVER blocked by the retrofit** — the periodic reconciliation reads AM state, never mutates it. If our monitor is down, Karma still works.
+- **The backfill CLI is one-shot and self-guarding** — refuses to re-run if `alert_outcomes` already has non-`backfill` rows.
 
 ## Dependencies
 
-- EPIC-001 (alert ingestor + outcomes table).
-- EPIC-009 (auto-fix outcomes feed the analyzer).
-- EPIC-015 (Netdata) — first shadow-rule pair needs Netdata to exist; if EPIC-015 ships before EPIC-010, the pair is enabled day-one in this epic; otherwise it lands as a follow-on stage in EPIC-015.
+- EPIC-001 (alert ingestor + outcomes table) — DONE (2026-06-XX).
+- EPIC-004 (log pipeline / signature system) — DONE. STAGE-010-001 removes the rule but leaves the underlying signature-metric collection intact.
+- EPIC-009 (auto-fix outcomes feed the analyzer) — DONE (2026-07-04). STAGE-010-005 verifies + fixes the auto-fix outcome writer.
+- EPIC-015 (Netdata) — NOT YET STARTED. First REAL shadow-rule pair (Netdata anomaly vs vmalert baseline) is deferred to EPIC-015 as a per-integration deliverable there.
+
+## Integration notes for future epics (011..019)
+
+These notes must be honored when each future epic begins its Design phase. They ensure the analyzer's contract is satisfied without needing back-patches to EPIC-010 later.
+
+- **EPIC-011 (discovery/suggestions)**: no direct integration required — discovery events are not alerts.
+- **EPIC-012 (maintenance windows)**: alerts fired within an active maintenance window MUST NOT count against `action_rate` denominators. Add a writer for `AlertOutcome.MAINTENANCE_SUPPRESSED` on alerts that fire during a window. Analyzer excludes suppressed outcomes from action-rate computation but INCLUDES them in `alerts_emitted` (so users can still see "this rule fired 5 times but 4 were suppressed by maintenance").
+- **EPIC-013 (digest builder)**: add a "Tool scorecard" digest section per spec §8.5. Renders top 3 rules by `alerts_emitted`, top 3 by low `action_rate`, and any new recommendations since last digest.
+- **EPIC-014 (self-monitor + local-watchdog)**: watchdog-triggered alerts (monitor-is-down) MUST route through `/api/alerts/ingest` with `source_tool="watchdog"` so they appear in scorecards. Otherwise the watchdog becomes invisible to tool-analysis.
+- **EPIC-015 (Netdata)**: add a stage that lands the FIRST REAL shadow pair — Netdata anomaly subscription on `homelab_host_cpu_percent` vs the existing vmalert baseline rule for the same metric. Wire it into the shadow-rule framework built in STAGE-010-009. This unblocks the "does Netdata pull its weight?" recommendation flow that motivated Decision 6 of this epic.
+- **EPIC-016 (ISP/WAN)**: each WAN sub-signal (mtr multi-hop, speedtest, DNS split, WAN reachability, external-IP tracking) MUST get a distinct `alertname` so overlap detection can identify when multiple ISP-side signals converge on the same fault. Consider `source_tool="vmalert-metrics"` with distinct `alertgroup` values per sub-signal, matching the existing pattern.
+- **EPIC-017 (SSH probes)** — DONE. Already correctly tagged with `source_tool: vmalert-metrics`, `alertgroup: ssh`, no retrofit needed.
+- **EPIC-018 (per-service deep-dives)**: each new service integration (Mosquitto, Z-wave/Zigbee2MQTT, Foundry, Plex, Frigate, AT&T modem, UPS, etc.) MUST include an `integration:` label on its emitted alerts, matching the existing pattern in EPIC-005/006/007/008 (`integration: home_assistant / pihole / synology / unifi`). This preserves the `integration` scorecard dimension's usefulness.
+- **EPIC-019 (polish, release)**: verify the tool-analysis UI, scorecards, and recommendation engine are fully documented in `docs/` for public release. Ensure the SignatureWentSilent-purge event (STAGE-010-001) is documented in the changelog so open-source users understand why the rule doesn't ship.
 
 ## Notes
 
-- "Unique share" definition is precise: an alert is unique to tool T if T's `source_tool` is the ONLY one that emitted an alert with the same fingerprint within ±group_interval. (Group_interval is Alertmanager's, default 5m.)
-- The analyzer's nightly job has its own concurrency group `analyzer` and runs at low CPU priority (nice/ionice).
-- Recommendations are advisory by default. The user-controlled "auto-apply low-risk recommendations" mode is deferred to a future epic — for now, every recommendation requires explicit user action.
+- "Unique share" definition (precise): an alert is unique to a `dimension_value` if that dimension_value is the ONLY one that emitted an alert with the same fingerprint within ±group_interval. (`group_interval` is Alertmanager's, default 5m.)
+- The analyzer's nightly job runs in concurrency group `analyzer` (not shared with any collector) at low CPU priority (`nice`/`ionice`).
+- Recommendations are advisory by default. A user-controlled "auto-apply low-risk recommendations" mode is DEFERRED to a future epic — for EPIC-010 every recommendation requires explicit user action.
+- The prod DB recon that drove Decision 1 was performed 2026-07-05 and is captured in the planning session transcript. Key stats to preserve for future context: 168,110 total alerts, 4 `source_tool` values, 86 `alertname` values, 39 `alertgroup` values, 12 `category` values, 10 `target_kind` values, 9 `anomaly_kind` values. If these cardinalities change significantly by the time an EPIC-010 stage begins (e.g., because EPICs 011..018 have shipped more source tools), re-run the recon before starting the stage.

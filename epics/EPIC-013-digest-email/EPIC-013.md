@@ -13,6 +13,14 @@ After this epic, the user receives a daily morning summary and a weekly comprehe
 - Spec §3.1 (digest builder), §8 (notifications, including digest section list), §6.1 (`digest_configs` table), §9.2 (Settings → Digests screen).
 - Spec §2 Q28 (digest is fully configurable; ship with all listed sections; add more via plugins).
 
+## EPIC-010 integration requirements (added 2026-07-05)
+
+The tentative table already includes STAGE-013-010 "tool effectiveness scorecard" digest section. Reinforcing the requirement here so it survives Design-phase re-decomposition:
+
+- **"Tool scorecard" digest section is REQUIRED.** Renders top 3 scorecards by `alerts_emitted` (noisiest rules), top 3 by low `action_rate` (least actionable), and any new EPIC-010 recommendations since the last digest (with links to the Tool Analysis page for Apply).
+- **Data source:** `tool_scorecards`, `recommendations` tables (both created in STAGE-010-002).
+- **Rendering:** sparklines for `alerts_emitted` trend, percentage bars for `action_rate`. Reuse the same visualization primitives as the Tool Analysis screen (STAGE-010-008).
+
 ## Stages (to decompose during epic Design phase)
 
 > **⚠️ TENTATIVE / PROSPECTIVE — DO NOT TREAT AS COMMITTED.**
@@ -24,24 +32,24 @@ After this epic, the user receives a daily morning summary and a weekly comprehe
 > whatever downstream epics/stages have already taught us. Do NOT begin any stage below without
 > that re-decomposition and explicit user sign-off.
 
-| Likely stage | Theme |
-|---|---|
-| STAGE-013-001 | `digest_section` plugin contract; built-in registration; default cadence engine (cron-driven jobs) |
-| STAGE-013-002 | Built-in section: active alerts (open issues with severity, age) |
-| STAGE-013-003 | Built-in section: resolved alerts since last digest (with durations) |
-| STAGE-013-004 | Built-in section: auto-fix activity (Claude runs, dry-runs, exit codes — links to transcripts) |
-| STAGE-013-005 | Built-in section: cron heartbeat report (on-time / late / missing per registered cron) |
-| STAGE-013-006 | Built-in section: backup status (Hyper Backup, /storage/scripts/cron/backup.sh, Backblaze leg) |
-| STAGE-013-007 | Built-in section: cert/domain expiry roundup (anything expiring in next N days, configurable) |
-| STAGE-013-008 | Built-in section: update availability (container images, OS packages, DSM, Unifi firmware) |
-| STAGE-013-009 | Built-in section: resource trends (top CPU/RAM/disk consumers; anomalies in trend) |
-| STAGE-013-010 | Built-in section: tool effectiveness scorecard (links the EPIC-010 data) |
-| STAGE-013-011 | Built-in section: "what changed" delta vs last digest (new containers, new devices, removed services, deleted crons) |
-| STAGE-013-012 | Built-in section: top noisy alert sources (tuning candidates) |
-| STAGE-013-013 | HTML rendering pipeline with embedded sparklines (lightweight inline-SVG; no external image dependencies) |
-| STAGE-013-014 | Plaintext fallback rendering |
-| STAGE-013-015 | SMTP channel: secret-store keys for SMTP host/port/user/password/from; STARTTLS/TLS support; bounce handling at log level |
-| STAGE-013-016 | Settings → Digests UI: cadence, sections, level-of-detail toggles, "Send test now" button |
+| Likely stage  | Theme                                                                                                                                             |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| STAGE-013-001 | `digest_section` plugin contract; built-in registration; default cadence engine (cron-driven jobs)                                                |
+| STAGE-013-002 | Built-in section: active alerts (open issues with severity, age)                                                                                  |
+| STAGE-013-003 | Built-in section: resolved alerts since last digest (with durations)                                                                              |
+| STAGE-013-004 | Built-in section: auto-fix activity (Claude runs, dry-runs, exit codes — links to transcripts)                                                    |
+| STAGE-013-005 | Built-in section: cron heartbeat report (on-time / late / missing per registered cron)                                                            |
+| STAGE-013-006 | Built-in section: backup status (Hyper Backup, /storage/scripts/cron/backup.sh, Backblaze leg)                                                    |
+| STAGE-013-007 | Built-in section: cert/domain expiry roundup (anything expiring in next N days, configurable)                                                     |
+| STAGE-013-008 | Built-in section: update availability (container images, OS packages, DSM, Unifi firmware)                                                        |
+| STAGE-013-009 | Built-in section: resource trends (top CPU/RAM/disk consumers; anomalies in trend)                                                                |
+| STAGE-013-010 | Built-in section: tool effectiveness scorecard (links the EPIC-010 data)                                                                          |
+| STAGE-013-011 | Built-in section: "what changed" delta vs last digest (new containers, new devices, removed services, deleted crons)                              |
+| STAGE-013-012 | Built-in section: top noisy alert sources (tuning candidates)                                                                                     |
+| STAGE-013-013 | HTML rendering pipeline with embedded sparklines (lightweight inline-SVG; no external image dependencies)                                         |
+| STAGE-013-014 | Plaintext fallback rendering                                                                                                                      |
+| STAGE-013-015 | SMTP channel: secret-store keys for SMTP host/port/user/password/from; STARTTLS/TLS support; bounce handling at log level                         |
+| STAGE-013-016 | Settings → Digests UI: cadence, sections, level-of-detail toggles, "Send test now" button                                                         |
 | STAGE-013-017 | "Send test now" backend: builds the digest with current data and sends to the configured recipients (with a TEST: prefix in subject and a banner) |
 
 ## Cross-stage acceptance criteria

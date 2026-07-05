@@ -10,6 +10,16 @@ Build the dedicated ISP/WAN-side monitoring per spec §2 Q21. All listed signals
 
 - Spec §2 Q21 (all signals in scope), §3.4 (discovered targets includes external endpoints), §16 (`nginx-configuator` and Route 53 context).
 
+## EPIC-010 integration requirements (added 2026-07-05)
+
+ISP/WAN failures often manifest as multiple simultaneous signals (a WAN outage triggers reachability failure, latency spike, DNS-fail, packet loss all at once). For EPIC-010's overlap detection to correctly identify "these five alerts are the same underlying event," each sub-signal must be individually identifiable:
+
+- **Distinct `alertname` per sub-signal.** Do NOT collapse WAN-side alerts to a single `WanDown` alertname. Use e.g. `WanReachabilityFailed`, `WanLatencyHigh`, `WanPacketLossHigh`, `DnsResolutionFailed`, `ExternalIpChanged`, `WanMtrHopLoss`. This lets the analyzer's overlap detection show "when Cloudflare 1.1.1.1 is unreachable, we also see mtr hop-3 loss AND dns fail" as one overlap group, so the user can see whether all detectors agree or one is over-reporting.
+- **Consider `alertgroup` values.** Use `alertgroup=wan_reachability`, `wan_latency`, `wan_dns`, `wan_multi_hop` (or similar) to give EPIC-010 a mid-grain aggregation axis. Follow the existing convention: `alertgroup` = vmalert rule file name.
+- **The `category` label for these alerts:** `network` (matches existing convention from unifi/pihole rules).
+- **The `target_kind` label:** `wan_endpoint` or `network` (decide during Design; add to the enumeration if novel).
+- **First real shadow-rule opportunity beyond EPIC-015:** ISP/WAN is a natural place to compare "mtr packet loss threshold" vs "vmalert latency baseline anomaly" on the same WAN target — if you want the shadow-rule framework to have a second real pair, this epic is where it fits. Optional; not required.
+
 ## Stages (to decompose during epic Design phase)
 
 > **⚠️ TENTATIVE / PROSPECTIVE — DO NOT TREAT AS COMMITTED.**
@@ -21,17 +31,17 @@ Build the dedicated ISP/WAN-side monitoring per spec §2 Q21. All listed signals
 > whatever downstream epics/stages have already taught us. Do NOT begin any stage below without
 > that re-decomposition and explicit user sign-off.
 
-| Likely stage | Theme |
-|---|---|
-| STAGE-016-001 | WAN reachability collector: ping (ICMP) and HTTP probe of well-known endpoints (1.1.1.1, 8.8.8.8, google.com, cloudflare.com); separate metrics per endpoint |
+| Likely stage  | Theme                                                                                                                                                                                                                                                                                                                                         |
+| ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| STAGE-016-001 | WAN reachability collector: ping (ICMP) and HTTP probe of well-known endpoints (1.1.1.1, 8.8.8.8, google.com, cloudflare.com); separate metrics per endpoint                                                                                                                                                                                  |
 | STAGE-016-002 | External IP tracking: a small collector that queries `https://api.ipify.org` (or similar, configurable) on a 5min cadence; emits `homelab_external_ip{ip}` with high cardinality only when changes occur (use a counter incrementing on change to avoid label explosion); cross-references the existing `ip-update` container's last known IP |
-| STAGE-016-003 | Latency + jitter: ongoing 1-minute moving window of pings to 1.1.1.1, 8.8.8.8; emits latency p50/p95/p99 + stddev (jitter); rule on sustained spikes |
-| STAGE-016-004 | Packet loss + multi-hop trace: periodic `mtr` runs (subprocess plugin since `mtr` is a binary, not a Python lib); emits per-hop loss; rule when sustained packet loss > 1% on the WAN-facing hops |
-| STAGE-016-005 | DNS resolution health: dual-path resolution test — resolve a known domain via Pi-hole and via 1.1.1.1 directly; emit `homelab_dns_resolution_seconds{path}` so Pi-hole vs WAN issues are distinguishable |
-| STAGE-016-006 | UDM speedtest result surfacing: when EPIC-007 lands the unifi-poller, speedtest results are already in VM. This stage adds rules and dashboard panels for them |
-| STAGE-016-007 | CGNAT / inbound reachability: an external service (or a small relay we run on a VPS) attempts to reach our public port; emits `homelab_inbound_reachable_bool` |
-| STAGE-016-008 | Modem health collector: stubbed plugin interface. The actual scraper is deferred until the user provides the AT&T modem model. The plugin contract and a TODO live here |
-| STAGE-016-009 | Default Grafana dashboard `isp-wan.json` and default vmalert rules |
+| STAGE-016-003 | Latency + jitter: ongoing 1-minute moving window of pings to 1.1.1.1, 8.8.8.8; emits latency p50/p95/p99 + stddev (jitter); rule on sustained spikes                                                                                                                                                                                          |
+| STAGE-016-004 | Packet loss + multi-hop trace: periodic `mtr` runs (subprocess plugin since `mtr` is a binary, not a Python lib); emits per-hop loss; rule when sustained packet loss > 1% on the WAN-facing hops                                                                                                                                             |
+| STAGE-016-005 | DNS resolution health: dual-path resolution test — resolve a known domain via Pi-hole and via 1.1.1.1 directly; emit `homelab_dns_resolution_seconds{path}` so Pi-hole vs WAN issues are distinguishable                                                                                                                                      |
+| STAGE-016-006 | UDM speedtest result surfacing: when EPIC-007 lands the unifi-poller, speedtest results are already in VM. This stage adds rules and dashboard panels for them                                                                                                                                                                                |
+| STAGE-016-007 | CGNAT / inbound reachability: an external service (or a small relay we run on a VPS) attempts to reach our public port; emits `homelab_inbound_reachable_bool`                                                                                                                                                                                |
+| STAGE-016-008 | Modem health collector: stubbed plugin interface. The actual scraper is deferred until the user provides the AT&T modem model. The plugin contract and a TODO live here                                                                                                                                                                       |
+| STAGE-016-009 | Default Grafana dashboard `isp-wan.json` and default vmalert rules                                                                                                                                                                                                                                                                            |
 
 ## Cross-stage acceptance criteria
 
