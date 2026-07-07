@@ -435,6 +435,27 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: PLR0912
         degraded.append("container_healthcheck_reconciler")
 
     try:
+        from homelab_monitor.kernel.analyzer.karma_outcome_reconciler import (  # noqa: PLC0415
+            KarmaOutcomeReconciler,
+        )
+
+        loader.register(
+            KarmaOutcomeReconciler,
+            {
+                "name": "karma_outcome_reconciler",
+                "interval_seconds": int(KarmaOutcomeReconciler.interval.total_seconds()),
+                "timeout_seconds": int(KarmaOutcomeReconciler.timeout.total_seconds()),
+            },
+        )
+    except Exception as exc:  # pragma: no cover -- defensive
+        log.warning(
+            "lifespan.collector_register_failed",
+            name="karma_outcome_reconciler",
+            error=str(exc),
+        )
+        degraded.append("karma_outcome_reconciler")
+
+    try:
         from homelab_monitor.kernel.metrics.redaction_audit import (  # noqa: PLC0415
             RedactionAuditCollector,
         )

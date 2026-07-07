@@ -307,9 +307,27 @@ class AlertRepository:
         self,
         alert_id: str,
         outcome: AlertOutcome,
-        decided_by: int | None,
+        decided_by: str | None,
     ) -> str:
-        """Insert an ``alert_outcomes`` row + audit; returns the new id."""
+        """Insert an ``alert_outcomes`` row + audit; returns the new id.
+
+        ``decided_by`` widened from ``int`` to ``str`` in migration 0053 so
+        callers can record provenance strings (``"karma"``, ``"reconciler"``)
+        alongside human user ids (coerced to str at the call site).
+
+        ``ON CONFLICT (alert_id, outcome) DO NOTHING`` is appended so repeat
+        calls for the same alert+outcome are silently no-ops (matches the
+        ``uq_alert_outcomes_alert_id_outcome`` UNIQUE index from migration 0053).
+        This is the double-ack fix (STAGE-010-003 Finding 1): a second POST to
+        ``/api/alerts/{id}/ack`` for the same alert must NOT return HTTP 500 due
+        to an IntegrityError. Note: this method ALWAYS writes an audit_log row
+        even on conflict. If audit-log-only-on-real-insert semantics are needed,
+        use ``insert_outcome_if_absent()`` instead.
+
+        When ``decided_by`` is None, the audit row is written with
+        ``who='system'``; callers wanting distinct audit provenance MUST
+        supply an explicit string.
+        """
         new_id = uuid7()
         now = utc_now_iso()
         async with self._repo.transaction() as conn:
@@ -317,7 +335,8 @@ class AlertRepository:
                 text(
                     "INSERT INTO alert_outcomes "
                     "(id, alert_id, outcome, decided_at, decided_by, created_at) "
-                    "VALUES (:id, :aid, :outcome, :dt, :db, :created)"
+                    "VALUES (:id, :aid, :outcome, :dt, :db, :created) "
+                    "ON CONFLICT (alert_id, outcome) DO NOTHING"
                 ),
                 {
                     "id": new_id,
@@ -330,7 +349,7 @@ class AlertRepository:
             )
             await insert_audit(
                 conn,
-                who=str(decided_by) if decided_by is not None else "system",
+                who=decided_by if decided_by is not None else "system",
                 what=f"alert.outcome.{outcome.value}",
                 after={
                     "alert_id": alert_id,
@@ -339,6 +358,81 @@ class AlertRepository:
                 },
             )
         return new_id
+
+    async def insert_outcome_if_absent(
+        self,
+        alert_id: str,
+        outcome: AlertOutcome,
+        decided_by: str | None,
+        decided_at: str,
+    ) -> bool:
+        """Insert an ``alert_outcomes`` row atomically iff no row already
+        exists for ``(alert_id, outcome)``. Returns True if inserted, False
+        if the pair was already present.
+
+        Idempotent by design — this is the write path used by the STAGE-010-003
+        Karma-outcome reconciler on its hourly tick. A repeat tick MUST NOT
+        double-insert and MUST NOT emit a spurious audit_log row.
+
+        Relies on the UNIQUE index ``uq_alert_outcomes_alert_id_outcome``
+        created in migration 0053. Uses SQLite's
+        ``INSERT ... ON CONFLICT (...) DO NOTHING RETURNING id`` to detect
+        the insert vs. skip case in a single round-trip.
+
+        Only the True (real-insert) branch writes an audit_log row; the
+        False (conflict) branch is silent so hourly no-op ticks don't
+        pollute the audit log.
+
+        Args:
+            alert_id: FK into ``alerts.id``.
+            outcome: The outcome enum value.
+            decided_by: Provenance string (``"karma"`` / ``"reconciler"`` /
+                username). ``None`` is allowed.
+            decided_at: ISO-8601 UTC timestamp of the decision. The reconciler
+                passes the silence's ``startsAt`` (for ACKED) or the alert's
+                ``resolved_at`` (for AUTO_RESOLVED), NOT ``now`` — the decision
+                time is the semantic anchor, not the persistence time.
+
+        When ``decided_by`` is None, the audit row is written with
+        ``who='system'``; callers wanting distinct audit provenance MUST
+        supply an explicit string.
+        """
+        new_id = uuid7()
+        now = utc_now_iso()
+        async with self._repo.transaction() as conn:
+            result = await conn.execute(
+                text(
+                    "INSERT INTO alert_outcomes "
+                    "(id, alert_id, outcome, decided_at, decided_by, created_at) "
+                    "VALUES (:id, :aid, :outcome, :dt, :db, :created) "
+                    "ON CONFLICT (alert_id, outcome) DO NOTHING "
+                    "RETURNING id"
+                ),
+                {
+                    "id": new_id,
+                    "aid": alert_id,
+                    "outcome": outcome.value,
+                    "dt": decided_at,
+                    "db": decided_by,
+                    "created": now,
+                },
+            )
+            row = result.fetchone()
+            if row is None:
+                # Conflict — the (alert_id, outcome) pair already exists.
+                # Do NOT write audit_log; a repeat tick is expected to be silent.
+                return False
+            await insert_audit(
+                conn,
+                who=decided_by if decided_by is not None else "system",
+                what=f"alert.outcome.{outcome.value}",
+                after={
+                    "alert_id": alert_id,
+                    "outcome_id": new_id,
+                    "outcome": outcome.value,
+                },
+            )
+        return True
 
     async def list_outcomes(self, alert_id: str) -> list[dict[str, Any]]:
         """Return outcomes for ``alert_id`` ordered by ``decided_at DESC``."""
@@ -353,7 +447,7 @@ class AlertRepository:
             {
                 "outcome": str(r[0]),
                 "decided_at": str(r[1]),
-                "decided_by": None if r[2] is None else int(r[2]),
+                "decided_by": None if r[2] is None else str(r[2]),
             }
             for r in rows
         ]

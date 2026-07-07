@@ -435,7 +435,7 @@ async def ack_alert(
     if alert is None:
         raise NotFoundProblem(message=f"alert not found: {alert_id}")
     now = utc_now_iso()
-    await alert_repo.insert_outcome(alert_id, AlertOutcome.ACKED, decided_by=user.id)
+    await alert_repo.insert_outcome(alert_id, AlertOutcome.ACKED, decided_by=str(user.id))
     await alert_repo.set_ack(alert_id, ack_at=now, ack_by=user.id)
     return AckResponse(alert_id=alert_id, ack_at=now)
 
@@ -456,5 +456,5 @@ async def dismiss_alert(
     if alert is None:
         raise NotFoundProblem(message=f"alert not found: {alert_id}")
     now = utc_now_iso()
-    await alert_repo.insert_outcome(alert_id, AlertOutcome.DISMISSED, decided_by=user.id)
+    await alert_repo.insert_outcome(alert_id, AlertOutcome.DISMISSED, decided_by=str(user.id))
     return DismissResponse(alert_id=alert_id, dismissed_at=now)

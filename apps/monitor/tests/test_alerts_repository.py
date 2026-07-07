@@ -294,6 +294,30 @@ async def test_insert_outcome_creates_row_and_audit(repo: SqliteRepository) -> N
 
 
 @pytest.mark.asyncio
+async def test_insert_outcome_is_idempotent_on_repeat_call(
+    repo: SqliteRepository,
+) -> None:
+    """After migration 0053, repeat insert_outcome for same (alert_id, outcome)
+    must NOT raise IntegrityError. This is the double-ack fix (STAGE-010-003
+    Finding 1): the API router /api/alerts/{id}/ack must not return HTTP 500
+    when the same operator acks the same alert twice.
+    """
+    ar = AlertRepository(repo)
+    a, pj = _make_alert(fingerprint="fp-double-ack")
+    alert_id = await ar.insert_firing(a, pj)
+
+    # First call: writes row.
+    await ar.insert_outcome(alert_id, AlertOutcome.ACKED, decided_by="op1")
+    # Second call: MUST be a silent no-op (ON CONFLICT DO NOTHING), not IntegrityError.
+    await ar.insert_outcome(alert_id, AlertOutcome.ACKED, decided_by="op1")
+
+    # Exactly one ACKED row.
+    outcomes = await ar.list_outcomes(alert_id)
+    acked = [o for o in outcomes if o["outcome"] == AlertOutcome.ACKED.value]
+    assert len(acked) == 1
+
+
+@pytest.mark.asyncio
 async def test_list_outcomes_returns_descending(repo: SqliteRepository) -> None:
     ar = AlertRepository(repo)
     a, pj = _make_alert(fingerprint="fp-M")

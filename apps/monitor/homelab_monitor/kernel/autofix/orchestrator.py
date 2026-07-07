@@ -2116,7 +2116,13 @@ class AutoFixOrchestrator:
         """Inline alert_outcomes INSERT mirroring AlertRepository.insert_outcome,
         on the supplied connection (so it shares the completion txn).
 
-        SQL and column set replicated from AlertRepository.insert_outcome exactly.
+        SQL and column set replicated from AlertRepository.insert_outcome exactly,
+        with ``ON CONFLICT (alert_id, outcome) DO NOTHING`` appended so a
+        re-run of the same runbook against the same alert (which can happen
+        when an alert resolves and re-fires within a short window) does NOT
+        violate the ``uq_alert_outcomes_alert_id_outcome`` UNIQUE index added
+        in migration 0053. Repeat writes are silently no-ops; the first
+        AUTO_FIXED outcome for a given alert is the durable record.
         """
         outcome_id = uuid7()
         now = utc_now_iso()
@@ -2124,7 +2130,8 @@ class AutoFixOrchestrator:
             text(
                 "INSERT INTO alert_outcomes "
                 "(id, alert_id, outcome, decided_at, decided_by, created_at) "
-                "VALUES (:id, :aid, :outcome, :dt, :db, :created)"
+                "VALUES (:id, :aid, :outcome, :dt, :db, :created) "
+                "ON CONFLICT (alert_id, outcome) DO NOTHING"
             ),
             {
                 "id": outcome_id,
