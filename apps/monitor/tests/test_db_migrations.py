@@ -46,6 +46,10 @@ EXPECTED_TABLES = {
     "suggestions",
     "suggestions_docker",
     "tool_scorecards",
+    "alert_overlap_groups",
+    "shadow_rule_results",
+    "recommendations",
+    "rule_annotations",
     "cron_log_cursors",
     "cron_runs",
     "probe_targets",
@@ -1307,5 +1311,231 @@ async def test_migration_0049_round_trip(db_url: str) -> None:
         async with engine.connect() as conn:
             tables_at_0048 = await conn.run_sync(_list_tables)
         assert "runbook_run_feedback" not in tables_at_0048
+    finally:
+        await engine.dispose()
+
+
+async def test_migration_0052_upgrade_creates_expected_tables(db_url: str) -> None:
+    """Migration 0052 creates the 5 EPIC-010 tables with expected columns."""
+    engine = get_engine(url=db_url)
+    try:
+        await run_migrations(engine)
+
+        def _get_columns(sync_conn: object, table: str) -> set[str]:
+            inspector = inspect(sync_conn)
+            if inspector is None:
+                return set()
+            return {col["name"] for col in inspector.get_columns(table)}
+
+        async with engine.connect() as conn:
+            scorecard_cols = await conn.run_sync(_get_columns, "tool_scorecards")
+            overlap_cols = await conn.run_sync(_get_columns, "alert_overlap_groups")
+            shadow_cols = await conn.run_sync(_get_columns, "shadow_rule_results")
+            rec_cols = await conn.run_sync(_get_columns, "recommendations")
+            annotation_cols = await conn.run_sync(_get_columns, "rule_annotations")
+
+        assert scorecard_cols == {
+            "id",
+            "dimension",
+            "dimension_value",
+            "window",
+            "alerts_emitted",
+            "action_rate",
+            "dedup_overlap",
+            "unique_share",
+            "computed_at",
+        }
+        assert overlap_cols == {
+            "id",
+            "fingerprint",
+            "group_key",
+            "alert_ids",
+            "group_started_at",
+            "computed_at",
+        }
+        assert shadow_cols == {
+            "id",
+            "pair_name",
+            "window",
+            "rule_a_hits",
+            "rule_b_hits",
+            "both_hits",
+            "either_hits",
+            "disagreement_count",
+            "computed_at",
+        }
+        assert rec_cols == {
+            "id",
+            "dimension",
+            "dimension_value",
+            "rule_name",
+            "message",
+            "severity",
+            "status",
+            "created_at",
+            "decided_at",
+            "decided_by",
+            "applied_action_id",
+        }
+        assert annotation_cols == {
+            "id",
+            "annotation_kind",
+            "target_source_tool",
+            "target_alertgroup",
+            "target_alertname",
+            "note",
+            "created_at",
+            "created_by",
+        }
+    finally:
+        await engine.dispose()
+
+
+async def test_migration_0052_downgrade_restores_stub_tool_scorecards(db_url: str) -> None:
+    """Downgrading 0052 restores the 3-column stub and drops the 4 new tables."""
+    engine = get_engine(url=db_url)
+    try:
+        await run_migrations(engine)
+
+        cfg = Config()
+        cfg.set_main_option("script_location", str(ALEMBIC_DIR))
+        cfg.set_main_option("sqlalchemy.url", db_url)
+        command.downgrade(cfg, "0051")
+
+        def _list_tables(sync_conn: object) -> set[str]:
+            inspector = inspect(sync_conn)
+            return set(inspector.get_table_names()) if inspector is not None else set()
+
+        def _get_columns(sync_conn: object, table: str) -> set[str]:
+            inspector = inspect(sync_conn)
+            if inspector is None:
+                return set()
+            return {col["name"] for col in inspector.get_columns(table)}
+
+        async with engine.connect() as conn:
+            tables = await conn.run_sync(_list_tables)
+            stub_cols = await conn.run_sync(_get_columns, "tool_scorecards")
+
+        assert "alert_overlap_groups" not in tables
+        assert "shadow_rule_results" not in tables
+        assert "recommendations" not in tables
+        assert "rule_annotations" not in tables
+        assert stub_cols == {"id", "tool", "created_at"}
+        assert "dimension" not in stub_cols
+        assert "alerts_emitted" not in stub_cols
+    finally:
+        await engine.dispose()
+
+
+async def test_tool_scorecards_unique_constraint(db_url: str) -> None:
+    """(dimension, dimension_value, window) must be unique on tool_scorecards."""
+    from sqlalchemy.exc import IntegrityError  # noqa: PLC0415
+
+    engine = get_engine(url=db_url)
+    try:
+        await run_migrations(engine)
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "INSERT INTO tool_scorecards "
+                    "(id, dimension, dimension_value, window, alerts_emitted, "
+                    "action_rate, dedup_overlap, unique_share, computed_at) "
+                    "VALUES ('sc-1', 'source_tool', 'vmalert', '7d', 10, 0.5, 0.1, 0.9, "
+                    "'2026-07-06T00:00:00Z')"
+                )
+            )
+        with pytest.raises(IntegrityError):
+            async with engine.begin() as conn:
+                await conn.execute(
+                    text(
+                        "INSERT INTO tool_scorecards "
+                        "(id, dimension, dimension_value, window, alerts_emitted, "
+                        "action_rate, dedup_overlap, unique_share, computed_at) "
+                        "VALUES ('sc-2', 'source_tool', 'vmalert', '7d', 20, 0.6, 0.2, 0.8, "
+                        "'2026-07-06T01:00:00Z')"
+                    )
+                )
+    finally:
+        await engine.dispose()
+
+
+async def test_shadow_rule_results_unique_constraint(db_url: str) -> None:
+    """(pair_name, window) must be unique on shadow_rule_results."""
+    from sqlalchemy.exc import IntegrityError  # noqa: PLC0415
+
+    engine = get_engine(url=db_url)
+    try:
+        await run_migrations(engine)
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "INSERT INTO shadow_rule_results "
+                    "(id, pair_name, window, rule_a_hits, rule_b_hits, both_hits, "
+                    "either_hits, disagreement_count, computed_at) "
+                    "VALUES ('sr-1', 'rule-a-vs-b', '7d', 5, 3, 2, 6, 4, "
+                    "'2026-07-06T00:00:00Z')"
+                )
+            )
+        with pytest.raises(IntegrityError):
+            async with engine.begin() as conn:
+                await conn.execute(
+                    text(
+                        "INSERT INTO shadow_rule_results "
+                        "(id, pair_name, window, rule_a_hits, rule_b_hits, both_hits, "
+                        "either_hits, disagreement_count, computed_at) "
+                        "VALUES ('sr-2', 'rule-a-vs-b', '7d', 8, 1, 1, 8, 7, "
+                        "'2026-07-06T01:00:00Z')"
+                    )
+                )
+    finally:
+        await engine.dispose()
+
+
+async def test_rule_annotations_check_constraint(db_url: str) -> None:
+    """rule_annotations requires at least one of the three target_* columns to be set."""
+    from sqlalchemy.exc import IntegrityError  # noqa: PLC0415
+
+    engine = get_engine(url=db_url)
+    try:
+        await run_migrations(engine)
+
+        # Seed a real users row (FK target for created_by; FKs are enforced).
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "INSERT INTO users (id, username, bcrypt_hash, created_at) "
+                    "VALUES (1, 'test-user', 'x', '2026-07-06T00:00:00Z')"
+                )
+            )
+
+        # All three target_* NULL -> violates CHECK constraint.
+        with pytest.raises(IntegrityError):
+            async with engine.begin() as conn:
+                await conn.execute(
+                    text(
+                        "INSERT INTO rule_annotations "
+                        "(id, annotation_kind, target_source_tool, target_alertgroup, "
+                        "target_alertname, note, created_at, created_by) "
+                        "VALUES ('ra-1', 'note', NULL, NULL, NULL, 'test note', "
+                        "'2026-07-06T00:00:00Z', 1)"
+                    )
+                )
+
+        # One target_* set -> succeeds.
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "INSERT INTO rule_annotations "
+                    "(id, annotation_kind, target_source_tool, target_alertgroup, "
+                    "target_alertname, note, created_at, created_by) "
+                    "VALUES ('ra-2', 'note', 'vmalert', NULL, NULL, 'test note', "
+                    "'2026-07-06T00:00:00Z', 1)"
+                )
+            )
+        async with engine.connect() as conn:
+            row = (
+                await conn.execute(text("SELECT id FROM rule_annotations WHERE id = 'ra-2'"))
+            ).fetchone()
+        assert row is not None
     finally:
         await engine.dispose()

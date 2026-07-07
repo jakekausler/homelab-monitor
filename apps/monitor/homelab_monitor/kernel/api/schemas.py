@@ -57,6 +57,7 @@ __all__ = [
     "ModelSummary",
     "ModelTemplateEntry",
     "OutcomeView",
+    "Recommendation",
     "RefreshCycleResponse",
     "RefreshStatusResponse",
     "RetryResponse",
@@ -73,6 +74,7 @@ __all__ = [
     "SilenceAllowlistCreateRequest",
     "SilenceAllowlistListResponse",
     "SilenceAllowlistResponse",
+    "ToolScorecard",
     "VMRangeData",
     "VMRangeResult",
     "VersionResponse",
@@ -883,3 +885,35 @@ class LastCycleResponse(BaseModel):
     models_touched: int = 0
     cycle_status: Literal["ok", "partial", "failed"] | None = None
     error: str | None = None
+
+
+class ToolScorecard(BaseModel):
+    """One row of the ``tool_scorecards`` table (EPIC-010 tool-effectiveness scoring)."""
+
+    model_config = ConfigDict(extra="forbid")
+    id: str
+    dimension: Literal["source_tool", "category", "target_kind", "alertgroup", "alertname"]
+    dimension_value: str
+    window: Literal["7d", "30d", "90d"]
+    alerts_emitted: int
+    action_rate: float
+    dedup_overlap: float
+    unique_share: float
+    computed_at: str
+
+
+class Recommendation(BaseModel):
+    """One row of the ``recommendations`` table (EPIC-010 rule-tuning suggestions)."""
+
+    model_config = ConfigDict(extra="forbid")
+    id: str
+    dimension: str
+    dimension_value: str
+    rule_name: str
+    message: str
+    severity: Literal["info", "warning", "action-required"]
+    status: Literal["pending", "applied", "dismissed", "snoozed"]
+    created_at: str
+    decided_at: str | None = None
+    decided_by: int | None = None
+    applied_action_id: str | None = None

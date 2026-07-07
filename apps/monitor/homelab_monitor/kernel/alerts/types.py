@@ -30,6 +30,8 @@ class AlertOutcome(StrEnum):
     DISMISSED = "dismissed"
     AUTO_FIXED = "auto_fixed"
     ESCALATED = "escalated"
+    AUTO_RESOLVED = "auto_resolved"
+    MAINTENANCE_SUPPRESSED = "maintenance_suppressed"
 
 
 class Alert(BaseModel):

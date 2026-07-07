@@ -84,7 +84,9 @@
           "acked",
           "dismissed",
           "auto_fixed",
-          "escalated"
+          "escalated",
+          "auto_resolved",
+          "maintenance_suppressed"
         ],
         "title": "AlertOutcome",
         "type": "string"
