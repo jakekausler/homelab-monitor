@@ -1549,7 +1549,8 @@ class AutoFixOrchestrator:
         result = await self._claim_and_exec(
             alert=alert,
             record=record,
-            initiated_by="alert",
+            initiated_by="operator" if approval.alert_id is None else "alert",
+            principal=principal,
             approving_principal=principal,
             credential_type=credential_type,
             ip=ip,
@@ -2048,7 +2049,10 @@ class AutoFixOrchestrator:
             # feedback (best-effort telemetry) fails.
             if exec_result.exit_code == 0 and alert is not None:
                 await self._insert_outcome_conn(
-                    conn, alert_id=alert.id, outcome=AlertOutcome.AUTO_FIXED
+                    conn,
+                    alert_id=alert.id,
+                    outcome=AlertOutcome.AUTO_FIXED,
+                    decided_by="autofix",
                 )
             await self._process_feedback(
                 conn,
@@ -2111,7 +2115,12 @@ class AutoFixOrchestrator:
             )
 
     async def _insert_outcome_conn(
-        self, conn: AsyncConnection, *, alert_id: str, outcome: AlertOutcome
+        self,
+        conn: AsyncConnection,
+        *,
+        alert_id: str,
+        outcome: AlertOutcome,
+        decided_by: str,
     ) -> None:
         """Inline alert_outcomes INSERT mirroring AlertRepository.insert_outcome,
         on the supplied connection (so it shares the completion txn).
@@ -2123,6 +2132,10 @@ class AutoFixOrchestrator:
         violate the ``uq_alert_outcomes_alert_id_outcome`` UNIQUE index added
         in migration 0053. Repeat writes are silently no-ops; the first
         AUTO_FIXED outcome for a given alert is the durable record.
+
+        ``decided_by`` is the provenance string stored in the ``decided_by`` column.
+        Callers pass the string identifying the writer (e.g. ``"autofix"``); it mirrors
+        the shape of ``AlertRepository.insert_outcome``'s ``decided_by`` parameter.
         """
         outcome_id = uuid7()
         now = utc_now_iso()
@@ -2138,7 +2151,7 @@ class AutoFixOrchestrator:
                 "aid": alert_id,
                 "outcome": outcome.value,
                 "dt": now,
-                "db": None,
+                "db": decided_by,
                 "created": now,
             },
         )
