@@ -1387,6 +1387,8 @@ async def test_exec_nonzero_exit_no_auto_fixed_outcome(
     assert result.exit_code == 1
 
     # No auto_fixed outcome
+    # Also covers STAGE-010-005 deliverable #4: failed auto-fix (exit_code != 0)
+    # writes NO outcome row.
     outcome_row = await repo.fetch_one(
         text("SELECT outcome FROM alert_outcomes WHERE alert_id = :aid"), {"aid": alert.id}
     )
@@ -7226,3 +7228,447 @@ async def test_execute_approved_happy_path_audit_includes_credential_type(
             ran_found = True
             break
     assert ran_found, f"No autofix.ran audit found for run {result.run_id}"
+
+
+# ---------------------------------------------------------------------------
+# STAGE-010-005: initiated_by / decided_by provenance regressions
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_alert_triggered_execute_approved_records_initiated_by_alert(
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
+) -> None:
+    """STAGE-010-005 regression: alert-triggered approval flow records
+    initiated_by='alert' on the real run row.
+    """
+    rb = _make_runbook_record(
+        alertname="TestAlert",
+        dry_run_required=True,
+        content_hash="hash-v1",
+        runbook_dir=tmp_path / "runbook",
+    )
+    await _insert_runbook(repo, rb)
+    alert = _make_alert(alertname="TestAlert")
+    await _insert_alert(repo, alert)
+
+    app_settings = AppSettingsRepository(repo)
+    await app_settings.set("autofix_enabled", "true")
+
+    transcript_dir = str(tmp_path / "transcripts")
+    os.makedirs(transcript_dir, exist_ok=True)
+    exec_log_dir = str(tmp_path / "exec-logs")
+    os.makedirs(exec_log_dir, exist_ok=True)
+
+    docker = _FakeDockerClient(
+        result=ExecResult(exit_code=0, stdout="plan", stderr=""),
+        transcript_to_write=f"{transcript_dir}/dry-{uuid7()}.transcript",
+    )
+    orch = _make_orchestrator(
+        repo,
+        secrets_repo,
+        docker,
+        transcript_dir=transcript_dir,
+        exec_log_dir=exec_log_dir,
+    )
+
+    with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
+        dry_result = await orch.handle_alert(alert)
+
+    assert dry_result is not None
+    approval_id = dry_result.approval_id
+    assert approval_id is not None
+
+    # Approval retains its non-NULL alert_id from the alert-triggered dry run.
+    docker.result = ExecResult(exit_code=0, stdout="fixed", stderr="")
+    docker.transcript_to_write = f"{transcript_dir}/real-{uuid7()}.transcript"
+
+    with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
+        result = await orch.execute_approved(approval_id, principal="admin", ip="1.2.3.4")
+
+    assert result is not None
+    assert result.ran is True
+    assert result.run_id is not None
+
+    run_row = await repo.fetch_one(
+        text("SELECT initiated_by FROM runbook_runs WHERE id = :id AND mode = 'real'"),
+        {"id": result.run_id},
+    )
+    assert run_row is not None
+    assert str(run_row.initiated_by) == "alert"
+
+
+@pytest.mark.asyncio
+async def test_operator_triggered_execute_approved_records_initiated_by_operator(
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
+) -> None:
+    """STAGE-010-005 regression (STAGE-009-013 item #3): operator-approved real
+    runs now record initiated_by='operator', not 'alert'. Approval.alert_id=None
+    (iff operator-initiated) is the invariant used at execute_approved.
+    """
+    rb = _make_runbook_record(
+        alertname="TestAlert",
+        dry_run_required=True,
+        content_hash="hash-v1",
+        runbook_dir=tmp_path / "runbook",
+    )
+    await _insert_runbook(repo, rb)
+    alert = _make_alert(alertname="TestAlert")
+    await _insert_alert(repo, alert)
+
+    app_settings = AppSettingsRepository(repo)
+    await app_settings.set("autofix_enabled", "true")
+
+    transcript_dir = str(tmp_path / "transcripts")
+    os.makedirs(transcript_dir, exist_ok=True)
+    exec_log_dir = str(tmp_path / "exec-logs")
+    os.makedirs(exec_log_dir, exist_ok=True)
+
+    # Create dry run
+    docker = _FakeDockerClient(
+        result=ExecResult(exit_code=0, stdout="plan", stderr=""),
+        transcript_to_write=f"{transcript_dir}/dry-{uuid7()}.transcript",
+    )
+    orch = _make_orchestrator(
+        repo,
+        secrets_repo,
+        docker,
+        transcript_dir=transcript_dir,
+        exec_log_dir=exec_log_dir,
+    )
+
+    with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
+        dry_result = await orch.handle_alert(alert)
+
+    assert dry_result is not None
+    approval_id = dry_result.approval_id
+    assert approval_id is not None
+
+    # Force alert_id = NULL on the approval row to simulate an operator-initiated
+    # approval with no associated alert.
+    async with repo.transaction() as conn:
+        await conn.execute(
+            text("UPDATE runbook_run_approvals SET alert_id = NULL WHERE id = :id"),
+            {"id": approval_id},
+        )
+
+    # _load_alert_for_exec builds a placeholder Alert with id="unknown" when
+    # approval.alert_id is None. The subsequent runbook_runs INSERT FKs alert_id
+    # → alerts.id, so seed an "unknown" alert row so the FK passes.
+    unknown_alert = Alert(
+        id="unknown",
+        fingerprint="fp-unknown",
+        source_tool="autofix-approval",
+        severity=Severity.WARNING,
+        status=AlertStatus.FIRING,
+        opened_at=utc_now_iso(),
+        last_seen_at=utc_now_iso(),
+        payload={},
+        labels={},
+        annotations={},
+    )
+    await _insert_alert(repo, unknown_alert)
+
+    docker.result = ExecResult(exit_code=0, stdout="fixed", stderr="")
+    docker.transcript_to_write = f"{transcript_dir}/real-{uuid7()}.transcript"
+
+    with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
+        result = await orch.execute_approved(approval_id, principal="admin", ip="1.2.3.4")
+
+    assert result is not None
+    assert result.ran is True
+    assert result.run_id is not None
+
+    # This assertion would FAIL without the STAGE-010-005 fix (previously always
+    # wrote initiated_by="alert" regardless of approval.alert_id).
+    run_row = await repo.fetch_one(
+        text("SELECT initiated_by FROM runbook_runs WHERE id = :id AND mode = 'real'"),
+        {"id": result.run_id},
+    )
+    assert run_row is not None
+    assert str(run_row.initiated_by) == "operator"
+
+
+@pytest.mark.asyncio
+async def test_successful_autofix_writes_outcome_with_decided_by_autofix(
+    repo: SqliteRepository, secrets_repo: AsyncSecretsRepository, tmp_path: Path
+) -> None:
+    """STAGE-010-005 regression: successful auto-fix writes exactly one
+    alert_outcomes row with decided_by='autofix' (previously wrote NULL — bug
+    at orchestrator.py:2141).
+    """
+    rb = _make_runbook_record(alertname="TestAlert", runbook_dir=tmp_path / "runbook")
+    await _insert_runbook(repo, rb)
+    alert = _make_alert(alertname="TestAlert")
+    await _insert_alert(repo, alert)
+
+    app_settings = AppSettingsRepository(repo)
+    await app_settings.set("autofix_enabled", "true")
+
+    transcript_dir = str(tmp_path / "transcripts")
+    os.makedirs(transcript_dir, exist_ok=True)
+    exec_log_dir = str(tmp_path / "exec-logs")
+    os.makedirs(exec_log_dir, exist_ok=True)
+
+    docker = _FakeDockerClient(result=ExecResult(exit_code=0, stdout="done", stderr=""))
+    orch = _make_orchestrator(
+        repo, secrets_repo, docker, transcript_dir=transcript_dir, exec_log_dir=exec_log_dir
+    )
+
+    with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
+        result = await orch.handle_alert(alert)
+
+    assert result is not None
+    assert result.ran is True
+    assert result.outcome == RunOutcome.RAN
+    assert result.exit_code == 0
+
+    outcome_rows = await repo.fetch_all(
+        text(
+            "SELECT alert_id, decided_by FROM alert_outcomes "
+            "WHERE alert_id = :aid AND outcome = 'auto_fixed'"
+        ),
+        {"aid": alert.id},
+    )
+    assert len(outcome_rows) == 1
+    assert str(outcome_rows[0].alert_id) == alert.id
+    assert str(outcome_rows[0].decided_by) == "autofix"
+
+
+@pytest.mark.asyncio
+async def test_execute_approved_operator_path_sets_initiated_by_operator(
+    tmp_path: Path,
+    repo: SqliteRepository,
+    secrets_repo: AsyncSecretsRepository,
+) -> None:
+    """Operator dry-run to approve: verify initiated_by='operator' in autofix.ran audit."""
+    runbook_dir = tmp_path / "runbook"
+    record = _make_runbook_record(
+        alertname="TestAlert",
+        enabled=True,
+        auto_trigger=False,
+        dry_run_required=True,
+        content_hash="fixture-hash",
+        runbook_dir=runbook_dir,
+    )
+    await _insert_runbook(repo, record)
+    alert = _make_alert(alertname="TestAlert")
+    await _insert_alert(repo, alert)
+    await AppSettingsRepository(repo).set("autofix_enabled", "true")
+
+    transcript_dir = tmp_path / "transcripts"
+    transcript_dir.mkdir()
+    exec_log_dir = tmp_path / "exec-logs"
+    exec_log_dir.mkdir()
+    docker = _FakeDockerClient(
+        result=ExecResult(exit_code=0, stdout="ok", stderr=""),
+        transcript_to_write=str(transcript_dir / "transcript.txt"),
+    )
+    orch = _make_orchestrator(
+        repo,
+        secrets_repo,
+        docker,
+        transcript_dir=str(transcript_dir),
+        exec_log_dir=str(exec_log_dir),
+    )
+
+    with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
+        dry_result = await orch.handle_operator_trigger(
+            record.id, mode=RunMode.DRY_RUN, principal="test-user", ip="127.0.0.1"
+        )
+        assert dry_result.outcome == RunOutcome.DRY_RUN_STORED
+        assert dry_result.approval_id is not None
+
+        docker.result = ExecResult(exit_code=0, stdout="fixed", stderr="")
+        docker.transcript_to_write = str(transcript_dir / "real-transcript.txt")
+        real_result = await orch.execute_approved(
+            dry_result.approval_id,
+            principal="test-user",
+            ip="127.0.0.1",
+        )
+
+    assert real_result.outcome == RunOutcome.RAN
+    assert real_result.ran is True
+    assert real_result.run_id is not None
+
+    ran_audit = await repo.fetch_one(
+        text(
+            "SELECT after_json FROM audit_log WHERE what = 'autofix.ran' "
+            "AND json_extract(after_json, '$.run_id') = :rid"
+        ),
+        {"rid": real_result.run_id},
+    )
+    assert ran_audit is not None
+    after = json.loads(str(ran_audit[0]))
+    assert after.get("initiated_by") == "operator"
+
+
+@pytest.mark.asyncio
+async def test_execute_approved_alert_path_sets_initiated_by_alert(
+    tmp_path: Path,
+    repo: SqliteRepository,
+    secrets_repo: AsyncSecretsRepository,
+) -> None:
+    """Alert dry-run to approve: verify initiated_by='alert' in autofix.ran audit."""
+    runbook_dir = tmp_path / "runbook"
+    record = _make_runbook_record(
+        alertname="TestAlert",
+        enabled=True,
+        dry_run_required=True,
+        content_hash="fixture-hash",
+        runbook_dir=runbook_dir,
+    )
+    await _insert_runbook(repo, record)
+    alert = _make_alert(alertname="TestAlert")
+    await _insert_alert(repo, alert)
+    await AppSettingsRepository(repo).set("autofix_enabled", "true")
+
+    transcript_dir = tmp_path / "transcripts"
+    transcript_dir.mkdir()
+    exec_log_dir = tmp_path / "exec-logs"
+    exec_log_dir.mkdir()
+    docker = _FakeDockerClient(
+        result=ExecResult(exit_code=0, stdout="ok", stderr=""),
+        transcript_to_write=str(transcript_dir / "dry-transcript.txt"),
+    )
+    orch = _make_orchestrator(
+        repo,
+        secrets_repo,
+        docker,
+        transcript_dir=str(transcript_dir),
+        exec_log_dir=str(exec_log_dir),
+    )
+
+    with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
+        dry_result = await orch.handle_alert(alert)
+        assert dry_result is not None
+        assert dry_result.approval_id is not None
+
+        docker.result = ExecResult(exit_code=0, stdout="fixed", stderr="")
+        docker.transcript_to_write = str(transcript_dir / "real-transcript.txt")
+        real_result = await orch.execute_approved(
+            dry_result.approval_id,
+            principal="admin",
+            ip="127.0.0.1",
+        )
+
+    assert real_result.outcome == RunOutcome.RAN
+    assert real_result.ran is True
+    assert real_result.run_id is not None
+
+    ran_audit = await repo.fetch_one(
+        text(
+            "SELECT after_json FROM audit_log WHERE what = 'autofix.ran' "
+            "AND json_extract(after_json, '$.run_id') = :rid"
+        ),
+        {"rid": real_result.run_id},
+    )
+    assert ran_audit is not None
+    after = json.loads(str(ran_audit[0]))
+    assert after.get("initiated_by") == "alert"
+
+
+@pytest.mark.asyncio
+async def test_auto_fix_success_writes_outcome_with_decided_by_autofix(
+    tmp_path: Path,
+    repo: SqliteRepository,
+    secrets_repo: AsyncSecretsRepository,
+) -> None:
+    """Auto-fix success (exit_code=0): verify alert_outcomes row with decided_by='autofix'."""
+    runbook_dir = tmp_path / "runbook"
+    record = _make_runbook_record(
+        alertname="TestAlert",
+        enabled=True,
+        auto_trigger=True,
+        dry_run_required=False,
+        content_hash="fixture-hash",
+        runbook_dir=runbook_dir,
+    )
+    await _insert_runbook(repo, record)
+    alert = _make_alert(alertname="TestAlert")
+    await _insert_alert(repo, alert)
+    await AppSettingsRepository(repo).set("autofix_enabled", "true")
+
+    transcript_dir = tmp_path / "transcripts"
+    transcript_dir.mkdir()
+    exec_log_dir = tmp_path / "exec-logs"
+    exec_log_dir.mkdir()
+    docker = _FakeDockerClient(
+        result=ExecResult(exit_code=0, stdout="fixed", stderr=""),
+        transcript_to_write=str(transcript_dir / "transcript.txt"),
+    )
+    orch = _make_orchestrator(
+        repo,
+        secrets_repo,
+        docker,
+        transcript_dir=str(transcript_dir),
+        exec_log_dir=str(exec_log_dir),
+    )
+
+    with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
+        result = await orch.handle_alert(alert)
+
+    assert result is not None
+    assert result.ran is True
+    assert result.run_id is not None
+
+    outcomes = await repo.fetch_all(
+        text(
+            "SELECT id, alert_id, outcome, decided_by FROM alert_outcomes "
+            "WHERE alert_id = :alert_id AND outcome = 'auto_fixed'"
+        ),
+        {"alert_id": alert.id},
+    )
+    assert len(outcomes) == 1
+    outcome_row = outcomes[0]
+    assert outcome_row[3] == "autofix"
+
+
+@pytest.mark.asyncio
+async def test_auto_fix_failure_writes_no_outcome_row(
+    tmp_path: Path,
+    repo: SqliteRepository,
+    secrets_repo: AsyncSecretsRepository,
+) -> None:
+    """Auto-fix failure (exit_code!=0): verify NO alert_outcomes row written."""
+    runbook_dir = tmp_path / "runbook"
+    record = _make_runbook_record(
+        alertname="TestAlert",
+        enabled=True,
+        auto_trigger=True,
+        dry_run_required=False,
+        content_hash="fixture-hash",
+        runbook_dir=runbook_dir,
+    )
+    await _insert_runbook(repo, record)
+    alert = _make_alert(alertname="TestAlert")
+    await _insert_alert(repo, alert)
+    await AppSettingsRepository(repo).set("autofix_enabled", "true")
+
+    transcript_dir = tmp_path / "transcripts"
+    transcript_dir.mkdir()
+    exec_log_dir = tmp_path / "exec-logs"
+    exec_log_dir.mkdir()
+    docker = _FakeDockerClient(
+        result=ExecResult(exit_code=1, stdout="failed", stderr="error"),
+        transcript_to_write=str(transcript_dir / "transcript.txt"),
+    )
+    orch = _make_orchestrator(
+        repo,
+        secrets_repo,
+        docker,
+        transcript_dir=str(transcript_dir),
+        exec_log_dir=str(exec_log_dir),
+    )
+
+    with patch.object(RunbookRunsRepository, "count_inflight", new=AsyncMock(return_value=0)):
+        result = await orch.handle_alert(alert)
+
+    assert result is not None
+    assert result.run_id is not None
+
+    outcomes = await repo.fetch_all(
+        text("SELECT id FROM alert_outcomes WHERE alert_id = :alert_id"),
+        {"alert_id": alert.id},
+    )
+    assert len(outcomes) == 0
