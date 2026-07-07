@@ -5,8 +5,9 @@ log_signatures cross-checked against log_signature_silence_allowlist and emits
 homelab_log_signature_silent{service_key, template_hash}=1 for every signature that
 is (silent within the alertable window: silent_min..silent_max since last_seen_at)
 AND (not suppressed) AND (NOT covered by an active expected-silence allowlist entry).
-A DUMB vmalert-metrics rule (deploy/vmalert/metrics/signature_silent.yaml) fires on
-homelab_log_signature_silent == 1.
+Previously drove the SignatureWentSilent alert (rule file removed in STAGE-010-001);
+the collector is retained because the underlying `homelab_log_signature_silent`
+metric may still be consumed by future rules.
 
 Self-resolution: replace_family every tick. A signature that recovers (last_seen_at
 refreshes), ages past silent_max, gets suppressed, or enters an allow-window simply

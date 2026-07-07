@@ -5,7 +5,7 @@
 # plus a per-service log-volume spike.
 #
 # Label convention (matches every sibling log-anomaly rule, e.g.
-# error_rate_spike.yaml / log_anomaly.yaml / signature_silent.yaml):
+# error_rate_spike.yaml / log_anomaly.yaml):
 #   severity, source_tool: vmalert-metrics, category: log-anomaly,
 #   + per-rule anomaly_kind + target_kind.
 #
